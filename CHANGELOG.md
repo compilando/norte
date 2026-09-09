@@ -16,9 +16,16 @@ independently through `PROTOCOL_VERSION`.
   The cut is made once, in the shared model, on the already-rendered line, and
   it counts CELLS of terminal — by bytes the text jumps at the first accent,
   by characters any line with CJK misaligns against its neighbours. A wide
-  character straddling the cut goes entirely. The stop is the longest line,
-  measured when decoding, leaving one column always in view; the hex dump has
-  a fixed width and does not move sideways.
+  character straddling the cut goes entirely **and leaves its cell blank** —
+  dropping it without a filler slides that row one column against its
+  neighbours, and the grid is the whole point. A zero-width mark that would
+  open a row is dropped, as the truncators beside it already do with a tail: a
+  split ZWJ cluster would otherwise paint a glyph that is not in the file. The
+  stop is the longest line, measured when decoding, leaving one column always
+  in view. The hex dump scrolls too, with its own 77-cell width: in a split
+  pane its ASCII gutter did not fit, so refusing the axis made it unreachable.
+  The status line and the window's header marks say the column in words, which
+  in the docked viewer is the only thing that says the view is shifted.
 - **The viewer says there is more, and the wheel moves it.** Both scrollbars
   in the terminal, drawn over the frame's borders and never when everything
   fits; the coupled preview gets only the vertical one, because its bottom
@@ -39,6 +46,12 @@ independently through `PROTOCOL_VERSION`.
   wired into the one funnel each frontend already had for a `cd`, plus the
   focus change, and not into each gesture: that list went stale once already,
   which is why the funnels exist.
+  The rule is about the ROOT: what has been read stays valid as long as the
+  new root is an ancestor of the old one. So going UP a level (Backspace) and
+  alternating between two sibling panels with `Tab` move the root up and keep
+  every branch, where before each of them emptied the whole tree on every
+  press — which made the tree useless with the two gestures it most needs to
+  survive. Only another provider anchors and empties.
 - **`Tab` reaches the third listing, and stops only at listings** (ADR 0100).
   In the terminal it was `focus ^= 1`, a count of two: after `alt+v` split a
   panel the key silently did nothing from the third one, because `PaneSlots`

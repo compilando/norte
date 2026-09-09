@@ -136,9 +136,12 @@ impl Estado {
         // FOTO porque el árbol no tiene `ViewChange` propio: viaja entero o no
         // viaja, y un cursor de árbol que no cruza deja el panel señalando la
         // rama del panel anterior.
-        if self.hueco_de_ramas().is_some() {
-            let activo = self.activo();
-            self.seguir_ramas(activo, backend, buzon);
+        //
+        // Solo si el árbol se MOVIÓ de verdad. Aterrizar en la barra de sitios
+        // no lo mueve —`seguir_ramas` solo sigue a un listado—, y mandar la
+        // pantalla entera por eso es pagar una foto por un parche de reparto.
+        let activo = self.activo();
+        if self.seguir_ramas(activo, backend, buzon) {
             let snap = self.snapshot();
             return (
                 self.aplicada(),

@@ -700,19 +700,7 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     if app.menu_bar && ev.row == 0 && matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
         return menu_click(app, ev.column, ev.row);
     }
-    // #324: la barra de paneles, por el mismo motivo. Los paneles laterales
-    // nacieron mudos al ratón una vez (#290) y no se repite: una fila de
-    // botones que no se pueden pulsar no es una fila de botones.
-    // La rueda sobre el VISOR a pantalla completa, antes del corte de los
-    // overlays: el visor es uno de ellos, así que hasta ahora rodar sobre un
-    // fichero abierto no hacía absolutamente nada. Es el gesto más obvio que
-    // tiene un visor, y lo único que hay debajo es un listado que no se ve.
-    if let Some(v) = app.viewer.as_mut() {
-        match ev.kind {
-            MouseEventKind::ScrollUp => v.scroll_up(WHEEL_ROWS),
-            MouseEventKind::ScrollDown => v.scroll_down(WHEEL_ROWS),
-            _ => {}
-        }
+    if rueda_en_el_visor(app, ev) {
         return After::Nothing;
     }
     if overlay_open(app) {
@@ -861,6 +849,37 @@ fn enfocar_lo_pulsado(app: &mut App, col: u16, row: u16) {
         return;
     };
     app.focus_slot(slot);
+}
+
+/// La rueda sobre el VISOR a pantalla completa: lo desplaza y dice que sí.
+///
+/// Se atiende ANTES del corte de los overlays porque el visor es uno de ellos,
+/// así que hasta ahora rodar sobre un fichero abierto no hacía absolutamente
+/// nada. Es el gesto más obvio que tiene un visor, y lo único que hay debajo es
+/// un listado que no se ve — desplazar ESE habría sido peor.
+///
+/// Los dos EJES, como en la ventana: el visor no envuelve, así que a lo ancho
+/// hace tanta falta como a lo alto. `shift+rueda` es el gesto de siempre para
+/// el eje horizontal, y algunos terminales mandan además una rueda horizontal
+/// propia.
+///
+/// `true` también cuando el visor está abierto y el evento no es una rueda: con
+/// un fichero delante, ningún otro gesto del ratón tiene dueño.
+fn rueda_en_el_visor(app: &mut App, ev: MouseEvent) -> bool {
+    let shift = mods(ev.modifiers).shift;
+    let Some(v) = app.viewer.as_mut() else {
+        return false;
+    };
+    match ev.kind {
+        MouseEventKind::ScrollUp if shift => v.scroll_left(WHEEL_ROWS),
+        MouseEventKind::ScrollDown if shift => v.scroll_right(WHEEL_ROWS),
+        MouseEventKind::ScrollUp => v.scroll_up(WHEEL_ROWS),
+        MouseEventKind::ScrollDown => v.scroll_down(WHEEL_ROWS),
+        MouseEventKind::ScrollLeft => v.scroll_left(WHEEL_ROWS),
+        MouseEventKind::ScrollRight => v.scroll_right(WHEEL_ROWS),
+        _ => {}
+    }
+    true
 }
 
 /// La rueda sobre un hueco de visor ACOPLADO: lo desplaza y dice que sí.

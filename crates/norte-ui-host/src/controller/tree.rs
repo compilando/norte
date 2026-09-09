@@ -55,20 +55,29 @@ impl Estado {
         slot: u32,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
-    ) {
+    ) -> bool {
         if self.hueco_de_ramas().is_none() || slot != self.activo() {
-            return;
+            return false;
         }
         let Some(dir) = self.huecos.get(&slot).map(|h| h.pane.dir().clone()) else {
-            return;
+            return false;
         };
-        self.ramas
+        let movio = self
+            .ramas
             .get_or_insert_with(norte_frontend::tree::Tree::default)
             .follow(&dir);
+        if !movio {
+            // El listado no se ha movido de sitio —un refresco, un click— así
+            // que el árbol tampoco. Subir la generación aquí invalidaba todo
+            // índice pintado y convertía un click en vuelo sobre una rama en
+            // un rechazo por generación, sin que nada hubiera cambiado.
+            return false;
+        }
         // Las filas se han movido —hay ancestros desplegados que antes no
         // estaban—, así que todo índice pintado hasta ahora nombra otra rama.
         self.gen_ramas += 1;
         self.pedir_ramas(backend, buzon);
+        true
     }
 
     /// Pide la siguiente rama que haga falta, y UNA por vuelta.

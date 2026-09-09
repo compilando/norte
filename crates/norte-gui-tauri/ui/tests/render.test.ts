@@ -733,8 +733,11 @@ describe("el visor", () => {
     screen.paint(v);
     const barra = document.querySelector(".viewer-bar-h") as HTMLElement;
     expect(barra).not.toBe(null);
-    expect(barra.getAttribute("aria-valuenow")).toBe("400");
-    expect(barra.getAttribute("aria-orientation")).toBe("horizontal");
+    // La barra es un INDICADOR y va `aria-hidden`: `role="scrollbar"` promete
+    // un control que no existe. La posición se lee en las marcas de la
+    // cabecera, con palabras, que es lo que llega a quien no la ve.
+    expect(barra.getAttribute("aria-hidden")).toBe("true");
+    expect(document.querySelector(".viewer-meta")?.textContent).toContain("401/800");
 
     // Y la rueda desplaza por el HOST: con `shift`, de lado.
     const caja = document.querySelector(".viewer") as HTMLElement;
@@ -1912,6 +1915,27 @@ describe("la ayuda", () => {
     }
   });
 
+  it("el cuerpo del visor se pinta en orden lógico, como un terminal", () => {
+    // El recorte horizontal lo hace el HOST en orden lógico, una sola vez, en
+    // el modelo que comparte con el terminal. Un navegador que reordenara por
+    // el algoritmo bidi dejaría la misma `first_col` enseñando cosas distintas
+    // en las dos superficies — y sin ninguna marca, porque una línea de LETRAS
+    // árabes o hebreas no lleva controles: nada se enmascara y `had_errors` es
+    // falso. Es la misma renuncia que ya hace `must_mask` con los aislantes
+    // legítimos: honestidad de rejilla por encima de tipografía.
+    //
+    // Sobre la HOJA como texto y por el mismo motivo que el bloque de la
+    // ayuda: jsdom no la aplica, así que `getComputedStyle` no comprobaría
+    // nada. Lo que hay que impedir es que la regla desaparezca.
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    const bloque = css
+      .split("}")
+      .find((b) => b.includes(".viewer-body {") && b.includes("unicode-bidi"));
+    expect(bloque, "el cuerpo del visor sin regla bidi").toBeDefined();
+    expect(bloque).toContain("bidi-override");
+    expect(bloque).toContain("direction: ltr");
+  });
+
   it("un enlace de la prosa no es un control ni lleva la clave de destino", () => {
     const { screen } = montar();
     const v = conAyuda();
@@ -2557,8 +2581,8 @@ describe("los huecos que no son listados", () => {
           truncated: false,
           total_rows: 2,
           first_line: 0,
-      total_cols: 0,
-      first_col: 0,
+          total_cols: 0,
+          first_col: 0,
           lines: ["Título", "texto"],
           preview_by: "via Markdown",
           preview_lossy: false,
@@ -2610,8 +2634,8 @@ describe("los huecos que no son listados", () => {
           truncated: false,
           total_rows: 200,
           first_line: 0,
-      total_cols: 0,
-      first_col: 0,
+          total_cols: 0,
+          first_col: 0,
           lines: ["una", "dos"],
           preview_by: "",
           preview_lossy: false,

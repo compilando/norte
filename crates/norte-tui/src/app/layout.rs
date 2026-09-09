@@ -1425,6 +1425,12 @@ mod tests {
     /// Cambiar de panel también cambia a dónde mira el árbol: los dos lados
     /// están en sitios distintos, y un árbol que se quedara en el del panel
     /// anterior describiría el que ya no tiene el foco.
+    ///
+    /// Y la raíz sube al ancestro COMÚN de los dos, sin tirar nada: `Tab` es la
+    /// tecla más usada del programa, y re-anclar en el destino cerraba el árbol
+    /// entero en cada pulsación. Aquí los dos lados solo comparten la raíz del
+    /// provider, así que ahí acaba subiendo; con dos directorios hermanos —el
+    /// caso normal— sube un nivel y se queda.
     #[test]
     fn el_arbol_sigue_al_cambio_de_panel() {
         let mut app = app_en("mem:///r", "mem:///otro");
@@ -1439,8 +1445,20 @@ mod tests {
 
         assert_eq!(
             app.tree().and_then(|t| t.root().cloned()),
-            Some(vp("mem:///otro")),
-            "el otro lado no cuelga de la raíz anterior, así que se re-ancla"
+            Some(vp("mem:///")),
+            "sube al ancestro común de los dos lados"
+        );
+        assert_eq!(
+            app.tree().and_then(norte_frontend::tree::Tree::revealing),
+            Some(&vp("mem:///otro")),
+            "y el cursor irá a donde está el panel que ahora tiene el foco"
+        );
+
+        // Y la vuelta ya no mueve la raíz: los dos cuelgan de ella.
+        app.switch_focus();
+        assert_eq!(
+            app.tree().and_then(|t| t.root().cloned()),
+            Some(vp("mem:///"))
         );
     }
 

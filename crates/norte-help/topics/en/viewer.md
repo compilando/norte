@@ -39,8 +39,9 @@ Lines are **not wrapped**, so a minified HTML file or a wide CSV runs off the
 right edge. {{cmd:viewer.left}} and {{cmd:viewer.right}} move the window a
 column at a time, and they take a count like the vertical pair: `40` and then
 right jumps forty columns. The window stops where the longest line ends, so it
-never scrolls off into a blank screen. The hex dump has a fixed width that
-always fits and does not move sideways.
+never scrolls off into a blank screen, and the status line says which column
+you are on. The hex dump scrolls sideways too, with its own width — its ASCII
+column does not fit in a narrow pane.
 
 The same keys work on a file inside a `.zip` or over SFTP. The pane holds a
 location, the viewer reads whatever that location gives it, and neither of them

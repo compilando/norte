@@ -57,6 +57,13 @@ pub struct Tree {
     /// en el último ancestro que sí existía cuando se pidió. Se liquida en
     /// [`Self::insert_children`], que es cuando aparecen filas nuevas.
     revealing: Option<VPath>,
+    /// El último directorio al que [`Self::follow`] siguió.
+    ///
+    /// Sirve para NO volver a mover el cursor cuando el listado no ha cambiado
+    /// de sitio: el embudo por el que se sigue pasa también en un refresco y
+    /// en un click, y sin esto el cursor que el lector había movido a mano
+    /// para mirar otra rama volvía de un salto por pulsar en el listado.
+    seguido: Option<VPath>,
 }
 
 impl Tree {
@@ -74,60 +81,112 @@ impl Tree {
         self.expanded_dirs.clear();
         self.cursor = 0;
         self.revealing = None;
+        self.seguido = None;
     }
 
     /// Sigue al listado de al lado: deja `dir` bajo el cursor SIN tirar lo que
-    /// esté abierto.
+    /// esté abierto. Dice si movió algo.
     ///
     /// Es la diferencia entre un árbol útil y uno que estorba. [`Self::anchor`]
     /// vacía —tiene que hacerlo, porque las ramas de otra raíz no dicen nada
     /// de ésta—, así que re-anclar en cada `cd` cerraría el árbol entero cada
-    /// vez que alguien entra en una carpeta. Revelar despliega los ANCESTROS
-    /// de `dir` y mueve el cursor; una rama hermana abierta sigue abierta.
+    /// vez que alguien entra en una carpeta.
+    ///
+    /// **La regla es una: lo leído sigue valiendo mientras la raíz nueva sea un
+    /// ANCESTRO de la vieja.** De ahí salen los tres casos:
+    ///
+    /// - `dir` cuelga de la raíz: se despliegan sus ancestros y el cursor va
+    ///   ahí. La raíz no se mueve y nada se tira.
+    /// - `dir` está por ENCIMA o al lado: la raíz sube al ancestro común más
+    ///   hondo y **se conserva todo**, porque cada rama leída sigue colgando de
+    ///   ahí. Es lo que hace que subir un nivel (`nav.up`) y alternar entre dos
+    ///   paneles hermanos con `Tab` no cierren el árbol en cada pulsación —
+    ///   antes lo hacían, y era la tecla más usada del programa.
+    /// - Otro provider u otra máquina: entonces sí se ancla y se vacía. No hay
+    ///   ancestro común, y un árbol que enseña un sitio junto a un listado que
+    ///   enseña otro no responde a nada.
     ///
     /// `dir` mismo NO se despliega: quien navega ahí ya está viendo su
     /// contenido en el listado de al lado, y desplegarlo costaría un listado
     /// más por cada paso que dé el lector.
     ///
-    /// Cuando `dir` no cuelga de la raíz —otro provider, otra máquina, o
-    /// simplemente `/tmp` desde `$HOME`— sí se re-ancla: la alternativa es un
-    /// árbol que enseña un sitio y un listado que enseña otro.
+    /// Seguir DOS VECES al mismo directorio no vuelve a mover el cursor: por
+    /// este embudo pasan también los refrescos y los clicks, y sin eso el
+    /// cursor que el lector había movido a mano volvía de un salto cada vez
+    /// que pulsaba en el listado.
     ///
     /// ```
     /// use norte_frontend::tree::Tree;
     /// use norte_proto::VPath;
     /// let vp = |w: &str| VPath::parse(w).unwrap();
     /// let mut t = Tree::default();
-    /// t.anchor(vp("mem:///r"));
-    /// t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
+    /// t.anchor(vp("mem:///r/a"));
     /// t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/y")]);
     /// t.follow(&vp("mem:///r/a/y"));
     /// assert_eq!(t.selected(), Some(vp("mem:///r/a/y")));
+    /// // Subir un nivel mueve la RAÍZ hacia arriba y conserva lo leído: hace
+    /// // falta el listado de la raíz nueva —el mismo viaje que `anchor`
+    /// // habría pedido— y con él vuelve todo lo que estaba abierto.
+    /// t.follow(&vp("mem:///r"));
+    /// assert_eq!(t.root(), Some(&vp("mem:///r")));
+    /// t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
+    /// assert!(t.rows().iter().any(|f| f.path == vp("mem:///r/a/y")));
     /// ```
-    pub fn follow(&mut self, dir: &VPath) {
+    pub fn follow(&mut self, dir: &VPath) -> bool {
         let Some(root) = self.root.clone() else {
             self.anchor(dir.clone());
-            return;
+            self.seguido = Some(dir.clone());
+            return true;
         };
-        // La cadena de `dir` hasta la raíz, `dir` incluido y la raíz no: es
-        // exactamente lo que hay que desplegar para que la fila exista.
-        let mut cadena = Vec::new();
-        let mut actual = dir.clone();
-        while actual != root {
-            let Some(padre) = actual.parent() else {
-                // Se ha llegado a la raíz del provider sin pasar por la
-                // nuestra: esto no cuelga de aquí.
-                self.anchor(dir.clone());
-                return;
-            };
-            cadena.push(actual);
-            actual = padre;
+        let cadena_dir = Self::hasta_la_raiz(dir);
+        let cadena_root = Self::hasta_la_raiz(&root);
+        // El ancestro común más HONDO: el primero de la cadena de `dir` —que va
+        // de abajo arriba— que también está en la de la raíz. Sin ninguno son
+        // dos providers distintos, y entonces nada de lo leído sirve.
+        let Some(base) = cadena_dir.iter().find(|p| cadena_root.contains(p)).cloned() else {
+            self.anchor(dir.clone());
+            self.seguido = Some(dir.clone());
+            return true;
+        };
+        let mismo_sitio = self.seguido.as_ref() == Some(dir);
+        let antes = (self.root.clone(), self.expanded_dirs.len());
+        if base != root {
+            // La raíz SUBE, y no se vacía: la nueva es un ancestro de la
+            // vieja, así que cada rama leída sigue colgando de ella. Lo que
+            // hay que hacer es desplegar la cadena hasta la raíz anterior, o
+            // lo que estaba abierto dejaría de verse — deja de estar a
+            // profundidad cero, que es la única que se despliega sola.
+            self.root = Some(base.clone());
+            for p in cadena_root.iter().take_while(|p| **p != base) {
+                self.expanded_dirs.insert(p.clone());
+            }
         }
-        for p in cadena.iter().skip(1) {
+        // Los ANCESTROS de `dir` hasta la base; `dir` no.
+        for p in cadena_dir.iter().take_while(|p| **p != base).skip(1) {
             self.expanded_dirs.insert(p.clone());
         }
+        self.seguido = Some(dir.clone());
+        let movio = antes != (self.root.clone(), self.expanded_dirs.len());
+        if mismo_sitio && !movio {
+            // El listado no se ha movido de sitio: el cursor del árbol es del
+            // lector.
+            return false;
+        }
         self.revealing = Some(dir.clone());
+        let antes_cursor = self.cursor;
         self.asentar_revelado();
+        movio || self.cursor != antes_cursor
+    }
+
+    /// `dir` y todos sus ancestros, del más hondo a la raíz del provider.
+    fn hasta_la_raiz(dir: &VPath) -> Vec<VPath> {
+        let mut out = vec![dir.clone()];
+        let mut actual = dir.clone();
+        while let Some(padre) = actual.parent() {
+            out.push(padre.clone());
+            actual = padre;
+        }
+        out
     }
 
     /// El directorio que [`Self::follow`] pidió y que aún no tiene fila, si
@@ -152,12 +211,25 @@ impl Tree {
     }
 
     /// Pone el cursor en la rama que [`Self::follow`] pidió, si ya es una fila.
+    ///
+    /// Y suelta el objetivo cuando se sabe que la fila NO va a aparecer: el
+    /// padre ya está listado y `dir` no está entre sus hijos. Pasa de verdad —
+    /// el listado de una rama se recorta a un tope, así que el hijo que hace
+    /// falta puede quedarse fuera— y sin esto el objetivo se quedaba puesto
+    /// para siempre, pagando un barrido de filas en cada rama que llegara.
     fn asentar_revelado(&mut self) {
         let Some(objetivo) = self.revealing.clone() else {
             return;
         };
         if let Some(i) = self.rows().iter().position(|r| r.path == objetivo) {
             self.cursor = i;
+            self.revealing = None;
+            return;
+        }
+        if let Some(padre) = objetivo.parent()
+            && let Some(hijos) = self.child_dirs.get(&padre)
+            && !hijos.contains(&objetivo)
+        {
             self.revealing = None;
         }
     }
@@ -413,16 +485,124 @@ mod tests {
         assert_eq!(t.revealing(), None, "ya está revelada");
     }
 
-    /// Un destino que no cuelga de la raíz SÍ re-ancla: un árbol que enseña un
-    /// sitio junto a un listado que enseña otro no responde a nada.
+    /// **Subir un nivel mueve la raíz ARRIBA y conserva lo leído.**
+    ///
+    /// `nav.up` es de las teclas más pulsadas de un gestor ortodoxo, y antes
+    /// vaciaba el árbol entero: la raíz nueva no colgaba de la vieja, así que
+    /// se anclaba. Pero al revés SÍ colgaba — todo lo leído sigue estando
+    /// debajo de la raíz nueva—, y tirarlo era gratis y encima costaba otro
+    /// listado.
     #[test]
-    fn seguir_fuera_de_la_raiz_reancla() {
+    fn seguir_hacia_arriba_sube_la_raiz_sin_vaciar() {
+        let mut t = Tree::default();
+        t.anchor(vp("mem:///r/a"));
+        t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/y")]);
+        t.set_cursor(1);
+        t.expand();
+        t.insert_children(vp("mem:///r/a/y"), vec![vp("mem:///r/a/y/z")]);
+
+        t.follow(&vp("mem:///r"));
+
+        assert_eq!(t.root(), Some(&vp("mem:///r")));
+        // La raíz nueva todavía no se ha listado, así que en esta vuelta solo
+        // se ve ella: lo que importa es que NADA se tiró. `wants` pide su
+        // listado —el mismo que `anchor` habría pedido— y con él vuelve todo.
+        assert_eq!(t.wants(), Some(vp("mem:///r")));
+        t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
+
+        let filas: Vec<VPath> = t.rows().into_iter().map(|r| r.path).collect();
+        assert_eq!(
+            filas,
+            vec![
+                vp("mem:///r"),
+                vp("mem:///r/a"),
+                vp("mem:///r/a/y"),
+                vp("mem:///r/a/y/z"),
+            ],
+            "la raíz vieja queda desplegada y lo abierto debajo sigue abierto"
+        );
+        assert_eq!(t.selected(), Some(vp("mem:///r")), "y el cursor, arriba");
+    }
+
+    /// **Alternar entre dos paneles hermanos no vacía el árbol.**
+    ///
+    /// Es `Tab` con el árbol abierto, o sea la tecla más usada del programa:
+    /// re-anclar en el destino cerraba el árbol en CADA pulsación. La raíz sube
+    /// al ancestro común una vez y ahí se queda, así que la segunda vuelta ya
+    /// no mueve nada.
+    #[test]
+    fn seguir_a_un_hermano_sube_al_ancestro_comun_una_vez() {
+        let mut t = Tree::default();
+        t.anchor(vp("mem:///r/a"));
+        t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/y")]);
+        t.set_cursor(1);
+        t.expand();
+        t.insert_children(vp("mem:///r/a/y"), Vec::new());
+
+        t.follow(&vp("mem:///r/b"));
+        assert_eq!(t.root(), Some(&vp("mem:///r")), "sube al ancestro común");
+        // Un listado de la raíz nueva —el que `anchor` habría pedido igual— y
+        // lo que estaba abierto vuelve entero.
+        t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a"), vp("mem:///r/b")]);
+        assert!(
+            t.rows().iter().any(|f| f.path == vp("mem:///r/a/y")),
+            "lo que estaba abierto sigue ahí: {:?}",
+            t.rows()
+        );
+        assert_eq!(t.selected(), Some(vp("mem:///r/b")), "y el cursor, en `b`");
+
+        // La vuelta ya no mueve la raíz ni pide nada: `a` cuelga de `r`.
+        t.follow(&vp("mem:///r/a"));
+        assert_eq!(t.root(), Some(&vp("mem:///r")));
+        assert_eq!(t.wants(), None, "no hace falta otro viaje");
+        assert!(t.rows().iter().any(|f| f.path == vp("mem:///r/a/y")));
+        assert_eq!(t.selected(), Some(vp("mem:///r/a")));
+    }
+
+    /// Otro provider SÍ ancla y vacía: no hay ancestro común, y las ramas de
+    /// otra máquina no dicen nada de ésta.
+    #[test]
+    fn seguir_a_otro_provider_reancla() {
         let mut t = con_raiz();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
-        t.follow(&vp("mem:///otro/z"));
-        assert_eq!(t.root(), Some(&vp("mem:///otro/z")));
+        t.follow(&vp("file:///otro/z"));
+        assert_eq!(t.root(), Some(&vp("file:///otro/z")));
         assert_eq!(t.rows().len(), 1, "solo la raíz nueva");
         assert_eq!(t.revealing(), None, "anclar no deja nada pendiente");
+    }
+
+    /// Seguir DOS VECES al mismo sitio no vuelve a mover el cursor: por este
+    /// embudo pasan los refrescos y los clicks, y el cursor que el lector movió
+    /// a mano para mirar otra rama es suyo.
+    #[test]
+    fn seguir_dos_veces_al_mismo_sitio_no_toca_el_cursor() {
+        let mut t = con_raiz();
+        t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a"), vp("mem:///r/b")]);
+        assert!(t.follow(&vp("mem:///r/a")), "la primera vez sí mueve");
+        assert_eq!(t.selected(), Some(vp("mem:///r/a")));
+
+        t.set_cursor(2);
+        assert!(!t.follow(&vp("mem:///r/a")), "la segunda no mueve nada");
+        assert_eq!(
+            t.selected(),
+            Some(vp("mem:///r/b")),
+            "el cursor se queda donde el lector lo dejó"
+        );
+    }
+
+    /// Y un objetivo que NO va a aparecer se suelta en cuanto se sabe: el
+    /// listado de una rama se recorta a un tope, así que el hijo que hacía
+    /// falta puede quedarse fuera y el objetivo colgado para siempre.
+    #[test]
+    fn un_objetivo_que_no_va_a_llegar_se_suelta() {
+        let mut t = con_raiz();
+        t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
+        t.follow(&vp("mem:///r/a/y"));
+        assert_eq!(t.revealing(), Some(&vp("mem:///r/a/y")));
+
+        // `a` se lista y `y` no está: recortado, borrado, o nunca existió.
+        t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/otro")]);
+        assert_eq!(t.revealing(), None, "ya se sabe que esa fila no viene");
     }
 
     /// Y una rama profunda que no se ha listado todavía se revela A PLAZOS:
@@ -443,8 +623,7 @@ mod tests {
         assert_eq!(t.revealing(), None);
     }
 
-    /// Seguir a la raíz misma es volver arriba, no vaciar: `anchor` habría
-    /// tirado lo leído y aquí no cambia de sitio nada.
+    /// Seguir a la raíz misma no cambia de sitio nada.
     #[test]
     fn seguir_a_la_propia_raiz_no_tira_nada() {
         let mut t = con_raiz();

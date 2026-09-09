@@ -79,17 +79,6 @@ function nota(texto: string): HTMLElement {
 }
 
 /**
- * El cuerpo de un visor: las líneas, o los fragmentos con estilo si un
- * plugin los puso. Lo comparten el visor a pantalla completa y el acoplado
- * (#291): es el mismo visor en otro sitio, y dos cuerpos divergen.
- *
- * Siempre `textContent`: el texto lo escribió un plugin. El rol va en
- * `data-role`, que la hoja de estilos mapea a las variables del tema, y el
- * color propio solo cuando no hay rol — el tema del lector manda sobre la
- * paleta fija del plugin. El fondo no tiene rol que lo mande: un medio
- * bloque sin fondo es media imagen (puente 50).
- */
-/**
  * Una barra de scroll del visor, o `null` si cabe todo.
  *
  * PROPIA y no la del navegador: el host manda solo la ventana visible, así que
@@ -100,7 +89,13 @@ function nota(texto: string): HTMLElement {
  *
  * No se arrastra: es un INDICADOR. Arrastrarla pediría traducir píxeles a
  * líneas del lado del renderer, que es justo lo que el host hace ya para la
- * rueda.
+ * rueda. Por eso va `aria-hidden` y NO `role="scrollbar"`: ese rol promete un
+ * control que no existe y exige un `aria-controls` que no hay. Quien no la ve
+ * lee la posición en las marcas de la cabecera, que la dicen con palabras.
+ *
+ * `visible === 0` es la medida de ANTES de pintar —el cuerpo aún no tiene
+ * altura— y entonces no se dibuja nada: con `Math.max(1, 0)` salía un pulgar
+ * de un píxel durante un frame.
  */
 function viewerBar(
   vertical: boolean,
@@ -108,17 +103,13 @@ function viewerBar(
   first: number,
   visible: number,
 ): HTMLElement | null {
-  const ventana = Math.max(1, visible);
-  if (total <= ventana) {
+  if (visible <= 0 || total <= visible) {
     return null;
   }
+  const ventana = visible;
   const bar = document.createElement("div");
   bar.className = vertical ? "viewer-bar viewer-bar-v" : "viewer-bar viewer-bar-h";
-  bar.setAttribute("role", "scrollbar");
-  bar.setAttribute("aria-orientation", vertical ? "vertical" : "horizontal");
-  bar.setAttribute("aria-valuemin", "0");
-  bar.setAttribute("aria-valuemax", String(total - ventana));
-  bar.setAttribute("aria-valuenow", String(first));
+  bar.setAttribute("aria-hidden", "true");
   const thumb = document.createElement("div");
   thumb.className = "viewer-thumb";
   const largo = ventana / total;
@@ -2555,6 +2546,12 @@ export class Screen {
     }
     if (viewer.truncated) {
       marcas.push(this.t("viewer-truncated"));
+    }
+    // La fila y la COLUMNA, en palabras: es lo que lee quien no ve las barras,
+    // que son indicadores visuales y van `aria-hidden`.
+    marcas.push(`${String(viewer.first_line + 1)}/${String(Math.max(1, viewer.total_rows))}`);
+    if (viewer.first_col > 0) {
+      marcas.push(`${String(viewer.first_col + 1)}/${String(Math.max(1, viewer.total_cols))}`);
     }
     meta.textContent = marcas.join(" · ");
     head.append(meta);

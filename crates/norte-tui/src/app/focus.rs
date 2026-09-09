@@ -67,13 +67,23 @@ impl App {
     /// árbol y el visor abiertos un anillo de toda la pantalla obligaría a dar
     /// cinco pulsaciones para volver al listado de al lado. A los laterales se
     /// llega con `layout.focus-next` y con la tecla de cada uno.
+    ///
+    /// Y por el MISMO aterrizaje que el anillo grande, que es lo que además
+    /// devuelve el teclado: `tab` está en `[global]`, así que se puede pulsar
+    /// con el visor acoplado enfocado, y sin esto el borde de foco saltaba al
+    /// listado de al lado mientras las flechas seguían moviendo el visor.
+    /// `Tab` saca de un panel lateral — eso es lo que garantiza que ninguna
+    /// combinación deje al lector dentro.
     pub fn switch_focus(&mut self) {
         let n = self.panes.len();
         if n < 2 {
+            // Con un solo listado no hay «el otro», y el teclado se devuelve
+            // igual: pulsar `Tab` dentro de un lateral tiene que sacar de él
+            // aunque no haya a dónde ir después.
+            self.return_keys_to_panes();
             return;
         }
-        self.set_focus((self.focus + 1) % n);
-        self.follow_tree();
+        self.aterrizar(FocusStop::Pane((self.focus + 1) % n));
     }
 
     /// Exchanges the two panes and everything `App` keeps beside them

@@ -20459,12 +20459,17 @@ async fn del_panel_de_procesos_se_sale_tabulando() {
     }
     assert!(dentro, "el anillo llega al panel de procesos");
 
-    // ...y se sale por donde se entró.
-    h.dispatch(tecla("Alt+o")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    // ...y se sale por donde se entró. `tecla_alt("o")`, no `tecla("Alt+o")`:
+    // el segundo no es un nombre de tecla, `to_chord` lo rechaza y el host
+    // contesta `Unavailable` sin mandar nada — o sea que la aserción de abajo
+    // se cumplía o no según qué sobre quedara en la cola.
+    h.dispatch(tecla_alt("o")).await.expect("host vivo");
+    let fuera_del_panel = foto_hasta(&h, &mut sub, "el foco salió del panel", |foto| {
+        activo(foto).filter(|id| *id != procesos)
+    })
+    .await;
     assert_ne!(
-        activo(&siguiente_foto(&mut sub).await),
-        Some(procesos),
+        fuera_del_panel, procesos,
         "y se SALE de él: un anillo que entra y no sale es una trampa"
     );
 

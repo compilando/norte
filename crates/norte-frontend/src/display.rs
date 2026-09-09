@@ -179,8 +179,16 @@ pub fn path_display_with(
 ///
 /// La misma medida contra la que presupuesta [`middle_ellipsis`], expuesta al
 /// crate para que quien reserve sitio a un campo POSTERIOR lo mida igual que lo
-/// mide el truncador. Un char sin ancho asignado (code point no asignado) pesa
-/// 0, que es lo que hace también el caminante del truncador.
+/// mide el truncador.
+///
+/// Se suma POR CARÁCTER, y eso no es la anchura que `unicode-width` da a la
+/// cadena entera: un VS16 o una pareja de indicadores regionales pintan menos
+/// de lo que suman sus partes. Es deliberado — los caminantes de este módulo
+/// solo pueden contar por carácter, y una medida que no cuente como ellos deja
+/// presupuestos que no cuadran con el recorte.
+///
+/// `width()` devuelve `None` solo para CONTROLES, y aquí pesan 0. Todo llamante
+/// de este módulo los ha enmascarado ya a `�` antes de medir.
 #[must_use]
 pub fn cells(s: &str) -> usize {
     s.chars()
@@ -188,7 +196,7 @@ pub fn cells(s: &str) -> usize {
         .sum()
 }
 
-/// Tira las primeras `n` CELDAS de `s` y devuelve el resto.
+/// Tira las primeras `n` CELDAS de `s` y devuelve el resto, alineado.
 ///
 /// Es el desplazamiento horizontal del visor: la ventana empieza en la columna
 /// `n`, y «columna» en un terminal es celda, no byte ni carácter. Contar por
@@ -196,15 +204,25 @@ pub fn cells(s: &str) -> usize {
 /// caracteres desalinearía cualquier línea con CJK, donde un carácter ocupa
 /// dos columnas.
 ///
-/// Un carácter ANCHO a caballo del corte se va ENTERO. Su mitad izquierda no
-/// se puede pintar —no hay medio ideograma— y quedarse con el carácter
-/// completo correría el texto una columna respecto a las líneas de al lado.
-/// Perder una columna es visible y honesto; una línea desplazada respecto a
-/// sus vecinas parece otro contenido.
+/// **Un carácter ANCHO a caballo del corte se va ENTERO y deja su hueco en
+/// blanco.** Su mitad izquierda no se puede pintar —no hay medio ideograma—,
+/// pero tirarlo sin más corre esa fila una columna respecto a las de al lado, y
+/// eso rompe exactamente lo que un desplazamiento horizontal sirve para leer:
+/// un CSV, un log alineado, una tabla. El espacio que se devuelve en su lugar
+/// es lo que mantiene la rejilla.
 ///
-/// Las marcas de ancho cero que abren el resto se conservan: son de la letra
-/// anterior, ya perdida, pero tirarlas no arregla nada y contarlas como
-/// avance sí escondería texto.
+/// **Las marcas de ancho cero que abrirían el resto se TIRAN**, igual que hacen
+/// [`middle_ellipsis`] y [`ellipsis_at_bytes`] con la cola: han perdido su base
+/// por construcción, y dejarlas las reparenta a la letra siguiente. Un cúmulo
+/// ZWJ cortado por la mitad pintaría, si no, una familia distinta de la que hay
+/// en el fichero.
+///
+/// El ancho se cuenta POR CARÁCTER, igual que [`cells`], y eso es deliberado
+/// aunque no sea la anchura que `unicode-width` daría a la cadena entera (un
+/// VS16 o una pareja de indicadores regionales pintan menos de lo que suman sus
+/// partes): quien camina la cadena solo puede contar por carácter, y una cota
+/// que no cuente igual que el caminante deja llegar el desplazamiento a donde
+/// el caminante no llega.
 ///
 /// ```
 /// use norte_frontend::display::skip_cells;
@@ -212,22 +230,52 @@ pub fn cells(s: &str) -> usize {
 /// assert_eq!(skip_cells("hola", 0), "hola");
 /// assert_eq!(skip_cells("hola", 2), "la");
 /// assert_eq!(skip_cells("hola", 9), "");
-/// // Un ideograma ocupa DOS celdas: cortar por la primera se lo lleva.
-/// assert_eq!(skip_cells("漢字", 1), "字");
+/// // Un ideograma ocupa DOS celdas: cortarlo por la primera se lo lleva
+/// // entero, y su hueco queda en blanco para no correr la fila.
+/// assert_eq!(skip_cells("漢字", 1), " 字");
+/// assert_eq!(skip_cells("漢字", 2), "字");
 /// ```
 #[must_use]
-pub fn skip_cells(s: &str, n: usize) -> &str {
+pub fn skip_cells(s: &str, n: usize) -> String {
     if n == 0 {
-        return s;
+        return s.to_owned();
     }
     let mut saltadas = 0usize;
+    let mut resto = "";
     for (i, c) in s.char_indices() {
         if saltadas >= n {
-            return &s[i..];
+            resto = &s[i..];
+            break;
         }
         saltadas += UnicodeWidthChar::width(c).unwrap_or(0);
     }
-    ""
+    // Lo que se saltó de MÁS es la mitad de un carácter ancho que no cabía: su
+    // hueco va en blanco.
+    let hueco = saltadas.saturating_sub(n);
+    // Y las marcas huérfanas del principio, fuera: su base se quedó al otro
+    // lado del corte.
+    let resto = sin_marcas_de_cabeza(resto);
+    let mut out = String::with_capacity(hueco + resto.len());
+    for _ in 0..hueco {
+        out.push(' ');
+    }
+    out.push_str(resto);
+    out
+}
+
+/// Lo que queda de `s` tras tirar las marcas de ancho CERO de su cabeza.
+///
+/// Una marca de cabeza perdió su base al otro lado de un corte por la
+/// izquierda, y dejarla la reparenta a la letra siguiente: un cúmulo ZWJ
+/// partido pintaría un glifo que no está en el fichero. Es la misma regla que
+/// [`middle_ellipsis`] y [`ellipsis_at_bytes`] aplican a la COLA, por el mismo
+/// motivo y en el otro extremo.
+///
+/// Público en el crate porque el recorte con estilo del visor tiene que
+/// aplicarlo en el mismo sitio del corte que el de la cadena entera; dos
+/// respuestas a esto son dos pinturas distintas del mismo fichero.
+pub(crate) fn sin_marcas_de_cabeza(s: &str) -> &str {
+    s.trim_start_matches(|c| UnicodeWidthChar::width(c) == Some(0))
 }
 
 /// Recorta a un tope de BYTES por la cola, marcando el recorte con `…`.
@@ -406,25 +454,75 @@ mod tests {
         VPath::root(Scheme::new("mem").unwrap(), None)
     }
 
-    /// `skip_cells` cuenta COLUMNAS, no bytes ni caracteres, y jamás parte un
-    /// carácter ancho: media celda no se puede pintar, y quedarse el carácter
-    /// entero correría la fila una columna respecto a sus vecinas.
+    /// `skip_cells` cuenta COLUMNAS, no bytes ni caracteres.
     #[test]
     fn skip_cells_cuenta_columnas_y_no_parte_un_ancho() {
         assert_eq!(skip_cells("hola", 0), "hola");
         assert_eq!(skip_cells("hola", 1), "ola");
         assert_eq!(skip_cells("hola", 4), "");
         assert_eq!(skip_cells("hola", 99), "", "pasarse no es un error");
+    }
 
-        // Un ideograma son DOS columnas: cortar por la primera se lo lleva.
-        assert_eq!(skip_cells("漢字x", 1), "字x");
+    /// **Un carácter ancho partido por el corte deja su hueco en blanco.**
+    ///
+    /// Tirarlo sin más corría esa fila una columna respecto a las de al lado, y
+    /// eso rompe justo lo que un desplazamiento horizontal sirve para leer: un
+    /// CSV, un log alineado. La rejilla es la característica.
+    #[test]
+    fn skip_cells_mantiene_la_rejilla_cuando_parte_un_ancho() {
+        // Un ideograma son DOS columnas: cortar por la primera se lo lleva
+        // entero, y deja un espacio donde estaba su mitad derecha.
+        assert_eq!(skip_cells("漢字x", 1), " 字x");
         assert_eq!(skip_cells("漢字x", 2), "字x");
-        assert_eq!(skip_cells("漢字x", 3), "x");
+        assert_eq!(skip_cells("漢字x", 3), " x");
+        assert_eq!(skip_cells("漢字x", 4), "x");
 
-        // Un acento combinante pesa cero: no avanza la cuenta, y sobrevive
-        // pegado a lo que quede — contarlo como avance esconderÍa texto.
-        assert_eq!(skip_cells("ae\u{301}b", 1), "e\u{301}b");
-        assert_eq!(skip_cells("ae\u{301}b", 2), "\u{301}b");
+        // Y lo que importa de verdad: la fila con CJK y la de ASCII miden lo
+        // MISMO tras el mismo desplazamiento, así que sus columnas siguen
+        // enfrentadas.
+        for n in 0..6 {
+            assert_eq!(
+                cells(&skip_cells("漢字x", n)),
+                cells(&skip_cells("abcde", n)),
+                "desplazadas {n} columnas, las dos filas miden igual"
+            );
+        }
+    }
+
+    /// Una marca de ancho cero que abriría el resto se TIRA: perdió su base al
+    /// otro lado del corte, y dejarla la reparenta a la letra siguiente. Es lo
+    /// mismo que hacen `middle_ellipsis` y `ellipsis_at_bytes` con la cola.
+    #[test]
+    fn skip_cells_no_deja_una_marca_huerfana_al_principio() {
+        assert_eq!(
+            skip_cells("ae\u{301}b", 1),
+            "e\u{301}b",
+            "la `e` trae la suya"
+        );
+        assert_eq!(skip_cells("ae\u{301}b", 2), "b", "el acento perdió su `e`");
+
+        // Un cúmulo ZWJ cortado por la mitad pintaría una familia DISTINTA de
+        // la que hay en el fichero. Sin el ZWJ de cabeza, son personas sueltas
+        // —que es lo que queda— y no otra familia inventada.
+        let familia = "👨\u{200D}👩\u{200D}👧\u{200D}👦";
+        let resto = skip_cells(familia, 2);
+        assert!(
+            !resto.starts_with('\u{200D}'),
+            "jamás se empieza por un unificador: {resto:?}"
+        );
+
+        // Y ninguna fila empieza nunca por algo de ancho cero, para cualquier
+        // desplazamiento.
+        for n in 0..12 {
+            let r = skip_cells(familia, n);
+            if let Some(c) = r.chars().next() {
+                assert_ne!(
+                    UnicodeWidthChar::width(c),
+                    Some(0),
+                    "n={n} empieza en ancho cero: {r:?}"
+                );
+            }
+        }
     }
 
     /// Encoding MEDIA-2: el TEXTO de `path_display` no puede contener NINGÚN

@@ -555,6 +555,97 @@ pub struct HostileTitle {
     pub why: &'static str,
 }
 
+/// A line of the horizontal-scroll grid fixture ([`viewer_grid_lines`]).
+#[derive(Debug, Clone)]
+pub struct GridLine {
+    /// Stable identifier (for test names and messages).
+    pub id: &'static str,
+    /// The line itself, without its newline.
+    pub text: String,
+    /// Why it is hostile to a cut by the LEFT (living documentation).
+    pub why: &'static str,
+}
+
+/// The canonical fixture for a viewer that scrolls SIDEWAYS.
+///
+/// Deliberately NOT part of [`content_fixtures`]: that corpus's contract is
+/// «detect as text and decode byte-exact», and it is swept by the encoding and
+/// search suites, which have no business with a 200-column emoji line. This
+/// one exists for the other invariant — **a cut by the left keeps every row on
+/// the same column grid, and never starts a row on something of width zero.**
+///
+/// Every line is at least 200 cells wide and built so the same marker sits at
+/// the same visual column on all of them, which is what makes the property
+/// assertable by sweeping `h in 0..max_cols` instead of pinning one magic
+/// offset. What each line attacks is in its `why`.
+///
+/// ```
+/// let lines = norte_testkit::corpus::viewer_grid_lines();
+/// assert!(lines.len() >= 6);
+/// // Every line is wider than any reasonable window.
+/// for l in &lines {
+///     assert!(l.text.chars().count() >= 20, "{}", l.id);
+/// }
+/// // And the reference row is plain ASCII: it is what the others align to.
+/// let regla = lines.iter().find(|l| l.id == "ascii_ruler").unwrap();
+/// assert!(regla.text.is_ascii());
+/// ```
+#[must_use]
+pub fn viewer_grid_lines() -> Vec<GridLine> {
+    vec![
+        GridLine {
+            id: "ascii_ruler",
+            // `0123456789` veinte veces: la columna N lleva el dígito N % 10,
+            // así que un desplazamiento se lee a ojo en el fallo de un test.
+            text: "0123456789".repeat(20),
+            why: "the reference row. Plain ASCII, one cell per character, so \
+                  it is what every other line's columns must line up with \
+                  after the same shift",
+        },
+        GridLine {
+            id: "cjk_double_width",
+            text: "漢".repeat(120),
+            why: "an ideograph is TWO cells, so at every odd offset the cut \
+                  falls in the middle of one. It cannot be painted in half, \
+                  so it goes entirely — and the cell it leaves has to be \
+                  filled, or this row slides one column against its \
+                  neighbours and an aligned log stops being aligned",
+        },
+        GridLine {
+            id: "nfd_combining",
+            text: "e\u{301}".repeat(120),
+            why: "NFD: the acute is its OWN codepoint of width 0, so at every \
+                  odd offset the remainder would BEGIN on a mark whose base \
+                  is on the other side of the cut. macOS hands out NFD by \
+                  default, so this is the ordinary case",
+        },
+        GridLine {
+            id: "zwj_family",
+            text: "👨\u{200D}👩\u{200D}👧\u{200D}👦".repeat(30),
+            why: "a ZWJ cluster is several codepoints painted as ONE glyph. A \
+                  cut inside it that keeps the joiner paints a DIFFERENT \
+                  family from the one in the file, and says nothing — unlike \
+                  a truncation by the right, which at least writes a `…`",
+        },
+        GridLine {
+            id: "emoji_presentation",
+            text: "✔\u{FE0F}🇪🇸".repeat(60),
+            why: "VS16 and a regional-indicator pair paint NARROWER than the \
+                  sum of their parts' per-character widths. Whatever a walker \
+                  counts, the CAP has to count the same way, or the scroll \
+                  reaches where the walker cannot follow and the row goes \
+                  blank",
+        },
+        GridLine {
+            id: "wide_before_tab",
+            text: "漢\tx".repeat(40),
+            why: "a tab stop is a COLUMN, so the ideograph before it spends \
+                  two. Counting the stop per character puts the `x` one \
+                  column off and every column after it on that line drifts",
+        },
+    ]
+}
+
 /// The 4 canonical hostile titles.
 ///
 /// ```

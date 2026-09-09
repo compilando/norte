@@ -37,5 +37,13 @@ pub fn status(v: &Viewer) -> String {
     if v.truncated {
         let _ = write!(out, "  {}", t("viewer-truncated"));
     }
+    // La COLUMNA, y solo cuando no es la primera. Es lo único que dice «estás
+    // desplazado a la derecha» en el visor acoplado, cuyo borde de abajo lleva
+    // esta misma línea y por eso no puede llevar una barra horizontal: las
+    // teclas de desplazar SÍ funcionan ahí, y hacerlo sin ningún indicador es
+    // la mitad de la avería que este trabajo arregla.
+    if v.hscroll() > 0 {
+        let _ = write!(out, "  {}/{}", v.hscroll() + 1, v.max_cols().max(1));
+    }
     out
 }

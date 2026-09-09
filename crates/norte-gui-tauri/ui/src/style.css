@@ -593,6 +593,20 @@ body {
   min-height: 0;
 }
 
+/* `bidi-override` y `direction: ltr`: el cuerpo del visor se pinta en orden
+   LÓGICO, como una rejilla de celdas de terminal, y no reordenado por el
+   algoritmo bidi del navegador.
+
+   El recorte horizontal lo hace el host en orden lógico —una sola vez, en el
+   modelo compartido—, así que un navegador que reordenara dejaría la misma
+   `first_col` enseñando cosas distintas en el terminal y en la ventana. Y
+   pasaría sin ninguna marca: una línea de LETRAS árabes o hebreas no lleva
+   controles bidi, así que nada se enmascara y `had_errors` es falso.
+
+   Es la misma renuncia que ya hace `must_mask` con los aislantes bidi
+   legítimos: honestidad de rejilla por encima de tipografía. El resto de
+   superficies de esta hoja usa `isolate`, que es lo correcto para un NOMBRE
+   dentro de una fila; esto no es un nombre, es un volcado. */
 .viewer-body {
   flex: 1 1 auto;
   margin: 0;
@@ -601,6 +615,8 @@ body {
   white-space: pre;
   font: inherit;
   min-width: 0;
+  direction: ltr;
+  unicode-bidi: bidi-override;
 }
 
 /* Las barras del visor: INDICADORES, no controles. El host manda solo la

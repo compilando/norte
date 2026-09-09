@@ -1378,10 +1378,13 @@ pub struct ViewerView {
     /// desplaza. Viaja aunque las `lines` ya vengan recortadas: el recorte dice
     /// qué se ve, y esto dice cuánto hay — sin lo segundo, un fichero cortado
     /// por la derecha se lee como un fichero corto.
-    #[serde(default)]
+    ///
+    /// Sin `serde(default)`, como el resto de esta vista: la compatibilidad
+    /// hacia atrás la resuelve `bridge_version` en el sobre, y un `default`
+    /// aquí solo debilitaría el golden — si alguien dejara de serializarlos, el
+    /// round-trip pasaría con ceros.
     pub total_cols: u64,
     /// Primera columna visible, en celdas.
-    #[serde(default)]
     pub first_col: u64,
     /// Las líneas de la ventana visible, ya saneadas y acotadas.
     pub lines: Vec<String>,

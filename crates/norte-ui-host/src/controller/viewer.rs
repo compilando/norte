@@ -63,7 +63,10 @@ impl Estado {
         let Some(v) = self.visor.as_mut() else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
-        let pasos = |n: i64| usize::try_from(n.abs()).unwrap_or(usize::MAX);
+        // `unsigned_abs`, no `abs`: el delta de la rueda llega CRUDO del
+        // renderer, y `i64::MIN.abs()` desborda —panic en debug, envuelto en
+        // release—, o sea que un mensaje mal formado tumbaría el host.
+        let pasos = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
         match efecto {
             crate::commands::EfectoVisor::Cerrar => {
                 self.visor = None;
@@ -111,7 +114,10 @@ impl Estado {
         let Some(v) = self.visor.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let pasos = |n: i64| usize::try_from(n.abs()).unwrap_or(usize::MAX);
+        // `unsigned_abs`, no `abs`: el delta de la rueda llega CRUDO del
+        // renderer, y `i64::MIN.abs()` desborda —panic en debug, envuelto en
+        // release—, o sea que un mensaje mal formado tumbaría el host.
+        let pasos = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
         if lineas < 0 {
             v.scroll_up(pasos(lineas));
         } else {
