@@ -56,6 +56,13 @@ pub fn roles_de_tema(theme: &norte_theme::Theme) -> Vec<(String, String)> {
     poner("mark-bg", Role::Mark, true);
     poner("hostile-fg", Role::HostileBadge, false);
     poner("status-bg", Role::StatusBar, true);
+    // Y su primer plano. Faltaba, y `Role::StatusBar` es una PAREJA: el
+    // terminal lo usa como estilo entero. Mandando solo el fondo, todo lo que
+    // la ventana pinte encima tiene que adivinar el texto — la cabecera del
+    // visor adivinaba `title-fg`, y con un tema cuya barra de estado es clara
+    // eso es claro sobre claro: la ruta, el encoding, el EOL y las pérdidas
+    // salían INVISIBLES. Un visor que no dice qué mira miente por omisión.
+    poner("status-fg", Role::StatusBar, false);
     poner("title-fg", Role::Title, false);
     poner("error-fg", Role::Error, false);
     // Los dos roles que una DECORACIÓN de plugin puede pedir además de
@@ -500,4 +507,70 @@ fn detalle_de(v: &norte_proto::methods::Volume, lang: Lang) -> (String, bool) {
         trozos.push(pintable);
     }
     (trozos.join(" · "), hostil)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::roles_de_tema;
+
+    /// **Un rol de PAREJA cruza con sus dos mitades.**
+    ///
+    /// `Role::StatusBar` es fondo Y texto: el terminal lo aplica como estilo
+    /// entero. Aquí solo viajaba el fondo, así que todo lo que la ventana
+    /// pintase encima tenía que ADIVINAR el color del texto — la cabecera del
+    /// visor adivinaba `title-fg`, y con un tema cuya barra de estado es clara
+    /// eso es claro sobre claro: la ruta, el encoding, el EOL y las pérdidas
+    /// salían invisibles. Se vio pintando la ventana de verdad, no en un test.
+    ///
+    /// La lista se comprueba entera y a mano, por lo que dice el rustdoc de
+    /// `roles_de_tema`: es un acuerdo con una hoja de estilos que no comparte
+    /// tipos, así que quitar una clave tiene que ponerse rojo aquí en vez de
+    /// descubrirse mirando la pantalla.
+    #[test]
+    fn el_tema_cruza_las_dos_mitades_de_la_barra_de_estado() {
+        let theme = norte_theme::Theme::preset_default();
+        let roles = roles_de_tema(&theme);
+        let nombres: Vec<&str> = roles.iter().map(|(n, _)| n.as_str()).collect();
+
+        for mitad in ["status-bg", "status-fg"] {
+            assert!(
+                nombres.contains(&mitad),
+                "falta `{mitad}`: sin las dos, quien pinte encima adivina — \
+                 y adivinó claro sobre claro ({nombres:?})"
+            );
+        }
+
+        assert_eq!(
+            nombres,
+            [
+                "bg",
+                "fg",
+                "panel-bg",
+                "panel-focus-bg",
+                "border",
+                "border-focus",
+                "selection-bg",
+                "selection-fg",
+                "mark-bg",
+                "hostile-fg",
+                "status-bg",
+                "status-fg",
+                "title-fg",
+                "error-fg",
+                "warning-fg",
+                "info-fg",
+            ],
+            "la lista es el acuerdo con `style.css`: si cambia, cambia también \
+             la hoja"
+        );
+
+        // Y cada uno lleva un color de verdad, no una cadena vacía que la
+        // hoja aceptaría en silencio.
+        for (nombre, color) in &roles {
+            assert!(
+                color.starts_with('#') && color.len() == 7,
+                "`{nombre}` no es un color: {color:?}"
+            );
+        }
+    }
 }

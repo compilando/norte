@@ -82,6 +82,25 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The window's viewer header was invisible on a light status bar.** The
+  theme projection carried `status-bg` and never its foreground, so anything
+  painted on top had to GUESS the text colour — the viewer header guessed
+  `title-fg`, which on a theme whose status bar is light is light on light:
+  the path, the encoding, the EOL, the lossy mark and the column all
+  disappeared. `Role::StatusBar` is a PAIR, and the terminal has always used
+  it as one. `status-fg` now crosses with it, and a test pins the whole key
+  list — it is an agreement with a stylesheet that shares no types, so
+  dropping one has to turn red rather than be found by looking at the screen.
+  Found by painting the window, not by a test.
+- **And the scrollbar track was a solid band across the window**, for the same
+  reason: it used `status-bg`. A track is chrome — what informs is the thumb —
+  so it takes the dimmed border, the same pair the terminal uses.
+- **An image in the window's viewer had lost its height, and grew bars that
+  described a hex dump nobody could see.** One branch of the image painter
+  rebuilt the whole frame where the other only replaced the body, so the new
+  canvas was thrown away; it replaces the body in place now, like its twin.
+  No bars over an image: the counts describe the hex view underneath, and the
+  picture is scaled to fit — there is nothing to scroll.
 - **A double click on a file does something again, in the terminal.** On a
   file `nav.enter` does not navigate: it resolves the desktop's program and
   leaves it armed for whoever owns the terminal to launch. The mouse arm ran

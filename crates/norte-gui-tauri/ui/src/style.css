@@ -552,10 +552,16 @@ body {
   overflow: hidden;
 }
 
+/* El texto sale de la PAREJA de la barra de estado, no de `title-fg`: sobre
+   `--status-bg` hay que usar el primer plano de ese mismo rol. Adivinándolo,
+   un tema cuya barra de estado es clara pintaba claro sobre claro y la
+   cabecera entera —ruta, encoding, EOL, pérdidas, columna— era invisible. El
+   respaldo mantiene legible una ventana contra un host que aún no manda
+   `status-fg`. */
 .viewer-head {
   flex: 0 0 var(--cell-h);
   padding: 0 6px;
-  color: var(--title-fg);
+  color: var(--status-fg, var(--title-fg));
   background: var(--status-bg);
   display: flex;
   align-items: baseline;
@@ -622,9 +628,14 @@ body {
 /* Las barras del visor: INDICADORES, no controles. El host manda solo la
    ventana visible, así que no hay nada que el scroll del navegador pueda
    mover; lo que falta es decir cuánto hay y por dónde vas. */
+/* La PISTA con el borde apagado, no con `--status-bg`: pintar de verdad
+   destapó que en un tema con la barra de estado clara la pista salía como una
+   franja de color macizo cruzando la ventana, indistinguible de la cabecera.
+   Una pista es cromo — lo que informa es el pulgar. Es el mismo par que usa el
+   terminal (`BorderUnfocused` para la pista, `BorderFocus` para el pulgar). */
 .viewer-bar {
   position: relative;
-  background: var(--status-bg);
+  background: var(--border);
 }
 
 .viewer-bar-v {

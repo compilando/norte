@@ -112,19 +112,31 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   const lienzo = document.createElement("div");
   lienzo.className = "viewer-canvas";
   lienzo.append(body);
-  const vertical = viewerBar(true, viewer.total_rows, viewer.first_line, this.viewerRows);
-  if (vertical !== null) {
-    lienzo.append(vertical);
-  }
   box.append(head, lienzo);
-  const horizontal = viewerBar(
-    false,
-    viewer.total_cols,
-    viewer.first_col,
-    this.viewerCols,
-  );
-  if (horizontal !== null) {
-    box.append(horizontal);
+  // Ninguna barra sobre una IMAGEN. Un fichero de imagen se lee en
+  // hexadecimal por debajo, así que las cuentas que llegan describen ese
+  // volcado — y dibujarlas encima de la foto sería una barra hablando de un
+  // contenido que no está en pantalla. La imagen se escala al hueco: no hay
+  // nada que desplazar.
+  if (viewer.image === null) {
+    const vertical = viewerBar(
+      true,
+      viewer.total_rows,
+      viewer.first_line,
+      this.viewerRows,
+    );
+    if (vertical !== null) {
+      lienzo.append(vertical);
+    }
+    const horizontal = viewerBar(
+      false,
+      viewer.total_cols,
+      viewer.first_col,
+      this.viewerCols,
+    );
+    if (horizontal !== null) {
+      box.append(horizontal);
+    }
   }
   // La rueda desplaza por el HOST, como el visor acoplado y el registro: la
   // ventana visible la decide él. Con `shift`, de lado — es el gesto normal
@@ -151,7 +163,7 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
     // Los bytes NO vienen en la foto: se piden aparte y se pintan cuando
     // llegan. Hasta entonces se ve la vista cruda, que es lo honesto —el
     // fichero es ese— en vez de un hueco vacío.
-    this.pintarImagen(viewer, box, body);
+    this.pintarImagen(viewer, body);
   }
   this.viewerRoot.replaceChildren(box);
   // Cuántas líneas caben lo sabe QUIEN PINTA. El host lo estimaba con
@@ -193,13 +205,13 @@ export function soltarImagen(this: Screen): void {
  * Los bytes ya vienen validados por el host —formato por bytes mágicos,
  * dimensiones declaradas contra el presupuesto, tamaño— así que aquí no se
  * decide nada: se envuelve y se pinta (ADR 0069).
+ *
+ * Solo necesita el CUERPO, no el marco: la foto sustituye al cuerpo en su
+ * sitio, sea quien sea su padre. Recibir el marco era lo que permitía a una
+ * de las dos ramas reconstruirlo y llevarse por delante lo que hubiera al
+ * lado del cuerpo.
  */
-export function pintarImagen(
-  this: Screen,
-  viewer: ViewerView,
-  box: HTMLElement,
-  body: HTMLElement,
-): void {
+export function pintarImagen(this: Screen, viewer: ViewerView, body: HTMLElement): void {
   const img = viewer.image;
   if (img === null) {
     return;
@@ -207,7 +219,15 @@ export function pintarImagen(
   const clave = `${viewer.path_display}|${img.format}|${String(img.width)}x${String(img.height)}`;
   if (this.imagenDe === clave && this.imagenUrl !== null) {
     // Ya está pedida —o pintada— y es la misma: no se vuelve a pedir.
-    box.replaceChildren(box.firstChild ?? body, this.nodoImagen(this.imagenUrl, img));
+    //
+    // Se cambia el CUERPO por la foto, en su sitio, igual que hace la rama de
+    // abajo cuando llegan los bytes. Antes esto reconstruía la caja entera
+    // (`box.replaceChildren(cabecera, foto)`), y eso se llevaba por delante
+    // todo lo que la caja tuviera además del cuerpo: con el lienzo de las
+    // barras dentro, la foto acabó siendo hija directa del marco y el hueco
+    // se quedó sin alto. Una rama que reconstruye lo que otra solo sustituye
+    // es la misma divergencia de siempre, dentro de una función.
+    body.replaceWith(this.nodoImagen(this.imagenUrl, img));
     return;
   }
   this.soltarImagen();
