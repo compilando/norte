@@ -4,7 +4,7 @@ expression: render_80x24(&app)
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "                                                                                "
-"┌⟨f┌ Ajustes ───────────────────────────────────────────────────────────────┐──┐"
+"┌/c┌ Ajustes ───────────────────────────────────────────────────────────────┐──┐"
 "│No│General                                                                 │ha│"
 "│  │> Tema                         default                                  │  │"
 "│  │  Idioma                       auto                                     │  │"
@@ -25,4 +25,4 @@ expression: render_80x24(&app)
 "│  │ Preset de color de la interfaz (o u… fichero de tema propio, ADR 0020).│  │"
 "│  └ /  [↑/↓/pgup/pgdn] navegar · [enter] editar · [esc] cerrar ────────────┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

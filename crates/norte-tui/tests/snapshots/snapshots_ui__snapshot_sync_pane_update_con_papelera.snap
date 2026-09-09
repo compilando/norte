@@ -4,7 +4,7 @@ expression: render_80x24(&app)
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 " S  V  P  D  Á  R                                                               "
-"┌ sincronizar (actualizar) — ⟨file⟩/casa → ⟨file⟩/otro ────────────────────────┐"
+"┌ sincronizar (actualizar) — /casa → /otro ────────────────────────────────────┐"
 "│todo esto se puede deshacer después, salvo lo que cambie entretanto           │"
 "│2 a copiar · 1 a sobrescribir · 1 directorios a crear · 0 a borrar · 0 sin    │"
 "│tocar                                                                         │"
@@ -25,4 +25,4 @@ expression: render_80x24(&app)
 "│                                                                              │"
 "│↑↓ mover · a aprobar · Esc cerrar                                             │"
 "└ 4 pasos · pulsa a para aprobar ──────────────────────────────────────────────┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

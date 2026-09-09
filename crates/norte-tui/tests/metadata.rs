@@ -115,7 +115,9 @@ fn sobre_la_fila_de_subir_la_hoja_la_describe() {
     let filas = norte_frontend::metadata::sheet(&e, subir, None, norte_i18n::Lang::Es);
     assert_eq!(
         filas.iter().map(|f| f.value.as_str()).collect::<Vec<_>>(),
-        ["..", "carpeta", "⟨file⟩/"]
+        // `file` sin authority no se anuncia: es el caso por defecto, y su
+        // etiqueta no distinguía nada de nada.
+        ["..", "carpeta", "/"]
     );
 }
 
@@ -130,13 +132,13 @@ fn la_hoja_dice_a_que_listado_sigue() {
     app.toggle_metadata();
     let res = resolver(&mut app);
     let (ruta, hostil) = norte_tui::metadata::follows(&app, &res).expect("hay hueco colocado");
-    assert_eq!(ruta, "⟨file⟩/izq");
+    assert_eq!(ruta, "/izq");
     assert!(!hostil);
 
     app.set_focus(1);
     let res = resolver(&mut app);
     let (otra, _) = norte_tui::metadata::follows(&app, &res).expect("sigue colocada");
-    assert_eq!(otra, "⟨file⟩/der", "sigue al ACTIVO, y lo dice");
+    assert_eq!(otra, "/der", "sigue al ACTIVO, y lo dice");
 }
 
 /// Un hueco detrás de una pestaña no produce objetivo. Es el mismo invariante

@@ -4,13 +4,13 @@ expression: "lines.join(\"\\n\")"
 ---
  Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         
  S  V  D  P  Á  R                                                               
-┌ Sitios ──────┐┌⟨file⟩/casa────┐┌⟨file⟩/casa────┐┌ Vista ─────────────────────┐
+┌ Sitios ──────┐┌/casa──────────┐┌/casa──────────┐┌ Vista ─────────────────────┐
 │▾ Unidades    ││Nombre▲        ││Nombre▲        ││                            │
 │▾ Favoritos   ││   f00         ││   f00         ││                            │
 │              ││   f01         ││   f01         ││                            │
 │              ││   f02         ││   f02         ││                            │
 │              ││   f03         ││   f03         │└────────────────────────────┘
-│              ││   f04         ││   f04         │┌ Detalles · ⟨file⟩/casa ────┐
+│              ││   f04         ││   f04         │┌ Detalles · /casa ──────────┐
 │              ││   f05         ││   f05         ││nada bajo el cursor         │
 │              ││   f06         ││   f06         ││                            │
 │              ││   f07         ││   f07         ││                            │
@@ -25,4 +25,4 @@ expression: "lines.join(\"\\n\")"
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- ⟨file⟩/casa  1/60
+ /casa  1/60

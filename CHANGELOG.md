@@ -7,6 +7,35 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Changed
+
+- **A terminal modal can have a hierarchy now, and the copy dialog is the
+  first to use it.** A modal's body was ONE string painted as a flat
+  paragraph, so the editable field, the paths, the hint and the keys all came
+  out in the same colour and the same weight: the last thing you found was the
+  only thing you could touch. Each line now declares its ROLE — data, label or
+  hint, destination, field, warning, error — and the theme decides how it is
+  painted. A modal that declares nothing looks exactly as it did, so the 56 of
+  them migrate one at a time.
+  In `TransferName`: the destination stands out and the source dims, the label
+  sits ABOVE the field (it was below — you read the name and then found out
+  what it was), and the field is painted as a field, its background running to
+  the border. The source now shows the DIRECTORY instead of repeating the file
+  name, which appeared twice in a five-line body. Labels «From»/«To» replace
+  the arrow: `→` is legitimate inside a name and is not masked, so
+  `docs → /home/BURN` manufactured a line that reads as two paths — that is
+  the corpus's `arrow_join_spoof` fixture, and what the host already did in
+  `DialogView::destination`. A test finally ties the declared height to the
+  body that gets composed: the module's own rustdoc had warned from the start
+  that the two halves drift apart and the modal gets clipped, and nothing
+  checked it.
+- **`⟨file⟩` stops announcing itself on local paths.** It is the default case
+  — this machine, this disk — so its label distinguished nothing at all, and
+  it was painted on every path of every listing, header and modal, spending
+  eight columns exactly where room is scarce. What informs is the scheme that
+  is NOT the usual one: `sftp`, `s3`, `zip` and friends still say so, and a
+  `file` WITH an authority does too — that one is another machine.
+
 ### Added
 
 - **The viewer scrolls sideways** (`viewer.left`, `viewer.right`, bound to

@@ -4,12 +4,12 @@ expression: render(&app)
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "                                                                                "
-"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
+"┌/casa─────────────────────────────────┐┌/otro─────────────────────────────────┐"
 "│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│  /docs                               ││   cosa                  1 B          │"
 "│  /src   ┌Copiar────────────────────────────────────────────────────┐         │"
 "│  @enlace│notas.txt                                                 │         │"
-"│   notas.│→ ⟨file⟩/otro/日本語のファイル名.txt                      │         │" Hidden by multi-width symbols: [(26, " "), (28, " "), (30, " "), (32, " "), (34, " "), (36, " "), (38, " "), (40, " "), (42, " ")]
+"│   notas.│→ /otro/日本語のファイル名.txt                            │         │" Hidden by multi-width symbols: [(20, " "), (22, " "), (24, " "), (26, " "), (28, " "), (30, " "), (32, " "), (34, " "), (36, " ")]
 "│ ! �.dat │[Enter] confirmar [y] aprobar [n] denegar [Esc] cancelar  │         │"
 "│         │                                                          │         │"
 "│         └──────────────────────────────────────────────────────────┘         │"
@@ -17,4 +17,4 @@ expression: render(&app)
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

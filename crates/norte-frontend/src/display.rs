@@ -142,25 +142,40 @@ pub fn path_display(p: &VPath) -> (String, bool) {
 /// texto por el que el usuario navega, no el lossy crudo. Mismo contrato de
 /// badge: cualquier segmento alterado (incluida la reinterpretación) marca.
 ///
+/// **`file` sin authority no se anuncia.** Es el caso por defecto —esta
+/// máquina, este disco— así que su etiqueta no distingue nada de nada: se
+/// pintaba en cada ruta de cada listado, cabecera y modal, gastando ocho
+/// columnas justo donde el sitio escasea. Lo que informa es el esquema que NO
+/// es el de siempre, y esos se siguen diciendo. Un `file` CON authority
+/// también: entonces es otra máquina, y eso hay que decirlo.
+///
 /// ```
 /// use norte_encoding::NameEncoding;
 /// use norte_frontend::path_display_with;
 /// let p = norte_proto::VPath::parse("mem:///CAF%90.TXT").unwrap();
 /// let (texto, hostil) = path_display_with(&p, Some(NameEncoding::Cp437));
 /// assert_eq!((texto.as_str(), hostil), ("⟨mem⟩/CAFÉ.TXT", true));
+///
+/// // Lo local se lee como lo escribe cualquiera.
+/// let local = norte_proto::VPath::parse("file:///home/o/notas.txt").unwrap();
+/// assert_eq!(path_display_with(&local, None).0, "/home/o/notas.txt");
 /// ```
 #[must_use]
 pub fn path_display_with(
     p: &VPath,
     reinterpret: Option<norte_encoding::NameEncoding>,
 ) -> (String, bool) {
-    let mut out = String::from("⟨");
-    out.push_str(p.scheme());
-    if let Some(a) = p.authority() {
-        out.push(' ');
-        out.push_str(a);
+    let mut out = String::new();
+    if p.scheme() != "file" || p.authority().is_some() {
+        out.push('⟨');
+        out.push_str(p.scheme());
+        if let Some(a) = p.authority() {
+            out.push(' ');
+            out.push_str(a);
+        }
+        out.push('⟩');
     }
-    out.push_str("⟩/");
+    out.push('/');
     let mut hostil = false;
     let mut first = true;
     for seg in p.segments() {

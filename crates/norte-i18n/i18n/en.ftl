@@ -69,6 +69,11 @@ modal-new-file-hint = name of the new file
 modal-transfer-name-copy = Copy to
 modal-transfer-name-move = Move to
 modal-transfer-name-hint = destination name (edit to rename)
+# Both labels live in their own COLUMN, never inside the text: a directory can
+# be called `docs → /home/BURN`, and with the arrow in-band that line reads as
+# two paths.
+modal-transfer-from = From
+modal-transfer-to = To
 # The typed destination: F5/F6 when there is no other panel to copy to (the
 # `simple` layout). The address is the wire form, the same one `[[hotlist]]`
 # takes, prefilled with this panel's own.

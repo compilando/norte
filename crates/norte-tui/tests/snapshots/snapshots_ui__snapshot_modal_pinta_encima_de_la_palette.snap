@@ -4,7 +4,7 @@ expression: render(&app)
 ---
 " Archivo  ┌ Paleta de comandos ──────────────────────────────────────┐          "
 "          │ app.quit                 sa…de norte                   q │          "
-"┌⟨file⟩/ca│ pane.switch              ca…de pane                  Tab │─────────┐"
+"┌/casa────│ pane.switch              ca…de pane                  Tab │─────────┐"
 "│Nombre▲  │ pane.tab-new             ab…ña                    Ctrl+t │    Fecha│"
 "│  /docs  │ pane.tab-close           ce…aña                   Ctrl+w │         │"
 "│  /src   ┌A la papelera─────────────────────────────────────────────┐         │"
@@ -17,4 +17,4 @@ expression: render(&app)
 "│         │ pane.tab-goto-4          ir…a pestaña 4                — │         │"
 "│         │ pane.tab-goto-5          ir…a pestaña 5                — │         │"
 "└─────────│ pane.tab-goto-6          ir…a pestaña 6                — │─────────┘"
-" ⟨file⟩/ca└ /  [enter] ejecutar · [esc] cerrar · [f1] ayuda ─────────┘          "
+" /casa  2/└ /  [enter] ejecutar · [esc] cerrar · [f1] ayuda ─────────┘          "

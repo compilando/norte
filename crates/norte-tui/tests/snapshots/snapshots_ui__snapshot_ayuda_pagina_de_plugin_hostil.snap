@@ -4,7 +4,7 @@ expression: text
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "  ┌ Ayuda ───────────────────────────────────────────────────────────────────┐  "
-"┌⟨│  Dentro de un archivo comp…║ Aprobar extensiones                         │─┐"
+"┌/│  Dentro de un archivo comp…║ Aprobar extensiones                         │─┐"
 "│N│                            ║ ─────────────────────────────────────────── │a│"
 "│ │Agentes y política          ║ de una extensión                            │ │"
 "│ │  Cuando pregunta un agente ║                                             │ │"
@@ -17,4 +17,4 @@ expression: text
 "│ │  abc�gpj.exe               █                                             │ │"
 "│ │ [Tab] índice ↔ texto [PgDn] bajar [PgUp] subir [/] filtrar …             │ │"
 "└─└──────────────────────────────────────────────────────────────────────────┘─┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

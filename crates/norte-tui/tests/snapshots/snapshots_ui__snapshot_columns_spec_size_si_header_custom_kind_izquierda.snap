@@ -4,7 +4,7 @@ expression: text
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 " S  V  P  D  Á  R                                                               "
-"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
+"┌/casa─────────────────────────────────┐┌/otro─────────────────────────────────┐"
 "│Nombre▲        Peso     Fecha Tipo    ││Nombre▲        Peso     Fecha Tipo    │"
 "│  /docs                       dir     ││   cosa         1 B           fichero │"
 "│   gr….bin   1.5 kB           fichero ││                                      │"
@@ -17,4 +17,4 @@ expression: text
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" ⟨file⟩/casa  1/3                                                               "
+" /casa  1/3                                                                     "

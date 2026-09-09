@@ -4,7 +4,7 @@ expression: render_80x24(&app)
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "                                                                                "
-"┌⟨f┌ Ajustes ───────────────────────────────────────────────────────────────┐──┐"
+"┌/c┌ Ajustes ───────────────────────────────────────────────────────────────┐──┐"
 "│No│General                                                                 │ha│"
 "│  │> Tipografía de la interfaz                                             │  │"
 "│  │                                                                        │  │"
@@ -25,4 +25,4 @@ expression: render_80x24(&app)
 "│  │ Familia tipográfica del chrome de l…, no el listado). El TUI la ignora.│  │"
 "│  └ Fira Code_  [enter] guardar · [esc] cancelar ──────────────────────────┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "
