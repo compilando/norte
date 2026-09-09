@@ -15,8 +15,31 @@ cada call site. Ninguno toca el wire; el del visor sube el puente.
 **Tech Stack:** Rust, ratatui (TUI), TypeScript + Tauri (ventana).
 
 **Spec:** este fichero. Los tres son bugs reportados a mano el 2026-09-09;
-no hay spec previa. Las decisiones de diseño están en la ADR que cierra el
-plan.
+no hay spec previa. Las decisiones están en la **ADR 0100**.
+
+**Estado: ejecutado el 2026-09-09**, en siete commits sobre
+`chore/arbol-tab-y-scroll-del-visor`. Lo que salió distinto del plan:
+
+- `viewer.line-home` se **descartó**: `home`/`end` ya son `viewer.top`/
+  `viewer.bottom` en los siete presets, y un comando sin chord libre en
+  ninguno es exactamente el fallo que la regla de los siete presets existe
+  para evitar. `viewer.left` con contador cubre volver al principio.
+- La barra HORIZONTAL solo va en el visor a pantalla completa. El acoplado
+  lleva la línea de estado en su borde de abajo, que es el único sitio donde
+  ese hueco dice QUÉ se está leyendo; taparla cambiaría un dato por una
+  insinuación.
+- Hizo falta una acción de puente que el plan no previó: **`viewer_scroll`**.
+  Una rueda no es una tecla, y fabricar pulsaciones de flecha para expresarla
+  ataba el gesto a que nadie reatara esas flechas.
+- El árbol también sigue al **cambio de foco**, no solo a la navegación: es
+  el otro momento en que cambia dónde mira el panel activo.
+- Dos listas escritas a mano que el plan no nombraba y el gate sí: el
+  conjunto `counts` del catálogo (ADR 0044) y `DOCUMENTED` en
+  `norte-help/tests/corpus.rs`.
+- Un test intermitente aparecido bajo carga —
+  `con_un_plan_en_vuelo_escape_cancela_el_filtro` — se diagnosticó y arregló
+  en la misma rama: esperaba un parche que un `siguiente_foto` anterior se
+  había tragado. Ahora pregunta por la foto, que es idempotente.
 
 ## Global Constraints
 
