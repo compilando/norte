@@ -7,7 +7,47 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **The viewer scrolls sideways** (`viewer.left`, `viewer.right`, bound to
+  `left`/`right` in all seven presets and to `h`/`l` in `vim`, both taking a
+  count). The viewer does not wrap, so a minified HTML file, a wide CSV or a
+  log had its right-hand half nowhere at all: painted clipped, unreachable.
+  The cut is made once, in the shared model, on the already-rendered line, and
+  it counts CELLS of terminal — by bytes the text jumps at the first accent,
+  by characters any line with CJK misaligns against its neighbours. A wide
+  character straddling the cut goes entirely. The stop is the longest line,
+  measured when decoding, leaving one column always in view; the hex dump has
+  a fixed width and does not move sideways.
+- **The viewer says there is more, and the wheel moves it.** Both scrollbars
+  in the terminal, drawn over the frame's borders and never when everything
+  fits; the coupled preview gets only the vertical one, because its bottom
+  border carries the line that says WHAT is being read. The wheel reached
+  neither the full-screen viewer (it sits behind the overlay cutoff) nor the
+  coupled one (its slot is not a listing, so the hit test returned nothing).
+  Bridge 59 carries `total_cols`/`first_col` and the `viewer_scroll` action.
+
 ### Fixed
+
+- **The tree follows the panel that navigates** (ADR 0100). Opening the tree
+  and walking around left the panel pointing at the folder you were in when
+  you opened it. Not a loose wire: both frontends anchored at open and never
+  again, on purpose, because anchoring EMPTIES the tree and re-anchoring on
+  every `cd` would have closed every open branch. What was missing was the
+  ability to reveal without emptying — `Tree::follow` expands the ancestors
+  and moves the cursor, and a sibling branch you opened stays open. It is
+  wired into the one funnel each frontend already had for a `cd`, plus the
+  focus change, and not into each gesture: that list went stale once already,
+  which is why the funnels exist.
+- **`Tab` reaches the third listing, and stops only at listings** (ADR 0100).
+  In the terminal it was `focus ^= 1`, a count of two: after `alt+v` split a
+  panel the key silently did nothing from the third one, because `PaneSlots`
+  clamps out of range instead of panicking. In the window the opposite —
+  `pane.switch` shared an arm with `layout.focus-next`, so with the places
+  bar, the tree and the viewer open it took five keystrokes to get back to the
+  listing beside you. Now they are two rings: `pane.switch` is "the other
+  panel" and cycles the listings, `layout.focus-*` walks the whole screen.
+  `Tab` still takes you out of a side panel.
 
 - **`[profile.start]` finally does something** (ADR 0098). Both frontends
   *wrote* it — `save_profile` records where every slot sits — and two files
