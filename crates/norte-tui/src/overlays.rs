@@ -330,6 +330,38 @@ pub fn open_contextual_help(
     app.freeze_help_plugins(plugins.map_or(&[], |l| l.plugins.as_slice()));
 }
 
+/// Abre la ayuda en una página CONCRETA del corpus, por su id.
+///
+/// El hermano de [`open_contextual_help`] para quien ya sabe qué página quiere
+/// —el indicador de sesión suelta de la barra, que no es una pantalla en la
+/// que el lector esté sino un hecho sobre esta ventana— y el mismo camino que
+/// `F1` sobre una fila de la paleta: [`HelpView::new_at_topic`], con la página
+/// como RAÍZ para que `Esc` cierre en vez de volver a un índice que nadie
+/// pidió. Los hechos se congelan igual que en la contextual.
+///
+/// Un id sin página en este idioma no abre nada: el corpus ata los ids que
+/// este crate usa, así que llegar aquí sería una página borrada, y abrir el
+/// índice a cambio sería contestar a otra pregunta.
+pub fn open_help_topic(
+    app: &mut App,
+    lang: norte_help::Lang,
+    help_lines: &[ratatui::text::Line<'static>],
+    topic: &str,
+) {
+    let Some(pagina) = norte_help::topic(lang, topic) else {
+        return;
+    };
+    let over_modal = app.modal.is_some();
+    app.freeze_help_facts();
+    app.help = Some(HelpView::new_at_topic(
+        lang,
+        help_lines.to_vec(),
+        &pagina.id,
+        over_modal,
+    ));
+    app.freeze_help_plugins(&[]);
+}
+
 /// Fetches the page of the plugin node the reader just opened (H3e).
 ///
 /// On demand and once: 64 KiB per plugin must not ride every `plugin.list`, and

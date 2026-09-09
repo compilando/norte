@@ -1053,10 +1053,34 @@ async fn una_ventana_suelta_no_escribe() {
     falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
     *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), false);
     let backend = Arc::new(falso);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    // Y lo DICE desde el primer frame, con el mismo indicador que el
+    // terminal: hasta aquí una ventana suelta cerraba y perdía dónde estaba
+    // cada panel sin una palabra.
+    let indicador = norte_i18n::t_in(norte_i18n::Lang::Es, "status-session-detached");
+    assert!(
+        snap.status.banners.iter().any(|b| b.text == indicador),
+        "la barra lleva el indicador de sesión suelta: {:?}",
+        snap.status.banners
+    );
     let informe = h.shutdown().await.expect("apaga");
     assert!(!informe.incomplete, "no escribir no es dejar algo a medias");
     assert!(backend.escrito.lock().expect("escrito").is_none());
+}
+
+/// Y la dueña no lleva el indicador: no es un adorno, es un estado.
+#[tokio::test]
+async fn la_duena_no_lleva_el_indicador_de_sesion() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), true);
+    let (_h, snap) = host_arbol(Arc::new(falso)).await;
+    let indicador = norte_i18n::t_in(norte_i18n::Lang::Es, "status-session-detached");
+    assert!(
+        !snap.status.banners.iter().any(|b| b.text == indicador),
+        "la dueña no avisa de nada: {:?}",
+        snap.status.banners
+    );
 }
 
 /// La dueña vuelca al cerrar —cerrar justo después de navegar guarda el

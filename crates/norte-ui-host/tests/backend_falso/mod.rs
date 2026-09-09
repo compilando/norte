@@ -1784,8 +1784,13 @@ impl HostBackend for Falso {
     fn session_get(
         &self,
     ) -> BoxFuture<'static, Result<(norte_proto::methods::Session, bool), Error>> {
-        let s = self.sesion.lock().expect("sesión").clone();
-        Box::pin(async move { Ok(s) })
+        let (sesion, duena) = self.sesion.lock().expect("sesión").clone();
+        // Sin sesión puesta —revisión 0, lo que `Default` da— esta ventana es
+        // la dueña, como en una instalación nueva: el daemon contesta
+        // `owner: true` a la primera conexión aunque no haya nada guardado.
+        // Un test que quiera una ventana SUELTA pone una sesión y dice `false`.
+        let duena = duena || sesion.revision == 0;
+        Box::pin(async move { Ok((sesion, duena)) })
     }
 
     fn session_put(

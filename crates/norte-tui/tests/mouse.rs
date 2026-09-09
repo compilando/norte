@@ -101,6 +101,7 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
             panels: ui::panel_zones(app, frame.area),
             places: ui::places_zones(app, frame.area),
             tree: ui::tree_zones(app, frame.area),
+            session: ui::session_zone(app, frame.area),
             borders: ui::resize_borders(app, frame.area),
             slots: ui::panel_slots(app, frame.area),
         },
@@ -157,6 +158,62 @@ const ABAJO: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
 const ARRIBA: MouseEventKind = MouseEventKind::Up(MouseButton::Left);
 /// Arrastre con el izquierdo pulsado.
 const ARRASTRE: MouseEventKind = MouseEventKind::Drag(MouseButton::Left);
+
+/// Una ventana SUELTA lleva su indicador en la barra de estado, y pulsarlo
+/// pide la explicación: el run loop abre la ayuda en la página de los
+/// paneles. La zona sale del frame PINTADO, así que se contrasta contra la
+/// línea que el lector tiene delante y no contra una aritmética paralela.
+#[test]
+fn pulsar_el_indicador_de_sesion_pide_la_ayuda() {
+    let mut app = app_pintada(3);
+    app.session.detached = true;
+    let lines = pintar(&mut app);
+    // El backend de prueba entrecomilla cada línea: la primera celda es el
+    // byte 1, no el 0.
+    let barra = lines[usize::from(H - 1)].trim_start_matches('"');
+    let badge = app.session_banner().expect("hay indicador");
+    assert!(barra.contains(&badge), "la barra lo pinta: {barra}");
+    let x0 = u16::try_from(barra.find(&badge).expect("está")).expect("cabe");
+    // La columna del primer carácter: en esta línea todo lo anterior es
+    // ASCII, así que bytes y celdas coinciden.
+    assert_eq!(
+        mouse::handle(&mut app, ev(ABAJO, x0, H - 1)),
+        After::SessionHelp,
+        "pulsar el indicador pide la ayuda"
+    );
+    // Y a su izquierda no: el resto de la barra no es pulsable.
+    assert_eq!(
+        mouse::handle(&mut app, ev(ABAJO, x0.saturating_sub(1), H - 1)),
+        After::Nothing
+    );
+    // La página existe en el corpus, en los dos idiomas: la constante no
+    // puede apuntar a una página borrada sin que esto se ponga rojo.
+    for lang in [norte_help::Lang::Es, norte_help::Lang::En] {
+        assert!(
+            norte_help::topic(lang, mouse::SESSION_HELP_TOPIC).is_some(),
+            "la página {} existe en {lang:?}",
+            mouse::SESSION_HELP_TOPIC
+        );
+    }
+    // Y abrirla la abre en ESA página, como raíz: `Esc` cierra.
+    norte_tui::overlays::open_help_topic(
+        &mut app,
+        norte_help::Lang::Es,
+        &[],
+        mouse::SESSION_HELP_TOPIC,
+    );
+    let help = app.help.as_ref().expect("la ayuda se abrió");
+    assert_eq!(help.state.current().as_str(), mouse::SESSION_HELP_TOPIC);
+
+    // La dueña no tiene indicador, y la misma celda no hace nada.
+    app.help = None;
+    app.session.detached = false;
+    let _ = pintar(&mut app);
+    assert_eq!(
+        mouse::handle(&mut app, ev(ABAJO, x0, H - 1)),
+        After::Nothing
+    );
+}
 
 #[test]
 fn el_layout_de_estos_tests_es_el_que_se_pinta() {

@@ -9,6 +9,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **A detached window says so quietly, and explains itself on demand.** A
+  terminal that started while another window held the session greeted the
+  reader with «another window owns the session; this one runs on its own» in
+  the message bar — jargon to anyone opening norte for what they thought was
+  the first time, and gone at the next key. Now nothing is announced: the
+  persistent indicator in the status bar is the whole signal, shortened to
+  `session not saved` (plain text: the badge now drives a mouse hit-test, and
+  this frontend keeps its badges ASCII for exactly that reason), and it
+  appears and disappears by itself as ownership
+  changes (a daemon handover no longer produces a message each way either).
+  Clicking the indicator opens the help on the panes page, which gains a
+  section on the session: who keeps it, the three reasons a window may not be
+  the one, and that no file is at risk. The window shows the same indicator in
+  its status bar — it showed nothing at all before, so a detached window closed
+  and lost every panel's place in silence (ADR 0077).
 - **A terminal modal can have a hierarchy now** (ADR 0103)**, and the copy
   dialog is the first to use it.** A modal's body was ONE string painted as a flat
   paragraph, so the editable field, the paths, the hint and the keys all came

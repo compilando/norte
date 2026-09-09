@@ -439,6 +439,32 @@ pediste ése. Si solo era el perfil en el que estabas la última vez, arranca si
 él y te lo dice, para que una errata en un directorio que estabas probando no
 te deje nunca fuera del programa.
 
+# La sesión: dónde estaba cada panel
+
+Al cerrar, norte guarda la pantalla —la disposición, qué paneles están
+abiertos, el directorio y el historial de cada uno— y al volver a abrir te deja
+donde estabas. Eso es la **sesión**, y la guarda **una sola ventana**: la
+primera que se conecta al daemon se la queda, y las demás arrancan con la misma
+pantalla y a partir de ahí van por su cuenta, sin escribir nada. Dos ventanas
+escribiendo la misma sesión se pisarían por turnos, y ninguna de las dos te
+dejaría donde la dejaste.
+
+Una ventana que no guarda lo dice con un indicador discreto en la barra de
+estado: `sesión sin guardar`. Pulsarlo con el ratón abre esta página. Significa
+que **al cerrar esta ventana su pantalla no se recordará**; los ficheros no
+tienen nada que ver con esto y no corren ningún riesgo. Pasa en tres casos.
+Lo normal es que ya hubiera otra ventana de norte abierta —el terminal o la
+gráfica, da igual— y sea ella la que guarda; cuando la cierres, la siguiente
+que pregunte se queda con la sesión. También pasa mientras el daemon cambia de
+manos (una actualización): la sesión queda libre un momento y esta ventana la
+vuelve a pedir sola. Y pasa si la sesión guardada la escribió una versión de
+norte MÁS NUEVA que ésta: no se toca, para no estropearla, y esta ventana
+arranca de su configuración.
+
+El indicador se va solo en cuanto la ventana vuelve a ser la que guarda. Lo que
+un perfil dice de dónde abre cada panel es una semilla para los paneles que la
+sesión no conoce; lo que la sesión recuerda gana.
+
 # El árbol de directorios
 
 {{cmd:pane.tree}} abre una columna a la izquierda con el árbol que cuelga del

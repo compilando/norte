@@ -899,6 +899,10 @@ impl UiHost {
         // La sesión primero: dice DÓNDE estaba cada hueco, y listar antes
         // sería traer un directorio para tirarlo.
         estado.leer_sesion(backend.as_ref()).await;
+        // Lo que la sesión dijo de esta ventana —dueña o suelta— va a la
+        // barra desde el primer frame: el cambio se descarta porque la foto
+        // del arranque lleva la barra entera.
+        let _ = estado.cambio_de_banners();
         // Y después `[profile.start]`, FUERA de `leer_sesion` a propósito: esa
         // vuelve pronto por cuatro caminos —sin sesión, de una versión futura,
         // revisión 0, cuerpo ilegible— y tres de ellos son justo el caso para

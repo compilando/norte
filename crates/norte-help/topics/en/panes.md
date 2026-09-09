@@ -433,6 +433,32 @@ start — you asked for that one. If it was merely the profile you were last in,
 it starts without it and tells you, so you are never locked out of the program
 by a typo in a directory you were only trying out.
 
+# The session: where every panel was
+
+On closing, norte saves the screen — the layout, which panels are open, each
+one's directory and history — and puts you back there the next time. That is
+the **session**, and **one window** keeps it: the first to connect to the
+daemon takes it, and any later one starts with the same screen and goes its own
+way from there, writing nothing. Two windows writing the same session would
+overwrite each other in turns, and neither would put you back where you left
+off.
+
+A window that is not saving says so with a discreet indicator in the status
+bar: `session not saved`. Clicking it opens this page. It means that **when
+this window closes its screen will not be remembered**; your files have nothing
+to do with it and are at no risk. It happens in three cases. Usually another
+norte window was already open — the terminal or the graphical one, it does not
+matter — and that one is saving; once you close it, the next window to ask
+takes the session over. It also happens while the daemon is being handed over
+(an update): the session is free for a moment and this window asks for it
+again on its own. And it happens when the saved session was written by a NEWER
+norte than this one: it is left alone so it is not damaged, and this window
+starts from its configuration.
+
+The indicator goes away by itself as soon as the window is the one saving
+again. What a profile says about where each panel opens is a seed for the
+panels the session does not know about; what the session remembers wins.
+
 # The directory tree
 
 {{cmd:pane.tree}} opens a column on the left with the tree hanging from the
