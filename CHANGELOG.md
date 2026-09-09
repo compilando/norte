@@ -9,8 +9,8 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
-- **A terminal modal can have a hierarchy now, and the copy dialog is the
-  first to use it.** A modal's body was ONE string painted as a flat
+- **A terminal modal can have a hierarchy now** (ADR 0103)**, and the copy
+  dialog is the first to use it.** A modal's body was ONE string painted as a flat
   paragraph, so the editable field, the paths, the hint and the keys all came
   out in the same colour and the same weight: the last thing you found was the
   only thing you could touch. Each line now declares its ROLE — data, label or
@@ -29,6 +29,22 @@ independently through `PROTOCOL_VERSION`.
   body that gets composed: the module's own rustdoc had warned from the start
   that the two halves drift apart and the modal gets clipped, and nothing
   checked it.
+  Two more things reviews caught. **A rename now names the file it renames**:
+  a rename opens with `to_dir = from.parent()`, so showing only the directory
+  made «From» and «To» identical and the name being changed vanished from the
+  screen the moment you typed — confirming a mutation whose operand is not
+  visible, which is what ADR 0070 forbids. And **`ConfirmTransfer` loses its
+  arrow too**: it marked its destination with `→` directly above a list of
+  somebody else's file names, and dropping `⟨file⟩` made that line cheaper to
+  forge — slash homoglyphs (U+2215, U+2044, U+FF0F) are legal on ext4, APFS
+  and NTFS, so `→ ∕srv∕publico` is a legal file name that renders a complete
+  destination line. What distinguishes it now is its ROLE, which a name cannot
+  write. Both spoofs are in the corpus.
+- **`tail_window` budgets in CELLS, not chars.** Fifty chars of CJK are a
+  hundred cells, so a Japanese name overflowed its box anyway and the overflow
+  ate the cursor at the end — you kept typing and the screen stopped changing.
+  It affected all six free-text fields; the first snapshot of the transfer
+  modal is what made it visible.
 - **`⟨file⟩` stops announcing itself on local paths.** It is the default case
   — this machine, this disk — so its label distinguished nothing at all, and
   it was painted on every path of every listing, header and modal, spending

@@ -234,16 +234,23 @@ pub(crate) fn clamp_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'st
 
 /// La COLA de `s`, con `…` delante cuando algo se quedó fuera.
 ///
-/// Por chars y no por bytes: cortar por bytes parte un carácter multibyte, y
-/// lo que se pinta son chars ya enmascarados (`display_name` no deja
-/// controles ni bidi crudos, así que ninguno de los que quedan puede
-/// reconfigurar la terminal al aparecer a media secuencia).
+/// En CELDAS de terminal, no en chars. Contaba chars, y para eso lo que este
+/// presupuesto protege —que el campo quepa en su caja— es la medida
+/// equivocada: cincuenta chars de CJK son CIEN celdas, así que un nombre
+/// japonés desbordaba igual y se llevaba por delante el cursor del final. Lo
+/// destapó la foto del modal de transferencia, que hasta hoy no existía.
+///
+/// El corte se delega en [`norte_frontend::skip_cells`], que no parte un
+/// carácter ancho por la mitad y deja su hueco en blanco: sin eso, la cola
+/// podía empezar con media celda y correr la línea entera.
 pub(crate) fn tail_window(s: &str, max: usize) -> String {
-    let total = s.chars().count();
+    let total = norte_frontend::cells(s);
     if total <= max {
         return s.to_owned();
     }
-    let tail: String = s.chars().skip(total - max.saturating_sub(1)).collect();
+    // Una celda se la queda el `…`.
+    let cabe = max.saturating_sub(1);
+    let tail = norte_frontend::skip_cells(s, total.saturating_sub(cabe));
     format!("…{tail}")
 }
 

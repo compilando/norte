@@ -55,10 +55,21 @@ pub(crate) enum LineKind {
 /// Una línea del cuerpo de un modal.
 #[derive(Debug, Clone)]
 pub(crate) struct ModalLine {
-    /// El texto, ya enmascarado y acotado por quien lo compuso.
+    /// El texto, ya enmascarado y acotado por quien lo compuso. SIN la marca
+    /// de nombre alterado: esa va aparte ([`Self::hostile`]).
     pub(crate) text: String,
     /// Qué papel juega.
     pub(crate) kind: LineKind,
+    /// Lo que se pinta DIFIERE de los bytes reales, y la línea lleva delante
+    /// la marca que lo dice (spec §6).
+    ///
+    /// Aparte del texto, y eso no es comodidad: la marca se pinta con
+    /// `Role::HostileBadge`, que es el único rol de este modal con contraste
+    /// GARANTIZADO (el gate de `norte-theme` lo mide a 4.5:1 en los ocho
+    /// presets). Metida dentro del texto heredaba el estilo del papel de la
+    /// línea, y una línea atenuada dejaba la señal de spec §6 a 2,3:1 sobre
+    /// un tema claro — una advertencia que no se lee no es una advertencia.
+    pub(crate) hostile: bool,
 }
 
 impl ModalLine {
@@ -67,13 +78,32 @@ impl ModalLine {
         Self {
             text: text.into(),
             kind,
+            hostile: false,
         }
+    }
+
+    /// La misma línea, marcada como alterada.
+    pub(crate) fn hostile(mut self, hostile: bool) -> Self {
+        self.hostile = hostile;
+        self
     }
 
     /// Una línea sin papel declarado: texto plano, como salía todo antes.
     pub(crate) fn plain(text: impl Into<String>) -> Self {
         Self::new(text, LineKind::Plain)
     }
+
+    /// Lo que ocupa al pintarse, en CELDAS: el texto más la marca, si la
+    /// lleva. Es lo que mide `modal_width`, y por eso vive junto al modelo —
+    /// una anchura que no cuente la marca deja la caja corta.
+    pub(crate) fn width(&self) -> usize {
+        self.text.as_str().width() + if self.hostile { badge_width() } else { 0 }
+    }
+}
+
+/// Lo que ocupa la marca de nombre alterado, con su espacio.
+fn badge_width() -> usize {
+    HOSTILE_BADGE.width() + 1
 }
 
 /// El cuerpo de un modal: sus líneas, en orden.
@@ -95,9 +125,13 @@ fn line_style(kind: LineKind, theme: &TuiTheme) -> ratatui::style::Style {
     use ratatui::style::Style;
     match kind {
         LineKind::Plain => Style::default(),
-        // El mismo rol que usa el borde de un panel sin foco, y por el mismo
-        // motivo: está, se lee, y no reclama la vista.
-        LineKind::Dim => theme.role(Role::BorderUnfocused),
+        // `Info`, NO `BorderUnfocused`. El de los bordes parecía lo natural
+        // —«está, se lee, y no reclama la vista»— pero es un rol pensado para
+        // CROMO: los temas claros lo ponen muy pálido y encima lleva `dim`.
+        // Medido sobre el fondo de su propio tema da 2,30:1 en
+        // `catppuccin-latte` y 2,45:1 en `gruvbox-light`, cuando WCAG AA pide
+        // 4,5 para texto. `Info` da 4,34 y 5,82 en los mismos dos.
+        LineKind::Dim => theme.role(Role::Info),
         LineKind::Strong => theme.role(Role::Title),
         // El fondo de una fila seleccionada: es exactamente lo que un campo
         // es —lo que tienes «cogido»— y ya significa eso en el listado.
@@ -114,7 +148,7 @@ fn line_style(kind: LineKind, theme: &TuiTheme) -> ratatui::style::Style {
 pub(crate) fn modal_width(titulo: &str, cuerpo: &ModalBody, frame_width: u16) -> u16 {
     let content_max = cuerpo
         .iter()
-        .map(|l| l.text.as_str().width())
+        .map(ModalLine::width)
         .chain(std::iter::once(titulo.width() + 2))
         .max()
         .unwrap_or(0);
@@ -175,7 +209,26 @@ pub(crate) fn modal_title_body(
     hints: &crate::hints::DialogHints,
 ) -> (String, ModalBody) {
     use crate::app::Modal;
-    let _ = reinterpret;
+    if let Modal::ConfirmTransfer {
+        kind,
+        items,
+        to,
+        space,
+        confine,
+    } = modal
+    {
+        return confirm_transfer_modal(
+            *kind,
+            items,
+            to,
+            reinterpret,
+            DestNotices {
+                space: space.as_deref(),
+                confine: confine.as_deref(),
+            },
+            &hints.confirm,
+        );
+    }
     if let Modal::TransferName {
         kind,
         from,
@@ -213,7 +266,7 @@ fn modal_title_text(
     reinterpret: Option<norte_encoding::NameEncoding>,
     hints: &crate::hints::DialogHints,
 ) -> (String, String) {
-    use crate::app::{Modal, TransferKind};
+    use crate::app::Modal;
     match modal {
         // #103 T10: el lote va como LISTA — una ruta por línea, saneada y
         // truncada por la política COMPARTIDA con la GUI
@@ -260,40 +313,6 @@ fn modal_title_text(
                     },
                     hints.confirm.clone(),
                 ],
-            ]
-            .concat()
-            .join("\n"),
-        ),
-        Modal::ConfirmTransfer {
-            kind,
-            items,
-            to,
-            space,
-            confine,
-        } => (
-            match kind {
-                TransferKind::Copy => t("modal-copy-title"),
-                TransferKind::Move => t("modal-move-title"),
-            },
-            [
-                norte_frontend::item_lines_with(items, HOSTILE_BADGE, reinterpret),
-                vec![
-                    // El destino es un DIRECTORIO y va en SU línea, con la
-                    // flecha FUERA de banda: ningún nombre de la lista de
-                    // arriba puede imitar esta línea.
-                    format!("→ {}", norte_frontend::path_display_with(to, reinterpret).0),
-                ],
-                // #149: el aviso de espacio va DEBAJO del destino y encima de
-                // las teclas — es lo último que se lee antes de decidir. Solo
-                // cuando lo hay: cabe, o el destino no sabe decirlo, o no se
-                // sabe cuánto se mueve, y ninguna de las tres se anuncia.
-                space.clone().into_iter().collect::<Vec<String>>(),
-                // #164: y justo debajo, si el destino no sabe confinar lo que
-                // se escriba en él. Las dos líneas son de la misma clase —un
-                // hecho del destino que conviene saber antes de decir que sí—
-                // y ninguna bloquea nada.
-                confine.clone().into_iter().collect::<Vec<String>>(),
-                vec![hints.confirm.clone()],
             ]
             .concat()
             .join("\n"),
@@ -485,12 +504,23 @@ fn modal_title_text(
             offset,
             cursor,
         } => semantic_hits_modal_text(hits, *offset, *cursor, hints),
-        // #105: lo atiende `modal_title_body`, que compone sus líneas CON
-        // PAPELES — es el primero que declara jerarquía. Aquí queda el brazo
-        // porque el `match` es exhaustivo a propósito: un modal nuevo no
-        // compila hasta que alguien decide cómo se pinta, y esa red no se
-        // pierde por migrar uno.
-        Modal::TransferName { .. } => (String::new(), String::new()),
+        // Los YA MIGRADOS: los atiende `modal_title_body`, que compone sus
+        // líneas CON PAPELES. El brazo queda porque el `match` es exhaustivo a
+        // propósito —un modal nuevo no compila hasta que alguien decide cómo
+        // se pinta— y esa red no se pierde por migrar uno.
+        //
+        // El cuerpo vacío es inalcanzable por el único llamante, que
+        // desvía estas dos variantes antes. Un `unreachable!` sería un panic
+        // en release (regla 6); el `debug_assert` lo pone rojo en los tests si
+        // alguien añade un segundo llamante y se salta el desvío.
+        Modal::TransferName { .. } | Modal::ConfirmTransfer { .. } => {
+            debug_assert!(
+                false,
+                "modal con papeles pedido a la tabla de texto: se atiende en \
+                 `modal_title_body`"
+            );
+            (String::new(), String::new())
+        }
     }
 }
 
@@ -670,12 +700,27 @@ pub(crate) fn draw_modal(
             // pintado y por eso vive aquí: quien compone el cuerpo no sabe
             // todavía cómo de ancha va a salir la caja.
             let texto = if l.kind == LineKind::Field {
-                let hueco = interior.saturating_sub(l.text.as_str().width());
+                let hueco = interior.saturating_sub(l.width());
                 format!("{}{}", l.text, " ".repeat(hueco))
             } else {
                 l.text.clone()
             };
-            ratatui::text::Line::styled(texto, line_style(l.kind, theme))
+            let estilo = line_style(l.kind, theme);
+            // La marca de nombre alterado, en su propio tramo y con SU rol:
+            // es la única señal de esta caja cuyo contraste está garantizado
+            // (spec §6), y heredar el estilo de una línea atenuada la dejaba
+            // ilegible justo donde más falta hace.
+            if l.hostile {
+                ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled(
+                        format!("{HOSTILE_BADGE} "),
+                        theme.role(Role::HostileBadge),
+                    ),
+                    ratatui::text::Span::styled(texto, estilo),
+                ])
+            } else {
+                ratatui::text::Line::styled(texto, estilo)
+            }
         })
         .collect();
     let mut body = Paragraph::new(lineas).block(
@@ -1297,6 +1342,56 @@ pub(crate) struct DestNotices<'a> {
     pub confine: Option<&'a str>,
 }
 
+/// Título y cuerpo de `Modal::ConfirmTransfer`, con papeles.
+///
+/// **Por qué el destino deja de marcarse con una flecha.** Su línea era
+/// `→ ⟨file⟩/otro/ruta`, encima de una lista de NOMBRES ajenos, y el comentario
+/// afirmaba que ningún nombre podía imitarla. Se apoyaba en dos cosas: que un
+/// nombre no puede llevar `/` —cierto en los tres SO— y en el prefijo del
+/// esquema. Lo segundo ya no está para lo local, y lo primero tiene
+/// homóglifos: `∕` (U+2215), `⁄` (U+2044) y `／` (U+FF0F) son legales en ext4,
+/// APFS y NTFS, no son peligro de terminal, no se enmascaran y no marcan. Un
+/// fichero llamado `→ ∕srv∕publico` fabrica esa línea entera.
+///
+/// El papel va ahora en el ESTILO —el destino es `Strong`, las filas de la
+/// lista son `Plain`— y eso un nombre no lo puede fabricar, porque no lo
+/// escribe él. La etiqueta es la misma que usa `transfer_name_modal`.
+fn confirm_transfer_modal(
+    kind: crate::app::TransferKind,
+    items: &[norte_proto::VPath],
+    to: &norte_proto::VPath,
+    reinterpret: Option<norte_encoding::NameEncoding>,
+    destino: DestNotices<'_>,
+    teclas: &str,
+) -> (String, ModalBody) {
+    let title = match kind {
+        crate::app::TransferKind::Copy => t("modal-copy-title"),
+        crate::app::TransferKind::Move => t("modal-move-title"),
+    };
+    let mut lines: ModalBody = norte_frontend::item_lines_with(items, HOSTILE_BADGE, reinterpret)
+        .into_iter()
+        .map(ModalLine::plain)
+        .collect();
+    let (ruta, hostil) = norte_frontend::path_display_with(to, reinterpret);
+    lines.push(
+        ModalLine::new(
+            format!("{}  {}", t("modal-transfer-to"), ruta),
+            LineKind::Strong,
+        )
+        .hostile(hostil),
+    );
+    // #149/#164: los dos hechos del destino, debajo de él y encima de las
+    // teclas — lo último que se lee antes de decidir. Ninguno bloquea nada.
+    lines.extend(destino.space.map(|s| ModalLine::new(s, LineKind::Warning)));
+    lines.extend(
+        destino
+            .confine
+            .map(|s| ModalLine::new(s, LineKind::Warning)),
+    );
+    lines.push(ModalLine::new(teclas, LineKind::Dim));
+    (title, lines)
+}
+
 /// Título y cuerpo de `Modal::TransferName` (#105), con papeles.
 ///
 /// **Qué se lee y en qué orden**, que es lo que este modal hacía mal: el campo
@@ -1330,14 +1425,24 @@ pub(crate) fn transfer_name_modal(
     destino: DestNotices<'_>,
 ) -> (String, ModalBody) {
     let (masked, hostile) = display_name(name.as_bytes());
-    // `▏` marca dónde ACABA lo tecleado, que es lo que hacía el `_` — pero el
-    // `_` se confunde con un guion bajo del propio nombre, y un nombre puede
-    // acabar en uno.
-    let field = if hostile {
-        format!("{HOSTILE_BADGE} {masked}▏")
-    } else {
-        format!("{masked}▏")
-    };
+    // La COLA, con la marca del corte: es lo mismo que hace todo prompt de
+    // texto libre (`free_text_modal_text`) y por el mismo motivo, que este
+    // modal nunca recibió. Sin acotar, un nombre más ancho que la caja se
+    // cortaba contra el borde a pelo: se perdía la cola, se perdía el cursor,
+    // y a partir de ahí teclear no cambiaba nada en pantalla — o sea confirmar
+    // un nombre que no se ve. El fondo del campo, que ahora llega al borde, lo
+    // disimulaba aún mejor.
+    let visible = tail_window(&masked, FREE_TEXT_FIELD_MAX);
+    // `_` marca dónde acaba lo tecleado. Se probó `▏` (U+258F) por no
+    // confundirse con un guion bajo del propio nombre, y fue peor: es
+    // East_Asian_Width=Ambiguous, así que en un terminal CJK con
+    // ambiguous-width doble ocupa DOS celdas, `modal_width` presupuesta una y
+    // la marca de fin de campo es lo primero que se recorta. `_` es `Na`,
+    // inequívoco, y es el que usan los otros cinco campos.
+    //
+    // La marca de alterado NO se mete aquí dentro: viaja en la línea, que la
+    // pinta con su propio rol y su contraste garantizado.
+    let field = format!("{visible}_");
     // La ruta va con ELIPSIS MEDIA, como en el modal de aprobación y el de
     // colisión: `modal_width` topa contra el ancho del frame y el `Paragraph`
     // de `draw_modal` no envuelve, así que una ruta honda se cortaba a pelo
@@ -1348,26 +1453,40 @@ pub(crate) fn transfer_name_modal(
     let etiqueta_de = t("modal-transfer-from");
     let etiqueta_a = t("modal-transfer-to");
     let ancho = etiqueta_de.width().max(etiqueta_a.width());
+    // La marca sale APARTE del texto: la línea la lleva en su campo y se pinta
+    // con `Role::HostileBadge`. Dentro del texto heredaba el estilo del papel,
+    // y con la línea de origen atenuada la señal de spec §6 quedaba a 2,3:1
+    // sobre un tema claro.
     let con_etiqueta = |etiqueta: &str, p: &norte_proto::VPath| {
         let (linea, hostil) = norte_frontend::path_display_with(p, enc);
         let linea = middle_ellipsis(&linea, MODAL_PATH_CHARS);
         let pad = " ".repeat(ancho.saturating_sub(etiqueta.width()));
-        if hostil {
-            format!("{etiqueta}{pad}  {HOSTILE_BADGE} {linea}")
-        } else {
-            format!("{etiqueta}{pad}  {linea}")
-        }
+        (format!("{etiqueta}{pad}  {linea}"), hostil)
     };
-    // De DÓNDE sale: el directorio, porque el nombre está en el campo. En la
-    // raíz no hay padre, y entonces la propia ruta es la respuesta.
-    let origen = from.parent().unwrap_or_else(|| from.clone());
+    // De DÓNDE sale. El DIRECTORIO cuando el nombre está en el campo, porque
+    // entonces enseñar la ruta entera lo repetía. Pero un RENAME abre con
+    // `to_dir = from.parent()` —es la misma carpeta, no se mueve nada— así que
+    // ahí el directorio no nombra nada: en cuanto el usuario teclea, el campo
+    // pasa a ser el nombre NUEVO y el que se está renombrando no aparece en
+    // ninguna parte de la pantalla. Eso es confirmar a ciegas una mutación
+    // cuyo operando no se ve, que es exactamente lo que prohíbe la ADR 0070.
+    // Con el origen y el destino en la misma carpeta, la línea «De» lleva la
+    // ruta ENTERA.
+    let renombra = from.parent().as_ref() == Some(to_dir);
+    let origen = if renombra {
+        from.clone()
+    } else {
+        from.parent().unwrap_or_else(|| from.clone())
+    };
+    let (texto_de, de_hostil) = con_etiqueta(&etiqueta_de, &origen);
+    let (texto_a, a_hostil) = con_etiqueta(&etiqueta_a, to_dir);
     let mut lines = vec![
-        ModalLine::new(con_etiqueta(&etiqueta_de, &origen), LineKind::Dim),
+        ModalLine::new(texto_de, LineKind::Dim).hostile(de_hostil),
         // El destino es lo que hay que leer antes de decir que sí.
-        ModalLine::new(con_etiqueta(&etiqueta_a, to_dir), LineKind::Strong),
+        ModalLine::new(texto_a, LineKind::Strong).hostile(a_hostil),
         ModalLine::plain(""),
         ModalLine::new(t("modal-transfer-name-hint"), LineKind::Dim),
-        ModalLine::new(field, LineKind::Field),
+        ModalLine::new(field, LineKind::Field).hostile(hostile),
         ModalLine::plain(""),
     ];
     // Los dos avisos del destino, en el mismo sitio y en el mismo orden que en
@@ -1433,7 +1552,39 @@ mod transfer_name_modal_text_tests {
             body.matches('\u{FFFD}').count() >= 4,
             "nombre + error (RLO) y origen + destino (bytes): {body:?}"
         );
-        assert!(body.matches(super::HOSTILE_BADGE).count() >= 2, "{body:?}");
+    }
+
+    /// La marca de alterado va en el CAMPO de la línea, no dentro del texto:
+    /// se pinta con `Role::HostileBadge`, cuyo contraste el gate de
+    /// `norte-theme` garantiza en los ocho presets. Dentro del texto heredaba
+    /// el estilo del papel de su línea, y una línea atenuada dejaba la señal
+    /// de spec §6 a 2,3:1 sobre un tema claro.
+    #[test]
+    fn la_marca_de_alterado_va_aparte_del_texto() {
+        let hostile = "abc\u{202E}rid";
+        let from = VPath::parse("mem:///src%FF/a.txt").unwrap();
+        let to_dir = VPath::parse("mem:///dst%FE").unwrap();
+        let (_, body) = transfer_name_modal(
+            TransferKind::Move,
+            &from,
+            &to_dir,
+            hostile,
+            None,
+            None,
+            super::DestNotices::default(),
+        );
+        assert!(
+            !texto(&body).contains(super::HOSTILE_BADGE),
+            "la marca no se mete en el texto: {:?}",
+            texto(&body)
+        );
+        // Origen, destino y campo: los tres llevan bytes alterados y los tres
+        // lo dicen.
+        assert_eq!(body.iter().filter(|l| l.hostile).count(), 3, "{body:?}");
+        // Y la anchura de la línea cuenta la marca: si no, la caja sale corta
+        // justo en las líneas que llevan una.
+        let marcada = body.iter().find(|l| l.hostile).expect("hay marcada");
+        assert!(marcada.width() > unicode_width::UnicodeWidthStr::width(marcada.text.as_str()));
     }
 
     /// **El campo se declara CAMPO, y una sola línea lo es.**
@@ -1501,6 +1652,39 @@ mod transfer_name_modal_text_tests {
         assert!(body[0].text.contains("/src"), "{:?}", body[0].text);
     }
 
+    /// **Un rename NOMBRA el fichero que renombra** (ADR 0070).
+    ///
+    /// Un rename abre con `to_dir = from.parent()`: la misma carpeta, no se
+    /// mueve nada. Enseñando solo el directorio, «De» y «A» salían idénticos y
+    /// el nombre que se está cambiando no aparecía en NINGUNA parte en cuanto
+    /// el usuario tecleaba — el campo pasa a ser el nombre nuevo. Eso es
+    /// confirmar a ciegas una mutación cuyo operando no se ve, y con la marca
+    /// consumida al enviar.
+    #[test]
+    fn un_rename_nombra_el_fichero_que_renombra() {
+        let from = VPath::parse("mem:///casa/docs/contrato-final.pdf").unwrap();
+        let to_dir = from.parent().expect("padre");
+        let (_, body) = transfer_name_modal(
+            TransferKind::Move,
+            &from,
+            &to_dir,
+            // Ya tecleado: el campo es el nombre NUEVO.
+            "contrato-v2.pdf",
+            None,
+            None,
+            super::DestNotices::default(),
+        );
+        assert!(
+            body[0].text.contains("contrato-final.pdf"),
+            "el operando tiene que estar escrito: {:?}",
+            body[0].text
+        );
+        assert_ne!(
+            body[0].text, body[1].text,
+            "y las dos líneas no pueden decir lo mismo"
+        );
+    }
+
     /// **Ni una flecha dentro del texto.** `→` es legítimo en un nombre y no
     /// se enmascara, así que marcaba el destino con un carácter que un
     /// directorio puede llevar: `docs → /casa/BORRAR` fabricaba una línea que
@@ -1520,6 +1704,49 @@ mod transfer_name_modal_text_tests {
             super::DestNotices::default(),
         );
         assert!(!texto(&body).contains('→'), "{:?}", texto(&body));
+    }
+
+    /// **Un nombre más ancho que la caja enseña su COLA, con la marca.**
+    ///
+    /// Sin acotar se cortaba contra el borde a pelo: se perdía la cola, se
+    /// perdía el `_` que dice dónde estás escribiendo, y a partir de ahí
+    /// teclear no cambiaba nada en pantalla. El relleno del fondo hasta el
+    /// borde lo disimulaba todavía mejor — la caja se ve completa y lo que hay
+    /// dentro no es el nombre. Es el mismo arreglo que ya tenían los otros
+    /// cinco campos (`tail_window`), y este no lo había recibido.
+    #[test]
+    fn un_nombre_mas_ancho_que_la_caja_ensena_su_cola() {
+        let largo = "a".repeat(101);
+        let from = VPath::parse("mem:///src/x").unwrap();
+        let to_dir = VPath::parse("mem:///dst").unwrap();
+        let (_, body) = transfer_name_modal(
+            TransferKind::Copy,
+            &from,
+            &to_dir,
+            &largo,
+            None,
+            None,
+            super::DestNotices::default(),
+        );
+        let campo = body
+            .iter()
+            .find(|l| l.kind == LineKind::Field)
+            .expect("hay campo");
+        assert!(
+            campo.text.contains('…'),
+            "el corte se DICE: {:?}",
+            campo.text
+        );
+        assert!(
+            campo.text.ends_with('_'),
+            "y el cursor sobrevive al recorte: {:?}",
+            campo.text
+        );
+        assert!(
+            campo.width() <= super::FREE_TEXT_FIELD_MAX + 2,
+            "acotado como los otros cinco campos: {}",
+            campo.width()
+        );
     }
 
     /// **El alto declarado cubre el cuerpo que se compone.**
@@ -1608,16 +1835,31 @@ mod free_text_modal_text_tests {
         );
     }
 
-    /// `tail_window` cuenta CHARS, no bytes: cortar por bytes partiría un
-    /// carácter multibyte por la mitad.
+    /// **`tail_window` cuenta CELDAS de terminal.**
+    ///
+    /// Contaba chars, y para lo que este presupuesto protege —que el campo
+    /// quepa en su caja— esa es la medida equivocada: cincuenta chars de CJK
+    /// son CIEN celdas, así que un nombre japonés desbordaba igual y el
+    /// recorte contra el borde se llevaba el cursor del final. Lo destapó la
+    /// primera foto del modal de transferencia.
     #[test]
-    fn la_ventana_de_cola_cuenta_chars() {
+    fn la_ventana_de_cola_cuenta_celdas() {
         assert_eq!(tail_window("abc", 10), "abc");
         assert_eq!(tail_window("abcdef", 3), "…ef");
+
+        // Ocho ideogramas son DIECISÉIS celdas: con cuatro de presupuesto
+        // caben el `…` y uno solo, no cuatro.
         let cjk = "日本語のファイル";
         let w = tail_window(cjk, 4);
-        assert_eq!(w.chars().count(), 4);
-        assert!(w.starts_with('…'));
+        assert!(w.starts_with('…'), "{w:?}");
+        assert!(
+            norte_frontend::cells(&w) <= 4,
+            "{w:?} mide {} celdas",
+            norte_frontend::cells(&w)
+        );
+
+        // Y lo que cabe entero no se toca, se mida como se mida.
+        assert_eq!(tail_window(cjk, 16), cjk);
     }
 
     /// Mismo pin que el del patrón (#103 M4): fn PURA — un RLO crudo en el

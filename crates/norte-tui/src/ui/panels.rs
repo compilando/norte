@@ -503,27 +503,15 @@ pub fn tree_zones(app: &App, area: Rect) -> Vec<TreeZone> {
 
 /// Cómo se llama un punto de montaje en catorce celdas.
 ///
-/// Sin el prefijo `⟨file⟩` de [`norte_frontend::path_display`] cuando el
-/// esquema es local, que es SIEMPRE en `host.volumes`: en un panel de catorce
-/// celdas ese prefijo se come la ruta entera y deja al lector mirando seis
-/// filas que ponen lo mismo. El enmascarado no se pierde — cada segmento pasa
-/// por `display_name` igual que hace `path_display`.
+/// Esto llevaba su propia copia de «lo local no se anuncia», porque
+/// `path_display` sí lo anunciaba y en un panel de catorce celdas el prefijo
+/// se comía la ruta entera. Ahora esa es la regla de `path_display` para todo
+/// el mundo, así que la copia sobra — y era una copia que ya había DERIVADO:
+/// usaba `display_name` donde `path_display_with` usa `display_name_with`, o
+/// sea que bajo una reinterpretación las dos pintaban distinto el mismo
+/// montaje.
 pub(crate) fn mount_name(mount: &norte_proto::VPath) -> (String, bool) {
-    if mount.scheme() != "file" || mount.authority().is_some() {
-        return norte_frontend::path_display(mount);
-    }
-    let mut text = String::new();
-    let mut hostile = false;
-    for seg in mount.segments() {
-        let (t, h) = display_name(seg);
-        text.push('/');
-        text.push_str(&t);
-        hostile |= h;
-    }
-    if text.is_empty() {
-        text.push('/');
-    }
-    (text, hostile)
+    norte_frontend::path_display(mount)
 }
 
 /// El porcentaje de una tarea, o `0` si todavía no se sabe.

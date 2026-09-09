@@ -118,10 +118,16 @@ pub fn display_name_with(
     (texto, true)
 }
 
-/// Path completo listo para pintar: prefijo `⟨scheme authority⟩/` (formato
-/// calcado EXACTO de `VPath::display_lossy`, proto vpath.rs — con segmentos
-/// limpios ambos textos coinciden) + cada segmento por [`display_name`], y
-/// marca si CUALQUIER segmento saldría alterado.
+/// Path completo listo para pintar: prefijo `⟨scheme authority⟩/` **salvo para
+/// `file` sin authority**, que no se anuncia (ver [`path_display_with`]) + cada
+/// segmento por [`display_name`], y marca si CUALQUIER segmento saldría
+/// alterado.
+///
+/// Ya NO calca `VPath::display_lossy`, y eso es deliberado: `display_lossy` es
+/// la forma de un LOG y de un error —donde el esquema siempre importa, porque
+/// no hay pantalla alrededor que lo diga— y esta es la de una pantalla, donde
+/// el esquema por defecto es ruido en cada fila. Con cualquier otro esquema
+/// las dos siguen coincidiendo.
 ///
 /// El texto se construye segmento a segmento con `display_name` (no con
 /// `display_lossy`, review encoding MEDIA-2): el criterio de enmascarado del
@@ -622,9 +628,15 @@ mod tests {
     }
 
     /// El prefijo `⟨scheme authority⟩/` de `path_display` calca EXACTO el
-    /// formato de `VPath::display_lossy` (proto vpath.rs): con segmentos
-    /// limpios ambos textos son idénticos — los snapshots de panes no
-    /// cambian.
+    /// formato de `VPath::display_lossy` (proto vpath.rs) para todo esquema
+    /// que se anuncie: con segmentos limpios ambos textos son idénticos.
+    ///
+    /// **Con una excepción, y aquí se fija**: `file` sin authority. Son dos
+    /// superficies distintas —`display_lossy` es la de un LOG, donde no hay
+    /// pantalla alrededor que diga de qué máquina se habla; ésta es la de una
+    /// fila, donde el esquema por defecto es ruido en cada línea— y el test
+    /// tiene que decir cuál es la diferencia en vez de dejar que se descubra
+    /// leyendo el código.
     #[test]
     fn path_display_calca_el_prefijo_de_display_lossy() {
         let limpio = VPath::parse("sftp://oscar-host/docs/notas.txt").unwrap();
@@ -633,6 +645,16 @@ mod tests {
         assert_eq!(path_display(&sin_auth).0, sin_auth.display_lossy());
         let raiz = root();
         assert_eq!(path_display(&raiz).0, raiz.display_lossy());
+
+        // Lo local diverge, y de una forma concreta: la misma cadena menos la
+        // etiqueta.
+        let local = VPath::parse("file:///home/o/notas.txt").unwrap();
+        assert_eq!(path_display(&local).0, "/home/o/notas.txt");
+        assert_eq!(local.display_lossy(), "⟨file⟩/home/o/notas.txt");
+
+        // Y un `file` CON authority sí se anuncia: entonces es otra máquina.
+        let remoto = VPath::parse("file://otra/home/o").unwrap();
+        assert_eq!(path_display(&remoto).0, remoto.display_lossy());
     }
 
     /// H3b encoding audit, FIX 3(b): the tail of a middle-truncated string
@@ -871,19 +893,37 @@ mod tests {
                 "[{id}] no hay nada que enmascarar: por eso hace falta el marcador"
             );
 
-            // Y el marcador de rol es lo que lo desactiva.
-            let p = VPath::parse("mem:///")
-                .expect("raíz")
-                .join(norte_proto::Segment::new(n.bytes.clone()).expect("segmento"));
-            let (linea, _) = path_display(&p);
-            assert_ne!(
-                linea, frase,
-                "[{id}] una ruta se pintó como una frase del host"
-            );
-            assert!(
-                linea.starts_with("⟨mem⟩/"),
-                "[{id}] el marcador de rol desapareció: {linea:?}"
-            );
+            // Y el marcador de rol es lo que lo desactiva. Sobre los TRES
+            // esquemas que se pintan distinto, `file` incluido: este test
+            // existe para atrapar a quien quite el prefijo por ruido, y
+            // probando solo `mem` no atrapó exactamente eso — el prefijo de
+            // `file` se quitó con el test en verde. Lo que se afirma ahora es
+            // el marcador que a cada uno le toca, no una cadena literal.
+            for raiz in ["mem:///", "file:///", "sftp://h/"] {
+                let p = VPath::parse(raiz)
+                    .expect("raíz")
+                    .join(norte_proto::Segment::new(n.bytes.clone()).expect("segmento"));
+                let (linea, _) = path_display(&p);
+                assert_ne!(
+                    linea, frase,
+                    "[{id}/{raiz}] una ruta se pintó como una frase del host"
+                );
+                // `file` sin authority no lleva `⟨…⟩`: su marcador es la `/`
+                // inicial, que un nombre no puede llevar (ningún SO soportado
+                // admite `/` en un segmento). Los demás llevan el suyo.
+                if raiz == "file:///" {
+                    assert!(
+                        linea.starts_with('/') && !linea.starts_with("⟨"),
+                        "[{id}] lo local se pinta sin etiqueta y con la barra \
+                         delante: {linea:?}"
+                    );
+                } else {
+                    assert!(
+                        linea.starts_with('⟨'),
+                        "[{id}/{raiz}] el marcador de rol desapareció: {linea:?}"
+                    );
+                }
+            }
         }
     }
 }
