@@ -49,6 +49,14 @@ pub struct Tree {
     expanded_dirs: BTreeSet<VPath>,
     /// Dónde está el cursor, por posición en las filas visibles.
     cursor: usize,
+    /// El directorio que [`Self::follow`] quiere dejar bajo el cursor y que
+    /// TODAVÍA no es una fila.
+    ///
+    /// Revelar una rama profunda necesita listar cada nivel, y eso son varias
+    /// vueltas del run loop: sin apuntar el objetivo, el cursor se quedaría
+    /// en el último ancestro que sí existía cuando se pidió. Se liquida en
+    /// [`Self::insert_children`], que es cuando aparecen filas nuevas.
+    revealing: Option<VPath>,
 }
 
 impl Tree {
@@ -65,6 +73,93 @@ impl Tree {
         self.child_dirs.clear();
         self.expanded_dirs.clear();
         self.cursor = 0;
+        self.revealing = None;
+    }
+
+    /// Sigue al listado de al lado: deja `dir` bajo el cursor SIN tirar lo que
+    /// esté abierto.
+    ///
+    /// Es la diferencia entre un árbol útil y uno que estorba. [`Self::anchor`]
+    /// vacía —tiene que hacerlo, porque las ramas de otra raíz no dicen nada
+    /// de ésta—, así que re-anclar en cada `cd` cerraría el árbol entero cada
+    /// vez que alguien entra en una carpeta. Revelar despliega los ANCESTROS
+    /// de `dir` y mueve el cursor; una rama hermana abierta sigue abierta.
+    ///
+    /// `dir` mismo NO se despliega: quien navega ahí ya está viendo su
+    /// contenido en el listado de al lado, y desplegarlo costaría un listado
+    /// más por cada paso que dé el lector.
+    ///
+    /// Cuando `dir` no cuelga de la raíz —otro provider, otra máquina, o
+    /// simplemente `/tmp` desde `$HOME`— sí se re-ancla: la alternativa es un
+    /// árbol que enseña un sitio y un listado que enseña otro.
+    ///
+    /// ```
+    /// use norte_frontend::tree::Tree;
+    /// use norte_proto::VPath;
+    /// let vp = |w: &str| VPath::parse(w).unwrap();
+    /// let mut t = Tree::default();
+    /// t.anchor(vp("mem:///r"));
+    /// t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
+    /// t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/y")]);
+    /// t.follow(&vp("mem:///r/a/y"));
+    /// assert_eq!(t.selected(), Some(vp("mem:///r/a/y")));
+    /// ```
+    pub fn follow(&mut self, dir: &VPath) {
+        let Some(root) = self.root.clone() else {
+            self.anchor(dir.clone());
+            return;
+        };
+        // La cadena de `dir` hasta la raíz, `dir` incluido y la raíz no: es
+        // exactamente lo que hay que desplegar para que la fila exista.
+        let mut cadena = Vec::new();
+        let mut actual = dir.clone();
+        while actual != root {
+            let Some(padre) = actual.parent() else {
+                // Se ha llegado a la raíz del provider sin pasar por la
+                // nuestra: esto no cuelga de aquí.
+                self.anchor(dir.clone());
+                return;
+            };
+            cadena.push(actual);
+            actual = padre;
+        }
+        for p in cadena.iter().skip(1) {
+            self.expanded_dirs.insert(p.clone());
+        }
+        self.revealing = Some(dir.clone());
+        self.asentar_revelado();
+    }
+
+    /// El directorio que [`Self::follow`] pidió y que aún no tiene fila, si
+    /// hay alguno.
+    ///
+    /// Lo que falta para que exista es listar sus ancestros, y eso ya lo pide
+    /// [`Self::wants`] solo.
+    ///
+    /// ```
+    /// use norte_frontend::tree::Tree;
+    /// use norte_proto::VPath;
+    /// let vp = |w: &str| VPath::parse(w).unwrap();
+    /// let mut t = Tree::default();
+    /// t.anchor(vp("mem:///r"));
+    /// t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
+    /// t.follow(&vp("mem:///r/a/y"));
+    /// assert_eq!(t.revealing(), Some(&vp("mem:///r/a/y")));
+    /// ```
+    #[must_use]
+    pub fn revealing(&self) -> Option<&VPath> {
+        self.revealing.as_ref()
+    }
+
+    /// Pone el cursor en la rama que [`Self::follow`] pidió, si ya es una fila.
+    fn asentar_revelado(&mut self) {
+        let Some(objetivo) = self.revealing.clone() else {
+            return;
+        };
+        if let Some(i) = self.rows().iter().position(|r| r.path == objetivo) {
+            self.cursor = i;
+            self.revealing = None;
+        }
     }
 
     /// Dónde está anclado.
@@ -80,6 +175,8 @@ impl Tree {
     /// segundo criterio que se separa del primero en cuanto alguien cambie uno.
     pub fn insert_children(&mut self, dir: VPath, child_dirs: Vec<VPath>) {
         self.child_dirs.insert(dir, child_dirs);
+        // Filas nuevas: puede que una de ellas sea la que se estaba revelando.
+        self.asentar_revelado();
     }
 
     /// Qué directorio hace falta listar para pintar lo que está abierto, si
@@ -283,6 +380,83 @@ mod tests {
         assert_eq!(t.rows().len(), 1, "solo la raíz nueva");
         assert_eq!(t.wants(), Some(vp("mem:///otro")));
         assert_eq!(t.cursor(), 0);
+    }
+
+    /// Seguir al listado deja la rama bajo el cursor y NO cierra lo que
+    /// hubiera abierto en otra parte del árbol: re-anclar en cada `cd` era
+    /// justo lo que hacía inútil tener el panel abierto.
+    #[test]
+    fn seguir_revela_la_rama_y_conserva_lo_abierto() {
+        let mut t = con_raiz();
+        t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a"), vp("mem:///r/b")]);
+        // `b` queda abierta: es la hermana que no debe cerrarse.
+        t.set_cursor(2);
+        t.expand();
+        t.insert_children(vp("mem:///r/b"), vec![vp("mem:///r/b/x")]);
+        t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/y")]);
+
+        t.follow(&vp("mem:///r/a/y"));
+
+        let filas: Vec<VPath> = t.rows().into_iter().map(|r| r.path).collect();
+        assert_eq!(
+            filas,
+            vec![
+                vp("mem:///r"),
+                vp("mem:///r/a"),
+                vp("mem:///r/a/y"),
+                vp("mem:///r/b"),
+                vp("mem:///r/b/x"),
+            ],
+            "el ancestro se despliega y `b` sigue abierta"
+        );
+        assert_eq!(t.selected(), Some(vp("mem:///r/a/y")));
+        assert_eq!(t.revealing(), None, "ya está revelada");
+    }
+
+    /// Un destino que no cuelga de la raíz SÍ re-ancla: un árbol que enseña un
+    /// sitio junto a un listado que enseña otro no responde a nada.
+    #[test]
+    fn seguir_fuera_de_la_raiz_reancla() {
+        let mut t = con_raiz();
+        t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
+        t.follow(&vp("mem:///otro/z"));
+        assert_eq!(t.root(), Some(&vp("mem:///otro/z")));
+        assert_eq!(t.rows().len(), 1, "solo la raíz nueva");
+        assert_eq!(t.revealing(), None, "anclar no deja nada pendiente");
+    }
+
+    /// Y una rama profunda que no se ha listado todavía se revela A PLAZOS:
+    /// `wants` pide un nivel por vuelta y el cursor aterriza cuando la fila
+    /// por fin existe, no en el ancestro más hondo que hubiera.
+    #[test]
+    fn seguir_una_rama_sin_listar_espera_a_que_llegue() {
+        let mut t = con_raiz();
+        t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
+
+        t.follow(&vp("mem:///r/a/y"));
+        assert_eq!(t.cursor(), 0, "todavía no hay fila que enseñar");
+        assert_eq!(t.revealing(), Some(&vp("mem:///r/a/y")));
+        assert_eq!(t.wants(), Some(vp("mem:///r/a")), "hace falta listar `a`");
+
+        t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/y")]);
+        assert_eq!(t.selected(), Some(vp("mem:///r/a/y")));
+        assert_eq!(t.revealing(), None);
+    }
+
+    /// Seguir a la raíz misma es volver arriba, no vaciar: `anchor` habría
+    /// tirado lo leído y aquí no cambia de sitio nada.
+    #[test]
+    fn seguir_a_la_propia_raiz_no_tira_nada() {
+        let mut t = con_raiz();
+        t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
+        t.set_cursor(1);
+        t.expand();
+        t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/y")]);
+
+        t.follow(&vp("mem:///r"));
+
+        assert_eq!(t.cursor(), 0);
+        assert_eq!(t.rows().len(), 3, "`a` sigue desplegada");
     }
 
     /// El cursor no se sale por ningún extremo, y sobre un árbol vacío no
