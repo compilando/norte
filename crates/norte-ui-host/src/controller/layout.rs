@@ -410,6 +410,33 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.poner_arbol(arbol, activo);
+        self.despertar_visibles(backend, buzon);
+        if self.hueco_de_sitios().is_some() {
+            self.sembrar_sitios();
+            self.pedir_sitios(backend, buzon);
+        }
+        // El árbol cambió: a la sesión AHORA, sin esperar al tic. Un panel
+        // abierto o una plantilla elegida es justo lo que el lector espera
+        // encontrar al volver, y un cierre que no llegue a tiempo no debe
+        // perderlo.
+        self.empujar_sesion(backend, buzon);
+        let snap = self.snapshot();
+        (
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        )
+    }
+
+    /// Pone `arbol` como el árbol de la pantalla y siembra los huecos que
+    /// estrena, SIN pedir ningún listado ni tocar la sesión.
+    ///
+    /// Es la mitad sin I/O de [`Self::aplicar_disposicion_con`], y lo que el
+    /// arranque usa para la disposición que la sesión guardó: ahí los
+    /// listados se piden después, una vez la sesión haya dicho dónde estaba
+    /// cada uno, y despertarlos aquí pediría el directorio del arranque para
+    /// tirarlo un instante después.
+    pub(super) fn poner_arbol(&mut self, arbol: Node, activo: Option<SlotId>) {
         let dir = self.hueco().pane.dir().clone();
         // Un hueco que se estrena nace como los del arranque: con la
         // ocultación de la configuración puesta.
@@ -447,16 +474,6 @@ impl Estado {
             None => self.roles.clear(RoleId::Active),
         }
         self.reconcilia_roles();
-        self.despertar_visibles(backend, buzon);
-        if self.hueco_de_sitios().is_some() {
-            self.sembrar_sitios();
-            self.pedir_sitios(backend, buzon);
-        }
-        let snap = self.snapshot();
-        (
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
-        )
     }
 
     /// Cambia el tamaño del hueco con el FOCO, no del listado activo.
@@ -511,6 +528,8 @@ impl Estado {
         // El reparto cambió: lo que acaba de salir de `hidden` no tiene
         // listado y nadie más se lo va a pedir.
         self.despertar_visibles(backend, buzon);
+        // Y a la sesión ahora: un tamaño es una decisión sobre el árbol.
+        self.empujar_sesion(backend, buzon);
         let cambio = ViewChange::Layout(self.disposicion());
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }

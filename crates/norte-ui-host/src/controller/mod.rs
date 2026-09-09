@@ -247,6 +247,15 @@ const PLAZO_PLUGINS: std::time::Duration = std::time::Duration::from_secs(5);
 /// caducan distinto son dos respuestas a «¿sigue esto en marcha?».
 const TTL_TASK_TERMINAL: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Cada cuánto se mira si la sesión cambió y, si cambió, se escribe.
+///
+/// El mismo segundo que el terminal (`session_tick` en su bucle), a
+/// propósito: dos frontends que guardan a ritmos distintos son dos respuestas
+/// a «¿dónde me quedé?» tras un cierre que no llegó a tiempo. Y un segundo es
+/// barato: comparar el cuerpo con lo último mandado es lo único que hace un
+/// tic sin cambios.
+const SESION_TIC: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Plazo de una petición de plan a un modelo.
 ///
 /// Generoso: pensar es lo que hace. Es el tope de ARRIBA, para que una
@@ -435,6 +444,27 @@ pub struct ShutdownReport {
     pub incomplete: bool,
 }
 
+/// El tic de la sesión, cada segundo, como el del terminal: la pantalla se
+/// guarda mientras se usa, no solo al cerrar. Un cierre que no llega —el
+/// proceso muerto, el socket atascado más allá del plazo— perdía hasta aquí
+/// todo lo andado desde el arranque. Los cambios del ÁRBOL además se escriben
+/// al momento, sin esperar al tic (`aplicar_disposicion_con`,
+/// `aplicar_arbol`). Muere con el buzón, como las demás bombas.
+fn bombear_tic_de_sesion(buzon: mpsc::Sender<Mensaje>) {
+    tokio::spawn(async move {
+        let mut tic = tokio::time::interval(SESION_TIC);
+        // El primero de `interval` es inmediato, y no hay nada que escribir
+        // un instante después de arrancar.
+        tic.tick().await;
+        loop {
+            tic.tick().await;
+            if buzon.send(Mensaje::SesionTic).await.is_err() {
+                return;
+            }
+        }
+    });
+}
+
 /// Reenvía los `plugin.notice` del backend al buzón del host (ADR 0100). Una
 /// función aparte de `start` porque la lista de bombas ya llenaba el límite
 /// de líneas, y la forma es la de las demás: una task que muere con el canal
@@ -527,6 +557,20 @@ enum Mensaje {
     ///
     /// El error es una CLAVE, no el error: el suyo lleva la ruta dentro (#73).
     TemaResuelto(Box<(String, Result<norte_theme::Theme, &'static str>)>),
+    /// El tic de la sesión: cada segundo, como el terminal. Si la pantalla
+    /// cambió desde lo último escrito, se escribe; si no, nada.
+    SesionTic,
+    /// Un `session.put` contestó: qué dijo el daemon y el cuerpo que se
+    /// mandó, para darlo por escrito solo si de verdad entró.
+    SesionPuesta(
+        Box<(
+            Result<u64, Error>,
+            std::sync::Arc<norte_frontend::session::SessionBody>,
+        )>,
+    ),
+    /// La sesión releída tras un conflicto: otra ventana escribió en medio y
+    /// la revisión sobre la que se escribe ya no vale.
+    SesionReleida(Result<(norte_proto::methods::Session, bool), Error>),
     /// A esta task TERMINADA se le acabó su rato en el tablero
     /// ([`TTL_TASK_TERMINAL`]). Lleva la ÉPOCA de conexión en la que se
     /// registró: tras un relevo del daemon los ids vuelven a empezar en 1, y
@@ -934,6 +978,8 @@ impl UiHost {
         }
         let primero = estado.snapshot();
 
+        bombear_tic_de_sesion(tx.clone());
+
         // Los dos canales de la conexión son del PRIMER dueño, así que se
         // toman una vez, aquí, y su contenido entra por el mismo buzón que
         // todo lo demás: un aviso de conexión perdida tiene que ordenarse
@@ -1282,6 +1328,18 @@ async fn actor(
                     for u in estado.decir(clave) {
                         let _ = updates.send(u);
                     }
+                }
+            }
+            Mensaje::SesionTic => estado.empujar_sesion(&backend, &buzon),
+            Mensaje::SesionPuesta(datos) => {
+                let (res, cuerpo) = *datos;
+                for u in estado.sesion_puesta(res, cuerpo, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::SesionReleida(res) => {
+                for u in estado.sesion_releida(res) {
+                    let _ = updates.send(u);
                 }
             }
             Mensaje::TemaResuelto(datos) => {
@@ -2907,6 +2965,23 @@ struct Sesion {
     /// hay que volver a escribir, y esto es lo que la sesión ya conocía —y no
     /// puede moverse cuando el proceso empieza a guardar lo suyo.
     conocidos: std::collections::BTreeSet<u32>,
+    /// El sello de edad de cada hueco, tal como se ESCRIBIÓ la última vez.
+    ///
+    /// La política compartida sella los huecos que cambiaron al preparar el
+    /// cuerpo, y el llamante tiene que recordar ese sello para la siguiente
+    /// captura: sellar cada captura con «ahora» hacía que ningún cuerpo fuera
+    /// igual al anterior, y el tic escribía cada segundo sin que nada hubiera
+    /// cambiado. Es el mismo mapa que lleva el terminal (`session.touched`).
+    touched: std::collections::BTreeMap<u32, u64>,
+    /// El cuerpo de un `session.put` en vuelo, si lo hay: el tic siguiente
+    /// no manda otro encima —dos escrituras cruzadas con la misma revisión
+    /// son un conflicto seguro— y el apagado sabe qué se estaba escribiendo
+    /// para decir si lo suyo llegó o no.
+    en_vuelo: Option<std::sync::Arc<norte_frontend::session::SessionBody>>,
+    /// El daemon rehusó el cuerpo por tamaño (#316): desde entonces se manda
+    /// sin historial, que es lo que se degrada. Lo que había que salvar es
+    /// dónde está el lector, y eso cabe.
+    sin_historial: bool,
     /// Los huecos que este proceso ya sembró desde `[profile.start]`.
     ///
     /// Sembrar es de la PRIMERA vez. Sin esta cuenta, un lector sin sesión
@@ -3164,6 +3239,9 @@ impl Estado {
                 policy: norte_frontend::session::PushPolicy::new(30),
                 leida: norte_frontend::session::SessionBody::default(),
                 conocidos: std::collections::BTreeSet::new(),
+                touched: std::collections::BTreeMap::new(),
+                en_vuelo: None,
+                sin_historial: false,
                 sembrados: std::collections::BTreeSet::new(),
             },
             dir_pedido: initial_dir_pedido.then(|| initial_dir.clone()),
