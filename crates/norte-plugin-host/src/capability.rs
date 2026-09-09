@@ -79,6 +79,76 @@ impl Scope {
     }
 }
 
+/// Escritura de FS (ADR 0101): nada, o una lista CERRADA de nombres de
+/// fichero —sidecars— que un `hook` puede pedir que el host escriba junto a
+/// lo que cambió. El host los escribe como actor `plugin`, por el policy
+/// engine y por el journal; el guest no ve rutas ni abre nada.
+///
+/// `fs-write = "scoped"` fue un valor reservado que nadie honraba, y desde
+/// ADR 0088 eso se rechaza al parsear: la variante [`Self::Reserved`] existe
+/// para que el rechazo diga qué se escribió, no para concederlo.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(untagged)]
+pub enum FsWriteCap {
+    /// Sin escritura.
+    #[default]
+    #[serde(skip)]
+    None,
+    /// Una cadena (`"scoped"` u otra): se rechaza al validar el manifiesto.
+    Reserved(String),
+    /// `fs-write = { sidecar = ["a", "b"] }`: los nombres, tal cual.
+    Sidecar(SidecarList),
+}
+
+/// La tabla de `fs-write`: una sola clave, y ninguna otra — entra en el
+/// digest de aprobación, así que una clave desconocida es un manifiesto
+/// inválido, no un campo que se ignora.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidecarList {
+    /// Nombres de fichero, un segmento cada uno. Validados en el manifiesto,
+    /// no aquí.
+    pub sidecar: Vec<String>,
+}
+
+impl FsWriteCap {
+    /// Los nombres de sidecar concedidos; vacío si no hay escritura.
+    #[must_use]
+    pub fn sidecar_names(&self) -> &[String] {
+        match self {
+            FsWriteCap::Sidecar(l) => &l.sidecar,
+            _ => &[],
+        }
+    }
+
+    /// Byte canónico + contenido para el digest. `None` digesta EXACTAMENTE
+    /// lo que digestaba `fs-write` ausente antes de ADR 0101 (el byte 0), así
+    /// que ninguna aprobación existente se mueve. `Sidecar` lleva un byte
+    /// nuevo y los nombres, en orden: cambiar qué puede escribir un plugin es
+    /// cambiar lo aprobado.
+    fn update_digest(&self, h: &mut sha2::Sha256) {
+        use sha2::Digest;
+        match self {
+            FsWriteCap::None => h.update([0u8]),
+            // Nunca llega al digest: se rechaza antes. El byte existe para
+            // que, si llegara, no colisionara con `None`.
+            FsWriteCap::Reserved(_) => h.update([1u8]),
+            FsWriteCap::Sidecar(l) => {
+                h.update([2u8]);
+                // Un CONJUNTO, como los hosts de `net`: reordenar dos nombres
+                // en el TOML no es cambiar lo aprobado.
+                let mut names: Vec<&str> = l.sidecar.iter().map(String::as_str).collect();
+                names.sort_unstable();
+                names.dedup();
+                h.update((names.len() as u64).to_le_bytes());
+                for n in names {
+                    update_str(h, n);
+                }
+            }
+        }
+    }
+}
+
 /// Acceso de UBICACIÓN (ADR 0057): nada, o lectura bajo el token opaco que el
 /// host entrega al pintar una columna.
 ///
@@ -137,9 +207,9 @@ pub struct Capabilities {
     /// Lectura de FS.
     #[serde(default, rename = "fs-read")]
     pub fs_read: Scope,
-    /// Escritura de FS.
+    /// Escritura de FS: los sidecars que un `hook` puede pedir (ADR 0101).
     #[serde(default, rename = "fs-write")]
-    pub fs_write: Scope,
+    pub fs_write: FsWriteCap,
     /// Red (allow-list de hosts); ausente = sin red.
     #[serde(default)]
     pub net: Option<NetCap>,
@@ -225,7 +295,7 @@ impl Capabilities {
     pub(crate) fn update_digest(&self, h: &mut sha2::Sha256) {
         use sha2::Digest;
         h.update([self.fs_read.digest_tag()]);
-        h.update([self.fs_write.digest_tag()]);
+        self.fs_write.update_digest(h);
         // net: presencia + nº de hosts + cada host longitud-prefijado. Los hosts
         // se ORDENAN y se DEDUPLICAN: es un CONJUNTO, ni el orden ni las
         // repeticiones en el fichero son semánticos.
@@ -282,8 +352,10 @@ impl Capabilities {
         if self.fs_read.granted() {
             out.push("fs-read".to_owned());
         }
-        if self.fs_write.granted() {
-            out.push("fs-write".to_owned());
+        // Un badge POR NOMBRE: lo que el humano aprueba es qué ficheros
+        // puede escribir el plugin, y «fs-write» a secas no lo dice.
+        for n in self.fs_write.sidecar_names() {
+            out.push(format!("fs-write:{n}"));
         }
         if self.net.is_some() {
             out.push("net".to_owned());

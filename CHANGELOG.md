@@ -33,10 +33,56 @@ independently through `PROTOCOL_VERSION`.
   neither the full-screen viewer (it sits behind the overlay cutoff) nor the
   coupled one (its slot is not a listing, so the hit test returned nothing).
   Bridge 59 carries `total_cols`/`first_col` and the `viewer_scroll` action.
+- **A hook may write a sidecar** (ADR 0101, protocol **0.70.0**,
+  `norte:hook@0.2.0`). A hook plugin can now return `write-sidecar`: a file
+  with one of the exact names its manifest declares in
+  `fs-write = { sidecar = [...] }` — the only form `fs-write` takes; the old
+  reserved `"scoped"` is rejected — written by the core **as a plugin actor**
+  in the parent directory of the event, through the policy engine (a rule
+  `actor = "plugin", action = "deny"` stops it, and the reader is told once
+  with the new `plugin.notice` kind `effect-denied`; an `ask` rule on a
+  plugin is a deny) and through the journal (`created`; `replace` trashes
+  the previous file first, so its content has a way back; a directory with
+  the name is never touched). Rows a plugin writes never come back to any
+  hook as events. Approval shows `fs-write:<name>` badges. `org.norte.rename-log` now keeps a
+  `.norte-renames.log` next to what it renamed, carrying the previous log
+  forward. A 0.69 client ignores the new notice kind.
+- **Operation hooks: a plugin can observe what the journal recorded, and
+  say so** (ADR 0100, protocol **0.69.0**). A new plugin kind, `hook`, with
+  its own WIT package `norte:hook@0.1.0`: the manifest names the journal
+  events it listens to — `after-created`, `after-removed`, `after-trashed`,
+  `after-renamed`, `after-mode-changed`, a closed vocabulary — and the guest
+  receives the committed entries in batches and may return one kind of
+  effect, `notify(text)`. There is no `before-*` and there is no veto: what
+  decides whether a mutation happens is the policy engine, and a hook sees
+  the entry after it is durable. The source is the journal's commit path,
+  so a hook fires for a human's rename, an agent's, a batch and an undo
+  alike, from the daemon and from an embedded `ntc`. The dispatcher runs off
+  the critical path with a bounded queue, tells the guest how many events
+  it lost, and three consecutive failures switch that plugin's hooks off and
+  say so (disabling the plugin re-arms them). A hook may not declare `net`,
+  is shown nothing under norte's own state directory, and its events appear
+  at approval as `hook:<event>` badges. The sentence reaches both frontends
+  as the new `plugin.notice` notification (humans only, `kind` ∈ {`notify`,
+  `hooks-disabled`}), masked, capped, rate-limited and prefixed with the
+  plugin id. Declaring a hook no longer rejects the manifest; an unknown
+  event does. First hook: **`org.norte.rename-log`** (`plugins/rename-log`,
+  `just plugin-rename-log`), which says how many files a rename touched. A
+  0.68 client ignores the notification: the hook ran, its sentence reached
+  nobody.
+- **Every binary says which build it is.** `ntc --version`, `norte --version`
+  and `ntc-gui --version` print the workspace version followed by the tree's
+  `git describe` (`0.3.0-alpha.3 (v0.3.0-alpha.3-10-g674b0eb9-dirty)`); the
+  TUI shows the same line in the frame of the help screen (F1) and the window
+  carries it in its title. The revision is fixed at compile time by
+  `norte-frontend`'s build script, falls back to `NORTE_REVISION` for
+  packagers and to `unknown` without git. On a development machine `just link`
+  points `ntc` at `target/debug`, and «0.3.0-alpha.3» was the same string ten
+  commits after the tag: now the binary tells you.
 
 ### Fixed
 
-- **The tree follows the panel that navigates** (ADR 0100). Opening the tree
+- **The tree follows the panel that navigates** (ADR 0102). Opening the tree
   and walking around left the panel pointing at the folder you were in when
   you opened it. Not a loose wire: both frontends anchored at open and never
   again, on purpose, because anchoring EMPTIES the tree and re-anchoring on
@@ -52,7 +98,7 @@ independently through `PROTOCOL_VERSION`.
   every branch, where before each of them emptied the whole tree on every
   press — which made the tree useless with the two gestures it most needs to
   survive. Only another provider anchors and empties.
-- **`Tab` reaches the third listing, and stops only at listings** (ADR 0100).
+- **`Tab` reaches the third listing, and stops only at listings** (ADR 0102).
   In the terminal it was `focus ^= 1`, a count of two: after `alt+v` split a
   panel the key silently did nothing from the third one, because `PaneSlots`
   clamps out of range instead of panicking. In the window the opposite —
@@ -61,6 +107,10 @@ independently through `PROTOCOL_VERSION`.
   listing beside you. Now they are two rings: `pane.switch` is "the other
   panel" and cycles the listings, `layout.focus-*` walks the whole screen.
   `Tab` still takes you out of a side panel.
+
+## [0.3.0-alpha.3] - 2026-09-08
+
+### Fixed
 
 - **`[profile.start]` finally does something** (ADR 0098). Both frontends
   *wrote* it — `save_profile` records where every slot sits — and two files
@@ -6272,6 +6322,7 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.2...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.3...HEAD
+[0.3.0-alpha.3]: https://github.com/compilando/norte/compare/v0.3.0-alpha.2...v0.3.0-alpha.3
 [0.3.0-alpha.2]: https://github.com/compilando/norte/compare/v0.3.0-alpha.1...v0.3.0-alpha.2
 [0.3.0-alpha.1]: https://github.com/compilando/norte/releases/tag/v0.3.0-alpha.1

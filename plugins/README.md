@@ -16,6 +16,7 @@ gate red.
 | `markdown/` | `org.norte.markdown` | previewer | `text/markdown` as styled lines: headings, emphasis, code, lists, quotes, links. |
 | `image-ansi/` | `org.norte.image-ansi` | previewer | PNG, JPEG and GIF as `▀` half-block cells, two pixels per cell (`fg` + `bg`), shrunk to the viewer's width. |
 | `date-prefix/` | `org.norte.date-prefix` | renamer | Proposes `YYYY-MM-DD_name` for the marked files from each one's modification time, read with `stat` under the location token; the plan is reviewed like the AI plan before anything is renamed. |
+| `rename-log/` | `org.norte.rename-log` | hook | After a rename lands in the journal — yours, an agent's, a batch, an undo — says in the status bar how many files it touched and keeps a `.norte-renames.log` next to them, written by norte as a plugin actor through the policy engine (ADR 0100, 0101). |
 
 The syntax-highlighting previewer (`org.norte.syntect`) lives with the host's
 example guests, in `crates/norte-plugin-host/examples-wasm/previewer-syntect/`.

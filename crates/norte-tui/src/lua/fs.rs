@@ -217,7 +217,10 @@ fn finish(lua: &Lua, state: &TaskState) -> mlua::Result<MultiValue> {
 /// de `norte.pane`/`norte.ui.message` no lo comprueban: son un snapshot
 /// congelado / un acumulador que muere con el run — rancios pero inofensivos
 /// (sin efectos sobre el FS ni sobre los cancellers).
-#[allow(clippy::too_many_lines)] // wiring de bindings uno a uno, sin lógica
+#[expect(
+    clippy::too_many_lines,
+    reason = "wiring de bindings uno a uno, sin lógica"
+)]
 pub(crate) fn install_fs(
     lua: &Lua,
     backend: Backend,

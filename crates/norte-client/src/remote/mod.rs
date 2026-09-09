@@ -18,8 +18,9 @@ use norte_proto::methods::{
     self, ClientInfo, CompareRowsBatch, ConnectionDegraded, ConnectionFailed, FsCapabilitiesParams,
     FsCapabilitiesResult, FsCopyParams, FsDeleteParams, FsListParams, FsListResult, FsMoveParams,
     FsReadParams, FsReadResult, FsSearchParams, FsStatParams, FsStatResult, FsTaskResult,
-    PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult, PolicyPendingResult,
-    SearchHits, TaskCancelParams, TaskCancelResult, TaskListParams, TaskListResult,
+    PluginNotice, PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult,
+    PolicyPendingResult, SearchHits, TaskCancelParams, TaskCancelResult, TaskListParams,
+    TaskListResult,
 };
 use norte_proto::{
     ByteRange, Capabilities, DeleteMode, Entry, Error, TaskId, TaskKind, TaskProgress, TaskState,
@@ -171,6 +172,10 @@ struct Inner {
     /// Fallos `connection.failed` (#322) hacia el frontend: por qué NO se
     /// pudo conectar. Mismo canal de un solo consumidor que `degraded`.
     failed_tx: mpsc::UnboundedSender<ConnectionFailed>,
+    /// Avisos `plugin.notice` (0.69.0, ADR 0100) hacia el frontend: la frase
+    /// de un hook, o que el daemon apagó los hooks de un plugin. Mismo canal
+    /// de un solo consumidor que `failed`.
+    notices_tx: mpsc::UnboundedSender<PluginNotice>,
     /// `approval_id`s ya entregados al frontend: la entrega del daemon es
     /// at-least-once (broadcast + resync pueden solapar; cada reconexión
     /// re-lista pendientes) y un prompt de SEGURIDAD duplicado confunde
@@ -284,6 +289,11 @@ impl Inner {
         let _ = self.failed_tx.send(f);
     }
 
+    /// Encola un aviso `plugin.notice` (0.69.0, ADR 0100) hacia el frontend.
+    fn push_notice(&self, n: PluginNotice) {
+        let _ = self.notices_tx.send(n);
+    }
+
     /// Retiene el ancla del directorio recién listado (#295).
     ///
     /// Un lock envenenado se traga sin ruido, y es la respuesta correcta: lo
@@ -319,6 +329,9 @@ pub struct RemoteBackend {
     /// Canal de fallos `connection.failed` (#322). Mismo invariante que
     /// `degraded_rx`: un solo consumidor se lo lleva.
     failed_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnectionFailed>>>,
+    /// Canal de avisos `plugin.notice` (0.69.0). Mismo invariante que
+    /// `failed_rx`.
+    notices_rx: Mutex<Option<mpsc::UnboundedReceiver<PluginNotice>>>,
 }
 
 impl Clone for RemoteBackend {
@@ -339,6 +352,7 @@ impl Clone for RemoteBackend {
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(None),
             failed_rx: Mutex::new(None),
+            notices_rx: Mutex::new(None),
         }
     }
 }
@@ -429,6 +443,7 @@ impl RemoteBackend {
         let (approvals_tx, approvals_rx) = mpsc::unbounded_channel();
         let (degraded_tx, degraded_rx) = mpsc::unbounded_channel();
         let (failed_tx, failed_rx) = mpsc::unbounded_channel();
+        let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let backend = Self {
             inner: Arc::new(Inner {
                 socket,
@@ -445,6 +460,7 @@ impl RemoteBackend {
                 approvals_tx,
                 degraded_tx,
                 failed_tx,
+                notices_tx,
                 seen_approvals: Mutex::new(std::collections::HashSet::new()),
                 search_routes: Mutex::new(BatchRoutes::default()),
                 compare_routes: Mutex::new(BatchRoutes::default()),
@@ -456,6 +472,7 @@ impl RemoteBackend {
             approvals_rx: Mutex::new(Some(approvals_rx)),
             degraded_rx: Mutex::new(Some(degraded_rx)),
             failed_rx: Mutex::new(Some(failed_rx)),
+            notices_rx: Mutex::new(Some(notices_rx)),
         };
         // La 1ª conexión SÍ arranca el daemon (spawn); las reconexiones
         // NO (M3 del rust-reviewer: reconectar jamás debe resucitar un
@@ -1836,6 +1853,17 @@ impl RemoteBackend {
         self.failed_rx.lock().expect("failed_rx lock sano").take()
     }
 
+    /// Se lleva el receptor de avisos `plugin.notice` (0.69.0, ADR 0100): lo
+    /// que un plugin `hook` quiso decirle al humano sobre una mutación ya
+    /// registrada, o que el daemon apagó los hooks de un plugin. Uno solo,
+    /// como los otros `take_*`.
+    ///
+    /// # Panics
+    /// Si el estado interno está envenenado por un panic previo.
+    pub fn take_plugin_notices(&self) -> Option<mpsc::UnboundedReceiver<PluginNotice>> {
+        self.notices_rx.lock().expect("notices_rx lock sano").take()
+    }
+
     /// `policy.decide` contra el daemon (M3-3b T5).
     ///
     /// # Errors
@@ -2393,7 +2421,10 @@ fn map_column_values_result(
 /// externo se suelta, `Inner` se libera, el `Client` interno cierra la
 /// conexión, `recv()` devuelve `None` y la bomba SALE — sin ciclo de
 /// Arc ni reconexión eterna.
-#[allow(clippy::too_many_lines)] // tabla de despacho notif→destino + reconexión
+#[expect(
+    clippy::too_many_lines,
+    reason = "tabla de despacho notif→destino + reconexión"
+)]
 async fn pump_loop(
     weak: Weak<Inner>,
     mut notifications: mpsc::UnboundedReceiver<norte_proto::wire::Notification>,
@@ -2455,6 +2486,24 @@ async fn pump_loop(
                 };
                 let Some(inner) = weak.upgrade() else { return };
                 inner.push_failed(f);
+                continue;
+            }
+            // ADR 0100: la frase de un hook, o «apagué sus hooks». Mismo
+            // trato: sin params o malformada, se descarta CON traza.
+            if n.method == methods::PLUGIN_NOTICE {
+                let Some(params) = n.params else {
+                    tracing::warn!("plugin.notice sin params: descartada");
+                    continue;
+                };
+                let p = match serde_json::from_value::<PluginNotice>(params) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "plugin.notice malformada");
+                        continue;
+                    }
+                };
+                let Some(inner) = weak.upgrade() else { return };
+                inner.push_notice(p);
                 continue;
             }
             // El daemon se va (0.46.0). Lo único que hay que quedarse es
@@ -2599,6 +2648,7 @@ async fn pump_loop(
                 approvals_rx: Mutex::new(None),
                 degraded_rx: Mutex::new(None),
                 failed_rx: Mutex::new(None),
+                notices_rx: Mutex::new(None),
             }
             .route(snapshot);
         }
@@ -2612,6 +2662,7 @@ async fn pump_loop(
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(None),
             failed_rx: Mutex::new(None),
+            notices_rx: Mutex::new(None),
         };
         *backend.inner.client.write().await = None;
         // Los feeds vivos (hits de una búsqueda, filas de una comparación)
@@ -2662,6 +2713,7 @@ async fn pump_loop(
                 approvals_rx: Mutex::new(None),
                 degraded_rx: Mutex::new(None),
                 failed_rx: Mutex::new(None),
+                notices_rx: Mutex::new(None),
             };
             // ¿Sigue vivo el permiso de arranque? Por TIEMPO, no por
             // intentos (ver `Inner::handover_until`): dentro de la ventana
@@ -2822,6 +2874,7 @@ mod tests {
         let (approvals_tx, _ar) = mpsc::unbounded_channel();
         let (degraded_tx, _dr) = mpsc::unbounded_channel();
         let (failed_tx, _ffr) = mpsc::unbounded_channel();
+        let (notices_tx, _fnr) = mpsc::unbounded_channel();
         Arc::new(Inner {
             socket,
             spawn_cmd: None,
@@ -2840,6 +2893,7 @@ mod tests {
             approvals_tx,
             degraded_tx,
             failed_tx,
+            notices_tx,
             seen_approvals: Mutex::new(std::collections::HashSet::new()),
             search_routes: Mutex::new(BatchRoutes::default()),
             compare_routes: Mutex::new(BatchRoutes::default()),
@@ -2934,6 +2988,7 @@ mod tests {
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(None),
             failed_rx: Mutex::new(None),
+            notices_rx: Mutex::new(None),
         };
 
         let r = backend.establish(false).await;
@@ -3262,6 +3317,7 @@ mod tests {
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(None),
             failed_rx: Mutex::new(None),
+            notices_rx: Mutex::new(None),
         }
     }
 
@@ -3318,6 +3374,7 @@ mod tests {
     fn degraded_push_llega_a_take_degraded() {
         let (degraded_tx, degraded_rx) = mpsc::unbounded_channel();
         let (failed_tx, _ffr) = mpsc::unbounded_channel();
+        let (notices_tx, _fnr) = mpsc::unbounded_channel();
         let (foreign_tx, _fr) = mpsc::unbounded_channel();
         let (events_tx, _er) = mpsc::unbounded_channel();
         let (approvals_tx, _ar) = mpsc::unbounded_channel();
@@ -3339,6 +3396,7 @@ mod tests {
             approvals_tx,
             degraded_tx,
             failed_tx,
+            notices_tx,
             seen_approvals: Mutex::new(std::collections::HashSet::new()),
             search_routes: Mutex::new(BatchRoutes::default()),
             compare_routes: Mutex::new(BatchRoutes::default()),
@@ -3352,6 +3410,7 @@ mod tests {
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(Some(degraded_rx)),
             failed_rx: Mutex::new(None),
+            notices_rx: Mutex::new(None),
         };
 
         inner.push_degraded(ConnectionDegraded {
@@ -3378,6 +3437,7 @@ mod tests {
     #[test]
     fn failed_push_llega_a_take_failed() {
         let (failed_tx, failed_rx) = mpsc::unbounded_channel();
+        let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let (degraded_tx, _dr) = mpsc::unbounded_channel();
         let (foreign_tx, _fr) = mpsc::unbounded_channel();
         let (events_tx, _er) = mpsc::unbounded_channel();
@@ -3400,6 +3460,7 @@ mod tests {
             approvals_tx,
             degraded_tx,
             failed_tx,
+            notices_tx,
             seen_approvals: Mutex::new(std::collections::HashSet::new()),
             search_routes: Mutex::new(BatchRoutes::default()),
             compare_routes: Mutex::new(BatchRoutes::default()),
@@ -3413,6 +3474,7 @@ mod tests {
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(None),
             failed_rx: Mutex::new(Some(failed_rx)),
+            notices_rx: Mutex::new(Some(notices_rx)),
         };
 
         inner.push_failed(ConnectionFailed {

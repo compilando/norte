@@ -15,6 +15,7 @@
 //!
 //! La frontera de este crate es su lista de dependencias, y hay un test que
 //! la vigila: `tests/dependency_boundary.rs`.
+#![forbid(unsafe_code)]
 
 pub mod remote;
 pub mod rpc;

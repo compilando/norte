@@ -10,7 +10,10 @@ use crate::color::Color;
 // Los cinco atributos son banderas independientes de terminal (bold/dim/
 // italic/underline/reverse): un struct de bools ES la representación natural,
 // no un enum ni flags empaquetadas.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "cuatro atributos de estilo independientes, no un enum ni flags empaquetadas"
+)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

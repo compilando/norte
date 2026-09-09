@@ -79,6 +79,15 @@ impl App {
         ));
     }
 
+    /// Records a `plugin.notice` (0.69.0, ADR 0100): what a hook plugin said,
+    /// attributed to it, as the transient status message. La frase la compone
+    /// el módulo COMPARTIDO, que es quien enmascara.
+    pub fn note_plugin_notice(&mut self, n: &norte_proto::methods::PluginNotice) {
+        if let Some(l) = norte_frontend::banners::plugin_notice_line(norte_i18n::active(), n) {
+            self.message = Some(l);
+        }
+    }
+
     /// Anota que esta sesión no está registrando sus mutaciones (#177).
     ///
     /// Idempotente: el core avisa una vez por EPISODIO, y si alguna vez avisara
@@ -222,6 +231,22 @@ mod tests {
             app.connection_banner().is_none(),
             "un fallo no enciende el indicador PERSISTENTE de degradación"
         );
+    }
+
+    /// ADR 0100: la frase de un hook llega a la barra atribuida al plugin, y
+    /// no enciende ningún indicador persistente.
+    #[test]
+    fn el_aviso_de_un_hook_llega_a_la_barra_con_su_plugin_delante() {
+        let mut app = app_dos_panes();
+        app.note_plugin_notice(&norte_proto::methods::PluginNotice {
+            plugin_id: "org.norte.rename-log".to_owned(),
+            kind: "notify".to_owned(),
+            text: Some("renamed 3 files".to_owned()),
+        });
+        let msg = app.message.clone().expect("la barra lo dice");
+        assert!(msg.contains("org.norte.rename-log"), "{msg}");
+        assert!(msg.contains("renamed 3 files"), "{msg}");
+        assert!(app.connection_banner().is_none());
     }
 
     /// Y dos conexiones degradadas no se pisan: antes la última ganaba y la

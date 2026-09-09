@@ -4,7 +4,7 @@
 //! Vivía en el root del binario `ntc` —un crate DISTINTO de esta lib—, y es la
 //! función con más parámetros de la rama (doce): todo lo que el bucle de
 //! eventos retiene y que una recarga puede sustituir. No es API, es cableado,
-//! y por eso lleva su `#[allow(clippy::too_many_arguments)]` desde antes de
+//! y por eso lleva su `#[expect(clippy::too_many_arguments)]` desde antes de
 //! moverse.
 //!
 //! El criterio que ordena el cuerpo entero: nada se aplica hasta que los tres
@@ -38,7 +38,7 @@ use crate::shortcuts_editor::{Maps, build_keymaps, shortcut_rows};
 /// esto aplicó. Un perfil a medio aplicar no es un estado que ese diseño
 /// admita, y el «todo o nada» que esta función ya tenía es justo la semántica
 /// que hace falta.
-#[allow(clippy::too_many_arguments)] // wiring del hot-reload, no API
+#[expect(clippy::too_many_arguments, reason = "wiring del hot-reload, no API")]
 pub async fn reload_config(
     app: &mut App,
     backend: &Backend,

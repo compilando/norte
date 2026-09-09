@@ -6,6 +6,7 @@
 //! FTS5 para el matching. Índice de solo-lectura tras `build`; single-writer
 //! (dueño = daemon), como el journal (ADR 0020).
 
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 use std::path::Path;

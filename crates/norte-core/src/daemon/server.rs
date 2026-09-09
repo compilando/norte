@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -402,6 +402,38 @@ fn may_observe(viewer: &Actor, owner: &Actor) -> bool {
     matches!(viewer, Actor::User) || viewer == owner
 }
 
+/// A dónde van los avisos de los hooks (ADR 0100): a las conexiones humanas,
+/// por `plugin.notice`. `Weak` por lo mismo que el observer de conexión.
+struct DaemonHookSink {
+    shared: Weak<Shared>,
+}
+
+impl crate::hooks::HookNoticeSink for DaemonHookSink {
+    fn notice(&self, n: methods::PluginNotice) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        // Si la serialización fallara (no puede: struct plano), mejor NO
+        // emitir que emitir una notif con shape corrupto.
+        let Ok(params) = serde_json::to_value(&n) else {
+            return;
+        };
+        let notif = Notification {
+            jsonrpc: norte_proto::wire::JsonRpcVersion,
+            method: methods::PLUGIN_NOTICE.into(),
+            params: Some(params),
+        };
+        if let Ok(frame) = encode_frame(&notif) {
+            shared.broadcast_humans(&Arc::from(frame.into_boxed_slice()));
+        }
+    }
+
+    /// Muerto el daemon, muerto el despachador.
+    fn is_closed(&self) -> bool {
+        self.shared.strong_count() == 0
+    }
+}
+
 /// Observer de avisos de conexión del daemon (#44): codifica cada aviso como
 /// `connection.degraded` y lo difunde SOLO a humanos (como `policy.*`). `Weak`
 /// rompe el ciclo Shared→engine→observer→Shared.
@@ -747,7 +779,10 @@ impl Daemon {
     // escondería detrás de una indirección y de más parámetros cruzando la
     // frontera. Cruzó las 100 líneas cuando 0.65.0 montó el anillo de
     // registro (`log_ring`) en `Shared` (#328, ADR 0092).
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "arranque del daemon: monta cada pieza de `Shared` una vez y en orden"
+    )]
     #[tracing::instrument(skip(engine, scopes, approvals, cfg))]
     pub async fn bind_with_policy(
         engine: Arc<Engine>,
@@ -771,6 +806,12 @@ impl Daemon {
         // La resolución del path por defecto puede tocar el FS (sonda de uid
         // del fallback /tmp) y el descubrimiento del catálogo de plugins lee el
         // dir de config: TODO I/O síncrono dentro del spawn_blocking (regla 2).
+        // La raíz de plugins también la necesita el despachador de hooks (ADR
+        // 0100), que redescubre el registro por tanda desde este mismo sitio.
+        let plugins_root = cfg
+            .plugins_dir
+            .clone()
+            .unwrap_or_else(crate::connect::config_dir);
         let (listener, uid, socket_path, plugins, plugin_runtime) = tokio::task::spawn_blocking({
             let requested = cfg.socket_path;
             let plugins_dir = cfg.plugins_dir;
@@ -881,6 +922,30 @@ impl Daemon {
                 previo,
             })
         });
+        // ADR 0100: los hooks. El despachador vive lo que el daemon; sus avisos
+        // —una frase de un plugin, o «apagué sus hooks»— van SOLO a humanos por
+        // `plugin.notice`, con el mismo `Weak` que rompe el ciclo arriba. La
+        // fuente de los eventos es el journal del engine, así que una mutación
+        // de un agente por MCP dispara igual que una del humano.
+        // Termina con el apagado del daemon (regla 3): la misma señal que
+        // para todo lo demás.
+        let (hooks_tx, _hooks_task) = crate::hooks::spawn_dispatcher(
+            plugins_root,
+            Arc::clone(&shared.plugin_runtime),
+            Arc::new(DaemonHookSink {
+                shared: Arc::downgrade(&shared),
+            }),
+            shared.shutdown.clone(),
+            Some(crate::hooks::SidecarWriter {
+                engine: Arc::downgrade(&shared.engine),
+                scopes: Some(shared.scopes.clone()),
+                // Las reglas las aplica el gate del engine; aquí no hacen falta.
+                policy: None,
+            }),
+        );
+        if shared.engine.claim_hooks_slot() {
+            shared.engine.enable_hooks(hooks_tx).await;
+        }
         // El escritor existe siempre que haya DÓNDE escribir, y es él quien
         // decide si de verdad escribe: arranca con el lock si el bind lo
         // consiguió, y sin él lo vuelve a intentar (#237). Lo que sigue
@@ -2512,7 +2577,10 @@ fn to_value<T: serde::Serialize>(v: &T) -> Result<serde_json::Value, RpcError> {
 // bloque de métodos no reduciría la complejidad real, solo la escondería
 // detrás de una indirección. Mismo criterio que otros dispatchers grandes
 // del árbol (ver `dispatch_fs_task`).
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "tabla plana método→handler; ver `dispatch_fs_task`"
+)]
 #[tracing::instrument(skip_all, fields(method = %req.method))]
 async fn dispatch(
     req: Request,
@@ -4241,7 +4309,10 @@ fn read_gate(
     shared: &Arc<Shared>,
 ) -> Result<(), RpcError> {
     use crate::policy::{DenyReason, ScopeVerdict};
-    #[allow(clippy::match_wildcard_for_single_variants)]
+    #[expect(
+        clippy::match_wildcard_for_single_variants,
+        reason = "las variantes agrupadas se leen mejor que enumeradas"
+    )]
     let denied: Option<DenyReason> = match actor {
         Actor::User => None,
         Actor::Agent { session } => {
@@ -4285,7 +4356,10 @@ fn content_gate(
     shared: &Arc<Shared>,
 ) -> Result<(), RpcError> {
     use crate::policy::{DenyReason, ScopeVerdict};
-    #[allow(clippy::match_wildcard_for_single_variants)]
+    #[expect(
+        clippy::match_wildcard_for_single_variants,
+        reason = "las variantes agrupadas se leen mejor que enumeradas"
+    )]
     let denied: Option<DenyReason> = match actor {
         Actor::User => None,
         Actor::Agent { session } => {
@@ -5151,12 +5225,29 @@ fn handle_rename_batch_report(
     to_value(&crate::rename::report_to_proto(&report))
 }
 
+/// Métodos que solo un HUMANO puede pedir: un agente recibe `PolicyDenied`
+/// con la regla `not-approved`, igual que si su scope no alcanzara. Los tres
+/// que lo usan (`ai.rename_plan`, `index.embed`, `index.search_semantic`)
+/// gastan modelo o construyen índice: no es un permiso de ruta, es de quién.
+fn human_only(actor: &Actor) -> Result<(), RpcError> {
+    if matches!(actor, Actor::User) {
+        Ok(())
+    } else {
+        Err(RpcError::from(norte_proto::Error::PolicyDenied {
+            rule: "not-approved".into(),
+        }))
+    }
+}
+
 /// Las familias `fs.*`/`task.*` del dispatch (separadas por tamaño). El
 /// `actor` viene de la conexión (M3-3b): las mutaciones se journalizan y
 /// evalúan bajo él.
 // Lista plana de brazos, un método por brazo — mismo criterio que `dispatch`:
 // trocearla no reduciría la complejidad real, solo la escondería.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "trocearla no reduciría la complejidad real, solo la escondería"
+)]
 async fn dispatch_fs_task(
     req: Request,
     conn_id: u64,
@@ -5242,11 +5333,7 @@ async fn dispatch_fs_task(
             // fuera de mi scope» ANTES de que se le denegara — o sea que la
             // respuesta dependía de cosas que él controla, y eso convierte un
             // método vedado en un oráculo sobre el árbol del humano.
-            if !matches!(actor, Actor::User) {
-                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
-                    rule: "not-approved".into(),
-                }));
-            }
+            human_only(&actor)?;
             let p: methods::AiRenamePlanParams = parse_params(req.params)?;
             if p.instruction.len() > MAX_AI_INSTRUCTION_BYTES {
                 return Err(RpcError::protocol(
@@ -5303,11 +5390,7 @@ async fn dispatch_fs_task(
             // audit M4-IA-2): un agente recibe `PolicyDenied` sea cual sea
             // la validez de sus params, y jamás distingue "params malos" de
             // "vedado" — la respuesta no depende de nada que él controle.
-            if !matches!(actor, Actor::User) {
-                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
-                    rule: "not-approved".into(),
-                }));
-            }
+            human_only(&actor)?;
             let p: methods::IndexEmbedParams = parse_params(req.params)?;
             read_gate(&actor, &p.root, shared)?; // #80
             let handle = shared
@@ -5327,11 +5410,7 @@ async fn dispatch_fs_task(
         methods::INDEX_SEARCH_SEMANTIC => {
             // Igual que `index.embed`: gate de actor ANTES del parseo (security
             // audit M4-IA-2), para que un agente vea siempre `PolicyDenied`.
-            if !matches!(actor, Actor::User) {
-                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
-                    rule: "not-approved".into(),
-                }));
-            }
+            human_only(&actor)?;
             let p: methods::IndexSearchSemanticParams = parse_params(req.params)?;
             if p.query.len() > MAX_AI_QUERY_BYTES {
                 return Err(RpcError::protocol(

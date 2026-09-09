@@ -435,6 +435,23 @@ pub struct ShutdownReport {
     pub incomplete: bool,
 }
 
+/// Reenvía los `plugin.notice` del backend al buzón del host (ADR 0100). Una
+/// función aparte de `start` porque la lista de bombas ya llenaba el límite
+/// de líneas, y la forma es la de las demás: una task que muere con el canal
+/// que la alimenta.
+fn bombear_avisos_de_plugin(backend: &dyn HostBackend, buzon: mpsc::Sender<Mensaje>) {
+    let Some(mut avisos) = backend.take_plugin_notices() else {
+        return;
+    };
+    tokio::spawn(async move {
+        while let Some(n) = avisos.recv().await {
+            if buzon.send(Mensaje::AvisoPlugin(Box::new(n))).await.is_err() {
+                return;
+            }
+        }
+    });
+}
+
 /// El host: un asa barata de clonar sobre el único escritor.
 #[derive(Clone)]
 pub struct UiHost {
@@ -581,6 +598,9 @@ enum Mensaje {
     Degradada(Box<norte_proto::methods::ConnectionDegraded>),
     /// Una conexión NO se pudo abrir, y por qué (#322).
     Fallida(Box<norte_proto::methods::ConnectionFailed>),
+    /// Un plugin `hook` dijo algo sobre una mutación ya registrada, o el
+    /// daemon apagó sus hooks (0.69.0, ADR 0100).
+    AvisoPlugin(Box<norte_proto::methods::PluginNotice>),
     /// El secreto se entregó (o no), y con ello qué hacer con la navegación
     /// que `SecretNeeded` había suspendido (#327).
     SecretoEntregado(Box<(u32, VPath, Result<(), Error>)>),
@@ -955,6 +975,9 @@ impl UiHost {
                 }
             });
         }
+        // Y los avisos de los hooks (ADR 0100), por el mismo buzón: hablan de
+        // ficheros que ya cambiaron, así que se leen pueda escribir o no.
+        bombear_avisos_de_plugin(backend.as_ref(), tx.clone());
         // Las aprobaciones de policy son una MUTACIÓN por delegación: decir
         // que sí a la operación de un agente. Un frontend que todavía no
         // puede escribir tampoco puede autorizar que escriba otro, así que
@@ -1099,7 +1122,10 @@ pub enum UiError {
 // El REPARTO de mensajes del actor: un brazo por variante, y cada brazo
 // delega. Largo por número de variantes, no por lógica — partirlo en dos
 // mitades arbitrarias solo escondería dónde se atiende cada mensaje.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "reparto de mensajes del actor: largo por variantes, no por lógica"
+)]
 async fn actor(
     mut rx: mpsc::Receiver<Mensaje>,
     mut estado: Estado,
@@ -1212,6 +1238,11 @@ async fn actor(
             }
             Mensaje::Fallida(f) => {
                 for u in estado.conexion_fallida(&f) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::AvisoPlugin(n) => {
+                for u in estado.aviso_de_plugin(&n) {
                     let _ = updates.send(u);
                 }
             }
@@ -3009,7 +3040,10 @@ impl Estado {
     /// Largo porque es un LITERAL de estructura: un campo por línea, con el
     /// porqué de los que no son obvios. No hay nada que extraer que no sea
     /// mover campos a una función que los devuelva de uno en uno.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "constructor: un campo por línea con su porqué, nada que extraer"
+    )]
     fn nuevo(instance: InstanceId, options: UiHostOptions) -> (Self, Arc<dyn HostBackend>) {
         let UiHostOptions {
             backend,

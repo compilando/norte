@@ -2216,7 +2216,6 @@ fn snapshot_settings_filtrada_y_editando_texto() {
 /// Una fila de comparación de test: los dos lados salen de las dos raíces del
 /// snapshot, y `reason` se rellena solo donde el wire lo exige
 /// (`CompareRow::reason_is_consistent`).
-#[allow(clippy::fn_params_excessive_bools)]
 fn fila_compare(
     id: u64,
     nombre: &[u8],

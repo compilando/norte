@@ -158,7 +158,10 @@ async fn capabilities_de(provider: &dyn Provider, dir: Option<&Entry>) -> Option
 /// descender la izquierda de `(a, b)` es el espejo de descender la derecha de
 /// `(b, a)`, no el de descender la izquierda.
 #[must_use]
-#[allow(clippy::too_many_arguments)] // el octavo es `excluded`, y agrupar (provider, raíz) en un tipo nuevo sería una API distinta para no cambiar nada más
+#[expect(
+    clippy::too_many_arguments,
+    reason = "el octavo es `excluded`, y agrupar (provider, raíz) en un tipo nuevo sería una API distinta para no cambiar nada más"
+)]
 pub fn compare<'a>(
     left: &'a dyn Provider,
     left_root: &VPath,

@@ -29,7 +29,10 @@ use norte_vfs_local::LocalProvider;
 use std::sync::Arc;
 
 #[tokio::main]
-#[allow(clippy::too_many_lines)] // wiring del binario, no API — mismo criterio que `run`/`dispatch`
+#[expect(
+    clippy::too_many_lines,
+    reason = "wiring del binario, no API — mismo criterio que `run`/`dispatch`"
+)]
 async fn main() -> Result<()> {
     // Args: DIR posicional + `--preset`/`--daemon`/`--socket`. `--help` y
     // `--version` salen ANTES de tocar el terminal (antes se ignoraban como
@@ -152,6 +155,9 @@ async fn main() -> Result<()> {
     let left = initial_pane(&backend, &start, &start_attrs).await?;
     let right = initial_pane(&backend, &start, &start_attrs).await?;
     let mut app = App::new(left, right);
+    // La revisión del binario, para la ayuda (F1). Vacía en los tests, que
+    // construyen `App` sin pasar por aquí y hacen snapshots de la ayuda.
+    app.version_line = norte_frontend::version::VERSION_LINE;
     // `None` si ya había subscriber: entonces nadie escribe en el anillo y el
     // panel lo DICE, en vez de enseñar un vacío que parece que no pasa nada.
     app.log_ring = log_ring;
@@ -295,6 +301,10 @@ async fn main() -> Result<()> {
     // abierta que viaja mal, y una que no llegó a abrirse— y mezclarlos hace
     // que uno se pinte como el otro.
     let failed = backend.take_failed();
+    // ADR 0100: lo que un plugin `hook` quiso decir sobre una mutación ya
+    // registrada, o que sus hooks se apagaron. En embebido esto ARRANCA el
+    // despachador de hooks sobre el journal de esta sesión.
+    let plugin_notices = backend.take_plugin_notices();
     // #167/#177: el brazo embebido abre el journal en su primera mutación, y si
     // resulta que lo tiene otro proceso, esta sesión muta SIN registro. Eso se
     // dice EN la sesión y en el instante en que ocurre: un `eprintln!` de
@@ -421,6 +431,7 @@ async fn main() -> Result<()> {
         approvals,
         degraded,
         failed,
+        plugin_notices,
         journal_warnings,
     )
     .await;
@@ -635,7 +646,7 @@ fn args_or_exit(args: norte_frontend::cli::Cli) -> Result<Option<norte_frontend:
         return Ok(None);
     }
     if args.version {
-        println!("ntc {}", env!("CARGO_PKG_VERSION"));
+        println!("ntc {}", norte_frontend::version::VERSION_LINE);
         return Ok(None);
     }
     if let Some(flag) = &args.unknown {

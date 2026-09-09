@@ -399,6 +399,19 @@ impl ScopeRegistry {
         entry.retain(|s| !s.is_expired(now));
         entry.push(scope);
     }
+
+    /// Retira TODOS los scopes de `session`. Es lo que cierra el hueco
+    /// transitorio que se le abre a un plugin para una escritura (ADR 0101):
+    /// el TTL es la red de seguridad, esto es la puerta.
+    ///
+    /// # Panics
+    /// Si el lock del registro está envenenado por un panic previo.
+    pub fn revoke_all(&self, session: &str) {
+        self.inner
+            .lock()
+            .expect("scope registry lock")
+            .remove(session);
+    }
     /// Veredicto de frontera para `(session, op, path)` a instante `now`.
     ///
     /// # Panics
@@ -629,24 +642,46 @@ impl ScopedPolicy {
     }
 }
 
+/// La clave con la que un actor NO humano entra en el [`ScopeRegistry`]:
+/// la sesión de un agente tal cual, y un plugin bajo `plugin:` — dos
+/// espacios de nombres, porque un id de plugin (`org.x.y`) es también una
+/// sesión de agente válida, y sin el prefijo un agente que se conectara con
+/// ese nombre heredaría lo que se le concede al plugin (ADR 0101).
+#[must_use]
+pub fn scope_key(actor: &Actor) -> Option<std::borrow::Cow<'_, str>> {
+    match actor {
+        Actor::User => None,
+        Actor::Agent { session } => Some(std::borrow::Cow::Borrowed(session.as_str())),
+        Actor::Plugin { id } => Some(std::borrow::Cow::Owned(format!("plugin:{id}"))),
+    }
+}
+
 impl PolicyGate for ScopedPolicy {
     fn evaluate(&self, actor: &Actor, op: PolicyOp, paths: &[&VPath]) -> Decision {
-        let session = match actor {
-            Actor::User => return Decision::Allow, // el humano no se sandboxea
-            Actor::Agent { session } => session.as_str(),
-            Actor::Plugin { id } => id.as_str(),
+        // El humano no se sandboxea.
+        let Some(session) = scope_key(actor) else {
+            return Decision::Allow;
         };
         let now = Instant::now();
         // Frontera: TODAS las rutas dentro del scope, o deny duro.
         for path in paths {
-            match self.scopes.permits(session, op, path, now) {
+            match self.scopes.permits(&session, op, path, now) {
                 ScopeVerdict::Within => {}
                 ScopeVerdict::OutOfScope => return Decision::Deny(DenyReason::OutOfScope),
                 ScopeVerdict::Expired => return Decision::Deny(DenyReason::ScopeExpired),
             }
         }
-        // Dentro del scope: reglas de policy.toml (fail-closed sin regla).
-        self.config.decide(actor, op, paths)
+        // Dentro del scope: reglas de policy.toml. Sin regla que case, un
+        // agente se deniega (fail-closed: nadie le dio permiso); un plugin se
+        // permite, porque SU regla es el manifiesto que el humano aprobó con
+        // el badge `fs-write:<nombre>` delante (ADR 0101). Una regla que
+        // deniegue o pregunte gana igual.
+        match self.config.decide(actor, op, paths) {
+            Decision::Deny(DenyReason::NoRule) if matches!(actor, Actor::Plugin { .. }) => {
+                Decision::Allow
+            }
+            d => d,
+        }
     }
 }
 

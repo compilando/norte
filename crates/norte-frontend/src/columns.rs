@@ -599,7 +599,7 @@ pub fn format_size(n: u64, fmt: SizeFormat) -> String {
             if n < 1000 {
                 return format!("{n} B");
             }
-            #[allow(clippy::cast_precision_loss)]
+            #[expect(clippy::cast_precision_loss, reason = "magnitudes lejos de 2^53")]
             let mut value = n as f64 / 1000.0;
             let mut unit = 0usize;
             while (value * 10.0).round() >= 10000.0 && unit + 1 < UNITS.len() {

@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "norte",
-  "version": "0.3.0-alpha.2",
   "identifier": "dev.norte.gui",
   "build": {
     "frontendDist": "ui/dist"

@@ -924,6 +924,22 @@
     "publisher": "norte",
     "version": "0.1.0"
   },
+  "plugin_info_with_hook_badges": {
+    "approved": true,
+    "capabilities": [
+      "location",
+      "hook:after-renamed",
+      "fs-write:.norte-renames.log"
+    ],
+    "category": "hook",
+    "columns": [],
+    "commands": [],
+    "enabled": true,
+    "id": "org.norte.rename-log",
+    "name": "Rename log",
+    "publisher": "norte",
+    "version": "0.1.0"
+  },
   "plugin_info_with_commands": {
     "approved": true,
     "capabilities": [
@@ -1017,6 +1033,19 @@
       }
     ],
     "plugins": []
+  },
+  "plugin_notice_effect_denied": {
+    "kind": "effect-denied",
+    "plugin_id": "org.norte.rename-log"
+  },
+  "plugin_notice_hooks_disabled": {
+    "kind": "hooks-disabled",
+    "plugin_id": "org.norte.rename-log"
+  },
+  "plugin_notice_notify": {
+    "kind": "notify",
+    "plugin_id": "org.norte.rename-log",
+    "text": "renamed 3 files"
   },
   "plugin_preview_params": {
     "path": "file:///home/user/doc.md"

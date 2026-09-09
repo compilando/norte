@@ -60,7 +60,10 @@ async fn list_names(p: &PluginProvider, dir: &VPath) -> Vec<Vec<u8>> {
 
 // Un solo test (una compilación del guest) que recorre todo el contrato de
 // lectura — de ahí su longitud.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "un solo test recorre el contrato de lectura entero"
+)]
 #[tokio::test]
 async fn plugin_provider_satisface_el_contrato_de_lectura() {
     let Some(wasm) = build_guest("provider-mem") else {

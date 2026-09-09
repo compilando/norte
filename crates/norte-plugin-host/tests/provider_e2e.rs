@@ -23,7 +23,10 @@ fn segs(parts: &[&[u8]]) -> Vec<Vec<u8>> {
 
 // Un solo test (una sola compilación del guest, ~1.7 s) que recorre todo el
 // camino de lectura: de ahí su longitud.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "recorre entero el camino de lectura del guest real"
+)]
 #[test]
 fn provider_wit_e2e_wasm_real() {
     let Some(wasm) = build_guest("provider-mem") else {

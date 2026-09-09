@@ -81,6 +81,7 @@ pub mod sync;
 pub mod tasks;
 pub mod theme;
 pub mod tree;
+pub mod version;
 pub mod viewer;
 pub mod viewport;
 pub mod watch;

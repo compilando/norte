@@ -12,6 +12,7 @@ use norte_vfs::{EntryStream, Provider};
 
 use crate::observer::{MutationObserver, NoopObserver};
 use crate::ops;
+use crate::ops::OnExists;
 use crate::scheduler::{Priority, Scheduler, TaskHandle};
 use crate::sessions::SessionPool;
 
@@ -74,6 +75,8 @@ pub struct Engine {
     connection_observer: RwLock<Option<Arc<dyn crate::connect::ConnectionObserver>>>,
     sched: Scheduler,
     observer: Arc<dyn MutationObserver>,
+    /// Si alguien se llevó ya el despachador de hooks (ADR 0100): es de UNO.
+    hooks_taken: std::sync::atomic::AtomicBool,
     /// De dónde sale el journal de este engine: fuente de LECTURA para el undo
     /// (M3-2) y para el gate de `sync.apply`. Es el MISMO objeto que `observer`
     /// en las dos variantes que tienen uno.
@@ -234,6 +237,16 @@ impl PolicyChecker {
                 tracing::info!(?reason, op = op.kind(), "policy denegó la operación");
                 Err(denied(reason))
             }
+            // Un plugin corre sin nadie delante (ADR 0101): una regla `ask`
+            // sobre él es un `deny` con su motivo, no un modal que nadie mira
+            // y que vence por TTL igual.
+            Decision::Ask if matches!(actor, crate::journal::Actor::Plugin { .. }) => {
+                tracing::info!(
+                    op = op.kind(),
+                    "policy pide confirmación a un plugin: denegado"
+                );
+                Err(denied(DenyReason::NotApproved))
+            }
             Decision::Ask => {
                 let req = crate::approval::ApprovalRequest {
                     actor: actor.clone(),
@@ -315,6 +328,7 @@ impl Engine {
             pack_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             checksum_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             anchors: None,
+            hooks_taken: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -462,6 +476,37 @@ impl Engine {
             Arc::clone(&journal) as Arc<dyn MutationObserver>,
             JournalSource::Lazy(journal),
         )
+    }
+
+    /// Enchufa los hooks (ADR 0100): cada fila que el journal de este engine
+    /// comprometa se le ofrece a `tx`, venga de donde venga la mutación. Sin
+    /// journal no hay filas y no hay hooks — un engine sin journal tampoco
+    /// tiene undo, y es la misma razón.
+    ///
+    /// Con el journal perezoso del modo embebido el extremo se guarda y se
+    /// le pone a cada handle que se abra; por eso es `async`.
+    pub async fn enable_hooks(&self, tx: crate::hooks::HookSender) {
+        match &self.journal {
+            JournalSource::None => {}
+            JournalSource::Open(j) => j.set_hook_sender(tx),
+            JournalSource::Lazy(l) => l.set_hook_sender(tx).await,
+        }
+    }
+
+    /// ¿Lleva este engine un journal (abierto o perezoso)? Sin él no hay
+    /// filas, y sin filas no hay hooks que despachar.
+    #[must_use]
+    pub fn has_journal(&self) -> bool {
+        !matches!(self.journal, JournalSource::None)
+    }
+
+    /// Reclama el hueco del despachador de hooks: `true` la PRIMERA vez, y
+    /// solo esa. Un engine tiene un despachador; el segundo que se arrancara
+    /// pisaría el extremo del primero en silencio.
+    pub fn claim_hooks_slot(&self) -> bool {
+        !self
+            .hooks_taken
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
     }
 
     /// A dónde van los avisos de «esta sesión no queda registrada» (#177).
@@ -3527,6 +3572,57 @@ impl Engine {
             Box::new(move |ctx| {
                 Box::pin(async move {
                     ops::create_task(provider, path, dest_anchor, observer, &ctx).await
+                })
+            }),
+        ))
+    }
+
+    /// Escribe un fichero con contenido desde memoria como Task (ADR 0101):
+    /// el sidecar de un hook. Gateado PRE-efecto por
+    /// [`crate::policy::PolicyOp::Create`] y, si `on_exists` es
+    /// [`OnExists::Replace`], también por `Delete{Trash}`: reemplazar es
+    /// enterrar lo que había y crear, dos permisos.
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] si `content` supera
+    /// [`norte_plugin_host::MAX_SIDECAR_BYTES`]; [`Error::JournalUnavailable`]
+    /// si el journal no se puede abrir (#178); [`Error::PolicyDenied`] si la
+    /// policy deniega; [`Error::Unsupported`] sin provider para el scheme.
+    #[tracing::instrument(skip(self, actor, content), fields(path = %span_path(path)))]
+    pub async fn write_file_as(
+        &self,
+        path: &VPath,
+        content: Vec<u8>,
+        on_exists: OnExists,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        if content.len() > norte_plugin_host::MAX_SIDECAR_BYTES {
+            return Err(Error::InvalidPath);
+        }
+        self.gate(&actor, crate::policy::PolicyOp::Create, &[path])
+            .await?;
+        if on_exists == OnExists::Replace {
+            self.gate(
+                &actor,
+                crate::policy::PolicyOp::Delete {
+                    mode: norte_proto::DeleteMode::Trash,
+                },
+                &[path],
+            )
+            .await?;
+        }
+        let provider = self.provider_for(path).await?;
+        let observer = Arc::clone(&self.observer);
+        let path = path.clone();
+        let key = path.scheme().to_owned();
+        Ok(self.sched.submit(
+            &key,
+            TaskKind::Create,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    ops::write_task(provider, path, content, on_exists, observer, &ctx).await
                 })
             }),
         ))

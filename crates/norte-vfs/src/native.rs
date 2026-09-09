@@ -41,7 +41,6 @@ pub(crate) use crate::wtf8::os_to_bytes;
 /// (imposible como nombre de archivo Windows; además la reconstrucción
 /// unchecked sería unsound).
 #[cfg(unix)]
-#[allow(clippy::unnecessary_wraps)] // firma común con la variante Windows, que sí falla
 pub fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
     use std::os::unix::ffi::OsStrExt;
     // Unix: cualquier byte es válido en un nombre; conversión segura 1:1.
@@ -73,7 +72,6 @@ pub fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
 /// [`Error::InvalidPath`] si los bytes no son representables como ruta del
 /// sistema (en Windows, si no son WTF-8 válido).
 #[cfg(unix)]
-#[allow(clippy::unnecessary_wraps)] // firma común con la variante Windows
 pub fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
     use std::os::unix::ffi::OsStrExt;
     Ok(OsStr::from_bytes(bytes).to_os_string())

@@ -241,6 +241,7 @@ rpc_catalogo! {
     PLUGIN_GET_CONFIG, Request, Direct, methods::PluginGetConfigParams, methods::PluginGetConfigResult;
     PLUGIN_SET_CONFIG, Request, Direct, methods::PluginSetConfigParams, methods::PluginSetConfigResult;
     PLUGIN_HELP, Request, Direct, methods::PluginHelpParams, methods::PluginHelpResult;
+    PLUGIN_NOTICE, Notification, Direct, methods::PluginNotice, ();
 
     // Sesión de la ventana.
     SESSION_GET, Request, Direct, (), methods::SessionGetResult;

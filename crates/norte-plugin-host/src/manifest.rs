@@ -22,12 +22,11 @@ pub enum Category {
     Command,
     /// Columnas custom en el listado.
     Columns,
-    /// Hooks before/after de operaciones. **Declararlo se RECHAZA hoy**
-    /// ([`ManifestError::HookNotImplemented`]): no existe interfaz WIT `hook`,
-    /// ni world, ni sitio en el host desde el que llamarla, así que aceptarlo
-    /// instalaría un plugin inerte. La variante se conserva porque spec §7.1
-    /// nombra los hooks entre las interfaces que WIT debe cubrir — y porque su
-    /// `digest_tag` es parte del digest de aprobación, que no se reordena.
+    /// Observa las mutaciones que el journal ya registró (H1, ADR 0100,
+    /// interfaz WIT `hook` del paquete `norte:hook`, world `norte-hook`).
+    /// Solo `after-*`: un hook no veta ni muta, y su único efecto es una
+    /// frase para el humano. Los eventos que escucha van en
+    /// `[[contributions.hook]]`, del vocabulario [`HOOK_EVENTS`].
     Hook,
     /// Decora entradas visibles con un badge/rol tipo "git status" (ADR
     /// 0037 decisión 2, interfaz WIT `decorator`, world `norte-decorator`).
@@ -132,9 +131,73 @@ pub struct RenamerContrib {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HookContrib {
-    /// Evento (`before-copy`, `after-copy`, `after-delete`, …).
+    /// Evento, uno de [`HOOK_EVENTS`] (`after-renamed`, …). Cerrado y
+    /// validado al parsear: un valor que no esté es
+    /// [`ManifestError::HookUnknownEvent`], como una capability desconocida.
     pub on: String,
 }
+
+/// Cuántos sidecars puede declarar un hook. Dieciséis es «varios ficheros
+/// de trabajo»; por encima es un plugin que quiere un directorio, y eso es
+/// otra capacidad.
+pub const SIDECAR_MAX_NAMES: usize = 16;
+
+/// Tope de bytes del nombre de un sidecar: `NAME_MAX` en los sistemas de
+/// ficheros corrientes.
+const SIDECAR_NAME_MAX_BYTES: usize = 255;
+
+/// `true` si `name` es UN nombre de fichero PORTABLE que el host aceptará
+/// escribir junto a un evento: ASCII imprimible sin `/ \ : * ? " < > |`, no
+/// vacío, cabe en `NAME_MAX`, ni `.` ni `..`, sin punto final y sin nombre
+/// reservado de Windows (`CON`, `NUL`, `COM1`…). ASCII porque el nombre es
+/// texto de un tercero que se pinta en la aprobación y se escribe en disco:
+/// sin bidi, sin invisibles, sin homógrafos.
+///
+/// ```
+/// use norte_plugin_host::is_valid_sidecar_name;
+/// assert!(is_valid_sidecar_name(".norte-renames.log"));
+/// assert!(!is_valid_sidecar_name("a/b"));
+/// assert!(!is_valid_sidecar_name(".."));
+/// assert!(!is_valid_sidecar_name("CON"));
+/// assert!(!is_valid_sidecar_name("log\u{202e}"));
+/// ```
+#[must_use]
+pub fn is_valid_sidecar_name(name: &str) -> bool {
+    const FORBIDDEN: &[u8] = b"/\\:*?\"<>|";
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if name.is_empty() || name.len() > SIDECAR_NAME_MAX_BYTES || name == "." || name == ".." {
+        return false;
+    }
+    if !name
+        .bytes()
+        .all(|b| (0x21..=0x7e).contains(&b) && !FORBIDDEN.contains(&b))
+    {
+        return false;
+    }
+    if name.ends_with('.') {
+        return false;
+    }
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    !RESERVED.contains(&stem.as_str())
+}
+
+/// El vocabulario CERRADO de `[[contributions.hook]].on` (ADR 0100): las
+/// operaciones del journal, en pasado, porque un hook solo ve lo que ya
+/// quedó registrado. No hay `before-*` — eso sería policy, no un plugin.
+///
+/// Está aquí y no en el core porque las tres piezas que tienen que estar de
+/// acuerdo —quien lo valida (este crate), quien lo dispara (`norte-core`) y
+/// la guía— parten de una lista; sin ella cada una guarda su copia.
+pub const HOOK_EVENTS: &[&str] = &[
+    "after-created",
+    "after-removed",
+    "after-trashed",
+    "after-renamed",
+    "after-mode-changed",
+];
 
 /// Un decorator declarado (ADR 0037 decisión 2): marcador VACÍO — a
 /// diferencia de [`PreviewerContrib`]/[`ColumnContrib`], un decorator no
@@ -631,27 +694,71 @@ pub enum ManifestError {
         "`location-root-marker` sin `location = \"read\"`: declara la capacidad o quita el marcador"
     )]
     LocationMarkerWithoutCap,
-    /// Un hook declarado —como categoría primaria o como contribución— cuando
-    /// NADA lo ejecuta: no hay interfaz WIT `hook`, ni world, ni sitio en el
-    /// host que la llame. Aceptarlo instalaría algo inerte que el gestor
-    /// pintaría como un plugin normal, y su autor se enteraría porque nunca
-    /// pasa nada.
-    ///
-    /// La categoría [`Category::Hook`] NO se retira: spec §7.1 nombra los
-    /// hooks entre las interfaces que WIT debe cubrir, así que borrarla
-    /// alejaría el código de la especificación. Lo que se retira es la
-    /// pretensión de que declarar uno sirva de algo hoy.
+    /// `[[contributions.hook]].on` con un valor fuera de [`HOOK_EVENTS`]. El
+    /// vocabulario es cerrado a propósito: un `before-copy` que se aceptara
+    /// instalaría un hook que nunca dispara, y su autor se enteraría porque
+    /// nunca pasa nada. Lleva el valor para que el error sea accionable.
     #[error(
-        "los hooks aún no están implementados: no hay interfaz WIT que los ejecute, \
-         así que declarar uno instalaría un plugin inerte"
+        "evento de hook desconocido `{0}`: los que existen son after-created, after-removed, after-trashed, after-renamed y after-mode-changed"
     )]
-    HookNotImplemented,
+    HookUnknownEvent(String),
+    /// `category = "hook"` sin ningún `[[contributions.hook]]`: un plugin que
+    /// dice observar y no escucha nada es inerte, y el gestor lo pintaría
+    /// como uno normal.
+    #[error(
+        "`category = \"hook\"` sin ningún `[[contributions.hook]]`: declara qué eventos escucha"
+    )]
+    HookWithoutEvents,
+    /// `[[contributions.hook]]` en un plugin de otra categoría: solo los de
+    /// `category = "hook"` se despachan, así que esos eventos no sonarían
+    /// nunca — el plugin inerte que el gestor pintaría como uno normal.
+    #[error(
+        "`[[contributions.hook]]` requiere `category = \"hook\"`: un plugin de otra categoría no recibe eventos"
+    )]
+    HookOnOtherCategory,
+    /// `category = "hook"` con `net`: un hook recibe la ruta de cada mutación
+    /// de la máquina, y con red sería un canal para sacarlas fuera. Hasta que
+    /// un ADR diga qué badge lo dice, se rechaza (ADR 0100).
+    #[error(
+        "un `hook` no puede declarar `net`: recibe la ruta de cada mutación, y con red eso es un canal de salida (ADR 0100)"
+    )]
+    HookWithNet,
+    /// `fs-write = "scoped"` (o cualquier cadena): un valor RESERVADO que
+    /// ninguna puerta del host honraba y que desde ADR 0088 se rechaza en vez
+    /// de aprobarse en vano. Lo que existe es `fs-write = { sidecar = [...] }`
+    /// (ADR 0101).
+    #[error(
+        "`fs-write = \"{0}\"` no existe: la escritura de un plugin es `fs-write = {{ sidecar = [\"nombre\"] }}`, y solo para un `hook` (ADR 0101)"
+    )]
+    FsWriteReserved(String),
+    /// `fs-write = { sidecar = [...] }` en un plugin que no es `hook`: solo un
+    /// hook tiene un evento junto al que escribir, así que en otra categoría
+    /// sería una capacidad aprobada que nadie usa (ADR 0088).
+    #[error("`fs-write` con sidecars solo lo puede declarar un `hook` (ADR 0101)")]
+    SidecarNotForCategory,
+    /// Un nombre de sidecar que no es UN nombre de fichero portable: ASCII
+    /// imprimible sin `/ \ : * ? " < > |`, ni `.`/`..`, ni nombre reservado de
+    /// Windows, ni punto final; o repetido. ASCII a propósito: el nombre es
+    /// lo que el humano lee en el badge de aprobación y lo que acaba en
+    /// disco, y un carácter bidi o invisible ahí es una suplantación. Lleva
+    /// el valor para que sea accionable.
+    #[error(
+        "nombre de sidecar inválido `{0}`: ASCII imprimible, sin `/ \\ : * ? \" < > |`, ni `.`/`..`, ni nombre reservado, ni repetido"
+    )]
+    SidecarName(String),
+    /// `fs-write = {{ sidecar = [...] }}` vacío o con más de
+    /// [`SIDECAR_MAX_NAMES`] nombres.
+    #[error("`fs-write.sidecar` lleva {got} nombres: entre 1 y {SIDECAR_MAX_NAMES}")]
+    SidecarListSize {
+        /// Cuántos traía.
+        got: usize,
+    },
     /// `capabilities.ai` declarada cuando NADA la honra: no hay interfaz WIT
     /// de IA ni sitio en el host que la linke. Se parseaba, entraba en el
     /// digest y pintaba insignia, así que un humano aprobaba «acceso a IA» y
-    /// concedía nada — la capability declarada que nadie honra (ADR 0088),
-    /// con la misma firma que los hooks y el mismo remedio: se rechaza al
-    /// parsear y el campo se queda porque spec §7.1 lo nombra.
+    /// concedía nada — la capability declarada que nadie honra (ADR 0088).
+    /// Se rechaza al parsear y el campo se queda porque spec §7.1 lo nombra;
+    /// los hooks tuvieron el mismo rechazo hasta ADR 0100.
     #[error(
         "la capability `ai` aún no está implementada: no hay interfaz WIT que la sirva, \
          así que declararla aprobaría un permiso que no concede nada"
@@ -838,6 +945,56 @@ pub fn scheme_claimable(scheme: &str) -> bool {
         && !norte_proto::ARCHIVE_FORMATS.contains(&scheme)
 }
 
+/// Lo que un manifiesto declara sobre hooks y sidecars (ADR 0100, ADR 0101),
+/// validado aparte de [`Manifest::from_toml`] para que la lista de
+/// comprobaciones del manifiesto no desborde el límite de líneas.
+fn validate_hooks_and_sidecars(raw: &ManifestRaw) -> Result<(), ManifestError> {
+    // Hooks (ADR 0100): cada evento del vocabulario cerrado, y un plugin
+    // que se declara hook escucha al menos uno. DESPUÉS del id a
+    // propósito: un manifiesto cuyo id no es de fiar se rechaza por el
+    // id, que es lo accionable.
+    if let Some(h) = raw
+        .contributions
+        .hook
+        .iter()
+        .find(|h| !HOOK_EVENTS.contains(&h.on.as_str()))
+    {
+        return Err(ManifestError::HookUnknownEvent(h.on.clone()));
+    }
+    if raw.plugin.category == Category::Hook && raw.contributions.hook.is_empty() {
+        return Err(ManifestError::HookWithoutEvents);
+    }
+    if raw.plugin.category != Category::Hook && !raw.contributions.hook.is_empty() {
+        return Err(ManifestError::HookOnOtherCategory);
+    }
+    if raw.plugin.category == Category::Hook && raw.capabilities.net.is_some() {
+        return Err(ManifestError::HookWithNet);
+    }
+    // `fs-write` (ADR 0101): solo sidecars, solo en hooks, nombres de
+    // verdad. Un `"scoped"` heredado se rechaza con lo que hay que poner.
+    match &raw.capabilities.fs_write {
+        crate::capability::FsWriteCap::None => {}
+        crate::capability::FsWriteCap::Reserved(s) => {
+            return Err(ManifestError::FsWriteReserved(s.clone()));
+        }
+        crate::capability::FsWriteCap::Sidecar(l) => {
+            let sidecar = &l.sidecar;
+            if raw.plugin.category != Category::Hook {
+                return Err(ManifestError::SidecarNotForCategory);
+            }
+            if sidecar.is_empty() || sidecar.len() > SIDECAR_MAX_NAMES {
+                return Err(ManifestError::SidecarListSize { got: sidecar.len() });
+            }
+            for (i, n) in sidecar.iter().enumerate() {
+                if !is_valid_sidecar_name(n) || sidecar[..i].contains(n) {
+                    return Err(ManifestError::SidecarName(n.clone()));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Manifest {
     /// Parsea y VALIDA un `plugin.toml`.
     ///
@@ -845,7 +1002,15 @@ impl Manifest {
     /// [`ManifestError`] si el TOML no parsea, el `id` no es reverse-DNS, o se
     /// declara `exec` distinto de `none` (prohibido sin excepción).
     pub fn from_toml(src: &str) -> Result<Self, ManifestError> {
-        let raw: ManifestRaw = toml::from_str(src)?;
+        let mut raw: ManifestRaw = toml::from_str(src)?;
+        // `fs-write = "none"` es la forma explícita de «sin escritura» que
+        // ADR 0022 documenta: vale lo mismo que ausente, y digesta igual
+        // (byte 0), así que ninguna aprobación se mueve. Cualquier OTRA cadena
+        // se rechaza en la validación de abajo.
+        if matches!(&raw.capabilities.fs_write, crate::capability::FsWriteCap::Reserved(s) if s == "none")
+        {
+            raw.capabilities.fs_write = crate::capability::FsWriteCap::None;
+        }
         // Invariante dura: exec SIEMPRE none.
         if raw
             .capabilities
@@ -882,17 +1047,8 @@ impl Manifest {
         if !is_valid_plugin_id(&raw.plugin.id) {
             return Err(ManifestError::Id);
         }
-        // Hooks: declarados pero sin nadie que los ejecute. Se mira la
-        // categoría Y las contribuciones — es la DECLARACIÓN la que promete
-        // algo, no el campo que clasifica al plugin.
-        //
-        // DESPUÉS del id a propósito: un manifiesto cuyo id no es de fiar se
-        // rechaza por el id, que es lo accionable. Decirle a su autor que los
-        // hooks no están implementados le mandaría a arreglar lo otro.
-        if raw.plugin.category == Category::Hook || !raw.contributions.hook.is_empty() {
-            return Err(ManifestError::HookNotImplemented);
-        }
-        // `ai`: misma familia que los hooks — una promesa que nadie cumple.
+        validate_hooks_and_sidecars(&raw)?;
+        // `ai`: una promesa que nadie cumple.
         // Se mira la PRESENCIA, no el valor: cualquier modo sería igual de
         // inerte.
         if raw.capabilities.ai.is_some() {

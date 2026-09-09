@@ -263,7 +263,10 @@ fn golden_capabilities() {
 // La tabla CONGELADA de la taxonomía entera. Trocearla por longitud
 // escondería justo lo que `check_family` comprueba —cobertura 1:1 entre
 // fixture y variante—, así que aquí la longitud es la propiedad.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "una aserción por fixture y variante: la longitud es la propiedad"
+)]
 #[test]
 fn golden_error() {
     check_family(
@@ -476,7 +479,10 @@ fn golden_task_state() {
 // Una fixture por `TaskKind` que el core emite, con la SEMÁNTICA de progreso
 // de cada uno escrita al lado. Es una tabla: trocearla por longitud escondería
 // que la cobertura es una por clase.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "una aserción por clase de progreso: la longitud es la cobertura"
+)]
 #[test]
 fn golden_task_progress() {
     check_family(
@@ -1180,7 +1186,14 @@ fn golden_methods() {
     // 198 → 200 en 0.67.0 (ADR 0095): + `plugin_command_info_renamer` y
     // `plugin_rename_plan_params`.
     // 200 → 201 en 0.68.0 (#332): + `ai_rename_plan_result_refused`.
-    assert_eq!(fixtures.len(), 201, "[methods.json] fixtures sin caso Rust");
+    // 201 → 203 en 0.69.0 (ADR 0100): + `plugin_notice_notify` y
+    // `plugin_notice_hooks_disabled`, UNA POR VALOR del vocabulario de `kind`:
+    // el frontend decide por igualdad si traduce la clase o pinta el texto.
+    // 203 → 205 en 0.70.0 (ADR 0101): + `plugin_notice_effect_denied` y
+    // `plugin_info_with_hook_badges` — los badges `hook:<evento>` y
+    // `fs-write:<nombre>` que un hook enseña al aprobarse; sin fixtura, su
+    // forma en el wire no la congelaba nada.
+    assert_eq!(fixtures.len(), 205, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -2041,13 +2054,55 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
+/// `plugin.notice` (0.69.0, ADR 0100): UNA fixtura POR VALOR de `kind`. Con
+/// una sola, renombrar la otra no pondría nada en rojo, y el frontend compara
+/// `kind` por igualdad para decidir si traduce la clase o pinta `text`.
+fn check_methods_plugin_notice(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{PLUGIN_NOTICE_KINDS, PluginNotice};
+    assert_eq!(
+        PLUGIN_NOTICE_KINDS,
+        &["notify", "hooks-disabled", "effect-denied"]
+    );
+    check_one(
+        fixtures,
+        "plugin_notice_notify",
+        &PluginNotice {
+            plugin_id: "org.norte.rename-log".into(),
+            kind: "notify".into(),
+            text: Some("renamed 3 files".into()),
+        },
+    );
+    // Sin `text`: la prueba de que no viaja cuando no lo hay.
+    check_one(
+        fixtures,
+        "plugin_notice_hooks_disabled",
+        &PluginNotice {
+            plugin_id: "org.norte.rename-log".into(),
+            kind: "hooks-disabled".into(),
+            text: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_notice_effect_denied",
+        &PluginNotice {
+            plugin_id: "org.norte.rename-log".into(),
+            kind: "effect-denied".into(),
+            text: None,
+        },
+    );
+}
+
 /// Casos de [`PluginInfo`]/[`PluginCommandInfo`] (P1, 0.26.0): el shape sin
 /// `description`/`commands`, el shape CON ambos poblados, y el tipo suelto
 /// `PluginCommandInfo`. Función propia para no desbordar el límite de
 /// líneas de `check_methods_plugin_governance`.
 // Una lista LITERAL de casos golden: cada uno es una forma congelada del wire
 // con su porqué, y partirla en mitades arbitrarias solo escondería cuáles hay.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "cada fixture lleva su porqué; partir en mitades escondería cuáles hay"
+)]
 fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
         PluginColumnInfo, PluginCommandInfo, PluginCommandKind, PluginInfo, PluginListResult,
@@ -2091,6 +2146,31 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
             version: "0.1.0".into(),
             category: "previewer".into(),
             capabilities: vec!["fs-read".into()],
+            approved: true,
+            enabled: true,
+            description: None,
+            commands: vec![],
+            columns: vec![],
+            has_help: false,
+            manifest_digest: None,
+        },
+    );
+    // ADR 0100/0101: lo que un hook enseña al aprobarse son sus eventos y
+    // los ficheros que puede escribir, en la lista ABIERTA de badges.
+    check_one(
+        fixtures,
+        "plugin_info_with_hook_badges",
+        &PluginInfo {
+            id: "org.norte.rename-log".into(),
+            name: "Rename log".into(),
+            publisher: "norte".into(),
+            version: "0.1.0".into(),
+            category: "hook".into(),
+            capabilities: vec![
+                "location".into(),
+                "hook:after-renamed".into(),
+                "fs-write:.norte-renames.log".into(),
+            ],
             approved: true,
             enabled: true,
             description: None,
@@ -2216,6 +2296,7 @@ fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
     // `plugin.list` sin params: golden vacío, simetría con `task_list_params`.
     check_one(fixtures, "plugin_list_params", &PluginListParams {});
     check_methods_plugin_info(fixtures);
+    check_methods_plugin_notice(fixtures);
     check_one(
         fixtures,
         "plugin_set_approval_params",
@@ -3942,7 +4023,10 @@ fn rpc_codes_y_limites_congelados() {
 // Partirla en dos mitades arbitrarias escondería la mitad, y lo que hace útil
 // una lista congelada es verla entera — mismo criterio que la tabla de
 // `efecto_de` en la ventana.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "un nombre por método, congelados de una vez"
+)]
 fn method_names_frozen() {
     use norte_proto::methods;
     assert_eq!(methods::FS_LIST, "fs.list");
@@ -4303,7 +4387,14 @@ fn method_names_frozen() {
     // 0.66.0 (D4): ningún método nuevo — dos campos opcionales, `SpanWire::bg`
     // y `PluginPreviewStyledParams::columns`, para el previewer de imagen que
     // pinta medios bloques y necesita saber a cuántas celdas encoger.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.68.0");
+    // 0.69.0 (ADR 0100): `plugin.notice`, la notificación con la que un
+    // plugin `hook` le dice algo al humano sobre una mutación ya registrada —
+    // o con la que el daemon dice que apagó los hooks de un plugin. Solo a
+    // humanos, como `connection.failed`; un cliente 0.68 la descarta.
+    assert_eq!(methods::PLUGIN_NOTICE, "plugin.notice");
+    // 0.70.0 (ADR 0101): ningún método nuevo — un valor más en el
+    // vocabulario de `PluginNotice::kind`, `effect-denied`.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.70.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

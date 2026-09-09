@@ -4,7 +4,10 @@
 
 // La firma del trait es `-> &str` (un provider puede derivar su scheme de
 // estado propio); devolver un literal aquí es correcto.
-#![allow(clippy::unnecessary_literal_bound)]
+#![expect(
+    clippy::unnecessary_literal_bound,
+    reason = "la firma del trait es `-> &str`"
+)]
 
 use async_trait::async_trait;
 use bytes::Bytes;

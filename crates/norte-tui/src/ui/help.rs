@@ -198,20 +198,30 @@ pub fn help_body_size(base: Rect, lang: norte_help::Lang) -> (usize, usize) {
 /// ÚNICA entrada libre es el filtro tecleado por el usuario, que pasa por el
 /// mismo doble filtro que la barra de quick search (`filter_display` — jamás
 /// `filter_raw` — más [`display_name`]).
-pub fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiTheme, hint: &str) {
+pub fn draw_help(
+    frame: &mut Frame<'_>,
+    help: &crate::app::HelpView,
+    theme: &TuiTheme,
+    hint: &str,
+    version_line: &str,
+) {
     use norte_frontend::help::{Focus, SidebarRow};
 
     let (area, sidebar, body_area, footer_area) =
         help_layout(frame.area(), help_sidebar_desired(help.state.lang()));
     clear_themed(frame, area, theme);
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" {} ", t("help-title")))
-            .title_style(theme.role(Role::Title))
-            .border_style(theme.role(Role::ModalBorder)),
-        area,
-    );
+    let mut marco = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("help-title")))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(Role::ModalBorder));
+    // Qué binario es este, arriba a la derecha: versión y revisión del árbol.
+    // No es texto de interfaz sino un identificador, así que no pasa por
+    // Fluent; y vacío no se pinta (los tests construyen `App` así).
+    if !version_line.is_empty() {
+        marco = marco.title_top(Line::raw(format!(" {version_line} ")).right_aligned());
+    }
+    frame.render_widget(marco, area);
 
     let state = &help.state;
     // La barra del índice vive en la PRIMERA celda del canalón: pegada a la

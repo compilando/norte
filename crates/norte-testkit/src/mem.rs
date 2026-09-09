@@ -757,7 +757,10 @@ fn entry_for(
 #[async_trait]
 impl Provider for MemProvider {
     // La firma del trait es `-> &str`; devolver un literal aquí es correcto.
-    #[allow(clippy::unnecessary_literal_bound)]
+    #[expect(
+        clippy::unnecessary_literal_bound,
+        reason = "la firma del trait es `-> &str`"
+    )]
     fn scheme(&self) -> &str {
         "mem"
     }

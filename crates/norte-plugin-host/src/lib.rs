@@ -35,7 +35,7 @@ mod manifest;
 mod runtime;
 mod wit_imports;
 
-pub use capability::{Capabilities, LocationCap, NetCap, Scope};
+pub use capability::{Capabilities, FsWriteCap, LocationCap, NetCap, Scope, SidecarList};
 pub use catalog::{
     Catalog, HelpPresence, LoadError, PluginEntry, Tier, verified_child, wasm_digest_of,
 };
@@ -47,13 +47,15 @@ pub use manifest::{
     COMMAND_ID_MAX_CHARS, COMMAND_MAX_COUNT, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
     CONFIG_ENUM_MAX_VALUES, CONFIG_KEY_MAX_CHARS, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS,
     CORE_SCHEMES, Category, ColumnContrib, CommandContrib, ConfigKeySpec, Contributions,
-    DecoratorContrib, HookContrib, Manifest, ManifestError, PreviewerContrib, ProviderContrib,
-    RenamerContrib, is_valid_plugin_id, scheme_claimable,
+    DecoratorContrib, HOOK_EVENTS, HookContrib, Manifest, ManifestError, PreviewerContrib,
+    ProviderContrib, RenamerContrib, SIDECAR_MAX_NAMES, is_valid_plugin_id, is_valid_sidecar_name,
+    scheme_claimable,
 };
 pub use runtime::{
-    ColumnsInstance, DecoratorInstance, LocationHost, MAX_ARTIFACT_BYTES, MAX_RENAME_PROPOSALS,
-    PluginInstance, PluginRuntime, ProviderInstance, RenamerInstance, RuntimeError, columns_iface,
-    decorator_iface, location_iface, previewer_iface, provider_iface, renamer_iface,
+    ColumnsInstance, DecoratorInstance, HookInstance, LocationHost, MAX_ARTIFACT_BYTES,
+    MAX_HOOK_EFFECTS, MAX_RENAME_PROPOSALS, MAX_SIDECAR_BYTES, MAX_SIDECAR_EFFECTS, PluginInstance,
+    PluginRuntime, ProviderInstance, RenamerInstance, RuntimeError, columns_iface, decorator_iface,
+    hook_iface, location_iface, previewer_iface, provider_iface, renamer_iface,
 };
 /// Handle opaco de un `writer` resource del guest (#30 stage 2b-write): el
 /// adapter host lo lleva en su `ByteSink` y lo pasa a los métodos

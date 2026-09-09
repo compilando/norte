@@ -367,6 +367,24 @@ impl crate::connect::ConnectionObserver for ChannelFailureObserver {
     }
 }
 
+/// A dónde van los avisos de los hooks en `Backend::Embedded` (ADR 0100): a
+/// un canal que el frontend drena, igual que en modo daemon los difunde el
+/// wire. Sin esto el embebido correría los hooks y se tragaría sus frases.
+struct ChannelHookSink {
+    tx: mpsc::UnboundedSender<norte_proto::methods::PluginNotice>,
+}
+
+impl crate::hooks::HookNoticeSink for ChannelHookSink {
+    fn notice(&self, n: norte_proto::methods::PluginNotice) {
+        let _ = self.tx.send(n);
+    }
+
+    /// El frontend soltó el receptor: el despachador termina con él.
+    fn is_closed(&self) -> bool {
+        self.tx.is_closed()
+    }
+}
+
 /// Sink de avisos del journal perezoso (#177) que los reenvía por un canal: la
 /// vía para que una TUI embebida pinte EN LA SESIÓN que sus mutaciones no están
 /// quedando registradas.
@@ -2110,6 +2128,81 @@ impl Backend {
             }
             #[cfg(unix)]
             Self::Remote(r) => r.take_failed(),
+        }
+    }
+
+    /// Receptor de avisos `plugin.notice` (0.69.0, ADR 0100): la frase de un
+    /// plugin `hook` sobre una mutación ya registrada, o que los hooks de un
+    /// plugin se apagaron tras tres fallos. En `Remote` viene del pump del
+    /// daemon; en `Embedded` ARRANCA el despachador de hooks sobre el journal
+    /// de este engine y le da un canal — así ambos modos corren los mismos
+    /// hooks y surfacean lo mismo. One-shot, como [`Backend::take_failed`]:
+    /// el engine tiene UN hueco para el despachador y el segundo que lo pida
+    /// recibe `None`, en vez de arrancar otro que pisara al primero.
+    ///
+    /// `None` también en `Embedded` si el engine no lleva journal (sin filas
+    /// no hay hooks) o si el runtime WASM no se pudo crear: sin runtime no
+    /// corre ningún plugin, y tampoco un hook (fail-closed, con traza). El
+    /// despachador muere solo cuando el receptor devuelto se suelta.
+    ///
+    /// # Panics
+    /// Fuera de un runtime de tokio: arranca tasks.
+    pub fn take_plugin_notices(
+        &self,
+    ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::PluginNotice>> {
+        match self {
+            Self::Embedded(engine) => {
+                if !engine.has_journal() || !engine.claim_hooks_slot() {
+                    return None;
+                }
+                let runtime = match norte_plugin_host::PluginRuntime::new() {
+                    Ok(r) => Arc::new(r),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "hooks: sin runtime de plugins, no corren");
+                        return None;
+                    }
+                };
+                let (tx, rx) = mpsc::unbounded_channel();
+                // Enchufar el journal es `async` (el perezoso guarda el
+                // extremo bajo su lock) y leer `policy.toml` es I/O (regla 2):
+                // las dos cosas en una task. Una mutación que se adelante
+                // queda sin hook, y es el arranque: no hay ninguna. Sin token
+                // de cancelación propio: la vida del despachador embebido es
+                // la del receptor (`is_closed`), y el proceso que lo hospeda
+                // termina con él.
+                let engine = Arc::clone(engine);
+                tokio::spawn(async move {
+                    // Las reglas del humano valen también aquí (ADR 0101): el
+                    // engine embebido no lleva gate, así que el despachador
+                    // las mira para el actor `plugin`. Un fichero ilegible se
+                    // dice y equivale a ninguno.
+                    let policy = tokio::task::spawn_blocking(crate::PolicyConfig::load)
+                        .await
+                        .ok()
+                        .and_then(|r| match r {
+                            Ok(p) => Some(Arc::new(p)),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "hooks: policy.toml ilegible, sin reglas");
+                                None
+                            }
+                        });
+                    let (sender, _task) = crate::hooks::spawn_dispatcher(
+                        crate::connect::config_dir(),
+                        runtime,
+                        Arc::new(ChannelHookSink { tx }),
+                        tokio_util::sync::CancellationToken::new(),
+                        Some(crate::hooks::SidecarWriter {
+                            engine: Arc::downgrade(&engine),
+                            scopes: None,
+                            policy,
+                        }),
+                    );
+                    engine.enable_hooks(sender).await;
+                });
+                Some(rx)
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.take_plugin_notices(),
         }
     }
 

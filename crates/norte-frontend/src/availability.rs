@@ -63,7 +63,10 @@ use norte_help::{Availability, Reason};
 /// read `Enterable::No, Viewable::Yes, RenameSingle::Yes` for no gain: the
 /// field names already say which question each answer belongs to.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "field names already say which question each answer belongs to"
+)]
 pub struct Facts {
     /// The focused entry can be entered (a directory, or an archive the
     /// frontend knows how to compose a scheme for).

@@ -108,18 +108,27 @@ async fn el_polling_detecta_cambios_y_se_cancela_limpio() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     let watch = norte_tui::config::watch_polling(&layers, tx, std::time::Duration::from_millis(20));
 
-    // Deja tomar el snapshot base y cambia el archivo (mtime Y tamaño).
-    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
-    std::fs::write(
-        d.path().join("norte.toml"),
-        "[keymap]\npreset = \"orthodox\"\n",
-    )
-    .unwrap();
-    let visto = tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv()).await;
-    assert!(
-        matches!(visto, Ok(Some(()))),
-        "el poll ve el cambio: {visto:?}"
-    );
+    // El poll toma su snapshot base en su propio task, así que no hay un
+    // «ya puedes cambiar el archivo» que esperar: dormir un múltiplo del
+    // periodo era apostar a que la base se tomó antes de la escritura, y bajo
+    // carga se perdía (ola W9, tarea 2.2). En su lugar se escribe un cambio
+    // distinto (mtime Y tamaño) en cada vuelta hasta que un tick lo ve: si la
+    // base llegó después de la primera escritura, la segunda la delata.
+    let mut visto = None;
+    for i in 0..15u32 {
+        let mut contenido = String::from("[keymap]\npreset = \"orthodox\"\n");
+        for _ in 0..i {
+            contenido.push_str("# vuelta\n");
+        }
+        std::fs::write(d.path().join("norte.toml"), contenido).unwrap();
+        if let Ok(Some(())) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await
+        {
+            visto = Some(());
+            break;
+        }
+    }
+    assert!(visto.is_some(), "el poll ve el cambio");
 
     drop(watch);
     // Tras cancelar, el task termina y suelta el sender: recv → None

@@ -238,7 +238,10 @@ fn pane_title(
 // Once argumentos: es el cableado del render de un pane, no una API. Agruparlos
 // en un struct solo movería la lista a otro sitio y añadiría un tipo que nadie
 // usa dos veces.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "cada arg es una fuente de pintado; un struct no se usaría dos veces"
+)]
 pub(crate) fn draw_pane(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -363,7 +366,10 @@ pub(crate) fn draw_pane(
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 
-#[allow(clippy::too_many_arguments)] // fila de render: cada arg es una fuente de pintado, no API
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fila de render: cada arg es una fuente de pintado, no API"
+)]
 pub(crate) fn entry_item<'a>(
     entry: &'a norte_proto::Entry,
     theme: &TuiTheme,

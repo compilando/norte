@@ -1223,7 +1223,7 @@ pub fn restore_after_suspend(
 /// con distinto origen, y tenerlo dos veces es cómo el menú y la barra acaban
 /// abriendo un panel de dos maneras que se separan en cuanto una crece un
 /// detalle. Es la lección de ADR 0077 aplicada dentro de un solo frontend.
-#[allow(clippy::too_many_arguments)] // wiring del bucle, no API
+#[expect(clippy::too_many_arguments, reason = "wiring del bucle, no API")]
 async fn despachar_clic(
     app: &mut crate::app::App,
     backend: &norte_core::backend::Backend,
@@ -1271,7 +1271,7 @@ async fn despachar_clic(
 /// Es el gemelo de [`crate::keys::on_key`]: un gesto es OTRA entrada, y toma
 /// exactamente los mismos caminos que la tecla equivalente — que es lo que
 /// impide que el ratón y el teclado diverjan.
-#[allow(clippy::too_many_arguments)] // wiring del bucle, no API
+#[expect(clippy::too_many_arguments, reason = "wiring del bucle, no API")]
 pub async fn on_mouse(
     app: &mut crate::app::App,
     backend: &norte_core::backend::Backend,

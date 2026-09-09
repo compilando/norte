@@ -66,7 +66,10 @@ fn first_pasted_line(text: &str) -> (String, usize) {
 /// never pressed. A capture answers a SINGLE keystroke, and a paste is never
 /// that, so it gets the exact outcome a hostile keystroke gets there
 /// (`msg-shortcut-not-bindable`) instead of being fed to `capture_chord`.
-#[allow(clippy::too_many_lines)] // wiring del run loop, no API — mismo criterio que `run`/`dispatch`: mantiene el orden 1:1 con la cadena `Event::Key`, y partirla rompería justo el argumento del doc de arriba.
+#[expect(
+    clippy::too_many_lines,
+    reason = "wiring del run loop: orden 1:1 con la cadena `Event::Key`"
+)]
 pub fn route_paste(app: &mut App, text: &str) {
     let (first_line, discarded) = first_pasted_line(text);
     let first_line = first_line.as_str();

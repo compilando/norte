@@ -1,4 +1,5 @@
 //! El binario del renderer: monta el host, abre UNA ventana y bombea.
+#![forbid(unsafe_code)]
 
 use std::process::ExitCode;
 
@@ -35,7 +36,10 @@ impl UpdateSink for VentanaSink {
 
 // `tauri::State` va POR VALOR en un comando: es lo que el macro genera, y no
 // hay una versión por referencia. El lint no conoce esa restricción.
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "`tauri::command` exige `State` por valor"
+)]
 #[tauri::command]
 fn initial_snapshot(state: tauri::State<'_, AppState>) -> Result<BridgeEnvelope<UiUpdate>, String> {
     tracing::info!(ms = ARRANQUE.elapsed().as_millis(), "primera foto pedida");
@@ -105,7 +109,10 @@ async fn image_bytes(state: tauri::State<'_, AppState>) -> Result<tauri::ipc::Re
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "`tauri::command` exige `State` por valor"
+)]
 #[tauri::command]
 fn catalog(
     state: tauri::State<'_, AppState>,
@@ -150,7 +157,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if cli.version {
-        println!("norte-gui {}", env!("CARGO_PKG_VERSION"));
+        println!("norte-gui {}", norte_frontend::version::VERSION_LINE);
         return ExitCode::SUCCESS;
     }
     // Se toca aquí para que la referencia sea el arranque del proceso y no la
@@ -186,6 +193,11 @@ fn main() -> ExitCode {
         .invoke_handler(handler())
         .plugin(guardia_de_navegacion())
         .setup(|app| {
+            // Qué binario es este, en el título: versión y revisión del árbol.
+            // La webview no lo necesita saber y el título no pasa por ella.
+            if let Some(v) = app.get_webview_window("main") {
+                let _ = v.set_title(&format!("norte {}", norte_frontend::version::VERSION_LINE));
+            }
             let estado: tauri::State<'_, AppState> = app.state();
             if let Ok(bridge) = estado.bridge() {
                 let sub = bridge.host().subscribe();

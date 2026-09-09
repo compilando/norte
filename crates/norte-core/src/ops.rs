@@ -1544,7 +1544,10 @@ async fn copy_symlink_leaf(
 // El octavo argumento es el ancla del destino (#295). Agruparla con `opts`
 // costaría el `Copy` de `TransferOptions`, que se copia en cada paso de un
 // árbol; agruparla con los providers mezclaría el QUÉ con el DÓNDE.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "las opciones viajan sueltas: con los providers mezclarían el QUÉ con el DÓNDE"
+)]
 pub(crate) async fn copy_task(
     src: Arc<dyn Provider>,
     dst: Arc<dyn Provider>,
@@ -1679,7 +1682,10 @@ async fn hydrate_plan(
 /// provenance (un dir sintético de un link expandido se crea como dir
 /// real, issue #19); la provenance manda en el DELETE del move. Devuelve
 /// los paths de ORIGEN saltados por política (el move no debe borrarlos).
-#[allow(clippy::too_many_arguments)] // función interna del módulo, no API
+#[expect(
+    clippy::too_many_arguments,
+    reason = "función interna del módulo, no API"
+)]
 async fn copy_tree(
     src: &Arc<dyn Provider>,
     dst: &Arc<dyn Provider>,
@@ -1766,7 +1772,6 @@ async fn copy_tree(
 /// SOBREVIVE (`keep`) y el reintento continúa desde donde iba
 /// (`open_resumable`) — el `before` que se restaura es la base del archivo,
 /// no cero, y `copy_file` recompone `base + already` en cada intento.
-#[allow(clippy::too_many_arguments)] // función interna del módulo, no API
 pub(crate) async fn copy_file_retrying(
     src: &dyn Provider,
     dest: &Dest<'_>,
@@ -1848,7 +1853,6 @@ async fn hash_source_prefix(
 /// `VerifyPolicy` (#35): Length compara tamaños; Hash compara el digest del
 /// prefijo del origen con el del staging (si el provider lo expone, si no
 /// degrada a Length).
-#[allow(clippy::too_many_arguments)]
 async fn should_discard_partial(
     src: &dyn Provider,
     dest: &Dest<'_>,
@@ -1891,7 +1895,10 @@ async fn should_discard_partial(
 /// al reanudar). Con resume: abre `open_resumable`, descarta el parcial si
 /// no cuadra con el origen (`verify`, #35), lee el origen desde `already`, y
 /// en cancelación/fallo CONSERVA el parcial (`keep`) en vez de abortar.
-#[allow(clippy::too_many_arguments)] // función interna del módulo, no API
+#[expect(
+    clippy::too_many_arguments,
+    reason = "función interna del módulo, no API"
+)]
 async fn copy_file(
     src: &dyn Provider,
     dest: &Dest<'_>,
@@ -2102,7 +2109,10 @@ async fn release(sink: Box<dyn norte_vfs::ByteSink>, to: &VPath, resume: bool) {
 /// pérdida silenciosa.
 #[tracing::instrument(skip_all, fields(from = %from.display_lossy(), to = %to.display_lossy()))]
 // Octavo argumento: el ancla del destino (#295), ver `copy_task`.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Octavo argumento: el ancla del destino (#295), ver `copy_task`"
+)]
 pub(crate) async fn move_task(
     src: Arc<dyn Provider>,
     dst: Arc<dyn Provider>,
@@ -2185,7 +2195,10 @@ enum RenameOutcome {
 // Un brazo por POLÍTICA de colisión, y cada uno con su secuencia completa —
 // stat del origen, stat del destino, comprobación de tipos, borrado, rename,
 // journal—. Partirla escondería cuál de las cinco hace qué.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "cinco fases en orden; partirla escondería cuál hace qué"
+)]
 async fn rename_with_policy(
     src: &dyn Provider,
     from: &VPath,
@@ -2334,9 +2347,15 @@ async fn rename_with_policy(
 // Dos formas del mismo verbo —una hoja y un árbol— cada una con su fase de
 // copia y su fase de borrado. Separarlas duplicaría la guarda de «dentro de sí
 // mismo» y el plan, que es donde estaría el error si se separaran.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "copia y borrado comparten la guarda «dentro de sí mismo» y el plan"
+)]
 // Octavo argumento: el ancla del destino (#295), ver `copy_task`.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Octavo argumento: el ancla del destino (#295), ver `copy_task`"
+)]
 async fn move_by_copy(
     src: Arc<dyn Provider>,
     dst: Arc<dyn Provider>,
@@ -2681,6 +2700,123 @@ pub(crate) async fn create_task(
         .await?;
     ctx.progress.update(|p| p.entries_done = 1);
     Ok(())
+}
+
+/// Qué hacer si el destino de `write_task` ya existe (ADR 0101).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnExists {
+    /// `Conflict{Exists}`: no se toca nada.
+    Refuse,
+    /// Lo que había va a la papelera lógica ANTES de crear el nuevo: dos
+    /// entradas de journal seguidas (`trashed`, `created`), y el contenido
+    /// anterior con vuelta atrás. Nunca se sobrescribe en sitio.
+    Replace,
+}
+
+/// Escribe un fichero con CONTENIDO desde memoria (ADR 0101): lo que un hook
+/// pide como sidecar. Es [`create_task`] con bytes y con una política de
+/// «ya existe» explícita; no lleva ancla porque no viene de un listado.
+#[tracing::instrument(skip_all, fields(path = %path.display_lossy(), ?on_exists, bytes = content.len()))]
+pub(crate) async fn write_task(
+    provider: Arc<dyn Provider>,
+    path: VPath,
+    content: Vec<u8>,
+    on_exists: OnExists,
+    observer: Arc<dyn MutationObserver>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    if ctx.cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    let observer = crate::observer::pin_for_task(observer).await?;
+    ctx.progress.update(|p| {
+        p.entries_total = Some(1);
+        p.current = Some(path.clone());
+    });
+    let mut buried: Option<Option<VPath>> = None;
+    match with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await {
+        // Solo se reemplaza UN FICHERO. Un directorio, un enlace o un
+        // dispositivo con el nombre aprobado no son «el sidecar anterior»: el
+        // badge dice «puede escribir un fichero llamado X», no «puede enterrar
+        // tu `.git`».
+        Ok(entry) if on_exists == OnExists::Refuse || entry.kind != EntryKind::File => {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            });
+        }
+        Ok(_) => {
+            // Mismo entierro que `delete_task`, misma vuelta atrás si la fila
+            // no llega (#160).
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+            let trash_id =
+                norte_vfs::trash::TrashId::new(now_ms, ctx.progress.snapshot().task_id.get());
+            let dest = trash_retrying(&*provider, &path, &trash_id, &ctx.cancel).await?;
+            if let Err(e) = observer
+                .on_mutation(
+                    &Mutation::Trashed {
+                        path: &path,
+                        dest: dest.as_ref(),
+                    },
+                    &ctx.actor,
+                )
+                .await
+            {
+                let devuelto = match dest.as_ref() {
+                    Some(en) => provider.restore_from(en, &path).await,
+                    None => Err(Error::Unsupported),
+                };
+                tracing::error!(
+                    error = %e,
+                    enterrado = %crate::engine::span_path(&path),
+                    devuelto = devuelto.is_ok(),
+                    "sidecar: se enterró el anterior y su entrada de journal NO llegó",
+                );
+                return Err(e);
+            }
+            buried = Some(dest);
+        }
+        Err(Error::NotFound) => {}
+        Err(e) => return Err(e),
+    }
+    // Si el nuevo no llega a publicarse, el anterior vuelve de la papelera:
+    // «reemplazar» que falla a medias no puede dejar el directorio sin
+    // ninguno de los dos. El journal ya tiene la fila `trashed`; la vuelta se
+    // registra como lo que es, para que la cadena cuente la historia entera.
+    let written = write_new(&*provider, &path, content).await;
+    if let Err(e) = written {
+        if let Some(Some(en)) = &buried {
+            match provider.restore_from(en, &path).await {
+                Ok(()) => {
+                    let _ = observer
+                        .on_mutation(&Mutation::Created(&path), &ctx.actor)
+                        .await;
+                }
+                Err(r) => tracing::error!(
+                    error = %r,
+                    "sidecar: el nuevo no se escribió y el anterior no volvió de la papelera"
+                ),
+            }
+        }
+        return Err(e);
+    }
+    observer
+        .on_mutation(&Mutation::Created(&path), &ctx.actor)
+        .await?;
+    ctx.progress.update(|p| p.entries_done = 1);
+    Ok(())
+}
+
+/// Abre, escribe y publica `content` en `path`; el staging se aborta si la
+/// escritura falla.
+async fn write_new(provider: &dyn Provider, path: &VPath, content: Vec<u8>) -> Result<(), Error> {
+    let mut sink = provider.write(path).await?;
+    if let Err(e) = sink.write(bytes::Bytes::from(content)).await {
+        let _ = sink.abort().await;
+        return Err(e);
+    }
+    sink.commit().await
 }
 
 /// Cambia los permisos POSIX de un lote de rutas (#314).
@@ -3757,6 +3893,71 @@ mod tests {
                 .is_err(),
             "nada creado bajo cancelación, ni siquiera vacío"
         );
+    }
+
+    /// Regla 3: `write_task` honra el token cancelado antes de tocar nada, y
+    /// un destino que es un DIRECTORIO no se reemplaza (ADR 0101).
+    #[tokio::test]
+    async fn write_task_honra_el_token_cancelado_y_no_reemplaza_un_directorio() {
+        use crate::journal::Actor;
+        use crate::progress::ProgressReporter;
+        use crate::scheduler::TaskCtx;
+        use norte_proto::{Error, TaskId, TaskKind, VPath};
+        use norte_testkit::MemProvider;
+        use norte_vfs::Provider as _;
+        use std::sync::Arc;
+        use tokio_util::sync::CancellationToken;
+
+        let mem = Arc::new(MemProvider::new());
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Create);
+        let ctx = TaskCtx {
+            cancel,
+            progress: Arc::new(reporter),
+            actor: Actor::Plugin {
+                id: "org.x.y".into(),
+            },
+        };
+        let observer: Arc<dyn crate::MutationObserver> = Arc::new(crate::observer::NoopObserver);
+        let p = VPath::parse("mem:///d/.log").expect("wire");
+        let r = super::write_task(
+            mem.clone(),
+            p.clone(),
+            b"x".to_vec(),
+            super::OnExists::Replace,
+            Arc::clone(&observer),
+            &ctx,
+        )
+        .await;
+        assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+        assert!(
+            (*mem).stat(&p).await.is_err(),
+            "nada creado bajo cancelación"
+        );
+
+        // Un directorio con el nombre del sidecar: `Conflict`, y sigue ahí.
+        let (reporter, _rx) = ProgressReporter::new(TaskId::new(2), TaskKind::Create);
+        let ctx = TaskCtx {
+            cancel: CancellationToken::new(),
+            progress: Arc::new(reporter),
+            actor: Actor::Plugin {
+                id: "org.x.y".into(),
+            },
+        };
+        let dir = VPath::parse("mem:///dir").expect("wire");
+        (*mem).mkdir(&dir).await.expect("mkdir");
+        let r = super::write_task(
+            mem.clone(),
+            dir.clone(),
+            b"x".to_vec(),
+            super::OnExists::Replace,
+            observer,
+            &ctx,
+        )
+        .await;
+        assert!(matches!(r, Err(Error::Conflict { .. })), "{r:?}");
+        assert!((*mem).stat(&dir).await.is_ok(), "el directorio sigue");
     }
 
     /// Observer que dice que no a TODO: lo que se prueba en las dos siguientes

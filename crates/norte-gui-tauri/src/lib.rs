@@ -18,6 +18,7 @@
 //! que pedirle al daemon lo que se le ocurra: la lista de comandos de
 //! [`commands`] es la superficie entera, y su fichero de capacidades no
 //! concede más que escuchar eventos (decisión D11).
+#![forbid(unsafe_code)]
 
 pub mod catalog;
 pub mod commands;

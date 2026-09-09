@@ -15,7 +15,7 @@ cada call site. Ninguno toca el wire; el del visor sube el puente.
 **Tech Stack:** Rust, ratatui (TUI), TypeScript + Tauri (ventana).
 
 **Spec:** este fichero. Los tres son bugs reportados a mano el 2026-09-09;
-no hay spec previa. Las decisiones están en la **ADR 0100**.
+no hay spec previa. Las decisiones están en la **ADR 0102**.
 
 **Estado: ejecutado el 2026-09-09**, en siete commits sobre
 `chore/arbol-tab-y-scroll-del-visor`. Lo que salió distinto del plan:

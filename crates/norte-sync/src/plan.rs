@@ -1135,7 +1135,10 @@ where
     // Ocho argumentos porque un paso tiene ocho cosas que decir. Agruparlos en
     // una struct intermedia solo movería el sitio donde equivocarse de campo, y
     // esto es privado del módulo: no es API que nadie más vaya a llamar.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "privado del módulo, no es API: agrupar en un struct solo movería los campos"
+    )]
     fn push(
         &mut self,
         row: &CompareRow,

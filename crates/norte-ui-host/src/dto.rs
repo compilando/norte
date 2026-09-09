@@ -966,7 +966,10 @@ pub struct ColumnsPickerView {
 // Cuatro bools, cada uno un hecho independiente que se pinta distinto: la
 // etiqueta difiere de lo real, la columna está encendida, su formato lo fija
 // el esquema, y la fila no se puede tocar. Ver `RowView`.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "cuatro estados independientes de una celda; ver `RowView`"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnsPickerRowView {
     /// Su id, tal como viaja a la configuración (`size`, `attr:posix.mode`).
@@ -1250,7 +1253,10 @@ pub struct LayoutPickerView {
 /// fábrica, el nombre difiere del real, comparte nombre con un preset de
 /// teclado, su fichero no parsea— y juntarlas en un enum obligaría a
 /// inventar combinaciones que no existen.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "avisos independientes de una fila; un enum inventaría combinaciones"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayoutRowView {
     /// Su nombre, ya saneado. El nombre REAL son bytes —acaba en
@@ -1348,7 +1354,10 @@ pub struct SearchRowView {
 /// es el mismo modelo que pinta el TUI: la detección de encoding, el salto a
 /// hexadecimal de un binario y el recorte de la ventana visible son suyos, no
 /// del renderer.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "el visor: hex, recorte y ventana son suyos, no del renderer"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerView {
     /// El fichero, ya saneado para pintar.
@@ -1966,7 +1975,10 @@ pub enum SlotState {
 // distinto: el nombre difiere de lo real, está bajo el cursor, está marcada,
 // su insignia difiere de lo real. No es un estado que se pueda plegar — el
 // lint apunta a parámetros y a máquinas de estado, no a una fila de wire.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "fila de wire: insignias independientes, no una máquina de estados"
+)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RowView {
     /// Clave opaca, válida para esta generación.

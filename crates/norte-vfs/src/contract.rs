@@ -40,7 +40,10 @@ macro_rules! provider_contract {
         hostile_names: $hostile:expr $(,)?
     ) => {
         mod $name {
-            #![allow(clippy::redundant_clone)]
+            #![allow(
+                clippy::redundant_clone,
+                reason = "según lo que el caller pase como `factory`/`root`, el clone es redundante o no: un `expect` no puede cumplirse en todas las instanciaciones"
+            )]
 
             // Las expresiones `factory`/`root`/`hostile_names` se evalúan en
             // este módulo: importa el scope del invocante.

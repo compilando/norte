@@ -60,7 +60,10 @@ impl Puerta {
 // de dos variantes dejaría cada test escribiendo `Lazy::Si, BorrarDeVerdad::No`
 // para nada: el nombre del campo ya dice a qué pregunta contesta.
 #[derive(Default)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "hechos independientes: cada campo dice a qué pregunta contesta"
+)]
 pub struct Falso {
     /// Un aviso por cada cosa que el doble ANOTA.
     ///
@@ -393,6 +396,10 @@ pub struct Falso {
     /// Aparte del de arriba, como en el backend de verdad.
     pub fallidas: std::sync::Mutex<
         Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>>,
+    >,
+    /// El canal de `plugin.notice` (ADR 0100), para que el test empuje uno.
+    pub avisos_plugin: std::sync::Mutex<
+        Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PluginNotice>>,
     >,
     /// Los directorios que se pidió crear.
     pub creados: std::sync::Mutex<Vec<VPath>>,
@@ -1498,6 +1505,12 @@ impl HostBackend for Falso {
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>> {
         self.fallidas.lock().expect("fallidas").take()
+    }
+
+    fn take_plugin_notices(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PluginNotice>> {
+        self.avisos_plugin.lock().expect("avisos_plugin").take()
     }
 
     /// #311: apunta el lote de sumas y devuelve una Task ya terminada. El

@@ -1092,7 +1092,41 @@ use crate::{
 /// ignorándolo (ADR 0004) y enseña «el modelo no propuso cambios» donde el
 /// plugin explicó por qué — un mensaje impreciso, no un error. Un cliente
 /// 0.68 contra un daemon 0.67 no negocia.
-pub const PROTOCOL_VERSION: &str = "0.68.0";
+///
+/// # 0.69.0 — los hooks hablan (ADR 0100)
+///
+/// Una notificación: [`PLUGIN_NOTICE`], con [`PluginNotice`]. Un plugin
+/// `hook` observa las entradas que el journal ya registró y puede devolver
+/// una frase para el humano; el daemon la enmascara, la acota y la difunde
+/// solo a humanos, atribuida al plugin. La misma notificación dice cuando el
+/// daemon apagó los hooks de un plugin que falló tres veces seguidas.
+///
+/// Ventana N=0.69.x / N-1=0.68.x. Aditivo: ningún mensaje que existía
+/// cambia. La pérdida, para un **cliente 0.68 contra un daemon 0.69**: la
+/// notificación se descarta (ADR 0004), así que el hook corre —la fuente es
+/// el journal, no el frontend— y su frase no le llega a nadie; y tampoco se
+/// entera de que los hooks de un plugin se apagaron. Un cliente 0.69 contra
+/// un daemon 0.68 no negocia.
+///
+/// # 0.70.0 — la policy le dice no a un sidecar (ADR 0101)
+///
+/// Un valor nuevo en [`PLUGIN_NOTICE_KINDS`]: `effect-denied`. Un hook puede
+/// pedir que el daemon escriba un sidecar junto a lo que cambió; el daemon lo
+/// escribe como actor `plugin` por el policy engine, y si una regla del
+/// humano lo deniega se le dice una vez por plugin. Sin `text`.
+///
+/// En el mismo bump, [`PluginInfo::capabilities`] —lista abierta— deja de
+/// llevar el badge fijo `fs-write` y lleva uno por nombre, `fs-write:<nombre>`
+/// (como `provider:<scheme>` y `location-root:<marca>`).
+///
+/// Ventana N=0.70.x / N-1=0.69.x. Aditivo: la forma de `PluginNotice` no
+/// cambia. La pérdida, para un **cliente 0.69 contra un daemon 0.70**: ve un
+/// `kind` que no conoce y sin `text`, y lo descarta como el contrato manda —
+/// no se entera de que su propia policy está impidiendo que un plugin
+/// escriba; y un cliente que tratara el badge exacto `fs-write` de forma
+/// especial deja de hacerlo. Un cliente 0.70 contra un daemon 0.69 no
+/// negocia.
+pub const PROTOCOL_VERSION: &str = "0.70.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2046,6 +2080,67 @@ pub const PLUGIN_COLUMN_VALUES: &str = "plugin.column_values";
 /// daemon enmascara y acota antes de que cruce. Un daemon 0.66 no negocia
 /// con este cliente.
 pub const PLUGIN_RENAME_PLAN: &str = "plugin.rename_plan";
+/// `plugin.notice` — notificación server→client (0.69.0, ADR 0100): un
+/// plugin `hook` tiene algo que decirle al humano sobre una mutación que el
+/// journal ya registró, o el daemon apagó los hooks de un plugin que falló
+/// tres veces seguidas. Ver [`PluginNotice`].
+///
+/// Se difunde solo a conexiones humanas, como [`CONNECTION_FAILED`]: es una
+/// frase para leer, y una conexión de agente no lee. Un cliente 0.68 la
+/// ignora (notif desconocida, ADR 0004): el hook corrió igual —la fuente es
+/// el journal, no el frontend—, solo que su frase no llegó a nadie.
+pub const PLUGIN_NOTICE: &str = "plugin.notice";
+
+/// El vocabulario CERRADO de [`PluginNotice::kind`], en un sitio, por lo
+/// mismo que [`CONNECTION_FAILURE_REASONS`]: quien emite, quien traduce y los
+/// goldens parten de una lista.
+///
+/// ```
+/// use norte_proto::methods::PLUGIN_NOTICE_KINDS;
+/// assert!(PLUGIN_NOTICE_KINDS.contains(&"notify"));
+/// assert!(PLUGIN_NOTICE_KINDS.contains(&"hooks-disabled"));
+/// assert!(PLUGIN_NOTICE_KINDS.contains(&"effect-denied"));
+/// ```
+pub const PLUGIN_NOTICE_KINDS: &[&str] = &["notify", "hooks-disabled", "effect-denied"];
+
+/// Lo que viaja en [`PLUGIN_NOTICE`]: un aviso atribuido a un plugin.
+///
+/// `text` es TEXTO DE UN TERCERO: el daemon lo enmascara (controles, bidi)
+/// y lo acota antes de que cruce, y el frontend lo pinta como frase de
+/// estado, atribuida a `plugin_id`, y jamás lo interpreta. No lleva la ruta
+/// del fichero que lo motivó: el hook la tuvo, y si quiso nombrarla la puso
+/// en la frase.
+///
+/// Un `kind` desconocido se enseña como `text` si lo hay: eso hace que una
+/// clase FUTURA cuyo texto no deba pintarse tal cual sea un cambio rompedor,
+/// no aditivo.
+///
+/// ```
+/// use norte_proto::methods::PluginNotice;
+/// let n: PluginNotice = serde_json::from_str(
+///     r#"{"plugin_id":"org.norte.rename-log","kind":"hooks-disabled"}"#,
+/// ).unwrap();
+/// assert_eq!(n.text, None);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginNotice {
+    /// El plugin del que viene, tal y como lo lista `plugin.list`.
+    pub plugin_id: String,
+    /// Qué clase de aviso, vocabulario cerrado [`PLUGIN_NOTICE_KINDS`]:
+    /// `"notify"` es una frase del hook (con `text`); `"hooks-disabled"` es
+    /// del daemon —los hooks de ese plugin se apagaron hasta reactivarlo tras
+    /// tres fallos seguidos— y va sin `text`; `"effect-denied"` (0.70.0, ADR
+    /// 0101) es del daemon también: la policy del humano denegó un sidecar
+    /// que el plugin pidió escribir, dicho una vez por plugin. Un valor
+    /// desconocido se enseña como `text` si lo hay y se descarta si no.
+    pub kind: String,
+    /// La frase, ya enmascarada y acotada por el daemon. Ausente para los
+    /// avisos del daemon, que el frontend traduce por `kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
 /// `plugin.get_config` — esquema `[config]` + valores EFECTIVOS de un plugin
 /// (0.28.0, G3c, ADR 0037): un elemento [`PluginConfigKeyWire`] por clave
 /// declarada, esquema y valor ACTUAL juntos (`schema+value together`) — un
@@ -3701,7 +3796,10 @@ mod label_wire {
     // `ref_option` (pedantic) wants `Option<&T>` here, but serde's `with =`
     // codegen calls this with `&self.label` — the field's actual type,
     // `&Option<Vec<u8>>` — not something this function gets to choose.
-    #[allow(clippy::ref_option)]
+    #[expect(
+        clippy::ref_option,
+        reason = "serde `with` fija la firma `&Option<Vec<u8>>`"
+    )]
     pub(super) fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
         match v {
             Some(bytes) => s.serialize_str(&encode_bytes_b64(bytes)),

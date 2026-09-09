@@ -21,6 +21,7 @@
 // que es el perfil al que apunta la convención de `missing_docs` aunque la
 // regla nombre proto/VFS/SDK. Y ojo: `just t` no corre doctests y `just c` no
 // comprueba enlaces intra-doc, así que lo de aquí solo se verifica en `docs`.
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod action;

@@ -434,6 +434,13 @@ status-degraded-subject = { $banner } — scheme { $scheme }, host { $host } ({ 
 degraded-reason-ftp-plaintext = FTP without encryption
 degraded-reason-tls-auth-rejected = the server rejected TLS
 degraded-reason-unknown = unknown reason
+# A `plugin.notice` (0.69.0, ADR 0100): what a hook plugin said about a
+# mutation the journal recorded, attributed to the plugin — and the daemon
+# saying it switched a plugin's hooks off. `$plugin` and `$text` are wire
+# text, already masked.
+msg-plugin-notice = ⚑ { $plugin }: { $text }
+msg-plugin-hooks-disabled = ⚑ { $plugin }: its hooks were switched off after three failures in a row — disable and re-enable it in the extension manager to try again
+msg-plugin-effect-denied = ⚑ { $plugin }: your policy denied a file this plugin asked to write (rule for actor "plugin"); said once while norte runs
 status-connection-failed = ✗ could not connect
 status-failed-subject = { $banner } — scheme { $scheme }, host { $host } ({ $reason })
 failed-reason-secret-missing = the secret is missing

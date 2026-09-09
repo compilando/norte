@@ -1,0 +1,21 @@
+[plugin]
+id = "org.norte.rename-log"
+name = "Rename log"
+publisher = "norte"
+version = "0.1.0"
+category = "hook"
+description = "After a rename lands in the journal, says how many files it touched and keeps a .norte-renames.log next to them."
+
+# One event. A hook only ever sees what the journal already recorded — there
+# is no `before-*` — and the only thing it can do about it is tell you.
+[[contributions.hook]]
+on = "after-renamed"
+
+# `location = "read"`: a token for the parent directory of each event, used
+# only to read the previous log so the new one can carry it forward.
+# `fs-write`: the ONE file this hook may ask norte to write, next to what was
+# renamed. norte writes it as a plugin actor, through the policy engine and the
+# journal; a rule `actor = "plugin", action = "deny"` stops it (ADR 0101).
+[capabilities]
+location = "read"
+fs-write = { sidecar = [".norte-renames.log"] }

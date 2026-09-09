@@ -920,7 +920,10 @@ async fn cancelar_el_undo_de_un_lote_lo_deja_terminable() {
     // Latencia por op → ventana determinista para cancelar antes de terminar.
     h.mem
         .faults()
-        .set_latency_per_op(Some(std::time::Duration::from_millis(40)));
+        // No se puede pausar el reloj aquí: el journal sqlx agota el pool
+        // (`PoolTimedOut`) cuando tokio adelanta el tiempo. Ventana ancha en
+        // su lugar: 200 ms por op frente a 15 ms de espera, 50x de margen.
+        .set_latency_per_op(Some(std::time::Duration::from_millis(200)));
     let (handle, report) = h
         .engine
         .undo_session(Actor::User)

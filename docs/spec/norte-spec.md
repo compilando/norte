@@ -65,15 +65,26 @@ Each crate has one responsibility, a small public API, and its own tests.
 | `norte-vfs-local` | Platform-specific local filesystem provider. |
 | `norte-vfs-sftp` | SSH/SFTP provider. |
 | `norte-vfs-object` | Feature-gated object-storage backends, starting with S3. |
-| `norte-vfs-archive` | ZIP and TAR archives as read-only virtual directories. |
+| `norte-vfs-archive` | ZIP, TAR and TAR.GZ archives as read-only virtual directories, nested (ADR 0018), plus the pure format writers the core's pack operation drives (ADR 0060). |
+| `norte-vfs-rar` | Read-only RAR by delegation to an installed `unrar`/`7z` (ADR 0056). |
+| `norte-compare` | Directory comparison engine: pairing key and criterion cascade (ADR 0048). |
+| `norte-sync` | One-way synchronisation planner over comparison rows (ADR 0049). |
+| `norte-config` | Layered configuration, profiles (ADR 0079), persistence and live reload. |
+| `norte-connect` | Remote connections and secret resolution; providers never see a secret (ADR 0015). |
 | `norte-index` | SQLite metadata, search, tags, and embeddings. |
 | `norte-plugin-host` | WASM Component Model runtime, WIT interfaces, and permissions. |
 | `norte-ai` | Model-provider abstraction and implementations. |
 | `norte-mcp` | MCP bridge between agent clients and the daemon. |
-| `norte-core` | Sessions, scheduler, policy, journal, configuration, and daemon. |
+| `norte-core` | Sessions, scheduler, policy, journal, and daemon. |
+| `norte-client` | The daemon client SDK: transport, framed JSON-RPC, reconnection (ADR 0066). Depends on the protocol and runtime crates only. |
 | `norte-frontend` | Presentation-independent state shared by official frontends. |
+| `norte-help` | Help corpus and markdown-lite model for every frontend (ADR 0040). |
+| `norte-encoding` | Text encoding detection and decoding. |
+| `norte-theme` | Semantic theme roles, true-colour values and terminal fallbacks. |
+| `norte-i18n` | Embedded Fluent catalogues, English and Spanish, with parity tests. |
 | `norte-tui` | ratatui terminal frontend. |
-| `norte-gui` | GPUI graphical frontend. |
+| `norte-ui-host` | The semantic state of a graphical frontend, over the SDK and `norte-frontend`; knows no painting toolkit and not the core (ADR 0066). |
+| `norte-gui-tauri` | The reference graphical renderer: a Tauri 2 webview that paints `norte-ui-host` and decides nothing (ADR 0067). |
 | `norte-cli` | Headless command-line client. |
 | `norte-testkit` | Memory providers, fixtures, and proptest strategies. |
 
@@ -127,8 +138,10 @@ preservation, collision policies, retry with backoff, and resumable transfers.
 Cross-provider moves are copy, verify, then delete.
 
 Archives use compound schemes and a `!` boundary between the container and
-internal path. ZIP, TAR, and TAR.GZ are currently read-only. Archive nesting and
-writes remain later work.
+internal path. Reading inside ZIP, TAR and TAR.GZ is read-only and nests (ADR
+0018). Writing an archive is not writing into one: pack, test, split and combine
+are core operations on the container, journalled like any mutation (ADR 0060,
+ADR 0078).
 
 Local providers use the native trash facility. Remote providers may opt into a
 logical `.norte-trash/`; otherwise a frontend must obtain explicit confirmation
@@ -292,8 +305,10 @@ Layers apply from lowest to highest precedence: compiled defaults, system, user,
 project-local `.norte/`, and CLI flags. Project-local configuration is opt-in
 where it can execute code.
 
-TOML files separate general configuration, keymaps, themes, openers, AI,
-policy, and connections. Connection files contain references, never secrets.
+A profile is one more layer directory under the user's configuration,
+`profiles/<name>/`, that declares and never executes (ADR 0079). TOML files
+separate general configuration, keymaps, themes, openers, AI, policy, and
+connections. Connection files contain references, never secrets.
 Published JSON Schemas support validation and editor completion. Hot reload
 retains the last complete valid configuration on error.
 
@@ -323,7 +338,7 @@ and provider connectivity.
 | **MT: themes** | Shared semantic themes, terminal fallback, presets, and hot reload. | Rich TUI themes use the same model prepared for the GUI. |
 | **M4: plugins and AI** | WASM previewers/commands, Lua, model providers, AI rename, and semantic search. | A third party can ship a plugin without changing the core. |
 | **M3: governed agents** | MCP bridge, scopes, policy, journal, undo, and audit export. | An agent manages a real directory under `ask` policy with full-session undo. |
-| **M5: GUI** | Measured GPUI spike followed by the first graphical frontend. | GUI and TUI use the same daemon session simultaneously. |
+| **M5: GUI** | GPUI spike measured (ADR 0027) and retired (ADR 0065); a Rust UI host with a Tauri renderer over it (ADR 0066/0067). | GUI and TUI use the same daemon session simultaneously. |
 
 ADR 0020 reordered the work after M2 to themes, plugins, governed agents, then
 GUI. The scope and exit criteria did not change.
@@ -333,7 +348,9 @@ GUI. The scope and exit criteria did not change.
 1. `norte` remains the working name pending a final branding decision.
 2. Protocol, VFS, testkit, and plugin SDK crates use dual MIT/Apache-2.0.
    The core and official frontends use AGPL-3.0-only.
-3. GPUI is the selected GUI toolkit after the measured spike in ADR 0027.
+3. GPUI was selected after the measured spike in ADR 0027 and retired in ADR
+   0065. The graphical frontend is a Rust UI host (`norte-ui-host`) painted by
+   a Tauri 2 webview that decides nothing (ADR 0066, ADR 0067).
 4. SQLite with FTS5 is the first index and storage engine. Tantivy remains a
    possible upgrade if a corpus above one million files demonstrates a need.
 5. RAR remains read-only through optional delegation to an installed `unrar` or
@@ -349,7 +366,8 @@ GUI. The scope and exit criteria did not change.
   VFS providers, with encoding-aware text matching, and expose results as an
   operable virtual pane.
 - **Directory comparison and synchronization:** compare panes by metadata or
-  hash and produce an approved one-way or two-way operation plan.
+  hash and produce an approved one-way or two-way operation plan. **Built**
+  one-way (`norte-compare`, `norte-sync`, ADR 0048/0049); two-way remains.
 - **Batch rename:** a transactional executor for a batch of renames inside one
   directory — whole-plan collision preview, cycle-safe ordering so that a
   permutation succeeds, and one undoable unit. Separately, the rule sets that
