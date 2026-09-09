@@ -585,6 +585,14 @@ body {
   opacity: 0.8;
 }
 
+/* El cuerpo y la barra vertical, en una fila. `min-height: 0` es lo que deja
+   que el `pre` se encoja dentro del flex en vez de empujar la caja. */
+.viewer-canvas {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
 .viewer-body {
   flex: 1 1 auto;
   margin: 0;
@@ -592,6 +600,40 @@ body {
   overflow: hidden;
   white-space: pre;
   font: inherit;
+  min-width: 0;
+}
+
+/* Las barras del visor: INDICADORES, no controles. El host manda solo la
+   ventana visible, así que no hay nada que el scroll del navegador pueda
+   mover; lo que falta es decir cuánto hay y por dónde vas. */
+.viewer-bar {
+  position: relative;
+  background: var(--status-bg);
+}
+
+.viewer-bar-v {
+  flex: 0 0 8px;
+}
+
+.viewer-bar-h {
+  flex: 0 0 8px;
+}
+
+.viewer-thumb {
+  position: absolute;
+  background: var(--border-focus);
+}
+
+.viewer-bar-v .viewer-thumb {
+  left: 2px;
+  right: 2px;
+  min-height: 8px;
+}
+
+.viewer-bar-h .viewer-thumb {
+  top: 2px;
+  bottom: 2px;
+  min-width: 8px;
 }
 
 .hexview {

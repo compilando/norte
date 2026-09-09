@@ -268,6 +268,11 @@
     "generation": 6,
     "row": 2
   },
+  "viewer_scroll": {
+    "action": "viewer_scroll",
+    "cols": -8,
+    "lines": 3
+  },
   "window_focus": {
     "action": "window_focus",
     "focused": false

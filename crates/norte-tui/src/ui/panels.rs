@@ -17,6 +17,65 @@ use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
 
+/// Las dos barras de scroll de un visor enmarcado, sobre sus bordes.
+///
+/// El visor decía «1/4813» en la barra de estado y nada más, así que el hecho
+/// de que hubiera más ARRIBA o a la DERECHA solo se sabía contando. La
+/// horizontal importa el doble: el visor no envuelve, y un fichero recortado
+/// por la derecha se lee como un fichero corto.
+///
+/// `area` es el marco COMPLETO; las barras se pintan encima de sus bordes y
+/// abarcan solo el interior, para que la posición del pulgar coincida con la
+/// primera y la última fila de texto. Ninguna se pinta cuando cabe todo
+/// ([`super::help::render_scrollbar`]).
+///
+/// `con_horizontal` es `false` en el visor ACOPLADO: su borde de abajo lleva la
+/// línea de estado —encoding, EOL, pérdidas, truncado—, que es el único sitio
+/// donde ese hueco dice QUÉ se está viendo. Taparla con una barra cambiaría un
+/// dato por una insinuación.
+fn barras_del_visor(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    viewer: &crate::viewer::Viewer,
+    theme: &TuiTheme,
+    con_horizontal: bool,
+) {
+    // Sin sitio para el marco no hay interior sobre el que informar.
+    if area.width < 3 || area.height < 3 {
+        return;
+    }
+    let alto = usize::from(area.height - 2);
+    let ancho = usize::from(area.width - 2);
+    super::help::render_scrollbar(
+        frame,
+        Rect {
+            x: area.x + area.width - 1,
+            y: area.y + 1,
+            width: 1,
+            height: area.height - 2,
+        },
+        theme,
+        viewer.total_rows(),
+        viewer.scroll,
+        alto,
+    );
+    if con_horizontal {
+        super::help::render_hscrollbar(
+            frame,
+            Rect {
+                x: area.x + 1,
+                y: area.y + area.height - 1,
+                width: area.width - 2,
+                height: 1,
+            },
+            theme,
+            viewer.max_cols(),
+            viewer.hscroll(),
+            ancho,
+        );
+    }
+}
+
 /// Viewer a pantalla completa: contenido + status propia (encoding, EOL,
 /// pérdidas, truncado — el usuario SIEMPRE sabe qué mira, spec §6).
 pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App) {
@@ -98,6 +157,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
         None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
     };
     frame.render_widget(Paragraph::new(lines).block(block), rows[0]);
+    barras_del_visor(frame, rows[0], viewer, &app.theme, true);
     let pos = format!(
         "{}/{}",
         (viewer.scroll + 1).min(viewer.total_rows().max(1)),
@@ -209,6 +269,8 @@ pub(crate) fn draw_preview(
         None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
     };
     frame.render_widget(Paragraph::new(lines).block(block), area);
+    // Solo la vertical: el borde de abajo es de la línea de estado.
+    barras_del_visor(frame, area, viewer, &app.theme, false);
 }
 
 /// El sidebar de sitios (L3): discos y favoritos en un panel que se queda.

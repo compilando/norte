@@ -703,6 +703,18 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     // #324: la barra de paneles, por el mismo motivo. Los paneles laterales
     // nacieron mudos al ratón una vez (#290) y no se repite: una fila de
     // botones que no se pueden pulsar no es una fila de botones.
+    // La rueda sobre el VISOR a pantalla completa, antes del corte de los
+    // overlays: el visor es uno de ellos, así que hasta ahora rodar sobre un
+    // fichero abierto no hacía absolutamente nada. Es el gesto más obvio que
+    // tiene un visor, y lo único que hay debajo es un listado que no se ve.
+    if let Some(v) = app.viewer.as_mut() {
+        match ev.kind {
+            MouseEventKind::ScrollUp => v.scroll_up(WHEEL_ROWS),
+            MouseEventKind::ScrollDown => v.scroll_down(WHEEL_ROWS),
+            _ => {}
+        }
+        return After::Nothing;
+    }
     if overlay_open(app) {
         return After::Nothing;
     }
@@ -795,8 +807,16 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     let m = mods(ev.modifiers);
     app.mouse.last_mods = m;
     match ev.kind {
-        MouseEventKind::ScrollUp => scroll(app, hit, false),
-        MouseEventKind::ScrollDown => scroll(app, hit, true),
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            let abajo = matches!(ev.kind, MouseEventKind::ScrollDown);
+            // El visor ACOPLADO primero: su hueco no es un listado, así que el
+            // hit-test devuelve `None` y la rueda se perdía. Un panel que se
+            // pinta y no se puede rodar es la misma avería que un panel que no
+            // se puede pulsar (#226, #290).
+            if !rueda_en_preview(app, ev.column, ev.row, abajo) {
+                scroll(app, hit, abajo);
+            }
+        }
         MouseEventKind::Down(MouseButton::Left) => return press(app, hit, m, now),
         MouseEventKind::Drag(MouseButton::Left) => {
             // Una motion fuera de toda fila NO se reporta: pasar por encima
@@ -841,6 +861,35 @@ fn enfocar_lo_pulsado(app: &mut App, col: u16, row: u16) {
         return;
     };
     app.focus_slot(slot);
+}
+
+/// La rueda sobre un hueco de visor ACOPLADO: lo desplaza y dice que sí.
+///
+/// `false` cuando bajo el puntero no hay uno, y entonces la rueda sigue su
+/// camino normal hacia el listado.
+fn rueda_en_preview(app: &mut App, col: u16, row: u16, abajo: bool) -> bool {
+    let Some(slot) = app
+        .mouse
+        .slots
+        .iter()
+        .find(|s| s.contains(col, row))
+        .map(|s| s.slot)
+    else {
+        return false;
+    };
+    let Some(v) = app
+        .panes
+        .preview_mut(slot)
+        .and_then(crate::preview::Preview::viewer_mut)
+    else {
+        return false;
+    };
+    if abajo {
+        v.scroll_down(WHEEL_ROWS);
+    } else {
+        v.scroll_up(WHEEL_ROWS);
+    }
+    true
 }
 
 /// El `Spot` de un hit que cayó sobre una fila de verdad.

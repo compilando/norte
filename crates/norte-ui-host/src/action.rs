@@ -197,6 +197,23 @@ pub enum UiAction {
         /// Líneas, negativo hacia arriba.
         delta: i64,
     },
+    /// Desplaza el visor a pantalla completa: la RUEDA sobre él (puente 59).
+    ///
+    /// Las teclas no pasan por aquí —van por el keymap del visor—, igual que
+    /// en [`UiAction::PreviewScroll`]. Existe porque una rueda no es una
+    /// tecla: el renderer sabe cuántas líneas significa un giro en su
+    /// plataforma, y fabricar pulsaciones de flecha para expresarlo dejaría el
+    /// gesto atado a que alguien no reatara esa flecha.
+    ///
+    /// Los dos ejes en UNA acción: la rueda con `shift` desplaza a lo ancho, y
+    /// separarlos serían dos acciones que siempre se mandan por el mismo
+    /// gesto.
+    ViewerScroll {
+        /// Líneas, negativo hacia arriba.
+        lines: i64,
+        /// Columnas, negativo hacia la izquierda.
+        cols: i64,
+    },
     /// Vuelve a pegar el registro al final y sigue lo que llega.
     LogFollow,
     /// Recorre la FUENTE del registro: los dos → esta ventana → el daemon

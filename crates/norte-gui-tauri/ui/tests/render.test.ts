@@ -681,6 +681,8 @@ describe("el visor", () => {
       truncated: true,
       total_rows: 120,
       first_line: 0,
+      total_cols: 0,
+      first_col: 0,
       lines: ["primera", "segunda"],
       preview_by: "",
       preview_lossy: false,
@@ -699,6 +701,57 @@ describe("el visor", () => {
     expect(enviadas.some((a) => a.action === "set_viewer_cols")).toBe(true);
   });
 
+  it("dice que hay más a lo ancho, y la rueda lo mueve", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    const base = {
+      path_display: "⟨file⟩/casa/pagina.html",
+      path_hostile: false,
+      encoding: "UTF-8",
+      eol: "lf",
+      hex: false,
+      forced: false,
+      had_errors: false,
+      truncated: false,
+      total_rows: 2,
+      first_line: 0,
+      lines: ["<html>", "</html>"],
+      preview_by: "",
+      preview_lossy: false,
+      image: null,
+      image_refused: "",
+      styled: [],
+    };
+
+    // Cabe a lo ancho: ninguna barra que arrastrar.
+    v.viewer = { ...base, total_cols: 0, first_col: 0 };
+    screen.paint(v);
+    expect(document.querySelector(".viewer-bar-h")).toBe(null);
+
+    // No cabe: barra, y con la posición dentro.
+    v.viewer = { ...base, total_cols: 800, first_col: 400 };
+    screen.paint(v);
+    const barra = document.querySelector(".viewer-bar-h") as HTMLElement;
+    expect(barra).not.toBe(null);
+    expect(barra.getAttribute("aria-valuenow")).toBe("400");
+    expect(barra.getAttribute("aria-orientation")).toBe("horizontal");
+
+    // Y la rueda desplaza por el HOST: con `shift`, de lado.
+    const caja = document.querySelector(".viewer") as HTMLElement;
+    caja.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+    const abajo = enviadas.find((a) => a.action === "viewer_scroll");
+    expect(abajo).toBeDefined();
+    expect(abajo?.action === "viewer_scroll" && abajo.lines > 0).toBe(true);
+    expect(abajo?.action === "viewer_scroll" && abajo.cols === 0).toBe(true);
+
+    caja.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: 120, shiftKey: true, bubbles: true }),
+    );
+    const lado = enviadas.filter((a) => a.action === "viewer_scroll").at(-1);
+    expect(lado?.action === "viewer_scroll" && lado.lines === 0).toBe(true);
+    expect(lado?.action === "viewer_scroll" && lado.cols > 0).toBe(true);
+  });
+
   it("un binario se pinta como hexadecimal y lo dice", () => {
     const { screen } = montar();
     const v = vista({});
@@ -713,6 +766,8 @@ describe("el visor", () => {
       truncated: false,
       total_rows: 1,
       first_line: 0,
+      total_cols: 0,
+      first_col: 0,
       lines: ["00000000  00 01 02 ff"],
       preview_by: "",
       preview_lossy: false,
@@ -741,6 +796,8 @@ describe("el visor", () => {
       truncated: false,
       total_rows: 2,
       first_line: 0,
+      total_cols: 0,
+      first_col: 0,
       lines: ["fn main", "plano"],
       preview_by: "via Syntax",
       preview_lossy: false,
@@ -796,6 +853,8 @@ describe("el visor", () => {
       truncated: false,
       total_rows: 1,
       first_line: 0,
+      total_cols: 0,
+      first_col: 0,
       lines: ["<script>alert(1)</script>"],
       preview_by: "",
       preview_lossy: false,
@@ -1027,6 +1086,8 @@ describe("la imagen del visor", () => {
     truncated: false,
     total_rows: 1,
     first_line: 0,
+    total_cols: 0,
+    first_col: 0,
     lines: ["00000000  89 50 4e 47"],
     preview_by: "",
     preview_lossy: false,
@@ -1123,6 +1184,8 @@ describe("la preview de un plugin en el visor", () => {
       truncated: false,
       total_rows: 2,
       first_line: 0,
+      total_cols: 0,
+      first_col: 0,
       lines: ["Informe anual"],
       preview_by: "via PDF de ACME",
       preview_lossy: true,
@@ -1157,6 +1220,8 @@ describe("la preview de un plugin en el visor", () => {
       truncated: false,
       total_rows: 1,
       first_line: 0,
+      total_cols: 0,
+      first_col: 0,
       lines: ["x"],
       preview_by: "via PDF de ACME",
       preview_lossy: true,
@@ -1190,6 +1255,8 @@ describe("la preview de un plugin en el visor", () => {
       truncated: false,
       total_rows: 1,
       first_line: 0,
+      total_cols: 0,
+      first_col: 0,
       lines: ["hola"],
       preview_by: "",
       preview_lossy: false,
@@ -2490,6 +2557,8 @@ describe("los huecos que no son listados", () => {
           truncated: false,
           total_rows: 2,
           first_line: 0,
+      total_cols: 0,
+      first_col: 0,
           lines: ["Título", "texto"],
           preview_by: "via Markdown",
           preview_lossy: false,
@@ -2541,6 +2610,8 @@ describe("los huecos que no son listados", () => {
           truncated: false,
           total_rows: 200,
           first_line: 0,
+      total_cols: 0,
+      first_col: 0,
           lines: ["una", "dos"],
           preview_by: "",
           preview_lossy: false,

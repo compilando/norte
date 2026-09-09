@@ -3625,6 +3625,7 @@ impl Estado {
             UiAction::LogSetFilter { filter } => self.filtro_de_registro(filter),
             UiAction::LogScroll { delta } => self.desplazar_registro(*delta),
             UiAction::PreviewScroll { slot_id, delta } => self.desplazar_preview(*slot_id, *delta),
+            UiAction::ViewerScroll { lines, cols } => self.desplazar_visor(*lines, *cols),
             UiAction::LogFollow => self.seguir_registro(),
             UiAction::LogCycleSource => self.fuente_de_registro(),
             UiAction::LogSetVisibleRange { rows } => self.filas_de_registro(*rows),

@@ -507,6 +507,8 @@ impl Estado {
             truncated: v.truncated,
             total_rows: v.total_rows() as u64,
             first_line: v.scroll as u64,
+            total_cols: v.max_cols() as u64,
+            first_col: v.hscroll() as u64,
             lines: v.rows(alto).into_iter().map(clamp_display).collect(),
             // El nombre ya viene enmascarado del modelo compartido; se acota
             // aquí como todo lo que cruza.

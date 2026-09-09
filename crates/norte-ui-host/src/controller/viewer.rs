@@ -97,6 +97,37 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
+    /// La RUEDA sobre el visor a pantalla completa (puente 59).
+    ///
+    /// Los dos ejes, porque un solo gesto los produce: la rueda a secas baja,
+    /// con `shift` va de lado. Un parche del visor y no una foto, por lo mismo
+    /// que las teclas: la foto entera mandaría, por cada giro, las filas
+    /// visibles de todos los listados que hay debajo y que nadie ve.
+    pub(super) fn desplazar_visor(
+        &mut self,
+        lineas: i64,
+        columnas: i64,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(v) = self.visor.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let pasos = |n: i64| usize::try_from(n.abs()).unwrap_or(usize::MAX);
+        if lineas < 0 {
+            v.scroll_up(pasos(lineas));
+        } else {
+            v.scroll_down(pasos(lineas));
+        }
+        if columnas < 0 {
+            v.scroll_left(pasos(columnas));
+        } else {
+            v.scroll_right(pasos(columnas));
+        }
+        let cambio = ViewChange::Viewer {
+            viewer: self.vista_visor(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
     /// Guarda el catálogo de atributos de un esquema y repinta.
     ///
     /// Manda una FOTO y no un parche: el catálogo cambia cómo se leen celdas
