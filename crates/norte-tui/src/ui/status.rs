@@ -46,7 +46,7 @@ pub(crate) fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
 ///
 /// Es la zona pulsable de la barra de estado: un clic encima abre la ayuda
 /// en la página que explica qué significa. Sale de la MISMA composición que
-/// pinta la línea ([`compose`]), así que solo existe cuando el indicador está
+/// pinta la línea (`compose`), así que solo existe cuando el indicador está
 /// de verdad en pantalla — con un mensaje, una espera o una búsqueda viva
 /// delante, la línea es otra y no hay nada que pulsar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
