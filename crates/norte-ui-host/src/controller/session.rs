@@ -24,6 +24,13 @@ impl Estado {
     /// - **Qué NO se sobrescribe.** Si lo guardado es de un esquema más
     ///   nuevo, se arranca de la configuración y se deja quieto: arrancar sin
     ///   sesión es recuperable; machacar la de una versión futura no.
+    ///
+    /// Y la DISPOSICIÓN guardada bajo la clave de este perfil se pone antes
+    /// que los huecos, por encima de la de `--layout` y la configuración —el
+    /// mismo orden que el terminal: la sesión es más específica que las dos,
+    /// porque es cómo estaba la pantalla al cerrar—. Es la D8 de la ADR 0058:
+    /// cierra un frontend, abre el otro, sigue donde estabas. Hasta aquí la
+    /// ventana no la leía, así que alternar un panel duraba hasta cerrar.
     pub(super) async fn leer_sesion(&mut self, backend: &dyn HostBackend) {
         let Ok((sesion, owner)) = backend.session_get().await else {
             // Sin sesión legible se arranca igual: es memoria de dónde
@@ -40,13 +47,186 @@ impl Estado {
             // Nadie la ha escrito todavía.
             return;
         }
-        let Ok(body) = serde_json::from_value::<norte_frontend::session::SessionBody>(sesion.body)
+        // Por el constructor que VALIDA, como el terminal, y no por serde a
+        // secas: un cuerpo cuya disposición no tenga listado parsea igual, y
+        // ponerla dejaría `huecos` vacío y la siguiente tecla en el `expect`
+        // de `hueco()` (#242). Un cuerpo que no vale se deja quieto y se
+        // arranca de la configuración, como uno del futuro.
+        let Ok(body) =
+            norte_frontend::session::SessionBody::from_value(sesion.version, &sesion.body)
         else {
+            tracing::warn!("la sesión guardada no se entiende: se arranca de la configuración");
             return;
         };
+        if let Some(arbol) = body.layouts.get(&self.clave_de_sesion()).cloned() {
+            // Sin despertar nada: los listados se piden después, una vez la
+            // sesión haya dicho dónde estaba cada uno. Despertarlos aquí
+            // pediría el directorio del arranque para tirarlo un instante
+            // después.
+            self.poner_arbol(arbol, None);
+        }
         self.aplicar_sesion(&body);
         self.sesion.conocidos = body.slots.keys().copied().collect();
+        for (id, estado) in &body.slots {
+            self.sesion.touched.insert(*id, estado.touched_ms);
+        }
         self.sesion.leida = body;
+    }
+
+    /// Bajo qué clave de `layouts` va la pantalla de esta ventana.
+    ///
+    /// La misma que el terminal (`App::session_key`): el nombre del perfil
+    /// activo, o `default` sin ninguno. Un perfil cuyo directorio no sea UTF-8
+    /// cae a `default`, que es lo que el selector avisa con `carries_state`.
+    pub(super) fn clave_de_sesion(&self) -> String {
+        self.perfil_activo
+            .as_ref()
+            .and_then(|n| n.to_str())
+            .filter(|s| !s.is_empty())
+            .map_or_else(|| "default".to_owned(), ToOwned::to_owned)
+    }
+
+    /// Mira si la pantalla cambió desde lo último escrito y, si cambió, la
+    /// escribe FUERA del actor. Es el tic de la sesión, y también lo que
+    /// cada cambio del árbol llama sin esperar al tic.
+    ///
+    /// Una ventana suelta no escribe; una sesión del futuro no se machaca; y
+    /// con un diálogo delante no se guarda lo que se está decidiendo, como en
+    /// el terminal. Con un `put` en vuelo se espera a que conteste: dos
+    /// escrituras cruzadas con la misma revisión son un conflicto seguro.
+    pub(super) fn empujar_sesion(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        if !self.sesion.owner
+            || self.sesion.futuro
+            || self.sesion.en_vuelo.is_some()
+            || !self.dialogos.is_empty()
+        {
+            return;
+        }
+        let ahora = u64::try_from(ahora_ms()).unwrap_or(0);
+        let mut body = self.capturar_sesion();
+        if self.sesion.sin_historial {
+            body.degrade_for_size();
+        }
+        let vivos: Vec<SlotId> = self.huecos.keys().map(|id| SlotId(*id)).collect();
+        let Some(sellados) = self.sesion.policy.prepare(&mut body, &vivos, ahora) else {
+            return;
+        };
+        for SlotId(id) in sellados {
+            self.sesion.touched.insert(id, ahora);
+        }
+        let Ok(json) = serde_json::to_value(&body) else {
+            return;
+        };
+        let cuerpo = std::sync::Arc::new(body);
+        self.sesion.en_vuelo = Some(std::sync::Arc::clone(&cuerpo));
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let revision = self.sesion.revision;
+        tokio::spawn(async move {
+            let res = backend
+                .session_put(norte_frontend::session::SCHEMA_VERSION, revision, json)
+                .await;
+            let _ = buzon
+                .send(Mensaje::SesionPuesta(Box::new((res, cuerpo))))
+                .await;
+        });
+    }
+
+    /// El `session.put` del tic contestó.
+    ///
+    /// Cuatro respuestas, y cada una dice algo distinto: entró, y lo mandado
+    /// pasa a ser lo último escrito; otra ventana escribió en medio, y se
+    /// relee para escribir sobre su revisión; el cuerpo no cabe, y desde
+    /// ahora va sin historial; esta ventana ya no es la dueña, y lo dice el
+    /// indicador. Lo demás se apunta y se reintenta en el tic siguiente.
+    pub(super) fn sesion_puesta(
+        &mut self,
+        res: Result<u64, Error>,
+        cuerpo: std::sync::Arc<norte_frontend::session::SessionBody>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.sesion.en_vuelo = None;
+        match res {
+            Ok(rev) => {
+                self.sesion.revision = rev;
+                self.sesion.policy.sent(cuerpo);
+                Vec::new()
+            }
+            Err(Error::Conflict { .. }) => {
+                self.sesion.policy.resend();
+                let backend = Arc::clone(backend);
+                let buzon = buzon.clone();
+                // La relectura vuelve por el buzón como todo lo demás, y
+                // mientras vuela no se escribe: lo que conflictó sigue
+                // pendiente hasta saber sobre qué revisión va.
+                self.sesion.en_vuelo = Some(cuerpo);
+                tokio::spawn(async move {
+                    let res = backend.session_get().await;
+                    let _ = buzon.send(Mensaje::SesionReleida(res)).await;
+                });
+                Vec::new()
+            }
+            Err(Error::LimitExceeded { .. }) => {
+                self.sesion.policy.resend();
+                self.sesion.sin_historial = true;
+                Vec::new()
+            }
+            Err(Error::PermissionDenied) => {
+                self.sesion.policy.resend();
+                self.sesion.owner = false;
+                let cambio = self.cambio_de_banners();
+                vec![self.parche(vec![cambio])]
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "la sesión no se pudo escribir; se reintenta");
+                self.sesion.policy.resend();
+                Vec::new()
+            }
+        }
+    }
+
+    /// La sesión releída tras un conflicto: se toma su revisión y se conserva
+    /// lo ajeno, SIN aplicarla a la pantalla —esta ventana es la que acaba de
+    /// moverse, y lo suyo va encima en el siguiente tic.
+    ///
+    /// La revisión solo avanza si el cuerpo se entiende: avanzar con un
+    /// cuerpo que no se pudo leer escribiría lo LEÍDO ANTES sobre una
+    /// revisión que ya no lo refleja, y eso pisa lo que la otra ventana
+    /// acaba de guardar. Sin cuerpo, el siguiente tic vuelve a conflictar y a
+    /// releer, que es lo honesto. Un cuerpo del FUTURO apaga la escritura del
+    /// todo, como al arrancar.
+    pub(super) fn sesion_releida(
+        &mut self,
+        res: Result<(norte_proto::methods::Session, bool), Error>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.sesion.en_vuelo = None;
+        let Ok((sesion, owner)) = res else {
+            return Vec::new();
+        };
+        let era_duena = self.sesion.owner;
+        self.sesion.owner = owner;
+        match norte_frontend::session::SessionBody::from_value(sesion.version, &sesion.body) {
+            Ok(body) => {
+                self.sesion.revision = sesion.revision;
+                self.sesion.leida = body;
+            }
+            Err(norte_frontend::session::SessionError::FromTheFuture { .. }) => {
+                self.sesion.futuro = true;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "la sesión releída no se entiende; se reintenta");
+            }
+        }
+        if era_duena == owner && !self.sesion.futuro {
+            return Vec::new();
+        }
+        let cambio = self.cambio_de_banners();
+        vec![self.parche(vec![cambio])]
     }
 
     /// Los huecos que `[profile.start]` siembra, ya filtrados a los que ESTA
@@ -140,20 +320,20 @@ impl Estado {
     /// Las MARCAS no entran: son una selección de trabajo, no un sitio donde
     /// estabas, y restaurarlas haría que una ventana nueva abriese con media
     /// docena de ficheros elegidos que nadie eligió.
-    pub(super) fn capturar_sesion(&self, ahora: u64) -> norte_frontend::session::SessionBody {
+    pub(super) fn capturar_sesion(&self) -> norte_frontend::session::SessionBody {
         // Se parte de lo LEÍDO y se pisa solo lo propio: los huecos de otro
-        // frontend y las disposiciones guardadas siguen ahí.
+        // frontend y las disposiciones de los OTROS perfiles siguen ahí.
         //
-        // Y `layouts` NO se toca. Hasta esta fase `self.arbol` era constante,
-        // así que escribirlo era escribir lo que se había leído; ahora cambia
-        // con `layout.pick` y con cada `Ctrl+→`, y el TUI adopta
-        // `layouts["default"]` al arrancar. Curiosear un minuto en el selector
-        // le cambiaba el arranque al TUI, que es lo que el rustdoc del campo
-        // prohíbe por su nombre (ADR 0058 D5) y lo que
-        // `aplicar_disposicion_elegida` promete no hacer: «se aplica para ESTA
-        // ventana». Era verdad para la configuración y falso para la sesión,
-        // que es la que lee el otro frontend.
+        // La disposición de esta ventana va bajo la clave de su perfil, como
+        // la del terminal: la D8 de la ADR 0058 —cierra un frontend, abre el
+        // otro, sigue donde estabas— y lo que el lector espera al volver a
+        // abrir: los paneles que dejó abiertos. Se dejó de escribir una vez
+        // por miedo a que curiosear en el selector cambiara el arranque del
+        // terminal, pero eso ES compartir la pantalla, y lo que la D5 protege
+        // es otra cosa: que el TAMAÑO de una ventana no reescriba el árbol.
         let mut body = self.sesion.leida.clone();
+        body.layouts
+            .insert(self.clave_de_sesion(), self.arbol.clone());
         for (id, hueco) in &self.huecos {
             body.slots.insert(
                 *id,
@@ -165,13 +345,14 @@ impl Estado {
                     sort: hueco.pane.sort(),
                     columns: Vec::new(),
                     show_hidden: hueco.pane.show_hidden(),
-                    // El sello de edad, con el reloj de quien escribe. Un
-                    // cero sellaba los huecos VIVOS con la época: para la
-                    // barrida propia era inocuo —`0.saturating_sub(x)` nunca
-                    // pasa de `MAX_AGE_MS`— pero el siguiente escritor con
-                    // reloj de verdad los veía con treinta días y se los
-                    // llevaba en su primer volcado.
-                    touched_ms: ahora,
+                    // El sello de edad tal como se ESCRIBIÓ la última vez,
+                    // no «ahora»: sellar cada captura con el reloj hacía que
+                    // ningún cuerpo fuera igual al anterior y el tic escribía
+                    // cada segundo. Quien cambia lo sella la política al
+                    // preparar el cuerpo, y `touched` recuerda el sello. Un
+                    // hueco nunca sellado va a cero y lo sella la primera
+                    // escritura, que es lo que hace el terminal.
+                    touched_ms: self.sesion.touched.get(id).copied().unwrap_or(0),
                 },
             );
         }

@@ -36,7 +36,16 @@ impl Estado {
             };
         }
         let ahora = u64::try_from(ahora_ms()).unwrap_or(0);
-        let mut body = self.capturar_sesion(ahora);
+        let mut body = self.capturar_sesion();
+        // Con una escritura del tic EN VUELO no se manda otra encima: iría
+        // con la misma revisión y una de las dos conflictaría seguro. Si lo
+        // que se estaba escribiendo es lo que hay ahora, no queda nada por
+        // escribir; si no, lo último no llegó, y se dice.
+        if let Some(en_vuelo) = &self.sesion.en_vuelo {
+            return ShutdownReport {
+                incomplete: hay_tasks || **en_vuelo != body,
+            };
+        }
         let vivos: Vec<SlotId> = self.huecos.keys().map(|id| SlotId(*id)).collect();
         if self
             .sesion

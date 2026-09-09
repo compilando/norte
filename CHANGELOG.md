@@ -171,6 +171,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The window remembers its panels.** Open the places sidebar, pick a layout
+  template, split a pane, close the window, open it again: everything was back
+  to the configured layout. The window never wrote its layout tree into the
+  session and never read one from it — a comment justified that by citing
+  ADR 0058 D5, which is about screen size not rewriting a stored tree, while
+  D8 of the same ADR asks for exactly the opposite: close one frontend, open
+  the other, carry on where you were. And the window only wrote the session
+  at all on shutdown, and only when the close reached the host in time: the
+  shared write policy was instantiated and never ticked. Now the window keeps
+  its tree under the same session key as the terminal (`default`, or the
+  active profile's name), applies the saved one at startup above `--layout`
+  and the configuration — the terminal's order —, writes the session every
+  second like the terminal when something changed, and writes it AT ONCE after
+  any change of the tree: a panel toggled, a template chosen, a split, a
+  resize. A detached window still writes nothing. The age seal of each slot is
+  now remembered between writes, as in the terminal; stamping every capture
+  with "now" would have made every tick a write.
 - **The window's viewer header was invisible on a light status bar.** The
   theme projection carried `status-bg` and never its foreground, so anything
   painted on top had to GUESS the text colour — the viewer header guessed

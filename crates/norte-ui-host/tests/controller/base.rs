@@ -1343,6 +1343,145 @@ async fn un_cuerpo_que_no_cabe_ni_degradado_se_dice() {
     assert!(backend.escrito.lock().expect("escrito").is_none());
 }
 
+/// Un doble con una sesión guardada de la que esta ventana es dueña.
+fn falso_con_sesion(guardada: norte_proto::methods::Session, duena: bool) -> Falso {
+    let mut falso = Falso::default();
+    falso.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"a".to_vec(), false)],
+    );
+    *falso.sesion.lock().expect("sesión") = (guardada, duena);
+    falso
+}
+
+/// El último cuerpo escrito, ya leído.
+fn cuerpo_escrito(f: &Falso) -> Option<norte_frontend::session::SessionBody> {
+    let v = f.escrito.lock().ok()?.clone()?;
+    serde_json::from_value(v).ok()
+}
+
+/// Alternar un panel lateral escribe la disposición en la sesión AL MOMENTO,
+/// bajo la misma clave que el terminal (ADR 0058 D8): la pantalla es una para
+/// los dos frontends, y hasta aquí la ventana ni la escribía ni la leía — solo
+/// guardaba dónde estaba cada listado, y solo al cerrar.
+#[tokio::test]
+async fn alternar_un_panel_escribe_la_disposicion_al_momento() {
+    let backend = Arc::new(falso_con_sesion(
+        sesion_guardada(1, 7, 1, "mem:///casa"),
+        true,
+    ));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    por_la_paleta(&h, &mut sub, "layout.places").await;
+    let cuerpo = hasta(&backend, "la disposición escrita", cuerpo_escrito).await;
+    let arbol = cuerpo
+        .layouts
+        .get("default")
+        .expect("bajo la clave del terminal sin perfil");
+    let texto = serde_json::to_string(arbol).expect("json");
+    assert!(
+        texto.contains("places"),
+        "con la barra lateral dentro: {texto}"
+    );
+    assert!(
+        cuerpo.slots.contains_key(&1),
+        "y los huecos siguen ahí: {:?}",
+        cuerpo.slots.keys().collect::<Vec<_>>()
+    );
+
+    // Cerrarla escribe OTRA vez, sin ella: cada cambio del árbol se guarda.
+    let antes = backend.puestas.lock().expect("puestas").len();
+    por_la_paleta(&h, &mut sub, "layout.places").await;
+    let cuerpo = hasta(&backend, "la segunda escritura", |f| {
+        (f.puestas.lock().ok()?.len() > antes)
+            .then(|| cuerpo_escrito(f))
+            .flatten()
+    })
+    .await;
+    let texto = serde_json::to_string(cuerpo.layouts.get("default").expect("sigue")).expect("json");
+    assert!(!texto.contains("places"), "ya sin la barra: {texto}");
+}
+
+/// Y al arrancar se APLICA la que la sesión guardó, por encima de la de la
+/// configuración: cierra la ventana con dos listados, vuelve con dos.
+#[tokio::test]
+async fn la_disposicion_guardada_se_aplica_al_arrancar() {
+    let mut guardada = sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut cuerpo: norte_frontend::session::SessionBody =
+        serde_json::from_value(guardada.body.clone()).expect("cuerpo");
+    cuerpo.layouts.insert(
+        "default".to_owned(),
+        norte_frontend::layout::presets::tree("orthodox").expect("preset"),
+    );
+    guardada.body = serde_json::to_value(&cuerpo).expect("json");
+    let backend = Arc::new(falso_con_sesion(guardada, true));
+    // El host arranca con `simple`, un listado; la sesión dice `orthodox`,
+    // dos. Lo que se ve al arrancar es lo que la sesión dice.
+    let (_h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let listados = snap
+        .slots
+        .iter()
+        .filter(|s| matches!(s, norte_ui_host::dto::SlotView::Browser(_)))
+        .count();
+    assert_eq!(
+        listados, 2,
+        "los dos listados de la disposición guardada, no el uno de `simple`"
+    );
+}
+
+/// El tic de la sesión escribe lo que cambió y NO repite lo mismo.
+///
+/// Con el reloj parado: un segundo virtual dispara el tic sin esperar un
+/// segundo de verdad. La primera vuelta escribe —la disposición de esta
+/// ventana aún no estaba en la sesión— y la segunda, sin cambios, no manda
+/// nada: comparar con lo último escrito es todo lo que hace un tic quieto.
+#[tokio::test(start_paused = true)]
+async fn el_tic_escribe_lo_que_cambio_y_no_repite_lo_mismo() {
+    let backend = Arc::new(falso_con_sesion(
+        sesion_guardada(1, 7, 1, "mem:///casa"),
+        true,
+    ));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    assert!(
+        backend.puestas.lock().expect("puestas").is_empty(),
+        "arrancar no escribe: el tic aún no ha sonado"
+    );
+    tokio::time::advance(std::time::Duration::from_millis(1100)).await;
+    let n = hasta(&backend, "la primera escritura del tic", |f| {
+        let n = f.puestas.lock().ok()?.len();
+        (n > 0).then_some(n)
+    })
+    .await;
+    assert_eq!(n, 1, "una escritura, la de la disposición nueva");
+
+    tokio::time::advance(std::time::Duration::from_millis(2100)).await;
+    // Una vuelta al actor: los tics que sonaron ya se han atendido.
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert_eq!(
+        backend.puestas.lock().expect("puestas").len(),
+        1,
+        "sin cambios, el tic no repite lo mismo"
+    );
+}
+
+/// Una ventana SUELTA no escribe tampoco al alternar un panel.
+#[tokio::test]
+async fn una_ventana_suelta_no_escribe_al_alternar_un_panel() {
+    let backend = Arc::new(falso_con_sesion(
+        sesion_guardada(1, 7, 1, "mem:///casa"),
+        false,
+    ));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    por_la_paleta(&h, &mut sub, "layout.places").await;
+    asentar().await;
+    assert!(
+        backend.puestas.lock().expect("puestas").is_empty(),
+        "suelta no escribe: la sesión es un documento con un solo escritor"
+    );
+}
+
 /// Espera la siguiente actualización que traiga tasks.
 pub(super) async fn siguientes_tasks(
     sub: &mut norte_ui_host::UiSubscription,
