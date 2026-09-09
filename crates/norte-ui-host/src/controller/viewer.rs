@@ -81,6 +81,8 @@ impl Estado {
             crate::commands::EfectoVisor::Pagina(n) => {
                 v.scroll_down(pasos(n).saturating_mul(alto));
             }
+            crate::commands::EfectoVisor::Columna(n) if n < 0 => v.scroll_left(pasos(n)),
+            crate::commands::EfectoVisor::Columna(n) => v.scroll_right(pasos(n)),
             crate::commands::EfectoVisor::Extremo { al_final: false } => v.scroll_top(),
             crate::commands::EfectoVisor::Extremo { al_final: true } => v.scroll_bottom(),
             crate::commands::EfectoVisor::Hex => v.toggle_hex(),

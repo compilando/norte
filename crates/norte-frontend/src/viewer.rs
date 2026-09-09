@@ -232,6 +232,21 @@ pub struct Viewer {
     forced: Option<&'static norte_encoding::Encoding>,
     /// Primera línea visible.
     pub scroll: usize,
+    /// Primera COLUMNA visible, en celdas de terminal.
+    ///
+    /// Sin esto, una línea más ancha que la ventana —un HTML minificado, un
+    /// CSV, un log— se pintaba recortada y el resto era inalcanzable: el visor
+    /// no envuelve, así que lo que no cabe no está en ninguna parte.
+    ///
+    /// En hexadecimal se IGNORA: esa vista tiene un ancho fijo que siempre
+    /// cabe, y desplazarla solo escondería el offset.
+    hscroll: usize,
+    /// La línea más ancha, en celdas: el tope del desplazamiento horizontal.
+    ///
+    /// Se mide una vez al decodificar y no por ventana. Medir solo lo visible
+    /// haría que el tope cambiara al bajar, y el texto saltaría de lado sin
+    /// que nadie hubiera pulsado nada.
+    max_cols: usize,
     /// Preview de un plugin (M4-P5): si está, REEMPLAZA la vista cruda y la
     /// decodificación (bytes/encoding se ignoran; `lines` ya enmascaradas).
     plugin_preview: Option<PluginPreviewView>,
@@ -254,6 +269,8 @@ impl Viewer {
             image: None,
             forced: None,
             scroll: 0,
+            hscroll: 0,
+            max_cols: 0,
             plugin_preview: None,
             text: String::new(),
             encoding_name: "",
@@ -284,7 +301,7 @@ impl Viewer {
         output: &str,
         lossy: bool,
     ) -> Self {
-        let styled = crate::ansi::parse_sgr(output)
+        let styled: Vec<crate::ansi::StyledLine> = crate::ansi::parse_sgr(output)
             .into_iter()
             .map(|line| {
                 line.into_iter()
@@ -299,6 +316,7 @@ impl Viewer {
             .collect();
         let plugin_name = crate::display_name(&plugin_name.into_bytes()).0;
         let mut v = Self::base(path, Vec::new(), false);
+        v.max_cols = ancho_de_estilo(&styled);
         v.plugin_preview = Some(PluginPreviewView {
             plugin_name,
             lossy,
@@ -330,7 +348,7 @@ impl Viewer {
         lines: &[Vec<norte_proto::methods::SpanWire>],
         lossy: bool,
     ) -> Self {
-        let styled = lines
+        let styled: Vec<crate::ansi::StyledLine> = lines
             .iter()
             .map(|line| {
                 line.iter()
@@ -345,6 +363,7 @@ impl Viewer {
             .collect();
         let plugin_name = crate::display_name(&plugin_name.into_bytes()).0;
         let mut v = Self::base(path, Vec::new(), false);
+        v.max_cols = ancho_de_estilo(&styled);
         v.plugin_preview = Some(PluginPreviewView {
             plugin_name,
             lossy,
@@ -354,13 +373,24 @@ impl Viewer {
     }
 
     /// Las filas visibles del preview de plugin CON estilo (#29), desde
-    /// `scroll`; `None` si el viewer no está en modo preview de plugin. El
-    /// frontend traduce [`crate::ansi::Rgb`] a su tipo de color y las pinta.
+    /// `scroll` y desde [`Self::hscroll`]; `None` si el viewer no está en modo
+    /// preview de plugin. El frontend traduce [`crate::ansi::Rgb`] a su tipo de
+    /// color y las pinta.
+    ///
+    /// Devuelve líneas PROPIAS y no referencias porque el desplazamiento
+    /// horizontal parte tramos: la salida de un plugin se desplaza igual que
+    /// el texto crudo — un previewer de CSV o de JSON produce líneas largas por
+    /// el mismo motivo que el fichero.
     #[must_use]
-    pub fn plugin_styled_rows(&self, height: usize) -> Option<Vec<&crate::ansi::StyledLine>> {
-        self.plugin_preview
-            .as_ref()
-            .map(|p| p.styled.iter().skip(self.scroll).take(height).collect())
+    pub fn plugin_styled_rows(&self, height: usize) -> Option<Vec<crate::ansi::StyledLine>> {
+        self.plugin_preview.as_ref().map(|p| {
+            p.styled
+                .iter()
+                .skip(self.scroll)
+                .take(height)
+                .map(|l| desplazar_estilo(l, self.hscroll))
+                .collect()
+        })
     }
 
     /// El nombre del plugin si el viewer está en modo preview (para el
@@ -400,6 +430,14 @@ impl Viewer {
             // Para PINTAR: todo EOL (incl. CR de Mac clásico) parte línea.
             let text = text.replace("\r\n", "\n").replace('\r', "\n");
             self.lines = text.lines().count();
+            // La más ancha YA renderizada: los tabs se expanden antes de
+            // pintar, así que medir el texto crudo daría un tope corto y
+            // dejaría la cola de una línea con tabulaciones inalcanzable.
+            self.max_cols = text
+                .lines()
+                .map(|l| crate::display::cells(&render_line(l)))
+                .max()
+                .unwrap_or(0);
             self.text = text;
             self.encoding_name = encoding.name();
             self.had_errors = had_errors;
@@ -418,8 +456,12 @@ impl Viewer {
             self.had_errors = false;
             self.text = String::new();
             self.lines = 0;
+            // El hexadecimal no se desplaza a lo ancho, así que no hay tope
+            // que dar: cero es «aquí no hay nada a la derecha».
+            self.max_cols = 0;
         }
         self.scroll = 0;
+        self.hscroll = 0;
     }
 
     /// «Recargar como…»: siguiente encoding del ciclo (spec §6). En un
@@ -448,6 +490,10 @@ impl Viewer {
     pub fn toggle_hex(&mut self) {
         self.hex = !self.hex;
         self.scroll = self.scroll.min(self.total_rows().saturating_sub(1));
+        // Y el horizontal a cero: el hexadecimal no lo usa, y volver al texto
+        // con un desplazamiento de la vista anterior enseñaría una columna que
+        // el lector no eligió.
+        self.hscroll = 0;
     }
 
     /// Total de filas visibles en el modo actual.
@@ -482,11 +528,45 @@ impl Viewer {
         self.scroll = self.total_rows().saturating_sub(1);
     }
 
+    /// La primera columna visible, en celdas.
+    #[must_use]
+    pub const fn hscroll(&self) -> usize {
+        self.hscroll
+    }
+
+    /// La línea más ancha, en celdas: cuánto hay a lo ancho.
+    ///
+    /// El frontend lo compara con el ancho de su ventana para decidir si
+    /// dibuja barra horizontal. `0` en hexadecimal, que no se desplaza.
+    #[must_use]
+    pub const fn max_cols(&self) -> usize {
+        self.max_cols
+    }
+
+    /// Izquierda `n` columnas.
+    pub const fn scroll_left(&mut self, n: usize) {
+        self.hscroll = self.hscroll.saturating_sub(n);
+    }
+
+    /// Derecha `n` columnas, sin pasarse del final de la línea más larga.
+    ///
+    /// El tope deja SIEMPRE una columna a la vista: un visor desplazado más
+    /// allá de todo su contenido es una pantalla en blanco de la que solo se
+    /// sale a ciegas.
+    pub fn scroll_right(&mut self, n: usize) {
+        self.hscroll = (self.hscroll + n).min(self.max_cols.saturating_sub(1));
+    }
+
     /// Las filas visibles desde `scroll`, ya formateadas para el terminal:
     /// tabs EXPANDIDOS (ratatui los borraría: columnas colapsadas en
     /// silencio) y el resto de controles enmascarados a `�` (un `.ans` con
     /// ESC se ve alterado, jamás sin marca) — misma política que los
     /// nombres (spec §6).
+    ///
+    /// Y recortadas por la IZQUIERDA a [`Self::hscroll`], salvo en
+    /// hexadecimal. El recorte se hace aquí, sobre la línea ya renderizada, y
+    /// no en cada frontend: dos recortes son dos formas de contar columnas que
+    /// un día no coinciden.
     #[must_use]
     pub fn rows(&self, height: usize) -> Vec<String> {
         if let Some(p) = &self.plugin_preview {
@@ -496,7 +576,10 @@ impl Viewer {
                 .iter()
                 .skip(self.scroll)
                 .take(height)
-                .map(|line| line.iter().map(|s| s.text.as_str()).collect())
+                .map(|line| {
+                    let entera: String = line.iter().map(|s| s.text.as_str()).collect();
+                    self.recortada(entera)
+                })
                 .collect()
         } else if self.hex {
             hex_rows(&self.bytes, self.scroll, height)
@@ -505,9 +588,17 @@ impl Viewer {
                 .lines()
                 .skip(self.scroll)
                 .take(height)
-                .map(render_line)
+                .map(|l| self.recortada(render_line(l)))
                 .collect()
         }
+    }
+
+    /// Una fila ya renderizada, desplazada a [`Self::hscroll`].
+    fn recortada(&self, fila: String) -> String {
+        if self.hscroll == 0 {
+            return fila;
+        }
+        crate::display::skip_cells(&fila, self.hscroll).to_owned()
     }
 
     /// Nombre del encoding decodificado (`"UTF-8"`…), o `""` si es binario.
@@ -572,6 +663,46 @@ const TAB_WIDTH: usize = 8;
 /// pasar bidi (U+202E) e invisibles (ZWSP) crudos: un `.txt` con RLO falsificaba
 /// el orden visual (Trojan Source, CVE-2021-42574) en la GUI GPUI —que reordena
 /// bidi en el shaping— y en terminales que honran bidi (encoding-auditor GUI-d).
+/// La línea con estilo más ancha, en celdas.
+fn ancho_de_estilo(styled: &[crate::ansi::StyledLine]) -> usize {
+    styled
+        .iter()
+        .map(|l| l.iter().map(|s| crate::display::cells(&s.text)).sum())
+        .max()
+        .unwrap_or(0)
+}
+
+/// Una línea con estilo desplazada `n` celdas a la izquierda.
+///
+/// Los tramos que quedan enteros a la izquierda del corte se van; el que lo
+/// cruza se recorta CONSERVANDO su color, que es lo que distingue esta función
+/// de recortar la cadena entera y perder los tramos.
+fn desplazar_estilo(linea: &crate::ansi::StyledLine, n: usize) -> crate::ansi::StyledLine {
+    if n == 0 {
+        return linea.clone();
+    }
+    let mut resto = n;
+    let mut out = Vec::new();
+    for span in linea {
+        if resto == 0 {
+            out.push(span.clone());
+            continue;
+        }
+        let ancho = crate::display::cells(&span.text);
+        if ancho <= resto {
+            resto -= ancho;
+            continue;
+        }
+        let recortado = crate::display::skip_cells(&span.text, resto).to_owned();
+        resto = 0;
+        out.push(crate::ansi::StyledSpan {
+            text: recortado,
+            ..span.clone()
+        });
+    }
+    out
+}
+
 fn render_line(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut col = 0usize;
@@ -633,6 +764,81 @@ mod tests {
 
     fn vp() -> VPath {
         VPath::parse("file:///f").unwrap()
+    }
+
+    /// **El visor se desplaza a lo ANCHO.**
+    ///
+    /// El visor no envuelve, así que sin esto la cola de una línea larga —un
+    /// HTML minificado, un CSV, un log— no estaba en ninguna parte: se pintaba
+    /// recortada y no había forma de llegar a ella.
+    #[test]
+    fn el_visor_se_desplaza_a_lo_ancho_con_tope() {
+        let texto = b"0123456789\ncorta\n".to_vec();
+        let mut v = Viewer::new(vp(), texto, false);
+        assert_eq!(v.max_cols(), 10, "la línea más ancha manda");
+        assert_eq!(v.hscroll(), 0);
+        assert_eq!(v.rows(2), vec!["0123456789", "corta"]);
+
+        v.scroll_right(4);
+        assert_eq!(v.hscroll(), 4);
+        assert_eq!(
+            v.rows(2),
+            vec!["456789", "a"],
+            "cada fila se recorta por la misma columna"
+        );
+
+        // El tope deja SIEMPRE una columna: desplazarse más allá de todo el
+        // contenido es una pantalla en blanco de la que se sale a ciegas.
+        v.scroll_right(1000);
+        assert_eq!(v.hscroll(), 9);
+        assert_eq!(v.rows(1), vec!["9"]);
+
+        v.scroll_left(1000);
+        assert_eq!(v.hscroll(), 0);
+        assert_eq!(v.rows(1), vec!["0123456789"]);
+    }
+
+    /// El tope se mide sobre la línea YA renderizada: los tabs se expanden
+    /// antes de pintar, así que medir el texto crudo dejaría su cola
+    /// inalcanzable.
+    #[test]
+    fn el_tope_horizontal_cuenta_los_tabs_expandidos() {
+        let v = Viewer::new(vp(), b"\tab\n".to_vec(), false);
+        assert_eq!(v.max_cols(), 10, "un tab son 8 columnas, y luego `ab`");
+    }
+
+    /// En hexadecimal NO hay desplazamiento horizontal: esa vista tiene un
+    /// ancho fijo que siempre cabe, y moverla solo esconderÍa el offset. Y al
+    /// alternar, el horizontal vuelve a cero — un desplazamiento heredado de
+    /// la otra vista enseña una columna que nadie eligió.
+    #[test]
+    fn el_hexadecimal_no_se_desplaza_a_lo_ancho() {
+        let mut v = Viewer::new(vp(), b"\x00\x01payload".to_vec(), false);
+        assert!(v.hex);
+        assert_eq!(v.max_cols(), 0);
+        v.scroll_right(8);
+        assert_eq!(v.hscroll(), 0, "no hay a dónde ir");
+        assert!(v.rows(1)[0].starts_with("00000000"));
+
+        let mut v = Viewer::new(vp(), b"0123456789\n".to_vec(), false);
+        v.scroll_right(4);
+        v.toggle_hex();
+        assert_eq!(v.hscroll(), 0);
+    }
+
+    /// Y un carácter ANCHO a caballo del corte se va ENTERO: media celda no se
+    /// puede pintar, y quedarse el carácter completo correría esa fila una
+    /// columna respecto a sus vecinas.
+    #[test]
+    fn un_caracter_ancho_partido_por_el_corte_se_va_entero() {
+        let mut v = Viewer::new(vp(), "漢字x\n".as_bytes().to_vec(), false);
+        assert_eq!(v.max_cols(), 5, "dos ideogramas de dos celdas y una `x`");
+        v.scroll_right(1);
+        assert_eq!(
+            v.rows(1),
+            vec!["字x"],
+            "el primero no se parte por la mitad"
+        );
     }
 
     #[test]

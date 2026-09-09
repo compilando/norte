@@ -158,4 +158,6 @@ keymap = [
     { on = ["pgdn"], run = "viewer.page-down" },
     { on = ["home"], run = "viewer.top" },
     { on = ["end"], run = "viewer.bottom" },
+    { on = ["left"], run = "viewer.left" },
+    { on = ["right"], run = "viewer.right" },
 ]

@@ -12,6 +12,8 @@ commands = [
     "viewer.page-down",
     "viewer.top",
     "viewer.bottom",
+    "viewer.left",
+    "viewer.right",
     "viewer.encoding",
     "viewer.encoding-auto",
     "viewer.hex",
@@ -32,6 +34,13 @@ what you are looking at is the head, and it is not pretending otherwise.
 {{cmd:viewer.up}} and {{cmd:viewer.down}} move a line,
 {{cmd:viewer.page-up}} and {{cmd:viewer.page-down}} a screen, and
 {{cmd:viewer.top}} and {{cmd:viewer.bottom}} go to the ends of what was read.
+
+Lines are **not wrapped**, so a minified HTML file or a wide CSV runs off the
+right edge. {{cmd:viewer.left}} and {{cmd:viewer.right}} move the window a
+column at a time, and they take a count like the vertical pair: `40` and then
+right jumps forty columns. The window stops where the longest line ends, so it
+never scrolls off into a blank screen. The hex dump has a fixed width that
+always fits and does not move sideways.
 
 The same keys work on a file inside a `.zip` or over SFTP. The pane holds a
 location, the viewer reads whatever that location gives it, and neither of them

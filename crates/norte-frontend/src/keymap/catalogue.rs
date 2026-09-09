@@ -274,6 +274,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("viewer.page-down", true),
     live("viewer.top", false),
     live("viewer.bottom", false),
+    // A lo ANCHO. Con cuenta, como sus gemelas verticales: el visor no
+    // envuelve, así que una línea larga se recorre igual que un fichero alto.
+    live("viewer.left", true),
+    live("viewer.right", true),
     live("viewer.encoding", false),
     live("viewer.encoding-auto", false),
     live("viewer.hex", false),
@@ -470,8 +474,13 @@ mod tests {
                 "nav.back",
                 "nav.forward",
                 "viewer.down",
+                // Los dos del eje horizontal, por lo mismo que sus gemelas
+                // verticales: acotados a la línea más larga, en memoria, sin
+                // task ni pantalla nueva.
+                "viewer.left",
                 "viewer.page-down",
                 "viewer.page-up",
+                "viewer.right",
                 "viewer.up",
             ],
             "un comando ganó o perdió `counts`: ver ADR 0044 antes de tocar esta lista"

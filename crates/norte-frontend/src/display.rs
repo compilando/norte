@@ -188,6 +188,48 @@ pub fn cells(s: &str) -> usize {
         .sum()
 }
 
+/// Tira las primeras `n` CELDAS de `s` y devuelve el resto.
+///
+/// Es el desplazamiento horizontal del visor: la ventana empieza en la columna
+/// `n`, y «columna» en un terminal es celda, no byte ni carácter. Contar por
+/// bytes movería el texto de golpe al llegar a un acento; contar por
+/// caracteres desalinearía cualquier línea con CJK, donde un carácter ocupa
+/// dos columnas.
+///
+/// Un carácter ANCHO a caballo del corte se va ENTERO. Su mitad izquierda no
+/// se puede pintar —no hay medio ideograma— y quedarse con el carácter
+/// completo correría el texto una columna respecto a las líneas de al lado.
+/// Perder una columna es visible y honesto; una línea desplazada respecto a
+/// sus vecinas parece otro contenido.
+///
+/// Las marcas de ancho cero que abren el resto se conservan: son de la letra
+/// anterior, ya perdida, pero tirarlas no arregla nada y contarlas como
+/// avance sí escondería texto.
+///
+/// ```
+/// use norte_frontend::display::skip_cells;
+///
+/// assert_eq!(skip_cells("hola", 0), "hola");
+/// assert_eq!(skip_cells("hola", 2), "la");
+/// assert_eq!(skip_cells("hola", 9), "");
+/// // Un ideograma ocupa DOS celdas: cortar por la primera se lo lleva.
+/// assert_eq!(skip_cells("漢字", 1), "字");
+/// ```
+#[must_use]
+pub fn skip_cells(s: &str, n: usize) -> &str {
+    if n == 0 {
+        return s;
+    }
+    let mut saltadas = 0usize;
+    for (i, c) in s.char_indices() {
+        if saltadas >= n {
+            return &s[i..];
+        }
+        saltadas += UnicodeWidthChar::width(c).unwrap_or(0);
+    }
+    ""
+}
+
 /// Recorta a un tope de BYTES por la cola, marcando el recorte con `…`.
 ///
 /// Es el truncador de las fronteras que miden en bytes —el bridge del host
@@ -362,6 +404,27 @@ mod tests {
 
     fn root() -> VPath {
         VPath::root(Scheme::new("mem").unwrap(), None)
+    }
+
+    /// `skip_cells` cuenta COLUMNAS, no bytes ni caracteres, y jamás parte un
+    /// carácter ancho: media celda no se puede pintar, y quedarse el carácter
+    /// entero correría la fila una columna respecto a sus vecinas.
+    #[test]
+    fn skip_cells_cuenta_columnas_y_no_parte_un_ancho() {
+        assert_eq!(skip_cells("hola", 0), "hola");
+        assert_eq!(skip_cells("hola", 1), "ola");
+        assert_eq!(skip_cells("hola", 4), "");
+        assert_eq!(skip_cells("hola", 99), "", "pasarse no es un error");
+
+        // Un ideograma son DOS columnas: cortar por la primera se lo lleva.
+        assert_eq!(skip_cells("漢字x", 1), "字x");
+        assert_eq!(skip_cells("漢字x", 2), "字x");
+        assert_eq!(skip_cells("漢字x", 3), "x");
+
+        // Un acento combinante pesa cero: no avanza la cuenta, y sobrevive
+        // pegado a lo que quede — contarlo como avance esconderÍa texto.
+        assert_eq!(skip_cells("ae\u{301}b", 1), "e\u{301}b");
+        assert_eq!(skip_cells("ae\u{301}b", 2), "\u{301}b");
     }
 
     /// Encoding MEDIA-2: el TEXTO de `path_display` no puede contener NINGÚN
