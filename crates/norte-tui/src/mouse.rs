@@ -21,7 +21,6 @@
 
 use crate::app::Trail;
 use crate::dispatch::dispatch;
-use crate::event_loop::run_command;
 use crate::keymap::Command;
 use crate::navigate::{apply_cd, cd_in};
 use crate::refresh::reap_search_run;
@@ -1224,10 +1223,25 @@ pub fn restore_after_suspend(
 /// abriendo un panel de dos maneras que se separan en cuanto una crece un
 /// detalle. Es la lección de ADR 0077 aplicada dentro de un solo frontend.
 #[expect(clippy::too_many_arguments, reason = "wiring del bucle, no API")]
+/// Despacha un comando NOMBRADO pedido por el ratón, y remata todo lo que ese
+/// comando deje pedido.
+///
+/// «Todo» son tres cosas y las tres van AQUÍ, no en cada brazo del ratón: el
+/// desenlace del `cd`, la cosecha de la búsqueda viva y **el opener que el
+/// comando haya dejado armado**. El último faltaba en el brazo del doble
+/// click, así que un doble click sobre un `.jpg` corría `nav.enter`, éste
+/// resolvía el programa del escritorio en `pending_open`… y nadie lo lanzaba:
+/// el gesto no hacía absolutamente nada, ni decía por qué. El rustdoc de
+/// [`on_mouse`] prometía justo eso desde el principio («lanzar el opener que un
+/// doble click dejó resuelto»), y el cable no estaba.
+///
+/// Compartir la salida es el arreglo, no añadir la línea que faltaba: dos
+/// brazos que rematan a mano son dos sitios donde olvidarse del tercero.
 async fn despachar_clic(
     app: &mut crate::app::App,
     backend: &norte_core::backend::Backend,
     events: &mut crate::console::Console<'_>,
+    capture: &mut Capture,
     help_lines: &mut Vec<ratatui::text::Line<'static>>,
     lang: norte_i18n::Lang,
     quick_mode: crate::nav::Mode,
@@ -1259,6 +1273,8 @@ async fn despachar_clic(
         &mut work.search,
         outcome,
     );
+    reap_search_run(app, &mut work.search);
+    crate::event_loop::launch_pending(app, events, capture).await;
 }
 
 /// Aplica un evento de ratón y remata lo que el gesto deje pedido.
@@ -1300,6 +1316,7 @@ pub async fn on_mouse(
                     app,
                     backend,
                     events,
+                    capture,
                     help_lines,
                     lang,
                     quick_mode,
@@ -1329,6 +1346,7 @@ pub async fn on_mouse(
                     app,
                     backend,
                     events,
+                    capture,
                     help_lines,
                     lang,
                     quick_mode,
@@ -1338,8 +1356,6 @@ pub async fn on_mouse(
                     &id,
                 )
                 .await;
-                reap_search_run(app, &mut work.search);
-                crate::event_loop::launch_pending(app, events, capture).await;
             }
         }
         // Doble click = `nav.enter`, por el MISMO `dispatch`
@@ -1347,6 +1363,12 @@ pub async fn on_mouse(
         // misma cosecha de la búsqueda viva. Un segundo
         // camino para entrar en un directorio sería un
         // segundo sitio donde arreglar cada bug de cd.
+        //
+        // Y por el mismo remate que el menú (`despachar_clic`),
+        // que es lo que faltaba: sobre un FICHERO, `nav.enter`
+        // resuelve el programa del escritorio y lo deja
+        // armado, así que sin lanzarlo un doble click en un
+        // `.jpg` no hacía nada.
         self::After::Enter => {
             // K3a: un gesto es OTRA entrada. La secuencia que
             // el lector estuviera tecleando se abandona con su
@@ -1354,23 +1376,18 @@ pub async fn on_mouse(
             // armada haría que la siguiente tecla disparase un
             // comando pedido antes de cambiar de directorio.
             app.abandon_pending(resolver);
-            // Paridad con el sitio del resolver: entrar en
-            // un hit apaga el modo virtual del pane, y hay
-            // que cosechar el run (regla 3).
-            run_command(
+            despachar_clic(
                 app,
                 backend,
                 events,
+                capture,
                 help_lines,
                 lang,
                 quick_mode,
                 confirm_quit,
                 cfg,
-                &mut work.fill,
-                &mut work.decorate,
-                &mut work.probed,
-                &mut work.search,
-                Command::NavEnter,
+                work,
+                "nav.enter",
             )
             .await;
         }

@@ -82,6 +82,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A double click on a file does something again, in the terminal.** On a
+  file `nav.enter` does not navigate: it resolves the desktop's program and
+  leaves it armed for whoever owns the terminal to launch. The mouse arm ran
+  the command and never launched what it armed, so double-clicking a `.jpg`
+  did nothing at all and did not say why — while `Enter` on the same row
+  worked. `on_mouse`'s own rustdoc had promised "launch the opener a double
+  click resolved" since it was written. The fix is that all three mouse arms
+  now leave through the same function, so none of them can forget the third
+  thing again. The window was already right: its double click goes through
+  the host, which opens a local file externally.
 - **The tree follows the panel that navigates** (ADR 0102). Opening the tree
   and walking around left the panel pointing at the folder you were in when
   you opened it. Not a loose wire: both frontends anchored at open and never

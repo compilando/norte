@@ -513,6 +513,41 @@ fn el_doble_click_pide_el_mismo_nav_enter_del_teclado() {
     assert_eq!(app.panes[0].cursor(), 1);
 }
 
+/// **Un doble click sobre un FICHERO deja algo que lanzar.**
+///
+/// `nav.enter` sobre un fichero local no navega: resuelve el programa del
+/// escritorio y lo deja armado en `pending_open` para que lo lance el dueño de
+/// la terminal. El brazo del ratón corría el comando y no remataba esa parte,
+/// así que un doble click en un `.jpg` no hacía absolutamente nada ni decía
+/// por qué.
+///
+/// Lo que se comprueba aquí es el CONTRATO del que depende ese remate: que
+/// `nav.enter` sobre un fichero arma el lanzamiento. El cable en sí
+/// —`despachar_clic` lanzando lo armado— no tiene test porque `on_mouse`
+/// necesita una terminal de verdad; el arreglo es que los tres brazos del
+/// ratón salgan por la MISMA función, que es lo que impide olvidarlo otra vez.
+#[test]
+fn nav_enter_sobre_un_fichero_deja_un_opener_armado() {
+    use norte_tui::gestures::{EnterAction, enter_action, resolve_opener};
+
+    let mut app = app_pintada(5);
+    // El listado son ficheros locales; el cursor arranca en el primero.
+    app.set_focus(0);
+    app.panes[0].set_cursor(0);
+    assert!(
+        matches!(enter_action(&app), EnterAction::OpenExternal),
+        "sobre un fichero local, entrar es ABRIR: {:?}",
+        enter_action(&app)
+    );
+
+    assert!(app.pending_open.is_none());
+    resolve_opener(&mut app);
+    assert!(
+        app.pending_open.is_some(),
+        "y resolverlo deja el programa armado para el dueño de la terminal"
+    );
+}
+
 /// Dos clicks LENTOS sobre la misma fila son dos clicks. Y dos rápidos
 /// sobre filas distintas, también: si no, bajar por el listado a golpe de
 /// click entraría en un directorio cada dos filas.
