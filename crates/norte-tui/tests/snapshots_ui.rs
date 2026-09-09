@@ -1107,6 +1107,44 @@ fn snapshot_modal_trust_lua_init() {
     insta::assert_snapshot!(render(&app));
 }
 
+/// **El mensaje que se ENVUELVE cabe entero en su caja.**
+///
+/// Es el único modal cuyo alto no se deriva del cuerpo: su cuerpo es una
+/// línea que `ratatui` parte en varias, y contar esas filas exige su regla de
+/// envoltura (`Paragraph::line_count` la sabe, pero es una feature inestable).
+/// Así que ese alto es un número escrito a mano — y un número a mano se queda
+/// corto en silencio en cuanto el mensaje crece: una traducción más larga, una
+/// ruta más honda. Esto es lo que lo pone rojo.
+///
+/// Se comprueba sobre el TEXTO pintado y no sobre el modelo: lo que importa es
+/// que la última palabra del aviso llegue a la pantalla, y eso solo lo dice el
+/// buffer.
+#[test]
+fn el_mensaje_que_se_envuelve_cabe_en_su_caja() {
+    let mut app = app_base();
+    app.modal = Some(Modal::TrustLuaInit {
+        path: "repo/.norte/init.lua".into(),
+        hash_abbrev: "ab12cd34ef56ab78ab12cd34ef56ab78".into(),
+    });
+    let pintado = render(&app);
+    // El cuerpo lleva las TECLAS dentro, al final: son lo último que se lee
+    // antes de conceder permisos de ejecución, así que son lo primero que se
+    // pierde si el alto se queda corto — y `ratatui` recorta por abajo sin
+    // decirlo.
+    let cuerpo = norte_i18n::ta(
+        "modal-lua-trust-body",
+        &[("path", "repo/.norte/init.lua"), ("hash", "x")],
+    );
+    let ultima = cuerpo
+        .split_whitespace()
+        .last()
+        .expect("el cuerpo no está vacío");
+    assert!(
+        pintado.contains(ultima),
+        "el final del aviso no llegó a la pantalla ({ultima:?}): {pintado}"
+    );
+}
+
 /// TOFU (#45): el modal muestra el fingerprint para comparar, y un host
 /// HOSTIL (bidi override) del servidor remoto se ENMASCARA — jamás pinta el
 /// byte crudo que podría spoofear la barra. No es snapshot: asserts directos.

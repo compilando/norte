@@ -1,8 +1,20 @@
-//! El texto de cada modal, y el alto que hay que reservarle.
+//! El cuerpo de cada modal, y cómo se pinta.
 //!
 //! Un `*_modal_text` no pinta: DEVUELVE el cuerpo ya compuesto, y por eso se
-//! puede afirmar sobre él sin un backend de test. `modal_height` es la otra
-//! mitad del contrato — si las dos se desincronizan, el modal se recorta.
+//! puede afirmar sobre él sin un backend de test.
+//!
+//! **El alto sale del cuerpo** ([`alto_del_cuerpo`]). Antes lo declaraba
+//! `modal_height`, una tabla de fórmulas a mano por variante, y este rustdoc
+//! avisaba de que las dos mitades se desincronizan y el modal se recorta — sin
+//! una sola comprobación. Cuando por fin se escribió una, para una variante,
+//! resultó que las fórmulas ni coincidían entre ellas: unas sumaban 2 al
+//! número de líneas, otras 3, otras 4. Derivándolo no hay dos números que
+//! puedan discrepar. La única excepción es el modal que ENVUELVE, y está
+//! marcada como tal.
+//!
+//! Cada línea declara además su PAPEL ([`LineKind`]) y el tema decide con qué
+//! se pinta. Un modal que no declare nada sale en texto plano, que es como
+//! salían todos: la migración es por modal (ADR 0103).
 
 use norte_theme::Role;
 use ratatui::Frame;
@@ -524,137 +536,43 @@ fn modal_title_text(
     }
 }
 
-/// Alto del modal por variante (líneas de contenido + bordes).
-pub(crate) fn modal_height(modal: &crate::app::Modal) -> u16 {
-    use crate::app::Modal;
-    match modal {
-        // Review H3c MINOR-5: cabecera + la VENTANA de rutas (más el resumen,
-        // si el lote no cabe entero) + el pie, más los bordes — el MISMO
-        // cómputo acotado que ConfirmDelete, y por la misma razón: cuántas
-        // rutas trae la petición lo elige el AGENTE, y `centered` recorta
-        // contra el frame, así que un alto sin tope dejaba las últimas líneas
-        // sin pintar. La última es el aviso de que las teclas están inertes.
-        Modal::ApproveAgentOp { req } => {
-            // Mismo cómputo que `approval_modal_text`: la línea de resumen
-            // aparece cuando la DECISIÓN cubre más rutas de las que se pintan,
-            // aunque el recorte lo haya hecho el server (`paths_total`).
-            let shown = req.paths.len().min(norte_frontend::MODAL_ITEM_LIMIT);
-            let total = usize::try_from(req.paths_total)
-                .unwrap_or(usize::MAX)
-                .max(req.paths.len());
-            // Cuerpo + plazo + las opcionales del detalle + las rutas +
-            // resumen + teclas. El plazo va SIEMPRE (desconocido también se
-            // dice), y las de modo y alcance son las que este cómputo se
-            // dejaba: un `set-mode` recursivo perdía su última línea.
-            let lines = 1
-                + 1
-                + usize::from(req.detail.mode.is_some())
-                + usize::from(req.detail.recursive)
-                + shown
-                + usize::from(total > shown)
-                + 1;
-            // `+ 2` (los bordes), no el `+ 3` de ConfirmDelete: este modal
-            // siempre ajustó exacto y acotar la lista no es motivo para
-            // moverle la caja una fila.
-            u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(2)
-        }
-        // #103 T10: una línea POR ítem listado (más la de resumen, si el
-        // lote no cabe entero), más las dos fijas (destino/modo + teclas) y
-        // los bordes — el mismo `body_lines + 3` que el resto. `centered`
-        // recorta contra el frame: en un terminal enano el lote se ve a
-        // medias, nunca desborda.
-        Modal::ConfirmDelete { items, .. } | Modal::ConfirmTransfer { items, .. } => {
-            let listed = items.len().min(norte_frontend::MODAL_ITEM_LIMIT)
-                + usize::from(items.len() > norte_frontend::MODAL_ITEM_LIMIT);
-            u16::try_from(listed).unwrap_or(u16::MAX).saturating_add(5)
-        }
-        // TrustHostKey: host + algo + fingerprint + nota + teclas (5 líneas)
-        // + bordes.
-        Modal::TrustHostKey { .. } => 9,
-        // TransferName: origen + destino + blanco + etiqueta + campo + blanco
-        // + teclas son 7 líneas, +3; y una más por cada aviso del destino y
-        // por el error. SE CUENTAN en vez de ir fijas porque los avisos
-        // aparecen y desaparecen (#343): un alto fijo dejaba la última línea
-        // —la de las teclas, o el propio aviso— fuera de la caja.
-        //
-        // Que este número case con lo que compone `transfer_name_modal` lo
-        // ata un test (`el_alto_declarado_cubre_el_cuerpo`), que es lo que
-        // faltaba: el rustdoc de este módulo lleva desde el principio diciendo
-        // que las dos mitades se desincronizan y nadie lo comprobaba.
-        Modal::TransferName {
-            error,
-            space,
-            confine,
-            ..
-        } => {
-            let extras = usize::from(error.is_some())
-                + usize::from(space.is_some())
-                + usize::from(confine.is_some());
-            u16::try_from(extras).unwrap_or(u16::MAX).saturating_add(10)
-        }
-        // TrustLuaInit: un mensaje largo con wrap (~4 líneas a 58 cols) +
-        // bordes.
-        // #325 `AskSecret`: conexión + destino + campo de puntos + nota +
-        // teclas son 5 líneas, +3. La caja NO cambia de alto al teclear — el
-        // campo pinta siempre una línea, llena o vacía.
-        Modal::TrustLuaInit { .. } | Modal::AskSecret { .. } => 8,
-        // Patrón/mkdir + hint + teclas (3 líneas) o + la línea de error (4),
-        // más bordes (#103 T9: mismo cómputo `body_lines + 3` que el resto).
-        // Sin error caen al comodín `6` de abajo (match_same_arms).
-        Modal::MarkPattern { error: Some(_), .. }
-        | Modal::Mkdir { error: Some(_), .. }
-        | Modal::EditNew { error: Some(_), .. }
-        | Modal::TransferDest { error: Some(_), .. }
-        | Modal::CommandLine { error: Some(_), .. }
-        | Modal::AiRenameInstruction { error: Some(_), .. }
-        | Modal::RenameBatchPattern { error: Some(_), .. }
-        | Modal::SemanticQuery { error: Some(_), .. } => 7,
-        // M4-IA: la línea del dir (audit MAJOR-1) + el veredicto del LOTE
-        // (§17) + dos por pareja de la VENTANA + el indicador (si el plan no
-        // cabe entero) + el detalle del lote (contado por
-        // `rename_batch_detail_lines` — la MISMA función que lo pinta, no una
-        // fórmula paralela que se desincronice) + el hint, más bordes — mismo
-        // cómputo dinámico `body_lines + 3` que
-        // ConfirmDelete/ConfirmTransfer. Estable al scroll: la ventana
-        // clampada siempre pinta `min(len, LIMIT)` parejas.
-        // #139: nombre, clase, tamaño, fecha y ruta, más un atributo por línea
-        // y la línea del recuento cuando la entrada es una carpeta.
-        Modal::Properties { entry, size, .. } => {
-            let lines = 5
-                + entry.attrs.len()
-                + usize::from(entry.kind == norte_proto::EntryKind::Dir || size.is_some());
-            u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(3)
-        }
-        // #311: una línea por fila de la ventana + el indicador de que hay más
-        // + el hint.
-        Modal::Checksums { rows, offset, .. } => {
-            // Con la ventana desplazada, «hay más» puede ser falso aunque la
-            // lista sea larga: la caja se mide con lo que se va a PINTAR.
-            let visibles = rows.len().saturating_sub(*offset).min(AI_RENAME_PAIR_LIMIT);
-            let hay_mas = rows.len().saturating_sub(offset + AI_RENAME_PAIR_LIMIT) > 0;
-            let lines = visibles + usize::from(hay_mas) + 1;
-            u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(3)
-        }
-        Modal::AiRenamePlan { entries, plan, .. } => {
-            let lines = 2
-                + 2 * entries.len().min(AI_RENAME_PAIR_LIMIT)
-                + usize::from(entries.len() > AI_RENAME_PAIR_LIMIT)
-                + plan.detail_line_count()
-                + 1;
-            u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(3)
-        }
-        // M4-IA-2: un hit POR LÍNEA de la ventana + el indicador (si el
-        // lote no cabe entero) + el hint — mismo cómputo dinámico
-        // `body_lines + 3` que el plan IA. Estable al scroll.
-        Modal::SemanticHits { hits, .. } => {
-            let lines = hits.len().min(SEMANTIC_HIT_LIMIT)
-                + usize::from(hits.len() > SEMANTIC_HIT_LIMIT)
-                + 1;
-            u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(3)
-        }
-        _ => 6,
-    }
+/// El alto que hay que reservar para un cuerpo YA COMPUESTO.
+///
+/// **Sustituye a `modal_height`, que era una tabla de fórmulas escritas a
+/// mano, una por variante.** El rustdoc de este módulo llevaba desde el
+/// principio advirtiendo que las dos mitades se desincronizan y el modal se
+/// recorta, y no había una sola comprobación; cuando por fin se escribió una
+/// —para una variante— resultó que las fórmulas ni siquiera coincidían entre
+/// ellas: unas sumaban 2 al número de líneas, otras 3, otras 4, y
+/// `TrustHostKey` declaraba 9 fijas para «cinco líneas».
+///
+/// Derivándolo del cuerpo, la desincronización deja de ser POSIBLE. No hace
+/// falta un test que la vigile: no hay dos números que puedan discrepar.
+///
+/// `+3` son los dos bordes y una fila de aire abajo — la convención
+/// mayoritaria (`body_lines + 3`) y la que se lee mejor. Las variantes que
+/// declaraban `+2` ganan esa fila; las que declaraban `+4`, la pierden.
+///
+/// **No sirve para el modal que ENVUELVE.** Ahí una línea de cuerpo ocupa
+/// varias filas y `cuerpo.len()` no las cuenta. La división obvia
+/// —`ancho / interior` redondeando arriba— se queda corta: `ratatui` envuelve
+/// por palabras, así que una palabra larga corta la fila antes de llenarla.
+/// Preguntárselo a él sería lo correcto (`Paragraph::line_count`) pero es una
+/// feature INESTABLE de ratatui, y activarla para un modal no se paga.
+/// Ese caso declara su alto a mano, y un test comprueba que su mensaje cabe
+/// (`el_mensaje_que_se_envuelve_cabe_en_su_caja`).
+fn alto_del_cuerpo(cuerpo: &ModalBody) -> u16 {
+    u16::try_from(cuerpo.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(3)
 }
+
+/// El alto del único modal cuyo cuerpo se ENVUELVE.
+///
+/// A mano y no derivado, porque su cuerpo es una línea que ratatui parte en
+/// varias y contar esas filas exige su regla de envoltura. Cuatro filas de
+/// mensaje a ~74 columnas, una de aire y los dos bordes.
+const ALTO_ENVUELTO: u16 = 7;
 
 /// Pinta el modal activo: borde (de aviso en las superficies de decisión
 /// duras), título y cuerpo de `modal_title_body`. `reinterpret` es la
@@ -677,20 +595,23 @@ pub(crate) fn draw_modal(
     } else {
         theme.role(Role::ModalBorder)
     };
-    // Altura: fija salvo la aprobación (una línea POR ruta, H2 del auditor).
-    let height = modal_height(modal);
-    let area = centered(
-        frame.area(),
-        modal_width(&title, &body, frame.area().width),
-        height,
-    );
-    clear_themed(frame, area, theme);
-    // Cada línea con el estilo de SU papel. Una línea sin papel declarado sale
-    // en el color de siempre, que es lo que hace que los modales aún no
-    // migrados se pinten exactamente igual que antes.
+    // Solo este modal envuelve: su cuerpo es UN mensaje largo; el resto ya
+    // viene troceado por líneas.
+    let envuelve = matches!(modal, Modal::TrustLuaInit { .. });
+    let width = modal_width(&title, &body, frame.area().width);
     // El interior de la caja: el ancho menos los dos bordes. Es lo que un
     // CAMPO tiene que ocupar entero.
-    let interior = usize::from(area.width.saturating_sub(2));
+    let interior = usize::from(width.saturating_sub(2));
+    // El alto se DERIVA del cuerpo que se acaba de componer, no de una tabla
+    // por variante: así no hay dos números que puedan discrepar. El que
+    // envuelve es la excepción, y se declara como tal.
+    let height = if envuelve {
+        ALTO_ENVUELTO
+    } else {
+        alto_del_cuerpo(&body)
+    };
+    let area = centered(frame.area(), width, height);
+    clear_themed(frame, area, theme);
     let lineas: Vec<ratatui::text::Line<'_>> = body
         .iter()
         .map(|l| {
@@ -730,10 +651,10 @@ pub(crate) fn draw_modal(
             .title_style(theme.role(Role::Title))
             .border_style(border),
     );
-    // Solo este modal envuelve: su cuerpo es UN mensaje largo; el resto ya
-    // viene troceado por líneas (y el wrap podría partir un path por
-    // cualquier char, cosa que los modales de rutas evitan con elipsis).
-    if matches!(modal, Modal::TrustLuaInit { .. }) {
+    // El envoltorio, con la MISMA condición que ya midió el alto: el resto de
+    // modales vienen troceados por líneas, y ahí el wrap podría partir un path
+    // por cualquier char (lo que los modales de rutas evitan con elipsis).
+    if envuelve {
         body = body.wrap(ratatui::widgets::Wrap { trim: false });
     }
     frame.render_widget(body, area);
@@ -1749,14 +1670,18 @@ mod transfer_name_modal_text_tests {
         );
     }
 
-    /// **El alto declarado cubre el cuerpo que se compone.**
+    /// **El alto cubre el cuerpo, y ya no puede no cubrirlo.**
     ///
-    /// `modal_height` es una segunda fuente de verdad —el rustdoc del módulo
-    /// lleva desde el principio diciendo que si las dos se desincronizan el
-    /// modal se recorta— y no había un solo test que las atara. Se comprueba
-    /// con y sin cada línea opcional, que es justo donde se desincronizan.
+    /// `modal_height` era una segunda fuente de verdad —una fórmula a mano por
+    /// variante— y el rustdoc del módulo llevaba desde el principio diciendo
+    /// que si las dos mitades se desincronizan el modal se recorta, sin un
+    /// solo test que las atara. Ya no hay dos: el alto se DERIVA del cuerpo.
+    ///
+    /// El test se queda porque sigue diciendo algo — que las líneas
+    /// opcionales entran en la cuenta— y porque es el sitio donde se vería si
+    /// alguien vuelve a meter un número a mano.
     #[test]
-    fn el_alto_declarado_cubre_el_cuerpo() {
+    fn el_alto_cubre_el_cuerpo() {
         use crate::app::Modal;
         let from = VPath::parse("mem:///src/a.txt").unwrap();
         let to_dir = VPath::parse("mem:///dst").unwrap();
@@ -1781,7 +1706,7 @@ mod transfer_name_modal_text_tests {
                         None,
                         &crate::hints::DialogHints::default(),
                     );
-                    let alto = super::modal_height(&modal);
+                    let alto = super::alto_del_cuerpo(&body);
                     assert!(
                         usize::from(alto) >= body.len() + 2,
                         "el cuerpo ({} líneas) no cabe en {alto} filas con sus \
@@ -2017,7 +1942,7 @@ pub(crate) fn ask_secret_modal_text(
 
 #[cfg(test)]
 mod ai_rename_plan_modal_tests {
-    use super::{HOSTILE_BADGE, ai_rename_plan_modal_text, display_name, modal_height};
+    use super::{HOSTILE_BADGE, ai_rename_plan_modal_text, display_name};
     use norte_proto::methods::{
         AiRenameEntry, FsRenameBatchPlanResult, PlanHash, RenameCollision, RenameCollisionKind,
         RenameStep,
@@ -2257,15 +2182,11 @@ mod ai_rename_plan_modal_tests {
             &plan_ok(),
         );
         assert!(body3.contains("f7"), "{body3:?}");
-        // Alto: 14 líneas de cuerpo + 3 de marco.
-        let modal = crate::app::Modal::AiRenamePlan {
-            dir: dir(),
-            entries,
-            offset: 0,
-            seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
-            plan: plan_ok(),
-        };
-        assert_eq!(modal_height(&modal), 17);
+        // Catorce líneas: el dir, diez parejas × ... — lo que se FIJA es el
+        // cuerpo, porque el alto sale de él (`alto_del_cuerpo`). Antes se
+        // afirmaba el alto (17 = 14 + 3) y eso replicaba la fórmula en vez de
+        // comprobarla.
+        assert_eq!(body.lines().count(), 14, "{body:?}");
     }
 
     /// Audit MAJOR-3: el indicador de desbordamiento delata una pareja
@@ -2432,15 +2353,7 @@ mod ai_rename_plan_modal_tests {
         );
         assert!(body.contains(&t("modal-rename-batch-pending")), "{body:?}");
         assert!(!body.contains(&t("modal-ai-rename-plan-hint")), "{body:?}");
-        // Y el alto cuadra con lo pintado (dir + pareja × 2 + estado + hint).
-        let modal = crate::app::Modal::AiRenamePlan {
-            dir: dir(),
-            entries: vec![entry("a", "b")],
-            offset: 0,
-            seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
-            plan: norte_frontend::BatchPlan::Pending,
-        };
-        assert_eq!(modal_height(&modal), 8);
+        // Lo pintado: dir + pareja × 2 + estado + hint. El alto sale de aquí.
         assert_eq!(body.lines().count(), 5, "{body:?}");
     }
 
@@ -2542,7 +2455,7 @@ mod ai_rename_plan_modal_tests {
 
 #[cfg(test)]
 mod semantic_hits_modal_tests {
-    use super::{HOSTILE_BADGE, modal_height, semantic_hits_modal_text};
+    use super::{HOSTILE_BADGE, semantic_hits_modal_text};
     use norte_proto::methods::SemanticHit;
     use norte_proto::{Segment, VPath};
 
@@ -2701,13 +2614,8 @@ mod semantic_hits_modal_tests {
         let (_, body3) =
             semantic_hits_modal_text(&hits, 999, 0, &crate::hints::DialogHints::default());
         assert!(body3.contains("f12"), "{body3:?}");
-        // Alto: 12 líneas de cuerpo + 3 de marco.
-        let modal = crate::app::Modal::SemanticHits {
-            hits,
-            offset: 0,
-            cursor: 0,
-        };
-        assert_eq!(modal_height(&modal), 15);
+        // Doce líneas de cuerpo, que es de donde sale el alto.
+        assert_eq!(body.lines().count(), 12, "{body:?}");
     }
 
     /// M4-IA-2: el indicador de desbordamiento delata un hit hostil OCULTO
@@ -2739,7 +2647,7 @@ mod semantic_hits_modal_tests {
 /// MINOR-5).
 #[cfg(test)]
 mod approval_modal_tests {
-    use super::{HOSTILE_BADGE, approval_modal_text, modal_height};
+    use super::{HOSTILE_BADGE, alto_del_cuerpo, approval_modal_text, plain_body};
 
     fn req(paths: Vec<String>) -> norte_proto::methods::PolicyApprovalRequired {
         norte_proto::methods::PolicyApprovalRequired {
@@ -2775,11 +2683,11 @@ mod approval_modal_tests {
             "el resumen cuenta las que la DECISIÓN cubre y no se ven: {body:?}"
         );
         assert_eq!(lines[6], "PIE", "y el pie sigue siendo la última: {body:?}");
-        assert_eq!(
-            modal_height(&crate::app::Modal::ApproveAgentOp { req: r }),
-            9,
-            "el alto cuenta la línea de resumen que acaba de aparecer",
-        );
+        // El alto cuenta la línea de resumen que acaba de aparecer. Se deriva
+        // del cuerpo, así que la aserción es sobre el cuerpo: antes había un
+        // `9` a mano que replicaba una fórmula, y las dos discrepaban en una
+        // fila de aire.
+        assert_eq!(alto_del_cuerpo(&plain_body(&body)), 10);
     }
 
     /// `paths_total: 0` es un server N-1 que no lo mandaba: lo recibido ES
@@ -2832,29 +2740,27 @@ mod approval_modal_tests {
             "y el pie es la ÚLTIMA línea, siempre presente: {body:?}"
         );
 
-        // El alto lo dice el mismo cómputo acotado: cuerpo + marco, jamás
-        // `paths.len()` crudo.
-        let modal = crate::app::Modal::ApproveAgentOp {
-            req: req(rutas(total)),
+        // **El agente no elige el alto.** Es lo único que este bloque tenía
+        // que decir, y ahora se dice sobre el cuerpo: el alto se deriva de él,
+        // así que basta con que la lista esté ACOTADA. Con 17 rutas y con 400
+        // se pinta lo mismo.
+        let alto_de = |n: usize| {
+            let (_, cuerpo) = approval_modal_text(&req(rutas(n)), "PIE-DEL-MODAL");
+            alto_del_cuerpo(&plain_body(&cuerpo))
         };
-        let height = modal_height(&modal);
         assert_eq!(
-            height,
-            u16::try_from(limit + 4).expect("cabe") + 2,
-            "{height}"
+            alto_de(total),
+            u16::try_from(limit + 4).expect("cabe") + 3,
+            "cuerpo acotado + marco"
         );
         assert_eq!(
-            modal_height(&crate::app::Modal::ApproveAgentOp { req: req(rutas(1)) }),
-            6,
-            "un lote que cabe conserva su alto de siempre: acotar la lista no \
-             le mueve la caja"
-        );
-        assert_eq!(
-            height,
-            modal_height(&crate::app::Modal::ApproveAgentOp {
-                req: req(rutas(400)),
-            }),
+            alto_de(400),
+            alto_de(total),
             "el agente no elige el alto: 17 rutas y 400 miden lo mismo"
+        );
+        assert!(
+            alto_de(1) < alto_de(total),
+            "y un lote que cabe ocupa menos, no lo mismo"
         );
     }
 

@@ -40,6 +40,18 @@ independently through `PROTOCOL_VERSION`.
   and NTFS, so `→ ∕srv∕publico` is a legal file name that renders a complete
   destination line. What distinguishes it now is its ROLE, which a name cannot
   write. Both spoofs are in the corpus.
+- **A modal's height is derived from its body**, and `modal_height` — a table
+  of 131 lines of hand-written formulas, one per variant — is gone. This
+  module's own rustdoc had warned from the start that the two halves drift
+  apart and the modal gets clipped; when a test was finally written for one
+  variant, it turned out the formulas did not even agree with each other:
+  some added 2 to the line count, some 3, some 4, and `TrustHostKey` declared
+  9 fixed rows for "five lines". Deriving it makes the drift impossible —
+  there are no longer two numbers that can disagree. The one modal that lets
+  `ratatui` wrap its body still declares its height by hand, because counting
+  wrapped rows needs ratatui's own rule (`Paragraph::line_count` knows it, but
+  it is an unstable feature and is not worth turning on for one modal); a test
+  now checks that its message reaches the screen.
 - **`tail_window` budgets in CELLS, not chars.** Fifty chars of CJK are a
   hundred cells, so a Japanese name overflowed its box anyway and the overflow
   ate the cursor at the end — you kept typing and the screen stopped changing.
