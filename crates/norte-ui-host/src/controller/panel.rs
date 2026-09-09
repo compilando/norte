@@ -96,7 +96,12 @@ impl Estado {
     }
 
     /// Mueve el foco al siguiente hueco enfocable, o al anterior.
-    pub(super) fn mover_foco(&mut self, atras: bool) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn mover_foco(
+        &mut self,
+        atras: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // El recorrido es el COMPARTIDO: `focus_order` ya se salta lo
         // que no se ve y lo que no se enfoca (una barra de estado no
         // recibe el foco), así que aquí no hay una segunda regla que
@@ -122,6 +127,19 @@ impl Estado {
         };
         self.roles.set(RoleId::Active, SlotId(id));
         self.reconcilia_roles();
+        // El árbol sigue al panel activo, y acaba de cambiar cuál es. Va por
+        // FOTO porque el árbol no tiene `ViewChange` propio: viaja entero o no
+        // viaja, y un cursor de árbol que no cruza deja el panel señalando la
+        // rama del panel anterior.
+        if self.hueco_de_ramas().is_some() {
+            let activo = self.activo();
+            self.seguir_ramas(activo, backend, buzon);
+            let snap = self.snapshot();
+            return (
+                self.aplicada(),
+                vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            );
+        }
         let cambio = ViewChange::Layout(self.disposicion());
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }

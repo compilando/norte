@@ -559,6 +559,24 @@ impl App {
         }
     }
 
+    /// El árbol sigue al listado ENFOCADO: revela su directorio y conserva lo
+    /// que estuviera abierto ([`norte_frontend::tree::Tree::follow`]).
+    ///
+    /// Se llama desde los dos sitios en los que «dónde mira el panel» cambia
+    /// —[`crate::navigate::settle_cd`], el embudo de todo `cd`, y el aterrizaje
+    /// del foco— y no desde cada gesto que provoca uno: la lista de gestos que
+    /// navegan ya se quedó corta una vez, y de ahí salió el propio `settle_cd`.
+    ///
+    /// Las ramas que hagan falta las pide el bucle solo
+    /// ([`norte_frontend::tree::Tree::wants`], una por vuelta), así que aquí no
+    /// hay I/O.
+    pub fn follow_tree(&mut self) {
+        let dir = self.focused().dir().clone();
+        if let Some(t) = self.tree_mut() {
+            t.follow(&dir);
+        }
+    }
+
     /// El árbol abierto, para mutarlo.
     pub fn tree_mut(&mut self) -> Option<&mut crate::tree::Tree> {
         let id = self.tree_slot()?;
@@ -1379,6 +1397,51 @@ mod tests {
         app.toggle_tree();
         assert_eq!(app.tree().and_then(|t| t.root().cloned()), Some(dir));
         assert_eq!(app.key_owner(), KeyOwner::Tree, "se lleva el teclado");
+    }
+
+    /// Y una vez abierto SIGUE al listado: navegar dentro de su raíz mueve el
+    /// cursor a esa rama y conserva lo que hubiera abierto. Anclado y quieto,
+    /// el panel decía dónde estabas cuando lo abriste y nada más.
+    #[test]
+    fn el_arbol_sigue_al_listado_que_navega() {
+        let mut app = app_en("mem:///r", "mem:///otro");
+        app.toggle_tree();
+        let t = app.tree_mut().expect("árbol");
+        t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a"), vp("mem:///r/b")]);
+        // `b` abierta a mano: es lo que un re-anclado habría cerrado.
+        t.set_cursor(2);
+        t.expand();
+        t.insert_children(vp("mem:///r/b"), vec![vp("mem:///r/b/x")]);
+        t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/y")]);
+
+        *app.focused_mut() = crate::app::pane::Pane::new(vp("mem:///r/a/y"), Vec::new());
+        app.follow_tree();
+
+        let t = app.tree().expect("árbol");
+        assert_eq!(t.selected(), Some(vp("mem:///r/a/y")));
+        assert_eq!(t.rows().len(), 5, "`b` sigue desplegada");
+    }
+
+    /// Cambiar de panel también cambia a dónde mira el árbol: los dos lados
+    /// están en sitios distintos, y un árbol que se quedara en el del panel
+    /// anterior describiría el que ya no tiene el foco.
+    #[test]
+    fn el_arbol_sigue_al_cambio_de_panel() {
+        let mut app = app_en("mem:///r", "mem:///otro");
+        app.toggle_tree();
+        app.return_keys_to_panes();
+        assert_eq!(
+            app.tree().and_then(|t| t.root().cloned()),
+            Some(vp("mem:///r"))
+        );
+
+        app.switch_focus();
+
+        assert_eq!(
+            app.tree().and_then(|t| t.root().cloned()),
+            Some(vp("mem:///otro")),
+            "el otro lado no cuelga de la raíz anterior, así que se re-ancla"
+        );
     }
 
     /// **Un layout RESTAURADO con el árbol dentro trae su estado.**

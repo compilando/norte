@@ -197,6 +197,9 @@ impl Estado {
         self.pedir_capacidades(slot, backend, buzon);
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
+        // Y el árbol, si hay uno: este listado es dónde está mirando el panel
+        // ahora, y el panel de al lado tiene que decir lo mismo.
+        self.seguir_ramas(slot, backend, buzon);
         // Los hechos de la ayuda describen la entrada bajo el CURSOR, y este
         // listado es otro (#262). La foto de abajo la lleva ya re-congelada,
         // así que aquí no se fabrica parche: gastaría un número de secuencia

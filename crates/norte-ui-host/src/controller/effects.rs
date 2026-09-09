@@ -88,7 +88,7 @@ impl Estado {
             | Efecto::MarcarPagina { .. }
             | Efecto::MarcarHastaElBorde { .. }
             | Efecto::DesmarcarTodo => self.efecto_de_listado(efecto, slot, backend, buzon),
-            Efecto::Foco { atras } => self.mover_foco(atras),
+            Efecto::Foco { atras } => self.mover_foco(atras, backend, buzon),
             Efecto::Destino => self.designar_destino(),
             // Atendido arriba, antes del panel enfocado. El brazo existe
             // porque el `match` es exhaustivo a propósito: un efecto nuevo

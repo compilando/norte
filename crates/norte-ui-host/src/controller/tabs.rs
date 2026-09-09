@@ -375,10 +375,11 @@ impl Estado {
             .dock(SlotId(self.enfocado()), borde, tamano, &hoja);
         let salida = self.aplicar_disposicion(nuevo, backend, buzon);
         if kind == "tree" {
-            // Anclar al abrirlo, y solo entonces: el árbol se queda donde
-            // está mientras el listado navega, que es lo que hace útil tenerlo
-            // abierto. Re-anclarlo en cada navegación tiraría las ramas
-            // abiertas cada vez que el lector entra en una carpeta.
+            // ANCLAR es solo aquí: es la única vez que se elige de dónde
+            // cuelga el árbol. Mientras el listado navega, el panel lo SIGUE
+            // revelando la rama (`seguir_ramas`), que conserva lo abierto;
+            // re-anclarlo cerraría el árbol entero cada vez que el lector
+            // entra en una carpeta.
             self.sembrar_ramas();
             self.pedir_ramas(backend, buzon);
         }

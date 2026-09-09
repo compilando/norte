@@ -18489,7 +18489,46 @@ async fn el_arbol_pide_una_rama_y_solo_al_abrirla() {
     );
 }
 
-/// Elegir una rama navega el LISTADO, y el árbol se queda donde está.
+/// **El árbol SIGUE al listado que navega.**
+///
+/// Un panel anclado al abrirse y quieto después decía dónde estabas cuando lo
+/// abriste, y nada más: entrar en una carpeta desde el listado dejaba el
+/// cursor del árbol donde estaba. Sigue revelando —despliega los ancestros y
+/// mueve el cursor—, no re-anclando: la raíz no cambia y lo abierto no se
+/// cierra.
+#[tokio::test]
+async fn el_arbol_sigue_al_listado_que_navega() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
+    let foto = arbol_con_ramas(&mut sub, 2).await;
+    assert_eq!(arbol_de(&foto).cursor, 0, "arranca en la raíz");
+
+    // `docs` es la primera fila del listado (los directorios van primero), así
+    // que Intro entra ahí.
+    ejecutar_por_paleta(&h, &mut sub, "nav.enter").await;
+
+    let mut visto = None;
+    for _ in 0..20 {
+        let foto = siguiente_foto(&mut sub).await;
+        if primer_listado(&foto).path_display.ends_with("/casa/docs") && arbol_de(&foto).cursor == 1
+        {
+            visto = Some(foto);
+            break;
+        }
+    }
+    let foto = visto.expect("el árbol acaba señalando la rama en la que está el listado");
+    let t = arbol_de(&foto);
+    assert_eq!(t.rows[1].label, "docs");
+    assert!(
+        t.rows[0].label.ends_with("/casa"),
+        "y la raíz no se ha movido: {:?}",
+        t.rows[0]
+    );
+}
+
+/// Elegir una rama navega el LISTADO, y la RAÍZ del árbol no se mueve.
 ///
 /// Es lo que hace útil tenerlo abierto: si el árbol se re-anclara en cada
 /// navegación, entrar en una carpeta tiraría todas las ramas abiertas.

@@ -55,6 +55,7 @@ impl App {
     /// Alterna el foco entre los dos panes (Tab, keymap mc).
     pub fn switch_focus(&mut self) {
         self.focus ^= 1;
+        self.follow_tree();
     }
 
     /// Exchanges the two panes and everything `App` keeps beside them
@@ -261,6 +262,9 @@ impl App {
             FocusStop::Pane(i) => {
                 self.return_keys_to_panes();
                 self.set_focus(i);
+                // Cambia cuál es el listado enfocado, así que cambia a dónde
+                // apunta el árbol.
+                self.follow_tree();
             }
             FocusStop::Side(owner) => self.key_owner = owner,
         }
