@@ -1290,6 +1290,13 @@ impl Estado {
         if let Some(clave) = self.aviso_de_daemon {
             banners.push(frase(clave));
         }
+        // Una ventana SUELTA —otra tiene la sesión, o la guardada es de un
+        // binario más nuevo— no escribe la pantalla, y hasta aquí no lo decía
+        // nadie: cerraba y perdía dónde estaba cada panel en silencio. El
+        // mismo indicador que el terminal, y en el mismo sitio (ADR 0077).
+        if !self.sesion.owner || self.sesion.futuro {
+            banners.push(frase("status-session-detached"));
+        }
         if let Some(aviso) = self.degradadas.banner(self.lang) {
             // La conexión va en su propio campo, jamás dentro de la frase:
             // ver el rustdoc de `connection_banner`.

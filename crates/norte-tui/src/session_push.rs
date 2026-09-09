@@ -52,11 +52,12 @@ pub async fn restore_session(
             return;
         }
     };
+    // Suelta o dueña es un ESTADO, y lo pinta el indicador persistente de la
+    // barra (`App::session_banner`) mientras dure: no un mensaje de
+    // arranque que hable de «otra ventana» a quien acaba de abrir la
+    // primera. El indicador es discreto, y la ayuda dice qué significa.
     app.session.detached = !dueña;
     app.session.revision = sesion.revision;
-    if !dueña {
-        app.message = Some(t("msg-session-detached"));
-    }
     // Revisión 0 es «nadie la ha escrito todavía»: no hay nada que aplicar y
     // tampoco nada roto que contar.
     if sesion.revision == 0 {
@@ -548,7 +549,6 @@ pub fn push_session(app: &mut App, st: &mut SessionPush) {
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
             tracing::warn!("el escritor de la sesión no está: esta ventana deja de guardar");
             app.session.detached = true;
-            app.message = Some(t("msg-session-detached"));
         }
     }
 }
@@ -563,15 +563,16 @@ pub fn drain_notices(app: &mut App, st: &mut SessionPush) {
                 // Lo mandado no llegó: que la comparación no lo dé por escrito.
                 st.policy.resend();
             }
+            // Ni tomar la sesión ni soltarla se anuncian: el indicador de la
+            // barra aparece y desaparece solo, y un mensaje por cada relevo
+            // de daemon era ruido sobre un hecho que ya se ve.
             SessionNotice::Owner { revision, orphans } => {
                 app.session.detached = false;
                 app.session.revision = revision;
                 app.adopt_session_orphans(orphans);
-                app.message = Some(t("msg-session-owned"));
             }
             SessionNotice::Released => {
                 app.session.detached = true;
-                app.message = Some(t("msg-session-detached"));
                 // Se vuelve a preguntar en el tick siguiente y no dentro de
                 // treinta segundos: esto suele ser un relevo de daemon, y la
                 // sesión ya está libre.
@@ -832,6 +833,34 @@ mod session_push_tests {
         );
     }
 
+    /// Soltar la sesión y volver a tomarla NO escriben en la barra de
+    /// mensajes: son un estado, lo pinta el indicador persistente, y un
+    /// mensaje por relevo era ruido sobre algo que ya se ve.
+    #[test]
+    fn soltar_y_tomar_la_sesion_no_dejan_mensaje() {
+        let mut app = app();
+        let (mut st, _ordenes, avisos) = SessionPush::for_test();
+        avisos.try_send(SessionNotice::Released).expect("cabe");
+        push_session(&mut app, &mut st);
+        assert!(app.session.detached, "suelta");
+        assert!(app.message.is_none(), "sin mensaje: {:?}", app.message);
+        assert!(
+            app.session_banner().is_some(),
+            "lo dice el indicador persistente"
+        );
+
+        avisos
+            .try_send(SessionNotice::Owner {
+                revision: 3,
+                orphans: std::collections::BTreeMap::new(),
+            })
+            .expect("cabe");
+        push_session(&mut app, &mut st);
+        assert!(!app.session.detached, "dueña otra vez");
+        assert!(app.message.is_none(), "y tampoco: {:?}", app.message);
+        assert!(app.session_banner().is_none(), "el indicador se fue solo");
+    }
+
     /// Y cuando el escritor dice que ya es la dueña, esta ventana vuelve a
     /// escribir desde la revisión que le den.
     #[test]
@@ -901,13 +930,13 @@ mod session_push_tests {
         assert!(matches!(v[1], SessionOrder::Write(_)));
     }
 
-    /// Perder la propiedad a media vida se DICE, y se vuelve a preguntar en el
-    /// tick siguiente.
+    /// Perder la propiedad a media vida se ve en el indicador de la barra, y
+    /// se vuelve a preguntar en el tick siguiente.
     ///
     /// Es lo que pasa tras un relevo de daemon: la conexión nueva no ha
     /// reclamado nada, el `put` sale `PermissionDenied` y el escritor se apaga.
-    /// Sin el aviso, la ventana se creía la dueña y no volvía a guardar en el
-    /// resto de su vida — ni lo decía.
+    /// Sin el estado, la ventana se creía la dueña y no volvía a guardar en el
+    /// resto de su vida — ni lo enseñaba.
     #[test]
     fn perder_la_propiedad_se_dice_y_se_vuelve_a_preguntar() {
         let mut app = app();
@@ -915,7 +944,7 @@ mod session_push_tests {
         avisos.try_send(SessionNotice::Released).expect("cabe");
         push_session(&mut app, &mut st);
         assert!(app.session.detached, "esta ventana ya no manda");
-        assert!(app.message.is_some(), "y lo dice");
+        assert!(app.session_banner().is_some(), "y el indicador lo enseña");
         // Y en el tick siguiente pregunta, sin esperar los treinta segundos.
         push_session(&mut app, &mut st);
         assert!(matches!(ordenes.try_recv(), Ok(SessionOrder::Ask)));
@@ -950,8 +979,8 @@ mod session_push_tests {
         );
     }
 
-    /// Un escritor muerto no deja a la pantalla hablando sola: se dice y se
-    /// deja de guardar.
+    /// Un escritor muerto no deja a la pantalla hablando sola: se deja de
+    /// guardar y el indicador de la barra lo enseña.
     #[test]
     fn si_el_escritor_se_muere_la_pantalla_se_entera() {
         let mut app = app();
@@ -959,7 +988,7 @@ mod session_push_tests {
         drop(ordenes);
         push_session(&mut app, &mut st);
         assert!(app.session.detached);
-        assert!(app.message.is_some());
+        assert!(app.session_banner().is_some());
     }
 
     /// **#231**: de un cuerpo ajeno se conserva lo que solo estaba en él.    /// **#231**: de un cuerpo ajeno se conserva lo que solo estaba en él. Los

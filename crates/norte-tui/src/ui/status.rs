@@ -35,6 +35,65 @@ pub(crate) fn marks_status_segments(pane: &Pane) -> (String, String) {
 }
 
 pub(crate) fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let (text, _) = compose(app, area);
+    frame.render_widget(
+        Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
+        area,
+    );
+}
+
+/// Dónde cae el indicador de sesión suelta en el frame, si se está pintando.
+///
+/// Es la zona pulsable de la barra de estado: un clic encima abre la ayuda
+/// en la página que explica qué significa. Sale de la MISMA composición que
+/// pinta la línea ([`compose`]), así que solo existe cuando el indicador está
+/// de verdad en pantalla — con un mensaje, una espera o una búsqueda viva
+/// delante, la línea es otra y no hay nada que pulsar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionZone {
+    /// Fila.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+}
+
+/// La zona del indicador de sesión para el frame `area`, si se pinta.
+///
+/// El rectángulo de la barra sale del mismo reparto que `draw_body`, y por
+/// el mismo camino: un clic resuelto contra otra geometría caería en la
+/// celda de al lado.
+#[must_use]
+pub fn session_zone(app: &App, area: Rect) -> Option<SessionZone> {
+    use super::geometry::{body_rect, chrome_body, resolved_frame, slot_rect};
+    // Con un overlay delante no hay zona, por la misma regla que la barra
+    // de paneles (`panel_bar_visible`): el visor pinta su propio pie y no
+    // esta barra, y con la ayuda o un modal encima la barra no es pulsable.
+    // `handle_at` ya corta antes por `overlay_open`, pero eso es un orden
+    // de comprobaciones, no una garantía de esta función.
+    if crate::mouse::overlay_open(app) || app.menu.is_some() {
+        return None;
+    }
+    let res = resolved_frame(app, area);
+    let body = body_rect(&res, &app.layout).unwrap_or_else(|| chrome_body(app, area));
+    let status = slot_rect(&res, crate::panel::SLOT_STATUS).unwrap_or(Rect {
+        x: body.x,
+        y: area.height.saturating_sub(1),
+        width: body.width,
+        height: 1,
+    });
+    let (_, span) = compose(app, status);
+    span.map(|(x0, x1)| SessionZone {
+        row: status.y,
+        x0,
+        x1,
+    })
+}
+
+/// La línea de estado, y las columnas del indicador de sesión si va en ella.
+fn compose(app: &App, area: Rect) -> (String, Option<(u16, u16)>) {
+    let mut session = None;
     let pane = app.focused();
     let total = pane.entries().len();
     let pos = if total == 0 { 0 } else { pane.cursor() + 1 };
@@ -138,6 +197,22 @@ pub(crate) fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         // búsqueda viva y sin hook Lua siguen avisando en cada frame.
         // H3d: la frase se COMPONE aquí desde el valor estructurado (una
         // conexión: la nombra; varias: cuántas), en vez de guardarse ya escrita.
+        // El de la sesión cierra la línea (`persistent_banner`), así que sus
+        // columnas son las últimas del aviso: es lo que el ratón pulsa.
+        if let Some(badge) = app.session_banner() {
+            let ancho = cells(&badge);
+            let fin = 1 + cells(&warn);
+            let x0 = area
+                .x
+                .saturating_add(u16::try_from(fin - ancho).unwrap_or(u16::MAX));
+            let x1 = area
+                .x
+                .saturating_add(u16::try_from(fin - 1).unwrap_or(u16::MAX));
+            // Solo si cabe ENTERO: media palabra no es un indicador.
+            if x1 < area.x.saturating_add(area.width) {
+                session = Some((x0, x1));
+            }
+        }
         format!(" {warn}{seq}")
     } else {
         // #93: el contenedor omitió entradas de su índice — el listado que
@@ -186,10 +261,7 @@ pub(crate) fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         let dir_text = norte_frontend::middle_ellipsis(&dir_text, room);
         format!(" {mark}{dir_text}{tail}")
     };
-    frame.render_widget(
-        Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
-        area,
-    );
+    (text, session)
 }
 
 #[cfg(test)]
@@ -230,6 +302,79 @@ mod tests {
         assert!(
             !linea.contains("copiado 1 fichero"),
             "el mensaje viejo tapa la espera: {linea}"
+        );
+    }
+
+    /// Una ventana suelta lleva su indicador en la barra, y la barra sabe
+    /// en qué columnas lo pintó: es lo que el ratón pulsa para pedir la
+    /// explicación. Se contrasta contra el TEXTO pintado, no contra una
+    /// aritmética paralela.
+    #[test]
+    fn el_indicador_de_sesion_dice_donde_cae() {
+        use super::compose;
+        use crate::ui::text::cells;
+        let mut app = app_dos_panes();
+        let area = ratatui::layout::Rect::new(0, 0, 70, 1);
+        assert!(
+            compose(&app, area).1.is_none(),
+            "la dueña no tiene indicador"
+        );
+
+        app.session.detached = true;
+        let (linea, span) = compose(&app, area);
+        let badge = app.session_banner().expect("hay indicador");
+        let (x0, x1) = span.expect("y la barra sabe dónde");
+        let byte = linea.find(&badge).expect("el indicador está en la línea");
+        assert_eq!(
+            usize::from(x0),
+            cells(&linea[..byte]),
+            "empieza donde se pinta"
+        );
+        assert_eq!(
+            usize::from(x1),
+            cells(&linea[..byte]) + cells(&badge) - 1,
+            "y acaba con su última celda"
+        );
+        assert!(barra(&app).contains(&badge), "y se ve: {}", barra(&app));
+
+        // Con un mensaje delante la línea es otra y no hay nada que pulsar.
+        app.message = Some("copiado 1 fichero".to_string());
+        assert!(compose(&app, area).1.is_none());
+    }
+
+    /// En un terminal estrecho el indicador se recorta, y un indicador que no
+    /// cabe entero no es pulsable: media palabra no es un indicador.
+    #[test]
+    fn el_indicador_recortado_no_es_pulsable() {
+        use super::compose;
+        let mut app = app_dos_panes();
+        app.session.detached = true;
+        let badge = app.session_banner().expect("hay indicador");
+        let ancho = crate::ui::text::cells(&badge);
+        // Justo lo que ocupa con su margen: cabe.
+        let justo = ratatui::layout::Rect::new(0, 0, u16::try_from(ancho + 1).expect("cabe"), 1);
+        assert!(
+            compose(&app, justo).1.is_some(),
+            "cabe entero y se puede pulsar"
+        );
+        // Una celda menos: ya no.
+        let corto = ratatui::layout::Rect::new(0, 0, u16::try_from(ancho).expect("cabe"), 1);
+        assert!(compose(&app, corto).1.is_none(), "recortado, sin zona");
+    }
+
+    /// Con un overlay delante no hay zona, aunque la ventana siga suelta: el
+    /// visor pinta su propio pie, y sobre la ayuda la barra no se pulsa.
+    #[test]
+    fn con_un_overlay_delante_no_hay_zona() {
+        use super::session_zone;
+        let mut app = app_dos_panes();
+        app.session.detached = true;
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        assert!(session_zone(&app, area).is_some(), "sin overlay sí");
+        app.help = Some(crate::app::HelpView::new(norte_i18n::Lang::Es, Vec::new()));
+        assert!(
+            session_zone(&app, area).is_none(),
+            "con la ayuda delante no"
         );
     }
 

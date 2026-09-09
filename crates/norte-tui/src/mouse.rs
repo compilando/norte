@@ -246,6 +246,9 @@ pub struct MouseState {
     /// Las filas pulsables del árbol del último frame, por lo mismo.
     /// Vacío = árbol cerrado, o sin sitio donde pintarlo.
     tree_zones: Vec<crate::ui::TreeZone>,
+    /// El indicador de sesión suelta de la barra de estado del último frame.
+    /// `None` = la ventana es la dueña, o la barra estaba diciendo otra cosa.
+    session_zone: Option<crate::ui::SessionZone>,
     /// Los bordes arrastrables del último frame.
     borders: Vec<ResizeBorder>,
     /// Los huecos que se colocaron en el último frame, para saber qué panel
@@ -335,6 +338,8 @@ pub struct FrameZones {
     pub places: Vec<crate::ui::PlaceZone>,
     /// Las filas del árbol (#136).
     pub tree: Vec<crate::ui::TreeZone>,
+    /// El indicador de sesión suelta de la barra de estado, si se pintó.
+    pub session: Option<crate::ui::SessionZone>,
     /// Los bordes arrastrables.
     pub borders: Vec<ResizeBorder>,
     /// Los huecos colocados, para saber qué panel hay bajo un click.
@@ -364,6 +369,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
         panels: panel_zones,
         places: places_zones,
         tree: tree_zones,
+        session: session_zone,
         borders,
         slots,
     } = zones;
@@ -387,9 +393,28 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     app.mouse.panel_zones = panel_zones;
     app.mouse.places_zones = places_zones;
     app.mouse.tree_zones = tree_zones;
+    app.mouse.session_zone = session_zone;
     app.mouse.borders = borders;
     app.mouse.slots = slots;
 }
+
+/// Si `ev` es el botón izquierdo cayendo sobre el indicador de sesión suelta
+/// del último frame.
+fn pulsa_indicador_de_sesion(app: &App, ev: MouseEvent) -> bool {
+    matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
+        && app
+            .mouse
+            .session_zone
+            .is_some_and(|z| z.row == ev.row && ev.column >= z.x0 && ev.column <= z.x1)
+}
+
+/// La página de la ayuda que explica el indicador de sesión suelta: la de
+/// los paneles, que es donde vive la sesión (dónde estaba cada uno).
+///
+/// Un id del corpus y no un contexto: el indicador no es una pantalla en la
+/// que el lector esté, es un hecho sobre esta ventana, y su página es fija.
+/// El test del corpus de abajo ata el id a una página real en ambos idiomas.
+pub const SESSION_HELP_TOPIC: &str = "panes";
 
 /// Qué debe hacer el run loop tras un evento de ratón. Todo lo que se puede
 /// hacer sobre el modelo ya está hecho al volver; esto es solo lo que
@@ -422,6 +447,10 @@ pub enum After {
     /// Se activó una rama del árbol (#136): mismo trato que la fila del
     /// sidebar, y el destino lo dice `App::tree_activate`.
     TreeActivate,
+    /// Se pulsó el indicador de sesión suelta de la barra de estado: el run
+    /// loop abre la ayuda en la página que lo explica. Aquí no se puede: la
+    /// ayuda se abre con la hoja de teclas y el idioma, que son del run loop.
+    SessionHelp,
 }
 
 /// El índice ABSOLUTO en `entries` de una posición PINTADA del pane.
@@ -732,6 +761,16 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
         app.mouse.last_click = None;
         app.pending_panel_command = Some(cmd);
         return After::PanelBar;
+    }
+    // El indicador de sesión suelta, en la barra de estado: pulsarlo pide la
+    // explicación, que es la página de la ayuda que la tiene. Un indicador
+    // discreto solo lo es si hay una forma igual de discreta de saber qué
+    // significa. Detrás de `overlay_open` por lo mismo que la barra de
+    // paneles: con la ayuda delante, la barra no es pulsable.
+    if pulsa_indicador_de_sesion(app, ev) {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        return After::SessionHelp;
     }
     // El ARRASTRE de un borde va antes que todo lo del listado, y en los tres
     // tiempos del gesto: mientras dura, el puntero se sale del borde y no por
@@ -1306,6 +1345,12 @@ pub async fn on_mouse(
 ) {
     match self::handle(app, me) {
         self::After::Nothing => {}
+        // El indicador de sesión suelta: la explicación está en la ayuda, y
+        // se abre por el MISMO constructor que `F1` sobre una fila de la
+        // paleta — una página en mano, no un contexto que resolver.
+        self::After::SessionHelp => {
+            crate::overlays::open_help_topic(app, lang, help_lines, SESSION_HELP_TOPIC);
+        }
         // #324: un botón de la barra de paneles va por el MISMO despacho que
         // su atajo. Dos caminos para abrir el mismo panel divergen en cuanto
         // uno de los dos crece un detalle — es la lección de ADR 0077 aplicada

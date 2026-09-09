@@ -82,6 +82,7 @@ fn tras_pintar(app: &mut App, area: ratatui::layout::Rect) -> Vec<norte_tui::ui:
             menus,
             places: sitios,
             tree: ramas.clone(),
+            session: None,
             slots: huecos,
             ..Default::default()
         },
