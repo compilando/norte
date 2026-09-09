@@ -32,52 +32,9 @@ impl Estado {
             Ok(c) => c,
             Err(clave) => return self.decir(clave),
         };
-        let antes = self.config.common.clone();
         self.perfil_activo = Some(nombre.to_os_string());
         self.selector_perfil = None;
-
-        // El TEMA. Se pone por nombre, y el aviso al que hospeda sale de aquí:
-        // es la mitad de para lo que existe un perfil.
-        if let Some(tema) = cfg.common.ui_theme.clone() {
-            self.aplicar_tema(&tema, buzon);
-        }
-        // El KEYMAP entero, con las capas del perfil dentro. Si no se puede
-        // construir se queda el que había: un perfil con un `keymap.toml`
-        // roto no puede dejar la ventana sin teclas.
-        if let Ok(browse) = crate::keys::keymap_de_preset_con_capas(
-            &cfg.common.preset,
-            &cfg.keymap_layers,
-            self.efectos,
-        ) {
-            self.efectivo = browse.clone();
-            self.resolver = Resolver::new(browse);
-        }
-        if let Ok(visor) =
-            crate::keys::keymap_visor_de_preset_con_capas(&cfg.common.preset, &cfg.keymap_layers)
-        {
-            self.efectivo_visor = visor.clone();
-            self.resolver_visor = Resolver::new(visor);
-        }
-        if let Ok(dialogo) =
-            crate::keys::keymap_dialogo_de_preset_con_capas(&cfg.common.preset, &cfg.keymap_layers)
-        {
-            self.resolver_dialogo = Resolver::new(dialogo);
-        }
-        // Columnas y favoritos.
-        self.columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
-        self.config = cfg;
-        self.sembrar_sitios();
-        // Y la DISPOSICIÓN que el perfil nombre, si nombra otra: es lo que
-        // hace que un perfil sea «otra pantalla» y no solo otros colores.
-        let mut cambios = Vec::new();
-        if antes.ui_layout != self.config.common.ui_layout
-            && let Some(nombre) = self.config.common.ui_layout.clone()
-            && let Ok(arbol) = norte_frontend::layout::presets::tree(&nombre)
-        {
-            // Lo que devuelve se DESCARTA: al final de esto sale una foto
-            // completa, y mandar dos seguidas es mandar la primera para nada.
-            let _ = self.aplicar_disposicion(arbol, backend, buzon);
-        }
+        let fuera = self.aplicar_config(cfg, backend, buzon);
         // Y `[profile.start]`: dónde abre cada hueco del que la sesión no sabe
         // nada. Es lo que hace útil un perfil recién creado o uno que llega de
         // otra máquina — sin esto, entrar en «trabajo» dejaba los dos paneles
@@ -101,9 +58,7 @@ impl Estado {
         for (id, destino) in self.siembra_de_perfil() {
             let _ = self.navegar_hueco(id, &destino, Trail::Seed, backend, buzon);
         }
-        // Lo que NO se puede aplicar sin reiniciar se dice por su nombre: un
-        // cambio que se callara esto sería un cambio que miente (D8).
-        let fuera = fuera_de_alcance_en_caliente(&antes, &self.config.common);
+        let mut cambios = Vec::new();
         // Y lo que el FICHERO del perfil trae y no se entiende, que gana a los
         // otros dos mensajes: «no se pudo aplicar en caliente» describe un
         // límite de este proceso, y esto describe líneas que no van a hacer
@@ -142,6 +97,100 @@ impl Estado {
         let snap = self.snapshot();
         cambios.push(self.sobre(UiUpdate::Snapshot(Box::new(snap))));
         cambios
+    }
+
+    /// Pone `cfg` como la configuración vigente y aplica todo lo que esta
+    /// ventana sabe aplicar sin reiniciar: tema, keymap entero, columnas,
+    /// favoritos y la disposición si cambia de nombre.
+    ///
+    /// Es el camino del cambio de perfil, y también el de un ajuste escrito
+    /// desde F11: una recarga es una recarga, venga de donde venga (ADR 0077
+    /// otra vez — dos formas de aplicar la misma configuración divergen en
+    /// silencio). Devuelve los ids de lo que NO se pudo aplicar en caliente,
+    /// para que quien llama lo diga por su nombre (D8).
+    ///
+    /// Un keymap que no se puede construir deja el que había: un
+    /// `keymap.toml` roto no puede dejar la ventana sin teclas. Lo que
+    /// devuelven la disposición y los listados se DESCARTA: quien llama
+    /// termina con una foto completa, y mandar parches antes es mandarlos
+    /// para nada.
+    pub(super) fn aplicar_config(
+        &mut self,
+        cfg: norte_frontend::config::FrontendConfig,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<&'static str> {
+        let antes = self.config.common.clone();
+        // El TEMA. Se pone por nombre, y el aviso al que hospeda sale de aquí:
+        // es lo que se ve.
+        if let Some(tema) = cfg.common.ui_theme.clone() {
+            self.aplicar_tema(&tema, buzon);
+        }
+        // El KEYMAP entero, con las capas dentro.
+        if let Ok(browse) = crate::keys::keymap_de_preset_con_capas(
+            &cfg.common.preset,
+            &cfg.keymap_layers,
+            self.efectos,
+        ) {
+            self.efectivo = browse.clone();
+            self.resolver = Resolver::new(browse);
+        }
+        if let Ok(visor) =
+            crate::keys::keymap_visor_de_preset_con_capas(&cfg.common.preset, &cfg.keymap_layers)
+        {
+            self.efectivo_visor = visor.clone();
+            self.resolver_visor = Resolver::new(visor);
+        }
+        if let Ok(dialogo) =
+            crate::keys::keymap_dialogo_de_preset_con_capas(&cfg.common.preset, &cfg.keymap_layers)
+        {
+            self.resolver_dialogo = Resolver::new(dialogo);
+        }
+        // Columnas y favoritos.
+        self.columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+        self.config = cfg;
+        self.sembrar_sitios();
+        // Y la DISPOSICIÓN que la configuración nombre, si nombra otra: es lo
+        // que hace que un perfil sea «otra pantalla» y no solo otros colores.
+        if antes.ui_layout != self.config.common.ui_layout
+            && let Some(nombre) = self.config.common.ui_layout.clone()
+            && let Ok(arbol) = norte_frontend::layout::presets::tree(&nombre)
+        {
+            let _ = self.aplicar_disposicion(arbol, backend, buzon);
+        }
+        // Lo que NO se puede aplicar sin reiniciar se dice por su nombre: un
+        // cambio que se callara esto sería un cambio que miente (D8).
+        fuera_de_alcance_en_caliente(&antes, &self.config.common)
+    }
+
+    /// Las capas de configuración tal como están puestas AHORA: las que
+    /// resolvió el arranque, con el perfil activo encima si lo hay.
+    ///
+    /// Es de donde se relee tras escribir un ajuste: la ventana relee de
+    /// donde leyó (ADR 0066 D14), y con el perfil que tiene puesto, que puede
+    /// no ser el del arranque.
+    pub(super) fn capas_actuales(&self) -> norte_config::Layers {
+        use crate::settings::ConfigLayer;
+        if let Some(perfil) = &self.perfil_activo
+            && let Some(capas) = self.capas_con_perfil(perfil)
+        {
+            return capas;
+        }
+        let dirs = self
+            .paths
+            .config_layers
+            .iter()
+            .map(|(capa, ruta)| {
+                let kind = match capa {
+                    ConfigLayer::System => norte_config::Layer::System,
+                    ConfigLayer::User => norte_config::Layer::User,
+                    ConfigLayer::Profile => norte_config::Layer::Profile,
+                    ConfigLayer::Project => norte_config::Layer::Project,
+                };
+                (ruta.path.clone(), kind)
+            })
+            .collect();
+        norte_config::Layers { dirs }
     }
 
     /// Pide la lista de perfiles, FUERA del actor.

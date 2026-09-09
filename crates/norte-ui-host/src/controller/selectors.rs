@@ -485,14 +485,31 @@ impl Estado {
     ///
     /// Sale de las capas que quien arrancó el host resolvió, no de volver a
     /// mirar el entorno: la ventana escribe donde de verdad leyó (ADR 0066
-    /// D14).
+    /// D14). Y el perfil es el que está PUESTO, no el del arranque: las capas
+    /// del arranque solo llevan uno si se arrancó con `--profile`, y un
+    /// perfil elegido en caliente no las toca. Sin esto, con un perfil puesto
+    /// desde el selector, el ajuste se escribía en la capa del usuario y el
+    /// perfil lo tapaba en la relectura: «guardado» y sin efecto, en silencio.
     pub(super) fn dir_de_escritura(&self) -> Option<std::path::PathBuf> {
         use crate::settings::ConfigLayer;
-        self.paths
+        let usuario = self
+            .paths
             .config_layers
             .iter()
-            .rfind(|(capa, _)| matches!(capa, ConfigLayer::Profile | ConfigLayer::User))
-            .map(|(_, p)| p.path.clone())
+            .find(|(capa, _)| matches!(capa, ConfigLayer::User))
+            .map(|(_, p)| p.path.clone());
+        match (&self.perfil_activo, usuario) {
+            (Some(perfil), Some(usuario)) => Some(usuario.join("profiles").join(perfil)),
+            (None, usuario) => usuario,
+            // Perfil puesto y sin capa de usuario de la que colgarlo: solo
+            // puede venir del arranque, y entonces está en las capas.
+            (Some(_), None) => self
+                .paths
+                .config_layers
+                .iter()
+                .rfind(|(capa, _)| matches!(capa, ConfigLayer::Profile))
+                .map(|(_, p)| p.path.clone()),
+        }
     }
 
     /// Pide el NOMBRE de un favorito nuevo que apunta al directorio del panel

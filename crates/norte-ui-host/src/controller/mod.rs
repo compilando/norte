@@ -747,6 +747,10 @@ enum Fondo {
         std::ffi::OsString,
         Box<Result<norte_frontend::config::FrontendConfig, &'static str>>,
     ),
+    /// Un ajuste de F11 ya está (o no) en el `norte.toml`, y la configuración
+    /// releída con él. En caja porque una `FrontendConfig` es grande al lado
+    /// del resto del enum.
+    AjusteEscrito(Box<settings::AjusteEscrito>),
     /// El catálogo que pidió la PALETA, para sus filas de plugin.
     PluginsDePaleta(u64, Result<norte_proto::methods::PluginListResult, Error>),
     /// Un cambio de gobierno (aprobar/revocar, encender/apagar) contestó.
@@ -2064,6 +2068,13 @@ enum Pendiente {
     /// allí el destino es una respuesta a «¿qué estabas mirando?», y aquí la
     /// pregunta es «¿cómo está la pantalla?», que solo tiene sentido AHORA.
     GuardarPerfil,
+    /// El valor de una entrada de TEXTO de los ajustes (F11). Lo que se
+    /// teclea es el valor; `fila` es sobre qué entrada se preguntó, porque el
+    /// cursor de los ajustes puede haberse movido con el diálogo delante.
+    EditarAjuste {
+        /// La fila PLANA de los ajustes sobre la que se preguntó.
+        fila: usize,
+    },
     /// Crear un directorio dentro de este otro. El nombre lo teclea el
     /// usuario y se valida al confirmar, no al teclear: corregir un nombre a
     /// medias es peor que verlo rechazado al final.
@@ -3711,6 +3722,7 @@ impl Estado {
         match accion {
             UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
+            UiAction::SettingsActivate { row } => self.activar_ajuste_por_raton(*row, buzon),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
             UiAction::SelectTab { slot_id } => self.elegir_pestana(*slot_id, backend, buzon),
             UiAction::AgentSelectRow { row, generation } => self.elegir_agente(*row, *generation),

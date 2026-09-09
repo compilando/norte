@@ -1,7 +1,8 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Los ajustes en solo lectura (tarea 4.5).
+// Los ajustes: lo que enseñan (tarea 4.5). Escribirlos es
+// `ajustes_escritura.rs`.
 // ---------------------------------------------------------------------------
 
 /// Espera la siguiente actualización que traiga los ajustes.
@@ -53,7 +54,7 @@ pub(super) async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) ->
 }
 
 /// `F11` abre los ajustes con el registro COMPARTIDO y su valor efectivo, y
-/// dice que esta ventana todavía no los escribe.
+/// cada fila dice si cambiarla hace efecto ya o al reiniciar.
 #[tokio::test]
 async fn los_ajustes_ensenan_el_registro_compartido_con_su_valor() {
     let (h, _snap) = host_arbol(arbol()).await;
@@ -61,10 +62,6 @@ async fn los_ajustes_ensenan_el_registro_compartido_con_su_valor() {
     h.dispatch(tecla("F11")).await.expect("host vivo");
     let a = siguiente_ajustes(&mut sub).await.expect("abren");
 
-    assert!(
-        a.read_only,
-        "y lo DICE, en vez de ofrecer un enter que no va"
-    );
     let general = a
         .sections
         .iter()
@@ -85,12 +82,26 @@ async fn los_ajustes_ensenan_el_registro_compartido_con_su_valor() {
             !r.name.starts_with("setting-"),
             "ninguna pinta una clave Fluent: {r:?}"
         );
-        assert!(
-            r.restart_required,
-            "esta ventana resuelve tema y keymap al arrancar: TODO pide \
-             reiniciar, y decir lo contrario manda a buscar un bug que no hay"
-        );
     }
+    // Lo que se aplica en caliente lo dice el catálogo compartido, que es lo
+    // que el terminal enseña; y lo que la ventana no puede aplicar —idioma,
+    // fuentes, movimiento— lo dice `fuera_de_alcance_en_caliente` al escribir.
+    let vivo = general
+        .iter()
+        .find(|r| r.id == "ui.theme")
+        .expect("el tema está");
+    assert!(
+        !vivo.restart_required,
+        "el tema se aplica en caliente al escribirlo, y la fila no dice lo contrario"
+    );
+    let frio = general
+        .iter()
+        .find(|r| r.id == "ui.lang")
+        .expect("el idioma está");
+    assert!(
+        frio.restart_required,
+        "el idioma pide reiniciar la ventana, y la fila lo dice"
+    );
 }
 
 /// Una ubicación con su existencia resuelta, como la resuelve el arranque.
@@ -186,7 +197,7 @@ async fn una_ruta_hostil_llega_enmascarada_y_marcada() {
     assert!(rutas[0].hostile, "y se MARCA que difiere del nombre real");
 }
 
-/// El cursor se mueve y no se sale, y `enter` dice que aquí no se edita.
+/// El cursor se mueve y no se sale, y `enter` sin dónde escribir lo dice.
 #[tokio::test]
 async fn el_cursor_no_se_sale_y_enter_lo_dice() {
     let (h, _snap) = host_arbol(arbol()).await;
@@ -215,17 +226,23 @@ async fn el_cursor_no_se_sale_y_enter_lo_dice() {
         "y por abajo tampoco"
     );
 
+    // La última fila de un host sin rutas es `keymap.preset`, que gira; y
+    // este host no tiene capa de usuario, así que no hay dónde escribirlo.
+    // Se dice, en vez de no hacer nada.
     let ack = h.dispatch(tecla("Enter")).await.expect("host vivo");
-    assert!(
-        matches!(ack, norte_ui_host::ActionAck::Unavailable { .. }),
-        "enter no edita, y lo dice en vez de no hacer nada: {ack:?}"
+    assert_eq!(
+        ack,
+        norte_ui_host::ActionAck::Unavailable {
+            reason_key: "host-no-config-dir".to_owned()
+        },
+        "enter sin dónde escribir lo dice: {ack:?}"
     );
 
     h.dispatch(tecla("Escape")).await.expect("host vivo");
-    assert!(
-        siguiente_ajustes(&mut sub).await.is_none(),
-        "esc los cierra"
-    );
+    foto_hasta(&h, &mut sub, "esc los cierra", |s| {
+        s.settings.is_none().then_some(())
+    })
+    .await;
 }
 
 /// Con los ajustes abiertos, una tecla del listado no se cuela.

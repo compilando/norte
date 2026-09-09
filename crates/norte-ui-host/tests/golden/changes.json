@@ -803,7 +803,6 @@
     "change": "settings",
     "settings": {
       "cursor": 0,
-      "read_only": true,
       "sections": [
         {
           "rows": [

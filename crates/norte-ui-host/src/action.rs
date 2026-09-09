@@ -400,9 +400,15 @@ pub enum UiAction {
     },
     /// Pone el cursor de los ajustes en esa fila (un click).
     ///
-    /// Solo mueve. Esta ventana no edita ajustes todavía, así que no hay una
-    /// acción para activar una fila: no habría nada que activar.
+    /// Solo mueve. Activarla es [`Self::SettingsActivate`].
     SettingsSelectRow {
+        /// Fila, contando TODAS las de todas las secciones en orden.
+        row: u32,
+    },
+    /// Activa esa fila de los ajustes (un doble click): lo que gira, gira;
+    /// lo que se teclea, se pide en un diálogo. El mismo camino que `enter`
+    /// (puente 60).
+    SettingsActivate {
         /// Fila, contando TODAS las de todas las secciones en orden.
         row: u32,
     },

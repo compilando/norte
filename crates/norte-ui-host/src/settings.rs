@@ -1,22 +1,20 @@
-//! Los ajustes (F9 / `app.settings`) vistos desde el host: qué hay
-//! configurado y de dónde sale.
+//! Los ajustes (F11 / `app.settings`) vistos desde el host: qué hay
+//! configurado, de dónde sale, y cambiarlo.
 //!
 //! Nada de esto lo decide este módulo. El registro de ajustes, el valor
-//! efectivo de cada entrada y su texto localizado son
-//! `norte_frontend::settings` — el mismo catálogo, con los mismos ids
-//! estables, que pinta el TUI. Lo que se aporta aquí es la PROYECCIÓN al
-//! vocabulario del bridge, más una sección que no es configuración sino
-//! diagnóstico: dónde vive cada cosa.
-//!
-//! **Solo lectura, y se dice.** Esta ventana no escribe ajustes hasta que la
-//! fase 5 le dé el camino seguro, así que la vista lo ANUNCIA en vez de
-//! ofrecer un `enter` que se negaría. El estado editor compartido
-//! (`settings::SettingsState`) no se usa: es una máquina de edición, y aquí no
-//! se edita.
+//! efectivo de cada entrada, su texto localizado y la MÁQUINA de edición
+//! —girar un booleano, validar un entero— son `norte_frontend::settings`: el
+//! mismo catálogo y el mismo editor que el terminal, con los mismos ids
+//! estables. Lo que se aporta aquí es la PROYECCIÓN al vocabulario del
+//! bridge, una sección que no es configuración sino diagnóstico —dónde vive
+//! cada cosa—, y la forma de pedir un valor: el terminal teclea en línea, y
+//! la ventana abre el diálogo de un campo, que es su forma de preguntar.
 
 use std::path::PathBuf;
 
-use norte_frontend::settings::{Row, build_rows_in};
+use norte_frontend::settings::{
+    PendingWrite, Row, SettingsEditError, SettingsState, build_rows_in,
+};
 use norte_i18n::Lang;
 
 use crate::bridge::clamp_display;
@@ -91,13 +89,39 @@ pub struct HostPaths {
 /// Los ajustes abiertos: el modelo mínimo, que es un cursor.
 ///
 /// No hay más estado porque no hay edición. Cuando la fase 5 la traiga, lo
-/// que entra aquí es `settings::SettingsState`, que ya existe y ya está
-/// probado — no una segunda máquina.
+/// Lo que hace Enter (o el doble clic) sobre la fila del cursor.
+#[derive(Debug)]
+pub(crate) enum Activacion {
+    /// Nada que activar: una ruta, o ninguna fila.
+    Nada,
+    /// La fila giró sola —booleano, enumerado, tema, preset— y esto es lo que
+    /// hay que escribir. En caja: un `PendingWrite` lleva un `toml_edit::Value`
+    /// y es grande al lado de las otras variantes.
+    Escribir(Box<PendingWrite>),
+    /// La fila quiere un valor tecleado: `nombre` y `actual` para el diálogo
+    /// que lo pide.
+    PedirTexto {
+        /// Cómo se llama la entrada, ya traducido.
+        nombre: String,
+        /// Qué dice ahora.
+        actual: String,
+        /// Sobre qué fila PLANA se preguntó, para volver a ella al confirmar.
+        fila: usize,
+    },
+}
+
+/// Los ajustes abiertos: el editor compartido más las ubicaciones.
+///
+/// El cursor es sobre la lista PLANA —las entradas del registro y después
+/// las rutas—, y se proyecta sobre el del editor solo cuando toca activar
+/// una entrada: el editor no sabe de rutas, y no tiene por qué.
 pub(crate) struct Ajustes {
-    /// Las filas del registro, congeladas al abrir. Se construyen una vez,
-    /// como las de la paleta y por el mismo motivo: `build_rows` resuelve el
-    /// valor efectivo de cada entrada y formatea dos cadenas Fluent por fila.
-    filas: Vec<Row>,
+    /// El editor compartido con el terminal, sobre las filas del registro.
+    ///
+    /// Sin filtro: el terminal filtra tecleando porque su overlay se come
+    /// todo imprimible, y aquí las teclas imprimibles no llegan al host. Lo
+    /// que cuenta es que girar, validar y proponer un valor sea UNA máquina.
+    estado: SettingsState,
     /// Las ubicaciones, ya saneadas.
     rutas: Vec<PathRowView>,
     /// Qué fila tiene el cursor, sobre la lista PLANA.
@@ -105,7 +129,7 @@ pub(crate) struct Ajustes {
 }
 
 impl Ajustes {
-    /// Abre la vista con la configuración que el host recibió al arrancar.
+    /// Abre la vista con la configuración que el host tiene puesta.
     ///
     /// La sección de plugins del modelo compartido se deja fuera: sus filas
     /// necesitan el esquema `[config]` de cada extensión, que llega con la
@@ -116,23 +140,101 @@ impl Ajustes {
         paths: &HostPaths,
         lang: Lang,
     ) -> Self {
-        // Con el idioma del HOST. Los títulos de sección ya iban con él y el
-        // nombre y la descripción de cada opción con el del proceso: media
-        // pantalla en cada idioma es peor que ninguna traducción.
-        let filas = build_rows_in(cfg, &[], lang)
-            .into_iter()
-            .filter(|r| !r.is_plugins_note())
-            .collect();
         Self {
-            filas,
+            estado: SettingsState::new(filas_de(cfg, lang)),
             rutas: rutas_de(paths, lang),
             cursor: 0,
         }
     }
 
+    /// Las filas se vuelven a construir sobre la configuración RECARGADA,
+    /// con el cursor donde estaba.
+    ///
+    /// Es lo que le pasa al terminal en cada recarga en caliente, y por lo
+    /// mismo: la fila que se acaba de girar ya enseña el valor nuevo
+    /// (optimista), y esto la deja diciendo lo que el fichero dice de verdad.
+    pub(crate) fn refrescar(&mut self, cfg: &norte_frontend::config::FrontendConfig, lang: Lang) {
+        self.estado.refresh(filas_de(cfg, lang));
+    }
+
     /// Cuántas filas elegibles hay en total.
     fn total(&self) -> usize {
-        self.filas.len() + self.rutas.len()
+        self.estado.rows().len() + self.rutas.len()
+    }
+
+    /// Enter sobre la fila del cursor.
+    ///
+    /// Las listas de temas y presets llegan de fuera y VIVAS, como en el
+    /// terminal: el tema efectivo puede haber cambiado en caliente.
+    pub(crate) fn activar(&mut self, temas: &[String], presets: &[&str]) -> Activacion {
+        let fila = self.cursor;
+        // El cursor plano indexa `rows()` directamente, y eso solo vale
+        // mientras el editor no filtre: sin consulta, `visible()` es la
+        // identidad. Quien le dé un filtro a esta ventana tiene que pasar de
+        // fila plana a fila visible, y esto es lo que se lo recuerda.
+        debug_assert_eq!(
+            self.estado.visible().len(),
+            self.estado.rows().len(),
+            "el editor no filtra en la ventana"
+        );
+        if fila >= self.estado.rows().len() {
+            return Activacion::Nada;
+        }
+        self.estado.set_cursor(fila);
+        if let Some(write) = self.estado.activate(temas, presets) {
+            return Activacion::Escribir(Box::new(write));
+        }
+        if !self.estado.is_editing() {
+            return Activacion::Nada;
+        }
+        // La ventana no teclea en línea: pregunta con un diálogo, y el valor
+        // vuelve ENTERO al confirmar. Hasta entonces el editor no queda a
+        // medias — `confirmar_texto` vuelve a abrir la edición sobre la
+        // misma fila, y un diálogo cancelado no deja nada que cerrar.
+        let actual = self.estado.edit_buffer().unwrap_or_default().to_owned();
+        self.estado.edit_cancel();
+        let nombre = self.estado.rows()[fila].name.clone();
+        Activacion::PedirTexto {
+            nombre,
+            actual,
+            fila,
+        }
+    }
+
+    /// El valor que el diálogo trajo para la fila `fila`.
+    ///
+    /// Vuelve a entrar en la edición de esa fila, pone el texto entero y
+    /// confirma: la validación —rango de un entero, forma de una línea de
+    /// órdenes— es la del editor compartido, no una copia.
+    ///
+    /// # Errors
+    /// Lo que el editor rechaza, sin escribir nada. Una fila que ya no pide
+    /// texto —el registro cambió bajo el diálogo— se rechaza como un entero
+    /// inválido: es el fallo inerte del editor, y no hay nada que escribir.
+    pub(crate) fn confirmar_texto(
+        &mut self,
+        fila: usize,
+        texto: &str,
+    ) -> Result<PendingWrite, SettingsEditError> {
+        if fila >= self.estado.rows().len() {
+            return Err(SettingsEditError::NotAnInt);
+        }
+        self.estado.set_cursor(fila);
+        // Sin listas: una fila de texto no las mira, y una que las mirara
+        // giraría en vez de editar, que es justo lo que el guard de abajo
+        // rechaza. Con la lista vacía `cycle` devuelve el valor que había, así
+        // que el `PendingWrite` que se descarta aquí era además un no-op.
+        if self.estado.activate(&[], &[]).is_some() || !self.estado.is_editing() {
+            self.estado.edit_cancel();
+            return Err(SettingsEditError::NotAnInt);
+        }
+        self.estado.edit_set(texto);
+        let salida = self.estado.edit_commit();
+        // Un rechazo deja el buffer abierto en el editor (el terminal lo
+        // conserva para corregirlo); aquí el diálogo ya se cerró, y una
+        // edición colgada haría que el siguiente Enter no girase.
+        self.estado.edit_cancel();
+        salida
     }
 
     /// Mueve el cursor `delta` filas, sin salirse.
@@ -159,7 +261,7 @@ impl Ajustes {
     pub(crate) fn vista(&self, lang: Lang) -> SettingsView {
         let general = SettingsSectionView::Settings {
             title: clamp_display(norte_i18n::t_in(lang, "settings-section-general")),
-            rows: self.filas.iter().map(proyectar_fila).collect(),
+            rows: self.estado.rows().iter().map(proyectar_fila).collect(),
         };
         let rutas = SettingsSectionView::Paths {
             title: clamp_display(norte_i18n::t_in(lang, "settings-section-paths")),
@@ -168,9 +270,34 @@ impl Ajustes {
         SettingsView {
             sections: vec![general, rutas],
             cursor: self.cursor as u64,
-            read_only: true,
         }
     }
+}
+
+/// Las filas del registro, en el idioma del HOST.
+///
+/// Los títulos de sección ya iban con él y el nombre y la descripción de
+/// cada opción con el del proceso: media pantalla en cada idioma es peor que
+/// ninguna traducción.
+fn filas_de(cfg: &norte_frontend::config::FrontendConfig, lang: Lang) -> Vec<Row> {
+    build_rows_in(cfg, &[], lang)
+        .into_iter()
+        .filter(|r| !r.is_plugins_note())
+        .collect()
+}
+
+/// Lo que la ventana NO puede aplicar sin reiniciar, por id del catálogo.
+///
+/// El catálogo compartido dice qué se aplica en caliente desde el punto de
+/// vista del terminal, que recarga todo. La ventana recarga por el camino del
+/// cambio de perfil —tema, keymap, columnas, favoritos, disposición— y lo
+/// que ese camino deja fuera es exactamente lo que `fuera_de_alcance_en_caliente`
+/// nombra al escribir: el idioma, las fuentes y el movimiento reducido. Y lo
+/// que se fija al crear cada hueco —los ocultos, la fila `..`— o al arrancar
+/// —ratón, barras, cómo busca, si pregunta al salir— tampoco cambia hasta la
+/// siguiente ventana.
+fn pide_reinicio(id: &str) -> bool {
+    !matches!(id, "ui.theme" | "keymap.preset")
 }
 
 /// Una fila del registro, proyectada.
@@ -189,13 +316,12 @@ fn proyectar_fila(r: &Row) -> SettingRowView {
         // de fuera llegaba al DOM sin pasar por la máscara.
         value: clamp_display(valor),
         hostile,
-        // TODAS, hoy. `SettingDef::applies_live` está escrito desde el punto
-        // de vista del TUI, que recarga en caliente; esta ventana resuelve
-        // catálogo, tema y keymaps UNA vez al arrancar y no tiene camino de
-        // recarga, así que cualquier cambio pide reiniciarla. Decir que una
-        // entrada se aplica sola cuando no lo hace es la clase de mentira que
-        // manda al usuario a buscar un bug que no existe.
-        restart_required: true,
+        // Por id y no por `SettingDef::applies_live`: ese campo está escrito
+        // desde el punto de vista del terminal, que recarga todo en caliente,
+        // y esta ventana solo recarga lo que el cambio de perfil sabe aplicar.
+        // Decir que una entrada se aplica sola cuando no lo hace es la clase
+        // de mentira que manda al usuario a buscar un bug que no existe.
+        restart_required: r.id().is_none_or(pide_reinicio),
     }
 }
 

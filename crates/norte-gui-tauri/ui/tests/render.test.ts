@@ -2007,19 +2007,17 @@ describe("los ajustes", () => {
         },
       ],
       cursor: 1,
-      read_only: true,
     };
     return v;
   }
 
-  it("es modal, avisa de que no escribe y numera solo las filas elegibles", () => {
+  it("es modal, no avisa de nada y numera solo las filas elegibles", () => {
     const { screen } = montar();
     screen.paint(conAjustes());
     const caja = document.querySelector(".settings") as HTMLElement;
     expect(caja.getAttribute("aria-modal")).toBe("true");
-    // El aviso es una NOTA, no un botón apagado: apagar un control invita a
-    // probarlo, y esta ventana todavía no escribe ajustes.
-    expect(caja.querySelector(".settings-note")?.getAttribute("role")).toBe("note");
+    // La nota de «no escribe» se fue con el puente 60: esta ventana escribe.
+    expect(caja.querySelector(".settings-note")).toBeNull();
     // Dos cabeceras, tres filas: el cursor cuenta filas, no cabeceras.
     expect(caja.querySelectorAll(".settings-group")).toHaveLength(2);
     const filas = [...caja.querySelectorAll(".settings-row")];
@@ -2111,6 +2109,14 @@ describe("los ajustes", () => {
     const filas = [...document.querySelectorAll(".settings-row")];
     (filas[2] as HTMLElement).click();
     expect(enviadas).toEqual([{ action: "settings_select_row", row: 2 }]);
+  });
+
+  it("un doble click ACTIVA esa fila, que es lo que hace enter", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conAjustes());
+    const filas = [...document.querySelectorAll(".settings-row")];
+    (filas[0] as HTMLElement).dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(enviadas).toEqual([{ action: "settings_activate", row: 0 }]);
   });
 
   it("cerrados, no tapan nada", () => {

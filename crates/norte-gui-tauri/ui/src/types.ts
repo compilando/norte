@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 59;
+export const BRIDGE_VERSION = 60;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -705,7 +705,6 @@ export type SettingsSectionView =
 export interface SettingsView {
   sections: SettingsSectionView[];
   cursor: number;
-  read_only: boolean;
 }
 
 export interface ExtensionRowView {
@@ -1254,6 +1253,8 @@ export type UiAction =
   | { action: "help_select_topic"; row: number }
   | { action: "help_activate"; index: number }
   | { action: "settings_select_row"; row: number }
+  /** El doble clic sobre una fila de los ajustes: lo que hace `enter` (puente 60). */
+  | { action: "settings_activate"; row: number }
   | { action: "extension_select_row"; row: number }
   | { action: "agent_select_row"; row: number; generation: number }
   | { action: "select_tab"; slot_id: number }
