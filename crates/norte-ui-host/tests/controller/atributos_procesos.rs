@@ -601,10 +601,12 @@ async fn el_panel_de_procesos_toma_sus_teclas() {
         .expect("host vivo");
     }
 
-    // Se rota el foco hasta el panel de procesos.
+    // Se rota el foco hasta el panel de procesos. Por el recorrido de la
+    // PANTALLA (`alt+o`): `Tab` cicla listados y no para en los laterales
+    // (ADR 0102).
     let mut en_procesos = false;
     for _ in 0..8 {
-        h.dispatch(tecla("Tab")).await.expect("host vivo");
+        h.dispatch(tecla_alt("o")).await.expect("host vivo");
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(&mut sub).await;
         let activo = foto
@@ -623,7 +625,7 @@ async fn el_panel_de_procesos_toma_sus_teclas() {
             break;
         }
     }
-    assert!(en_procesos, "el tabulador llega al panel de procesos");
+    assert!(en_procesos, "el anillo llega al panel de procesos");
 
     h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
     h.dispatch(UiAction::Resync).await.expect("host vivo");

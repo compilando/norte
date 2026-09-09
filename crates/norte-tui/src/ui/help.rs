@@ -450,6 +450,35 @@ pub(crate) fn render_scrollbar(
     );
 }
 
+/// Pinta una barra de scroll HORIZONTAL en `area` para un contenido de `total`
+/// columnas del que se ven `visible` desde `offset`.
+///
+/// Gemela de [`render_scrollbar`] y con la misma regla: nada cuando cabe todo.
+/// Existe porque el visor no envuelve —una línea puede seguir a la derecha— y
+/// sin una barra que lo diga, un fichero recortado se lee como un fichero
+/// corto.
+pub(crate) fn render_hscrollbar(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    theme: &TuiTheme,
+    total: usize,
+    offset: usize,
+    visible: usize,
+) {
+    if area.width == 0 || area.height == 0 || total <= visible {
+        return;
+    }
+    let mut state = ScrollbarState::new(total.saturating_sub(visible)).position(offset);
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .style(theme.role(Role::BorderUnfocused)),
+        area,
+        &mut state,
+    );
+}
+
 /// Whether the sidebar paints a header for the group row at `header`.
 ///
 /// Public because it is also what says which `help-group-{tag}` lookups the

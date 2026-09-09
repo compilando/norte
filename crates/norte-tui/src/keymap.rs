@@ -186,6 +186,8 @@ commands! {
     "viewer.page-down" => ViewerPageDown,
     "viewer.top" => ViewerTop,
     "viewer.bottom" => ViewerBottom,
+    "viewer.left" => ViewerLeft,
+    "viewer.right" => ViewerRight,
     "viewer.encoding" => ViewerEncoding,
     "viewer.encoding-auto" => ViewerEncodingAuto,
     "viewer.hex" => ViewerHex,

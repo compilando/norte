@@ -1380,6 +1380,21 @@ pub struct ViewerView {
     pub total_rows: u64,
     /// Primera línea visible.
     pub first_line: u64,
+    /// Ancho de la línea más larga, en CELDAS.
+    ///
+    /// Con `first_col`, es lo que el renderer necesita para dibujar barra
+    /// horizontal. `0` en hexadecimal, que tiene un ancho fijo y no se
+    /// desplaza. Viaja aunque las `lines` ya vengan recortadas: el recorte dice
+    /// qué se ve, y esto dice cuánto hay — sin lo segundo, un fichero cortado
+    /// por la derecha se lee como un fichero corto.
+    ///
+    /// Sin `serde(default)`, como el resto de esta vista: la compatibilidad
+    /// hacia atrás la resuelve `bridge_version` en el sobre, y un `default`
+    /// aquí solo debilitaría el golden — si alguien dejara de serializarlos, el
+    /// round-trip pasaría con ceros.
+    pub total_cols: u64,
+    /// Primera columna visible, en celdas.
+    pub first_col: u64,
     /// Las líneas de la ventana visible, ya saneadas y acotadas.
     pub lines: Vec<String>,
     /// «via ‹plugin›», ya traducido y con el nombre enmascarado dentro. Vacío

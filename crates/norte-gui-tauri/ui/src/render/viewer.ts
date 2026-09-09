@@ -3,7 +3,7 @@
 
 import type { Screen } from "../render";
 import type { MetadataSlotView, PreviewSlotView, ViewerView } from "../types";
-import { nota, viewerBody, badge } from "./dom";
+import { nota, viewerBar, viewerBody, badge } from "./dom";
 import type { SlotDom } from "./dom";
 
 /** El visor tapa la pantalla mientras está abierto. */
@@ -57,6 +57,12 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   if (viewer.truncated) {
     marcas.push(this.t("viewer-truncated"));
   }
+  // La fila y la COLUMNA, en palabras: es lo que lee quien no ve las barras,
+  // que son indicadores visuales y van `aria-hidden`.
+  marcas.push(`${String(viewer.first_line + 1)}/${String(Math.max(1, viewer.total_rows))}`);
+  if (viewer.first_col > 0) {
+    marcas.push(`${String(viewer.first_col + 1)}/${String(Math.max(1, viewer.total_cols))}`);
+  }
   meta.textContent = marcas.join(" · ");
   head.append(meta);
   if (viewer.preview_by !== "") {
@@ -96,7 +102,42 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   body.setAttribute("tabindex", "-1");
   body.setAttribute("aria-describedby", `viewer-meta-${String(viewer.first_line)}`);
 
-  box.append(head, body);
+  // El cuerpo y la barra VERTICAL van en una fila; la HORIZONTAL debajo de las
+  // dos. Las barras son propias porque el host manda solo la ventana visible:
+  // el `pre` mide lo que se ve y `overflow` no tiene qué mover.
+  const lienzo = document.createElement("div");
+  lienzo.className = "viewer-canvas";
+  lienzo.append(body);
+  const vertical = viewerBar(true, viewer.total_rows, viewer.first_line, this.viewerRows);
+  if (vertical !== null) {
+    lienzo.append(vertical);
+  }
+  box.append(head, lienzo);
+  const horizontal = viewerBar(false, viewer.total_cols, viewer.first_col, this.viewerCols);
+  if (horizontal !== null) {
+    box.append(horizontal);
+  }
+  // La rueda desplaza por el HOST, como el visor acoplado y el registro: la
+  // ventana visible la decide él. Con `shift`, de lado — es el gesto normal
+  // para un eje horizontal, y el visor no envuelve.
+  box.onwheel = (e) => {
+    e.preventDefault();
+    const c = this.cell();
+    const pasos = (delta: number, celda: number): number => {
+      if (delta === 0) {
+        return 0;
+      }
+      // Al menos UNO: un trackpad manda deltas de pocos píxeles, y redondear
+      // a cero convertía el gesto en nada.
+      const n = Math.round(Math.abs(delta) / celda);
+      return Math.sign(delta) * Math.max(1, n);
+    };
+    const lines = e.shiftKey ? 0 : pasos(e.deltaY, c.h);
+    const cols = e.shiftKey ? pasos(e.deltaY, c.w) : pasos(e.deltaX, c.w);
+    if (lines !== 0 || cols !== 0) {
+      this.send({ action: "viewer_scroll", lines, cols });
+    }
+  };
   if (viewer.image !== null) {
     // Los bytes NO vienen en la foto: se piden aparte y se pintan cuando
     // llegan. Hasta entonces se ve la vista cruda, que es lo honesto —el

@@ -63,7 +63,10 @@ impl Estado {
         let Some(v) = self.visor.as_mut() else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
-        let pasos = |n: i64| usize::try_from(n.abs()).unwrap_or(usize::MAX);
+        // `unsigned_abs`, no `abs`: el delta de la rueda llega CRUDO del
+        // renderer, y `i64::MIN.abs()` desborda —panic en debug, envuelto en
+        // release—, o sea que un mensaje mal formado tumbaría el host.
+        let pasos = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
         match efecto {
             crate::commands::EfectoVisor::Cerrar => {
                 self.visor = None;
@@ -81,6 +84,8 @@ impl Estado {
             crate::commands::EfectoVisor::Pagina(n) => {
                 v.scroll_down(pasos(n).saturating_mul(alto));
             }
+            crate::commands::EfectoVisor::Columna(n) if n < 0 => v.scroll_left(pasos(n)),
+            crate::commands::EfectoVisor::Columna(n) => v.scroll_right(pasos(n)),
             crate::commands::EfectoVisor::Extremo { al_final: false } => v.scroll_top(),
             crate::commands::EfectoVisor::Extremo { al_final: true } => v.scroll_bottom(),
             crate::commands::EfectoVisor::Hex => v.toggle_hex(),
@@ -89,6 +94,40 @@ impl Estado {
         }
         // Un PARCHE del visor. La foto entera mandaba, por cada línea de
         // scroll, las filas visibles de todos los listados que hay debajo.
+        let cambio = ViewChange::Viewer {
+            viewer: self.vista_visor(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// La RUEDA sobre el visor a pantalla completa (puente 59).
+    ///
+    /// Los dos ejes, porque un solo gesto los produce: la rueda a secas baja,
+    /// con `shift` va de lado. Un parche del visor y no una foto, por lo mismo
+    /// que las teclas: la foto entera mandaría, por cada giro, las filas
+    /// visibles de todos los listados que hay debajo y que nadie ve.
+    pub(super) fn desplazar_visor(
+        &mut self,
+        lineas: i64,
+        columnas: i64,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(v) = self.visor.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        // `unsigned_abs`, no `abs`: el delta de la rueda llega CRUDO del
+        // renderer, y `i64::MIN.abs()` desborda —panic en debug, envuelto en
+        // release—, o sea que un mensaje mal formado tumbaría el host.
+        let pasos = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
+        if lineas < 0 {
+            v.scroll_up(pasos(lineas));
+        } else {
+            v.scroll_down(pasos(lineas));
+        }
+        if columnas < 0 {
+            v.scroll_left(pasos(columnas));
+        } else {
+            v.scroll_right(pasos(columnas));
+        }
         let cambio = ViewChange::Viewer {
             viewer: self.vista_visor(),
         };

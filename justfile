@@ -70,7 +70,11 @@ deny-guests:
     #!/usr/bin/env bash
     set -euo pipefail
     for m in crates/norte-plugin-host/examples-wasm/*/Cargo.toml plugins/*/Cargo.toml; do
-        cargo deny --manifest-path "$m" --config deny-guests.toml check -A advisory-not-detected advisories
+        # `--config` va DESPUÉS de `check`: es una opción del subcomando, no
+        # del binario, y cargo-deny 0.19 lo rechaza al revés («unexpected
+        # argument '--config' found»). Con una versión más vieja pasaba, así
+        # que el gate se quedó rojo en cuanto alguien actualizó.
+        cargo deny --manifest-path "$m" check --config deny-guests.toml -A advisory-not-detected advisories
     done
 
 # --no-tests=pass: el esqueleto de fase 1 no tiene tests aún; con código real

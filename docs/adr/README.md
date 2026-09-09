@@ -107,3 +107,4 @@ edits.
 | [0099](0099-the-window-reloads-what-a-profile-switch-reloads.md) | The window reloads what a profile switch reloads, and says the rest | accepted |
 | [0100](0100-a-hook-observes-what-the-journal-recorded-and-may-only-speak.md) | A hook observes what the journal recorded, and may only speak | accepted |
 | [0101](0101-a-hook-may-write-a-sidecar-through-the-policy-engine-as-a-plugin-actor.md) | A hook may write a sidecar, through the policy engine, as a plugin actor | accepted |
+| [0102](0102-a-side-panel-follows-and-tab-is-the-listing-ring.md) | A side panel FOLLOWS the active listing, and `Tab` is the listing ring | accepted |

@@ -9,6 +9,30 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The viewer scrolls sideways** (`viewer.left`, `viewer.right`, bound to
+  `left`/`right` in all seven presets and to `h`/`l` in `vim`, both taking a
+  count). The viewer does not wrap, so a minified HTML file, a wide CSV or a
+  log had its right-hand half nowhere at all: painted clipped, unreachable.
+  The cut is made once, in the shared model, on the already-rendered line, and
+  it counts CELLS of terminal — by bytes the text jumps at the first accent,
+  by characters any line with CJK misaligns against its neighbours. A wide
+  character straddling the cut goes entirely **and leaves its cell blank** —
+  dropping it without a filler slides that row one column against its
+  neighbours, and the grid is the whole point. A zero-width mark that would
+  open a row is dropped, as the truncators beside it already do with a tail: a
+  split ZWJ cluster would otherwise paint a glyph that is not in the file. The
+  stop is the longest line, measured when decoding, leaving one column always
+  in view. The hex dump scrolls too, with its own 77-cell width: in a split
+  pane its ASCII gutter did not fit, so refusing the axis made it unreachable.
+  The status line and the window's header marks say the column in words, which
+  in the docked viewer is the only thing that says the view is shifted.
+- **The viewer says there is more, and the wheel moves it.** Both scrollbars
+  in the terminal, drawn over the frame's borders and never when everything
+  fits; the coupled preview gets only the vertical one, because its bottom
+  border carries the line that says WHAT is being read. The wheel reached
+  neither the full-screen viewer (it sits behind the overlay cutoff) nor the
+  coupled one (its slot is not a listing, so the hit test returned nothing).
+  Bridge 59 carries `total_cols`/`first_col` and the `viewer_scroll` action.
 - **A hook may write a sidecar** (ADR 0101, protocol **0.70.0**,
   `norte:hook@0.2.0`). A hook plugin can now return `write-sidecar`: a file
   with one of the exact names its manifest declares in
@@ -55,6 +79,34 @@ independently through `PROTOCOL_VERSION`.
   packagers and to `unknown` without git. On a development machine `just link`
   points `ntc` at `target/debug`, and «0.3.0-alpha.3» was the same string ten
   commits after the tag: now the binary tells you.
+
+### Fixed
+
+- **The tree follows the panel that navigates** (ADR 0102). Opening the tree
+  and walking around left the panel pointing at the folder you were in when
+  you opened it. Not a loose wire: both frontends anchored at open and never
+  again, on purpose, because anchoring EMPTIES the tree and re-anchoring on
+  every `cd` would have closed every open branch. What was missing was the
+  ability to reveal without emptying — `Tree::follow` expands the ancestors
+  and moves the cursor, and a sibling branch you opened stays open. It is
+  wired into the one funnel each frontend already had for a `cd`, plus the
+  focus change, and not into each gesture: that list went stale once already,
+  which is why the funnels exist.
+  The rule is about the ROOT: what has been read stays valid as long as the
+  new root is an ancestor of the old one. So going UP a level (Backspace) and
+  alternating between two sibling panels with `Tab` move the root up and keep
+  every branch, where before each of them emptied the whole tree on every
+  press — which made the tree useless with the two gestures it most needs to
+  survive. Only another provider anchors and empties.
+- **`Tab` reaches the third listing, and stops only at listings** (ADR 0102).
+  In the terminal it was `focus ^= 1`, a count of two: after `alt+v` split a
+  panel the key silently did nothing from the third one, because `PaneSlots`
+  clamps out of range instead of panicking. In the window the opposite —
+  `pane.switch` shared an arm with `layout.focus-next`, so with the places
+  bar, the tree and the viewer open it took five keystrokes to get back to the
+  listing beside you. Now they are two rings: `pane.switch` is "the other
+  panel" and cycles the listings, `layout.focus-*` walks the whole screen.
+  `Tab` still takes you out of a side panel.
 
 ## [0.3.0-alpha.3] - 2026-09-08
 

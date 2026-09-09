@@ -52,9 +52,38 @@ impl App {
         &mut self.panes[self.focus]
     }
 
-    /// Alterna el foco entre los dos panes (Tab, keymap mc).
+    /// Pasa el foco al siguiente LISTADO, ciclando (`pane.switch`, el `Tab`
+    /// ortodoxo).
+    ///
+    /// Era `focus ^= 1`, y eso es una cuenta de DOS. En cuanto `layout.split-v`
+    /// pone un tercer listado en pantalla —`[izquierda, nuevo, derecha]`— el
+    /// tabulador solo alternaba entre los dos primeros: desde el índice 2,
+    /// `2 ^ 1` es 3, que no existe, y `PaneSlots` ACOTA fuera de rango en vez
+    /// de panicar, así que la tecla no hacía nada y no lo decía. El panel que
+    /// no habías partido era inalcanzable.
+    ///
+    /// Solo listados, y por eso no es [`Self::layout_focus`]: `Tab` es «el
+    /// otro panel» de cualquier gestor ortodoxo, y con la barra de sitios, el
+    /// árbol y el visor abiertos un anillo de toda la pantalla obligaría a dar
+    /// cinco pulsaciones para volver al listado de al lado. A los laterales se
+    /// llega con `layout.focus-next` y con la tecla de cada uno.
+    ///
+    /// Y por el MISMO aterrizaje que el anillo grande, que es lo que además
+    /// devuelve el teclado: `tab` está en `[global]`, así que se puede pulsar
+    /// con el visor acoplado enfocado, y sin esto el borde de foco saltaba al
+    /// listado de al lado mientras las flechas seguían moviendo el visor.
+    /// `Tab` saca de un panel lateral — eso es lo que garantiza que ninguna
+    /// combinación deje al lector dentro.
     pub fn switch_focus(&mut self) {
-        self.focus ^= 1;
+        let n = self.panes.len();
+        if n < 2 {
+            // Con un solo listado no hay «el otro», y el teclado se devuelve
+            // igual: pulsar `Tab` dentro de un lateral tiene que sacar de él
+            // aunque no haya a dónde ir después.
+            self.return_keys_to_panes();
+            return;
+        }
+        self.aterrizar(FocusStop::Pane((self.focus + 1) % n));
     }
 
     /// Exchanges the two panes and everything `App` keeps beside them
@@ -261,6 +290,9 @@ impl App {
             FocusStop::Pane(i) => {
                 self.return_keys_to_panes();
                 self.set_focus(i);
+                // Cambia cuál es el listado enfocado, así que cambia a dónde
+                // apunta el árbol.
+                self.follow_tree();
             }
             FocusStop::Side(owner) => self.key_owner = owner,
         }
@@ -523,6 +555,51 @@ mod tests {
         app.set_layout(Node::slot(SlotId(0), KindId::browser()));
         app.layout_focus(1);
         assert_eq!(app.key_owner(), KeyOwner::Panes);
+        assert_eq!(app.focus(), 0);
+    }
+
+    /// **`Tab` alcanza el tercer listado.**
+    ///
+    /// Era `focus ^= 1`, una cuenta de dos: con `[izquierda, nuevo, derecha]`
+    /// en pantalla, desde el índice 2 daba 3 —que no existe— y `PaneSlots`
+    /// ACOTA fuera de rango en vez de panicar, así que la tecla no hacía nada
+    /// y no lo decía. El panel que no habías partido era inalcanzable.
+    #[test]
+    fn el_tabulador_alcanza_el_tercer_listado() {
+        use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+        let mut app = app_dos_panes();
+        app.set_layout(Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(1), Size::Weight(1), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(0), KindId::browser()),
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        });
+        assert_eq!(app.panes.len(), 3, "tres listados en pantalla");
+
+        app.set_focus(0);
+        let mut vistos = Vec::new();
+        for _ in 0..3 {
+            app.switch_focus();
+            vistos.push(app.focus());
+        }
+        assert_eq!(
+            vistos,
+            vec![1, 2, 0],
+            "los tres, y la vuelta entera en tres saltos"
+        );
+    }
+
+    /// Con un solo listado, `Tab` es un no-op: no hay otro panel, y girar
+    /// sobre uno mismo sería fingir que pasó algo.
+    #[test]
+    fn el_tabulador_sobre_un_solo_listado_no_hace_nada() {
+        use norte_frontend::layout::{KindId, Node, SlotId};
+        let mut app = app_dos_panes();
+        app.set_layout(Node::slot(SlotId(0), KindId::browser()));
+        app.switch_focus();
         assert_eq!(app.focus(), 0);
     }
 

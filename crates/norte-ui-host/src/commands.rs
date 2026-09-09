@@ -288,6 +288,8 @@ pub const IMPLEMENTADOS_VISOR: &[&str] = &[
     "viewer.page-down",
     "viewer.top",
     "viewer.bottom",
+    "viewer.left",
+    "viewer.right",
     "viewer.hex",
     "viewer.encoding",
     "viewer.encoding-auto",
@@ -320,6 +322,11 @@ pub enum EfectoVisor {
     Linea(i64),
     /// Desplaza tantas PÁGINAS (negativo hacia arriba).
     Pagina(i64),
+    /// Desplaza tantas COLUMNAS (negativo hacia la izquierda).
+    ///
+    /// El visor no envuelve: sin esto, la cola de una línea más ancha que la
+    /// ventana no estaba en ninguna parte.
+    Columna(i64),
     /// Al principio o al final.
     Extremo {
         /// `true` = al final.
@@ -348,6 +355,8 @@ pub fn efecto_visor_de(command: &str, veces: u32) -> Option<EfectoVisor> {
         "viewer.page-down" => EfectoVisor::Pagina(n),
         "viewer.top" => EfectoVisor::Extremo { al_final: false },
         "viewer.bottom" => EfectoVisor::Extremo { al_final: true },
+        "viewer.left" => EfectoVisor::Columna(-n),
+        "viewer.right" => EfectoVisor::Columna(n),
         "viewer.hex" => EfectoVisor::Hex,
         "viewer.encoding" => EfectoVisor::Encoding,
         "viewer.encoding-auto" => EfectoVisor::EncodingAuto,
@@ -406,6 +415,14 @@ pub enum Efecto {
     Foco {
         /// `true` = hacia atrás.
         atras: bool,
+        /// `true` = solo paran los LISTADOS; los paneles laterales se saltan.
+        ///
+        /// Es la diferencia entre `pane.switch` y `layout.focus-next`: el
+        /// primero es «el otro panel» de cualquier gestor ortodoxo y el
+        /// segundo el recorrido de la pantalla entera. Un solo anillo para
+        /// los dos obligaba a dar cinco pulsaciones para volver al listado
+        /// de al lado con la barra de sitios, el árbol y el visor abiertos.
+        solo_listados: bool,
     },
     /// Designa OTRO hueco como destino de la siguiente operación.
     Destino,
@@ -741,11 +758,23 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "mark.toggle-page-up" => Efecto::MarcarPagina { abajo: false },
         "mark.to-top" => Efecto::MarcarHastaElBorde { arriba: true },
         "mark.to-bottom" => Efecto::MarcarHastaElBorde { arriba: false },
-        // `pane.switch` es el cambio clásico entre dos paneles; con más de
-        // dos, lo honesto es seguir el mismo recorrido que el tabulador en
-        // vez de inventar un segundo orden.
-        "pane.switch" | "layout.focus-next" => Efecto::Foco { atras: false },
-        "layout.focus-prev" => Efecto::Foco { atras: true },
+        // `pane.switch` es «el otro panel»: cicla los LISTADOS, todos los que
+        // haya, y ninguno más. `layout.focus-*` es el recorrido de la pantalla
+        // entera, laterales incluidos. Compartían brazo, y eso hacía que con
+        // el árbol y el visor abiertos el tabulador diera cinco paradas para
+        // volver al listado de al lado.
+        "pane.switch" => Efecto::Foco {
+            atras: false,
+            solo_listados: true,
+        },
+        "layout.focus-next" => Efecto::Foco {
+            atras: false,
+            solo_listados: false,
+        },
+        "layout.focus-prev" => Efecto::Foco {
+            atras: true,
+            solo_listados: false,
+        },
         "layout.set-target" => Efecto::Destino,
         "layout.grow" => Efecto::Tamano(n),
         "layout.shrink" => Efecto::Tamano(-n),

@@ -167,6 +167,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::LogScroll { .. } => "log_scroll",
         UiAction::ProgramFinished { .. } => "program_finished",
         UiAction::PreviewScroll { .. } => "preview_scroll",
+        UiAction::ViewerScroll { .. } => "viewer_scroll",
         UiAction::LogFollow => "log_follow",
         UiAction::LogCycleSource => "log_cycle_source",
         UiAction::LogSetVisibleRange { .. } => "log_set_visible_range",
@@ -448,6 +449,12 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("set_viewer_rows", UiAction::SetViewerRows { rows: 40 }),
+        // La rueda sobre el visor, con los dos ejes: un solo gesto los
+        // produce (`shift` va de lado).
+        (
+            "viewer_scroll",
+            UiAction::ViewerScroll { lines: 3, cols: -8 },
+        ),
         ("set_viewer_cols", UiAction::SetViewerCols { cols: 110 }),
         (
             "set_viewport",
@@ -772,6 +779,11 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
         truncated: true,
         total_rows: 120,
         first_line: 4,
+        // Y cuánto hay A LO ANCHO, con la ventana ya movida de lado: el visor
+        // no envuelve, así que sin esto un fichero cortado por la derecha se
+        // lee como un fichero corto (puente 59).
+        total_cols: 320,
+        first_col: 12,
         lines: vec!["quinta línea".to_owned()],
         // Lo enseña un PREVIEWER, y se dice de quién es: un plugin puede
         // enseñar cualquier cosa —ese es su trabajo— y quien mira tiene
@@ -2265,7 +2277,7 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    const FORMA: u64 = 256_773_043_671_963_694;
+    const FORMA: u64 = 16_718_082_450_651_606_617;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

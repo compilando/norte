@@ -299,13 +299,17 @@ impl Estado {
         alto: usize,
     ) {
         use crate::commands::EfectoVisor;
-        let pasos = |n: i64| usize::try_from(n.abs()).unwrap_or(usize::MAX);
+        // `unsigned_abs`, no `abs`: el delta de `PreviewScroll` llega CRUDO del
+        // renderer, y `i64::MIN.abs()` desborda.
+        let pasos = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
         match efecto {
             EfectoVisor::Cerrar => {}
             EfectoVisor::Linea(n) if n < 0 => v.scroll_up(pasos(n)),
             EfectoVisor::Linea(n) => v.scroll_down(pasos(n)),
             EfectoVisor::Pagina(n) if n < 0 => v.scroll_up(pasos(n).saturating_mul(alto)),
             EfectoVisor::Pagina(n) => v.scroll_down(pasos(n).saturating_mul(alto)),
+            EfectoVisor::Columna(n) if n < 0 => v.scroll_left(pasos(n)),
+            EfectoVisor::Columna(n) => v.scroll_right(pasos(n)),
             EfectoVisor::Extremo { al_final: false } => v.scroll_top(),
             EfectoVisor::Extremo { al_final: true } => v.scroll_bottom(),
             EfectoVisor::Hex => v.toggle_hex(),

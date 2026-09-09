@@ -35,6 +35,51 @@ impl Estado {
         self.gen_ramas += 1;
     }
 
+    /// El árbol sigue al listado ACTIVO: revela su directorio y pide lo que
+    /// falte para pintarlo.
+    ///
+    /// Se llama desde el embudo por el que pasa TODO listado que aterriza
+    /// ([`Estado::aterrizar_listado`]) y desde el cambio de foco, que son los
+    /// dos momentos en que «dónde está mirando el panel» cambia. Ponerlo en
+    /// cada gesto que provoca un `cd` —el ratón, la paleta, el menú, el
+    /// rastro, el propio árbol— sería la lista que un día se queda corta.
+    ///
+    /// Solo el ACTIVO. Un listado del otro lado que termina de cargar no es
+    /// dónde está trabajando el lector, y mover el árbol por él lo dejaría
+    /// apuntando a un panel que nadie está mirando.
+    ///
+    /// Y revela, no re-ancla ([`norte_frontend::tree::Tree::follow`]): lo que
+    /// el lector abrió a mano sigue abierto.
+    pub(super) fn seguir_ramas(
+        &mut self,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> bool {
+        if self.hueco_de_ramas().is_none() || slot != self.activo() {
+            return false;
+        }
+        let Some(dir) = self.huecos.get(&slot).map(|h| h.pane.dir().clone()) else {
+            return false;
+        };
+        let movio = self
+            .ramas
+            .get_or_insert_with(norte_frontend::tree::Tree::default)
+            .follow(&dir);
+        if !movio {
+            // El listado no se ha movido de sitio —un refresco, un click— así
+            // que el árbol tampoco. Subir la generación aquí invalidaba todo
+            // índice pintado y convertía un click en vuelo sobre una rama en
+            // un rechazo por generación, sin que nada hubiera cambiado.
+            return false;
+        }
+        // Las filas se han movido —hay ancestros desplegados que antes no
+        // estaban—, así que todo índice pintado hasta ahora nombra otra rama.
+        self.gen_ramas += 1;
+        self.pedir_ramas(backend, buzon);
+        true
+    }
+
     /// Pide la siguiente rama que haga falta, y UNA por vuelta.
     ///
     /// Perezoso por la misma razón que el listado local no trae tamaños: un

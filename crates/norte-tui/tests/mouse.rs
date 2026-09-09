@@ -458,6 +458,37 @@ fn la_rueda_desplaza_el_pane_bajo_el_puntero_y_no_el_del_foco() {
     assert_eq!(app.panes[1].cursor(), 0, "y vuelve");
 }
 
+/// **La rueda sobre el VISOR lo desplaza.**
+///
+/// El visor es un overlay, y el corte de los overlays se comía el evento: con
+/// un fichero abierto, rodar no hacía absolutamente nada. Es el gesto más
+/// obvio que tiene un visor, y lo único que había debajo era un listado que no
+/// se ve — desplazar ESE habría sido peor.
+#[test]
+fn la_rueda_sobre_el_visor_lo_desplaza_y_no_el_listado() {
+    let mut app = app_pintada(40);
+    let texto: Vec<u8> = (0..80)
+        .flat_map(|i| format!("linea {i}\n").into_bytes())
+        .collect();
+    app.viewer = Some(norte_tui::viewer::Viewer::new(
+        vp("file:///casa/alto.txt"),
+        texto,
+        false,
+    ));
+
+    let _ = mouse::handle(&mut app, ev(MouseEventKind::ScrollDown, 35, FILA0 + 1));
+    let bajado = app.viewer.as_ref().expect("visor abierto").scroll;
+    assert!(bajado > 0, "el visor bajó");
+    assert_eq!(app.panes[1].cursor(), 0, "y el listado de debajo, intacto");
+
+    let _ = mouse::handle(&mut app, ev(MouseEventKind::ScrollUp, 35, FILA0 + 1));
+    assert_eq!(
+        app.viewer.as_ref().expect("visor abierto").scroll,
+        0,
+        "y vuelve"
+    );
+}
+
 /// Doble click = `nav.enter`. Se comprueba el ACUERDO con el run loop
 /// (devuelve [`After::Enter`], que allí despacha el mismo comando del
 /// teclado), no la navegación en sí: entrar en un directorio necesita

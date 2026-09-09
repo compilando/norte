@@ -1134,6 +1134,59 @@ fn modal_trust_host_fingerprint_hostil_y_sha256_completo() {
     assert!(!text.contains('…'), "no se trunca: {text}");
 }
 
+/// **El visor DICE que hay más, arriba y a la derecha.**
+///
+/// Antes solo lo decía la cuenta `1/4813` de la barra de estado, y a lo ancho
+/// no lo decía nada: el visor no envuelve, así que un fichero recortado por la
+/// derecha se leía como un fichero corto. Las dos barras se pintan sobre los
+/// bordes del marco, y ninguna cuando cabe todo — una barra llena de lado a
+/// lado no informa de nada.
+#[test]
+fn el_visor_pinta_las_barras_solo_cuando_hay_mas() {
+    let mut app = app_base();
+
+    // Un fichero de una línea corta: cabe entero, así que ni una barra.
+    app.viewer = Some(Viewer::new(
+        vp("file:///casa/corto.txt"),
+        b"hola\n".to_vec(),
+        false,
+    ));
+    let cabe = render(&app);
+    assert!(
+        !cabe.contains('█'),
+        "cabe todo: ninguna barra que arrastrar\n{cabe}"
+    );
+
+    // Alto: cuarenta líneas en una pantalla de dieciséis.
+    let alto: Vec<u8> = (0..40)
+        .flat_map(|i| format!("linea {i}\n").into_bytes())
+        .collect();
+    app.viewer = Some(Viewer::new(vp("file:///casa/alto.txt"), alto, false));
+    assert!(render(&app).contains('█'), "hay más ABAJO y se ve");
+
+    // Ancho: una línea de doscientas columnas en una pantalla de ochenta.
+    let ancho = || format!("{}\n", "x".repeat(200)).into_bytes();
+    let v = Viewer::new(vp("file:///casa/ancho.txt"), ancho(), false);
+    assert_eq!(v.max_cols(), 200);
+    app.viewer = Some(v);
+    let pintado = render(&app);
+    assert!(
+        pintado.contains('█'),
+        "hay más a la DERECHA y se ve\n{pintado}"
+    );
+
+    // Y el pulgar se MUEVE con el desplazamiento: una barra quieta dice «hay
+    // más» y no dice dónde estás.
+    let mut v = Viewer::new(vp("file:///casa/ancho.txt"), ancho(), false);
+    v.scroll_right(150);
+    app.viewer = Some(v);
+    assert_ne!(
+        pintado,
+        render(&app),
+        "el pulgar de la horizontal sigue al desplazamiento"
+    );
+}
+
 #[test]
 fn snapshot_viewer_texto_y_hex() {
     let mut app = app_base();

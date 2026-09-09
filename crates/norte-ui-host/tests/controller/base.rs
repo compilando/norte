@@ -481,6 +481,20 @@ pub(super) fn tecla(k: &str) -> UiAction {
     })
 }
 
+/// `alt+<algo>`: el modificador va en su campo, jamás en el nombre de la
+/// tecla — `"Alt+o"` no es un nombre de tecla, `to_chord` lo rechaza y el host
+/// contesta `Unavailable` sin mandar nada. Un test escrito así se cumplía o no
+/// según qué sobre quedara en la cola.
+pub(super) fn tecla_alt(k: &str) -> UiAction {
+    UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: k.to_owned(),
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+    })
+}
+
 /// Una tecla del preset resuelve al comando del CATÁLOGO compartido y el
 /// host solo la ejecuta: no hay un segundo keymap.
 #[tokio::test]

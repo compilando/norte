@@ -665,6 +665,8 @@ pub async fn dispatch(
         Command::ViewerPageDown => viewer_do(app, |v| v.scroll_down(crate::viewer::PAGE)),
         Command::ViewerTop => viewer_do(app, crate::viewer::Viewer::scroll_top),
         Command::ViewerBottom => viewer_do(app, crate::viewer::Viewer::scroll_bottom),
+        Command::ViewerLeft => viewer_do(app, |v| v.scroll_left(1)),
+        Command::ViewerRight => viewer_do(app, |v| v.scroll_right(1)),
         Command::ViewerEncoding => viewer_do(app, crate::viewer::Viewer::cycle_encoding),
         Command::ViewerEncodingAuto => viewer_do(app, crate::viewer::Viewer::reset_encoding),
         Command::ViewerHex => viewer_do(app, crate::viewer::Viewer::toggle_hex),

@@ -96,7 +96,17 @@ impl Estado {
     }
 
     /// Mueve el foco al siguiente hueco enfocable, o al anterior.
-    pub(super) fn mover_foco(&mut self, atras: bool) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    ///
+    /// Con `solo_listados`, los paneles laterales se saltan: es `pane.switch`,
+    /// el `Tab` ortodoxo, y lo que contesta es «el otro panel». Sin él es
+    /// `layout.focus-next`, el recorrido de la pantalla entera.
+    pub(super) fn mover_foco(
+        &mut self,
+        atras: bool,
+        solo_listados: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // El recorrido es el COMPARTIDO: `focus_order` ya se salta lo
         // que no se ve y lo que no se enfoca (una barra de estado no
         // recibe el foco), así que aquí no hay una segunda regla que
@@ -109,7 +119,7 @@ impl Estado {
         // una parada de la que ninguna tecla saca. Se salta, y la vuelta se
         // da igual porque el recorrido cicla.
         let actual = SlotId(self.enfocado());
-        let siguiente = self.siguiente_que_toma_teclas(actual, atras);
+        let siguiente = self.siguiente_del_anillo(actual, atras, solo_listados);
         let Some(SlotId(id)) = siguiente else {
             // Un solo hueco: no hay a dónde ir, y decirlo es más
             // honesto que fingir que pasó algo.
@@ -122,6 +132,22 @@ impl Estado {
         };
         self.roles.set(RoleId::Active, SlotId(id));
         self.reconcilia_roles();
+        // El árbol sigue al panel activo, y acaba de cambiar cuál es. Va por
+        // FOTO porque el árbol no tiene `ViewChange` propio: viaja entero o no
+        // viaja, y un cursor de árbol que no cruza deja el panel señalando la
+        // rama del panel anterior.
+        //
+        // Solo si el árbol se MOVIÓ de verdad. Aterrizar en la barra de sitios
+        // no lo mueve —`seguir_ramas` solo sigue a un listado—, y mandar la
+        // pantalla entera por eso es pagar una foto por un parche de reparto.
+        let activo = self.activo();
+        if self.seguir_ramas(activo, backend, buzon) {
+            let snap = self.snapshot();
+            return (
+                self.aplicada(),
+                vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            );
+        }
         let cambio = ViewChange::Layout(self.disposicion());
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
@@ -180,12 +206,23 @@ impl Estado {
         self.aplicar_disposicion(arbol, backend, buzon)
     }
 
-    /// El siguiente hueco del recorrido compartido que además TOMA TECLAS.
+    /// El siguiente hueco del recorrido compartido que sirve como parada.
     ///
-    /// Da como mucho una vuelta entera: si ninguno la toma —una pantalla que
+    /// Con `solo_listados`, solo los `browser`; sin él, cualquiera que TOME
+    /// TECLAS. Lo enfocable no es lo que toma teclas: la hoja de atributos es
+    /// lo primero y no lo segundo —sigue al cursor del listado, y con el
+    /// teclado dentro dejaría de seguir a nada—, así que pararse ahí sería una
+    /// parada de la que ninguna tecla saca.
+    ///
+    /// Da como mucho una vuelta entera: si ninguno sirve —una pantalla que
     /// solo tenga hoja de atributos, que el reparto permite— devuelve `None`
     /// en vez de girar para siempre.
-    pub(super) fn siguiente_que_toma_teclas(&self, desde: SlotId, atras: bool) -> Option<SlotId> {
+    pub(super) fn siguiente_del_anillo(
+        &self,
+        desde: SlotId,
+        atras: bool,
+        solo_listados: bool,
+    ) -> Option<SlotId> {
         let mut actual = desde;
         for _ in 0..self.reparto.focus_order.len() {
             let siguiente = if atras {
@@ -196,10 +233,14 @@ impl Estado {
             if siguiente == desde {
                 return None; // dio la vuelta sin encontrar ninguno
             }
-            if kind_de(&self.arbol, siguiente)
-                .and_then(|k| self.kinds.get(&k))
-                .is_some_and(|d| d.takes_keys)
-            {
+            let para = kind_de(&self.arbol, siguiente).is_some_and(|k| {
+                if solo_listados {
+                    k == norte_frontend::layout::KindId::browser()
+                } else {
+                    self.kinds.get(&k).is_some_and(|d| d.takes_keys)
+                }
+            });
+            if para {
                 return Some(siguiente);
             }
             actual = siguiente;

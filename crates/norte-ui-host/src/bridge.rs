@@ -218,7 +218,16 @@ use serde::{Deserialize, Serialize};
 ///   —no está delante—, pero sí que ahí fuera hay algo así, que es lo que
 ///   decide si merece la pena ampliar antes de aprobar. El terminal lo decía
 ///   en su resumen desde siempre y esta ventana no, sobre las mismas rutas.
-pub const BRIDGE_VERSION: u32 = 58;
+/// - **59**: el visor dice cuánto hay A LO ANCHO (`total_cols`) y por dónde va
+///   (`first_col`). El visor no envuelve, así que sin esto un HTML minificado
+///   se pintaba recortado y la ventana no tenía con qué dibujar una barra
+///   horizontal: un fichero cortado por la derecha se leía como un fichero
+///   corto. Las `lines` ya vienen recortadas —el recorte lo hace el modelo
+///   compartido, una sola vez— y estos dos campos son la otra mitad: qué se ve
+///   y cuánto hay. Con ellos llega `viewer_scroll`, que es la RUEDA sobre el
+///   visor: una rueda no es una tecla, y fabricar flechas para expresarla
+///   dejaba el gesto atado a que nadie reatara esas flechas.
+pub const BRIDGE_VERSION: u32 = 59;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

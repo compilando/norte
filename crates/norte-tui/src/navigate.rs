@@ -140,6 +140,13 @@ pub fn settle_cd(
                 plugin_cols,
             ),
         );
+        // Y el árbol, si hay uno: este listado es dónde mira el panel ahora, y
+        // el panel de al lado tiene que decir lo mismo. Solo por el ENFOCADO —
+        // un listado del otro lado que termina de cargar no es dónde está
+        // trabajando el lector.
+        if pane == app.focus() {
+            app.follow_tree();
+        }
     }
     apply_cd(
         &app.panes,

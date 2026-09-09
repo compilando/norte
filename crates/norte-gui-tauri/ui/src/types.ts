@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 58;
+export const BRIDGE_VERSION = 59;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -480,6 +480,14 @@ export interface ViewerView {
   truncated: boolean;
   total_rows: number;
   first_line: number;
+  /**
+   * Cuánto hay A LO ANCHO, en celdas, y por dónde va (puente 59). El visor no
+   * envuelve, así que sin estos dos un HTML minificado se pinta recortado y no
+   * hay con qué dibujar la barra horizontal. `total_cols` es 0 en hexadecimal,
+   * que tiene ancho fijo y no se desplaza.
+   */
+  total_cols: number;
+  first_col: number;
   lines: string[]; /** «via ‹plugin›», ya traducido. Vacío = lo enseña norte, no un plugin. */
   preview_by: string;
   /** La decodificación que se le dio al previewer fue con PÉRDIDA. */
@@ -1225,6 +1233,12 @@ export type UiAction =
   | { action: "log_set_filter"; filter: string }
   | { action: "log_scroll"; delta: number }
   | { action: "preview_scroll"; slot_id: number; delta: number }
+  /**
+   * La RUEDA sobre el visor a pantalla completa (puente 59). Los dos ejes en
+   * una acción porque un solo gesto los produce: la rueda a secas baja, con
+   * `shift` va de lado.
+   */
+  | { action: "viewer_scroll"; lines: number; cols: number }
   | { action: "log_follow" }
   | { action: "log_cycle_source" }
   | { action: "log_set_visible_range"; rows: number }

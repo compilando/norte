@@ -1602,9 +1602,16 @@ async fn con_un_plan_en_vuelo_escape_cancela_el_filtro() {
         listado(&foto).quick.is_none(),
         "el Escape canceló el filtro"
     );
-    let r = siguiente_revision(&mut sub)
-        .await
-        .expect("el plan sobrevivió");
+    // Por la FOTO y no esperando el parche de la revisión: el
+    // `siguiente_foto` de arriba consume sobres hasta encontrar una foto, y
+    // con `retraso_ia_ms = 120` el parche de la revisión puede caer justo
+    // ahí — se lo tragaba y luego esperaba para siempre un evento que ya
+    // había pasado (rojo intermitente bajo carga). Un `Resync` reenvía el
+    // ESTADO, así que preguntar por la foto no puede perderse nada.
+    let r = foto_hasta(&h, &mut sub, "la revisión del plan aterrizó", |foto| {
+        foto.ai_rename.clone()
+    })
+    .await;
     assert_eq!(r.total, 1);
 }
 

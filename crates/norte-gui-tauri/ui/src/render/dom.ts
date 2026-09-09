@@ -33,6 +33,53 @@ export function nota(texto: string): HTMLElement {
 }
 
 /**
+ * Una barra de scroll del visor, o `null` si cabe todo.
+ *
+ * PROPIA y no la del navegador: el host manda solo la ventana visible, así que
+ * el `pre` mide exactamente lo que se ve y `overflow` no tiene nada que
+ * desplazar. Sin barra, el visor decía «hay más» solo en la cuenta de la
+ * cabecera, y a lo ancho no lo decía nada — y el visor no envuelve, así que un
+ * fichero cortado por la derecha se lee como un fichero corto.
+ *
+ * No se arrastra: es un INDICADOR. Arrastrarla pediría traducir píxeles a
+ * líneas del lado del renderer, que es justo lo que el host hace ya para la
+ * rueda. Por eso va `aria-hidden` y NO `role="scrollbar"`: ese rol promete un
+ * control que no existe y exige un `aria-controls` que no hay. Quien no la ve
+ * lee la posición en las marcas de la cabecera, que la dicen con palabras.
+ *
+ * `visible === 0` es la medida de ANTES de pintar —el cuerpo aún no tiene
+ * altura— y entonces no se dibuja nada: con `Math.max(1, 0)` salía un pulgar
+ * de un píxel durante un frame.
+ */
+export function viewerBar(
+  vertical: boolean,
+  total: number,
+  first: number,
+  visible: number,
+): HTMLElement | null {
+  if (visible <= 0 || total <= visible) {
+    return null;
+  }
+  const bar = document.createElement("div");
+  bar.className = vertical ? "viewer-bar viewer-bar-v" : "viewer-bar viewer-bar-h";
+  bar.setAttribute("aria-hidden", "true");
+  const thumb = document.createElement("div");
+  thumb.className = "viewer-thumb";
+  const largo = visible / total;
+  const donde = Math.min(1, Math.max(0, first / (total - visible)));
+  const pct = (x: number): string => `${(x * 100).toFixed(2)}%`;
+  if (vertical) {
+    thumb.style.height = pct(largo);
+    thumb.style.top = pct((1 - largo) * donde);
+  } else {
+    thumb.style.width = pct(largo);
+    thumb.style.left = pct((1 - largo) * donde);
+  }
+  bar.append(thumb);
+  return bar;
+}
+
+/**
  * El cuerpo de un visor: las líneas, o los fragmentos con estilo si un
  * plugin los puso. Lo comparten el visor a pantalla completa y el acoplado
  * (#291): es el mismo visor en otro sitio, y dos cuerpos divergen.

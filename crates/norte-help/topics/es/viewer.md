@@ -12,6 +12,8 @@ commands = [
     "viewer.page-down",
     "viewer.top",
     "viewer.bottom",
+    "viewer.left",
+    "viewer.right",
     "viewer.encoding",
     "viewer.encoding-auto",
     "viewer.hex",
@@ -32,6 +34,14 @@ cuando hay más: lo que tienes delante es la cabecera, y no finge otra cosa.
 {{cmd:viewer.up}} y {{cmd:viewer.down}} mueven una línea,
 {{cmd:viewer.page-up}} y {{cmd:viewer.page-down}} una pantalla, y
 {{cmd:viewer.top}} y {{cmd:viewer.bottom}} van a los extremos de lo leído.
+
+Las líneas **no se envuelven**, así que un HTML minificado o un CSV ancho se
+salen por la derecha. {{cmd:viewer.left}} y {{cmd:viewer.right}} mueven la
+ventana de columna en columna, y aceptan contador igual que la pareja vertical:
+`40` y luego derecha salta cuarenta columnas. La ventana se para donde acaba la
+línea más larga, así que nunca se va a una pantalla en blanco, y la barra de
+estado dice en qué columna estás. El volcado hexadecimal también se mueve de
+lado, con su propio ancho: su columna ASCII no cabe en un hueco estrecho.
 
 Las mismas teclas valen para un fichero dentro de un `.zip` o al otro lado de
 SFTP. El panel sostiene una ubicación, el visor lee lo que esa ubicación le dé,

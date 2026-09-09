@@ -15,7 +15,12 @@
 # Divergences from the original: panel cursor movement (arrows, PgUp/PgDn,
 # Home/End, Enter) follows the same well-known convention TC and Krusader
 # themselves bind it by, for the same reason — it predates any of the three
-# programs' own written documentation. No bare letter is ever bound, matching
+# programs' own written documentation. The viewer's HORIZONTAL pair
+# (`left`/`right` -> viewer.left/right, added 2026-09-09) is in the same
+# class and worse attested: NC's own viewer did have horizontal scrolling on
+# the arrows, but with no plaintext NC.HLP nothing here can attest it. It is
+# bound because a viewer that does not wrap needs both axes; treat it as
+# convention, not transcription. No bare letter is ever bound, matching
 # the other three presets' convention (NC's own quicksearch-by-typing is the
 # feature that makes it necessary here too).
 #
@@ -158,4 +163,6 @@ keymap = [
     { on = ["pgdn"], run = "viewer.page-down" },
     { on = ["home"], run = "viewer.top" },
     { on = ["end"], run = "viewer.bottom" },
+    { on = ["left"], run = "viewer.left" },
+    { on = ["right"], run = "viewer.right" },
 ]

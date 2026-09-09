@@ -1087,6 +1087,7 @@
         "viewer": {
           "encoding": "UTF-8",
           "eol": "lf",
+          "first_col": 12,
           "first_line": 4,
           "forced": false,
           "had_errors": false,
@@ -1126,6 +1127,7 @@
               }
             ]
           ],
+          "total_cols": 320,
           "total_rows": 120,
           "truncated": true
         }
@@ -1191,6 +1193,7 @@
     "viewer": {
       "encoding": "UTF-8",
       "eol": "lf",
+      "first_col": 12,
       "first_line": 4,
       "forced": false,
       "had_errors": false,
@@ -1230,6 +1233,7 @@
           }
         ]
       ],
+      "total_cols": 320,
       "total_rows": 120,
       "truncated": true
     },
