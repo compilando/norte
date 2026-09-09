@@ -784,6 +784,19 @@ impl SettingsState {
         }
     }
 
+    /// Replaces the edit buffer WHOLESALE. No-op if not editing.
+    ///
+    /// For a frontend whose text field is native (the window's prompt): the
+    /// caret is the widget's, and the host receives the full text on
+    /// confirm rather than one character at a time. Same contract as
+    /// [`Self::edit_push_char`] otherwise — raw, unsanitized, validated by
+    /// [`Self::edit_commit`].
+    pub fn edit_set(&mut self, text: &str) {
+        if let Some(buf) = &mut self.edit {
+            text.clone_into(buf);
+        }
+    }
+
     /// Cancels the edit WITHOUT writing — the row's value stays as it was.
     pub fn edit_cancel(&mut self) {
         self.edit = None;
@@ -1408,6 +1421,21 @@ mod tests {
         assert_eq!(write.value.as_str(), Some("JetBrains Mono"));
         assert!(!s.is_editing());
         assert_eq!(s.rows()[s.visible()[0]].value, "JetBrains Mono");
+    }
+
+    /// La ventana no teclea carácter a carácter: su campo es nativo y entrega
+    /// el texto entero al confirmar. `edit_set` es esa entrada, y fuera de
+    /// una edición no hace nada.
+    #[test]
+    fn edit_set_reemplaza_el_buffer_entero_y_solo_editando() {
+        let mut s = only("mono-font");
+        s.edit_set("nada");
+        assert!(!s.is_editing(), "sin edición abierta no abre una");
+        s.activate(&[], &[]);
+        s.edit_set("JetBrains Mono");
+        assert_eq!(s.edit_buffer(), Some("JetBrains Mono"));
+        let write = s.edit_commit().expect("Text siempre válido");
+        assert_eq!(write.value.as_str(), Some("JetBrains Mono"));
     }
 
     #[test]

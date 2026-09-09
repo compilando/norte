@@ -718,8 +718,8 @@ settings-path-state = State (session, history)
 settings-path-logs = Logs
 settings-path-socket = Daemon socket
 settings-path-missing = not there
-settings-read-only = This window shows settings but does not write them yet.
 settings-restart-badge = restart required
+modal-setting-edit = Change setting
 settings-hint-gui = [↑/↓/pgup/pgdn/click] navigate · [enter/click] edit · [ctrl+k] shortcuts · [esc] close
 # P1: prefix on a plugin-contributed row (`palette::plugin_rows`) — no
 # built-in row ever carries it, so a plugin cannot spoof a built-in command
@@ -914,6 +914,7 @@ msg-extensions-no-help = this extension ships no help page
 # value already validated client-side.
 msg-plugin-config-saved = { $key } saved: { $value }
 msg-settings-saved = { $name } saved: { $value }
+msg-settings-saved-restart = { $name } saved: { $value } — takes effect when the window restarts
 msg-settings-save-failed = not saved: { $error }
 # S review I1: the background write task itself panicked or was cancelled
 # (never observed in practice — the one known panic source, an unexpected
@@ -2052,7 +2053,7 @@ host-extension-changed = the capabilities it declares changed since the question
 host-extension-too-many-caps = it declares more capabilities than fit on one screen; not granted from here
 host-extension-updated = done; the catalogue is being fetched again to confirm it
 modal-extension-approve-title = grant these capabilities?
-host-settings-read-only = settings are read-only here
+host-settings-closed = settings were closed; the value was not written
 msg-nav-at-root = already at the root
 msg-nothing-selected = nothing selected
 msg-batch-summary = { $total } transfers: { $ok } ok, { $fail } failed

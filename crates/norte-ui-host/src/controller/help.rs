@@ -241,6 +241,9 @@ impl Estado {
                     // Y guardar el perfil pide un NOMBRE, que acaba siendo un
                     // directorio: mismo diálogo de un campo (#318).
                     | Pendiente::GuardarPerfil
+                    // Y el valor de un ajuste de texto: un campo prellenado
+                    // y dos botones.
+                    | Pendiente::EditarAjuste { .. }
                     // Y los permisos piden un MODO, con la misma forma (#314).
                     // El corpus los documenta en la página de las propiedades,
                     // pero el CONTEXTO de teclas es este: un campo y dos

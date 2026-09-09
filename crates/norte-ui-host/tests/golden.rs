@@ -183,6 +183,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::HelpSelectTopic { .. } => "help_select_topic",
         UiAction::HelpActivate { .. } => "help_activate",
         UiAction::SettingsSelectRow { .. } => "settings_select_row",
+        UiAction::SettingsActivate { .. } => "settings_activate",
         UiAction::ExtensionSelectRow { .. } => "extension_select_row",
         UiAction::AgentSelectRow { .. } => "agent_select_row",
         UiAction::SelectTab { .. } => "select_tab",
@@ -343,6 +344,7 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
             "settings_select_row",
             UiAction::SettingsSelectRow { row: 2 },
         ),
+        ("settings_activate", UiAction::SettingsActivate { row: 2 }),
         (
             "extension_select_row",
             UiAction::ExtensionSelectRow { row: 1 },
@@ -1698,7 +1700,6 @@ fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
             },
         ],
         cursor: 0,
-        read_only: true,
     }
 }
 
@@ -2277,7 +2278,7 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    const FORMA: u64 = 16_718_082_450_651_606_617;
+    const FORMA: u64 = 14_956_904_933_279_647_300;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

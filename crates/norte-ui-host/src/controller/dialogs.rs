@@ -312,6 +312,14 @@ impl Estado {
                 rehusado = motivo;
                 salidas.extend(partes);
             }
+            // El valor de una entrada de texto de los ajustes: lo valida el
+            // editor compartido y, si vale, se escribe.
+            Some(Pendiente::EditarAjuste { fila }) => {
+                let (motivo, partes) =
+                    self.confirmar_valor_de_ajuste(fila, dialogo.tecleado.texto(), buzon);
+                rehusado = motivo;
+                salidas.extend(partes);
+            }
             // Los dos que fabrican ficheros a partir de lo tecleado, juntos:
             // este `match` es un despachador y ya roza su tope.
             Some(p @ (Pendiente::Partir { .. } | Pendiente::Empaquetar { .. })) => {

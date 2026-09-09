@@ -66,6 +66,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window writes settings** (bridge 60). F11 in the window was a showcase:
+  it listed the shared registry with each effective value and told you it did
+  not write. Now `enter` (or a double click) does what it does in the terminal:
+  a boolean, an enumeration, the theme or the keymap preset cycle to the next
+  value and are written at once; a text or a number opens the window's
+  one-field prompt, prefilled with the current value, and the shared editor
+  validates it — a font size outside `[8, 32]` is refused with the range and
+  writes nothing. The write goes to the layer the window already writes
+  (the active profile, else the user's), off the actor, and the configuration
+  is re-read and applied through the SAME path a profile switch uses: theme,
+  keymap, columns, favourites and layout change without restarting; what that
+  path cannot apply (language, fonts, reduced motion, and what is fixed when a
+  pane is created) keeps its "restart required" badge, and the saved message
+  says so. `SettingsView.read_only` is gone from the bridge: it was a phase-4
+  promise and no longer true. Out of scope, and said in the parity
+  classification: the terminal's search filter over the settings, and the
+  plugins section, which is informational in both frontends.
 - **The viewer scrolls sideways** (`viewer.left`, `viewer.right`, bound to
   `left`/`right` in all seven presets and to `h`/`l` in `vim`, both taking a
   count). The viewer does not wrap, so a minified HTML file, a wide CSV or a

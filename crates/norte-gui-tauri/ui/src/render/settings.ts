@@ -13,12 +13,13 @@ import type {
 import { revelar, badge } from "./dom";
 
 /**
- * Los ajustes (F11), en solo lectura.
+ * Los ajustes (F11).
  *
  * Dos clases de sección y ninguna decisión aquí: el host manda el registro
  * con su valor ya resuelto y las ubicaciones ya saneadas. Lo único que este
- * método sabe es que una fila de ruta que falta se dice, y que la lista es
- * un `listbox` con un cursor que el host lleva.
+ * método sabe es que una fila de ruta que falta se dice, que la lista es
+ * un `listbox` con un cursor que el host lleva, y que un doble clic sobre
+ * una fila la activa — girarla o pedir su valor lo decide el host.
  */
 export function paintSettings(this: Screen, settings: SettingsView | null): void {
   if (settings === null) {
@@ -36,15 +37,6 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   const titulo = document.createElement("h1");
   titulo.textContent = this.t("settings-title");
   caja.append(titulo);
-  if (settings.read_only) {
-    // Un AVISO y no un botón apagado: apagar un control invita a probarlo,
-    // y esta ventana no escribe ajustes todavía.
-    const nota = document.createElement("p");
-    nota.className = "settings-note";
-    nota.setAttribute("role", "note");
-    nota.textContent = this.t("settings-read-only");
-    caja.append(nota);
-  }
 
   const lista = document.createElement("ul");
   lista.className = "settings-rows";
@@ -549,7 +541,13 @@ export function paintPicker(this: Screen, picker: PickerView | null): void {
   this.pickerRoot.replaceChildren(caja);
 }
 
-/** El `<li>` de una fila de ajustes, con su cursor y su click. */
+/**
+ * El `<li>` de una fila de ajustes, con su cursor, su click y su doble click.
+ *
+ * El click SEÑALA y el doble click ACTIVA, como en un listado: el primero
+ * mueve el cursor y el segundo hace lo que `enter`. Los dos viajan —un
+ * doble click es también un click— y el host los ordena.
+ */
 export function settingsRow(this: Screen, i: number, cursor: number): HTMLElement {
   const fila = document.createElement("li");
   fila.className = "settings-row";
@@ -558,6 +556,9 @@ export function settingsRow(this: Screen, i: number, cursor: number): HTMLElemen
   fila.setAttribute("aria-selected", String(cursor === i));
   fila.addEventListener("click", () => {
     this.send({ action: "settings_select_row", row: i });
+  });
+  fila.addEventListener("dblclick", () => {
+    this.send({ action: "settings_activate", row: i });
   });
   return fila;
 }

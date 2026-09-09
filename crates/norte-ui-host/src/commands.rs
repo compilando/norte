@@ -436,7 +436,7 @@ pub enum Efecto {
     Columnas,
     /// Abre la paleta de comandos.
     Paleta,
-    /// Abre los ajustes, en solo lectura.
+    /// Abre los ajustes: se leen, se giran y se escriben.
     Ajustes,
     /// Abre el gestor de extensiones, en solo lectura.
     Extensiones,

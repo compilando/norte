@@ -227,7 +227,14 @@ use serde::{Deserialize, Serialize};
 ///   y cuánto hay. Con ellos llega `viewer_scroll`, que es la RUEDA sobre el
 ///   visor: una rueda no es una tecla, y fabricar flechas para expresarla
 ///   dejaba el gesto atado a que nadie reatara esas flechas.
-pub const BRIDGE_VERSION: u32 = 59;
+/// - **60**: los ajustes (F11) se ESCRIBEN desde la ventana. `SettingsView`
+///   pierde `read_only`, que era una promesa de fase 4 y ya no es verdad; y
+///   llega `settings_activate`, el doble clic sobre una fila, que hace lo que
+///   `enter`: girar lo que gira y pedir en un diálogo lo que se teclea. El
+///   editor es el compartido con el terminal (`norte_frontend::settings`), y
+///   lo escrito se relee y se aplica por el mismo camino que un cambio de
+///   perfil.
+pub const BRIDGE_VERSION: u32 = 60;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

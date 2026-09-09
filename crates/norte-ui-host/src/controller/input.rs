@@ -245,7 +245,7 @@ impl Estado {
             return Some(self.tecla_en_agentes(k, backend, buzon));
         }
         if self.ajustes.is_some() {
-            return Some(self.tecla_en_ajustes(k));
+            return Some(self.tecla_en_ajustes(k, buzon));
         }
         if self.visor.is_some() {
             return Some(self.tecla_en_visor(k, backend, buzon));

@@ -68,6 +68,12 @@ const APLAZADOS: &[(&str, u32)] = &[
     // acordarse de dónde dejaste cada panel DENTRO de cada perfil — la
     // disposición sale de la configuración del perfil, no de su estado
     // guardado— y eso es lo único que queda de #307.
+    // Los ajustes (F11) se ESCRIBEN desde la ventana desde el puente 60, con
+    // el editor compartido. Lo que sigue sin tener, y no es un comando del
+    // catálogo, así que esta lista no lo ve: el filtro que el terminal
+    // teclea sobre la lista de ajustes (su overlay se come todo imprimible;
+    // aquí las teclas imprimibles no llegan al host), y la sección de plugins,
+    // que es informativa en los dos frontends.
 ];
 
 /// Todo comando vivo o lo implementa la ventana, o está clasificado.

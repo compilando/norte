@@ -243,6 +243,10 @@
     "first": 100,
     "slot_id": 1
   },
+  "settings_activate": {
+    "action": "settings_activate",
+    "row": 2
+  },
   "settings_select_row": {
     "action": "settings_select_row",
     "row": 2

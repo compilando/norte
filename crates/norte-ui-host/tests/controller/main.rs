@@ -23,6 +23,7 @@ use norte_ui_host::dto::{SlotView, UiNotice, UiUpdate};
 mod backend_falso;
 use backend_falso::Falso;
 
+mod ajustes_escritura;
 mod ajustes_extensiones;
 mod atributos_procesos;
 mod ayuda;

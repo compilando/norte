@@ -56,6 +56,7 @@ impl Estado {
         match f {
             Fondo::Perfiles(perfiles, vecino) => self.con_los_perfiles(perfiles, vecino, buzon),
             Fondo::PerfilCargado(nombre, res) => self.aplicar_perfil(&nombre, *res, backend, buzon),
+            Fondo::AjusteEscrito(hecho) => self.ajuste_escrito(*hecho, backend, buzon),
             Fondo::PlanIa(epoca, res) => self.aplicar_plan_ia(epoca, *res, backend, buzon),
             // #311: las dos mitades de comprobar unas sumas — el fichero que
             // se lee antes de lanzar nada, y el informe que llega después.

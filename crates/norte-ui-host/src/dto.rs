@@ -567,10 +567,6 @@ pub struct SettingsView {
     /// Qué fila tiene el cursor, contando TODAS las filas de todas las
     /// secciones en orden (las cabeceras no cuentan: no se pueden elegir).
     pub cursor: u64,
-    /// Esta ventana no escribe ajustes todavía, y lo DICE en vez de ofrecer
-    /// un `enter` que se negaría. Lo pinta el renderer como un aviso, no como
-    /// un botón apagado que invita a probar.
-    pub read_only: bool,
 }
 
 /// Una sección de los ajustes: entradas del registro, o ubicaciones.
@@ -619,7 +615,8 @@ pub struct SettingRowView {
     /// siempre tuvieron su bandera: dos clases de fila prometiendo cosas
     /// distintas sobre la misma columna era la incoherencia que había.
     pub hostile: bool,
-    /// Cambiarlo pide reiniciar la ventana.
+    /// Cambiarlo pide reiniciar la ventana: lo que se escribe se guarda, y
+    /// hace efecto en la siguiente.
     pub restart_required: bool,
 }
 

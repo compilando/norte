@@ -727,8 +727,8 @@ settings-path-state = Estado (sesión, historial)
 settings-path-logs = Logs
 settings-path-socket = Socket del daemon
 settings-path-missing = no está
-settings-read-only = Esta ventana enseña los ajustes pero todavía no los escribe.
 settings-restart-badge = requiere reinicio
+modal-setting-edit = Cambiar ajuste
 settings-hint-gui = [↑/↓/pgup/pgdn/click] navegar · [enter/click] editar · [ctrl+k] atajos · [esc] cerrar
 # P1: prefijo de una fila aportada por un plugin (`palette::plugin_rows`) —
 # ninguna fila built-in lo lleva, así que un plugin no puede disfrazarse de
@@ -862,6 +862,7 @@ msg-extensions-no-help = esta extensión no trae página de ayuda
 # valor nuevo, ya validado client-side.
 msg-plugin-config-saved = { $key } guardado: { $value }
 msg-settings-saved = { $name } guardado: { $value }
+msg-settings-saved-restart = { $name } guardado: { $value } — hace efecto al reiniciar la ventana
 msg-settings-save-failed = no se pudo guardar: { $error }
 # Revisión S I1: la propia tarea de fondo de la escritura panicó o se
 # canceló (nunca observado en la práctica — la única causa de panic
@@ -2079,7 +2080,7 @@ host-extension-changed = las capabilities que declara han cambiado desde que se 
 host-extension-too-many-caps = declara demasiadas capabilities para poder leerlas en una pantalla; no se concede desde aquí
 host-extension-updated = hecho; el catálogo se vuelve a pedir para confirmarlo
 modal-extension-approve-title = ¿conceder estas capabilities?
-host-settings-read-only = los ajustes aquí son de solo lectura
+host-settings-closed = los ajustes se cerraron; el valor no se escribió
 msg-nav-at-root = ya estás en la raíz
 msg-nothing-selected = nada seleccionado
 msg-batch-summary = { $total } transferencias: { $ok } bien, { $fail } mal
