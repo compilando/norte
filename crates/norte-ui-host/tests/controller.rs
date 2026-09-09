@@ -799,6 +799,18 @@ fn tecla(k: &str) -> UiAction {
     })
 }
 
+/// `alt+<algo>`: el modificador va en su campo, jamás en el nombre de la
+/// tecla — `"Alt+o"` no es un nombre de tecla y no resuelve a nada.
+fn tecla_alt(k: &str) -> UiAction {
+    UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: k.to_owned(),
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+    })
+}
+
 /// Una tecla del preset resuelve al comando del CATÁLOGO compartido y el
 /// host solo la ejecuta: no hay un segundo keymap.
 #[tokio::test]
@@ -1101,6 +1113,96 @@ async fn el_foco_cambia_y_el_destino_lo_sigue() {
     };
     assert_eq!(rol(2), Some(norte_ui_host::dto::SlotRole::Active));
     assert_eq!(rol(1), Some(norte_ui_host::dto::SlotRole::Target));
+}
+
+/// **`pane.switch` cicla los LISTADOS —todos— y se salta los laterales.**
+///
+/// Es «el otro panel» de cualquier gestor ortodoxo. Compartía brazo con
+/// `layout.focus-next`, y eso hacía dos cosas mal a la vez: con el árbol
+/// abierto el tabulador se paraba en él, y con tres listados en pantalla no
+/// había forma de decir «al de al lado» sin contar las paradas de por medio.
+///
+/// `layout.focus-next` sigue siendo el recorrido de la pantalla entera, y
+/// esa mitad se comprueba aquí mismo: son dos anillos, no uno con dos nombres.
+#[tokio::test]
+async fn el_tabulador_cicla_los_listados_y_se_salta_los_laterales() {
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    // El árbol al lado, y un tercer listado: el panel partido y el que no.
+    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
+    // Drenar antes de volver a la paleta: la cola trae los sobres de la
+    // apertura anterior, y el ayudante los leería como respuesta a la nueva.
+    foto_hasta(&h, &mut sub, "el árbol está en pantalla", |foto| {
+        foto.palette
+            .is_none()
+            .then(|| foto.slots.iter().any(|v| matches!(v, SlotView::Tree(_))))
+            .filter(|hay| *hay)
+    })
+    .await;
+    ejecutar_por_paleta(&h, &mut sub, "layout.split-v").await;
+    let (hueco_del_arbol, partida) = foto_hasta(
+        &h,
+        &mut sub,
+        "tres listados y un árbol en pantalla",
+        |foto| {
+            let listados = foto
+                .slots
+                .iter()
+                .filter(|v| matches!(v, SlotView::Browser(_)))
+                .count();
+            let arbol = foto.slots.iter().find_map(|v| match v {
+                SlotView::Tree(t) => Some(t.slot_id),
+                _ => None,
+            })?;
+            let foco = foto.focus?;
+            (listados == 3).then_some((arbol, foco))
+        },
+    )
+    .await;
+
+    let mut vistos = Vec::new();
+    let mut anterior = partida;
+    for _ in 0..3 {
+        h.dispatch(tecla("Tab")).await.expect("host vivo");
+        // Hasta que el foco se MUEVA: el sobre anterior puede seguir en la
+        // cola, y leerlo como respuesta a esta tecla es leer una foto vieja.
+        let ahora = foto_hasta(&h, &mut sub, "el foco se movió", |foto| {
+            foto.focus.filter(|f| *f != anterior)
+        })
+        .await;
+        vistos.push(ahora);
+        anterior = ahora;
+    }
+    assert!(
+        !vistos.contains(&hueco_del_arbol),
+        "el tabulador no para en el árbol: {vistos:?}"
+    );
+    let distintos: std::collections::BTreeSet<u32> = vistos.iter().copied().collect();
+    assert_eq!(
+        distintos.len(),
+        3,
+        "los TRES listados son alcanzables: {vistos:?}"
+    );
+    assert_eq!(
+        vistos[2], partida,
+        "y tres saltos dan la vuelta entera: {vistos:?}"
+    );
+
+    // La otra mitad: el recorrido de la pantalla SÍ para en el árbol.
+    let mut paradas = Vec::new();
+    for _ in 0..4 {
+        h.dispatch(tecla_alt("o")).await.expect("host vivo");
+        let ahora = foto_hasta(&h, &mut sub, "el foco se movió", |foto| {
+            foto.focus.filter(|f| *f != anterior)
+        })
+        .await;
+        paradas.push(ahora);
+        anterior = ahora;
+    }
+    assert!(
+        paradas.contains(&hueco_del_arbol),
+        "`layout.focus-next` recorre la pantalla entera: {paradas:?}"
+    );
 }
 
 /// Enfocar un hueco que no se ve es una carrera con un reparto anterior, no
@@ -6459,10 +6561,11 @@ async fn el_panel_de_procesos_toma_sus_teclas() {
         .expect("host vivo");
     }
 
-    // Se rota el foco hasta el panel de procesos.
+    // Se rota el foco hasta el panel de procesos. Por el recorrido de la
+    // PANTALLA (`alt+o`): `Tab` cicla listados y no para en los laterales.
     let mut en_procesos = false;
     for _ in 0..8 {
-        h.dispatch(tecla("Tab")).await.expect("host vivo");
+        h.dispatch(tecla_alt("o")).await.expect("host vivo");
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(&mut sub).await;
         let activo = foto
@@ -6481,7 +6584,7 @@ async fn el_panel_de_procesos_toma_sus_teclas() {
             break;
         }
     }
-    assert!(en_procesos, "el tabulador llega al panel de procesos");
+    assert!(en_procesos, "el anillo llega al panel de procesos");
 
     h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
     h.dispatch(UiAction::Resync).await.expect("host vivo");
@@ -20305,10 +20408,14 @@ async fn lo_elegido_en_el_menu_corre_y_el_menu_se_cierra_antes() {
     assert!(foto.help.is_some(), "y lo elegido corrió");
 }
 
-/// Del panel de PROCESOS se sale con la misma tecla con la que se entró.
+/// Del panel de PROCESOS se sale con la misma tecla con la que se entró, y
+/// además el tabulador saca de él.
 ///
 /// Un anillo que entra en un panel y no sale de él no es un anillo: es una
-/// trampa, y el lector se queda sin forma de volver al listado sin ratón.
+/// trampa, y el lector se queda sin forma de volver al listado sin ratón. Al
+/// panel se entra por el recorrido de la pantalla (`layout.focus-next`), que
+/// es el que pasa por los laterales; `Tab` no entra —cicla listados— pero sí
+/// SACA, y eso es lo que hace que ninguna combinación deje al lector dentro.
 #[tokio::test]
 async fn del_panel_de_procesos_se_sale_tabulando() {
     use norte_ui_host::dto::SlotRole;
@@ -20333,10 +20440,10 @@ async fn del_panel_de_procesos_se_sale_tabulando() {
             .find(|p| p.role == Some(SlotRole::Active))
             .map(|p| p.slot_id)
     };
-    // Se tabula hasta caer en el panel de procesos...
+    // Se recorre la pantalla hasta caer en el panel de procesos...
     let mut dentro = false;
     for _ in 0..6 {
-        h.dispatch(tecla("Tab")).await.expect("host vivo");
+        h.dispatch(tecla_alt("o")).await.expect("host vivo");
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         if activo(&siguiente_foto(&mut sub).await) == Some(procesos) {
             dentro = true;
@@ -20345,13 +20452,36 @@ async fn del_panel_de_procesos_se_sale_tabulando() {
     }
     assert!(dentro, "el anillo llega al panel de procesos");
 
-    // ...y se sale.
-    h.dispatch(tecla("Tab")).await.expect("host vivo");
+    // ...y se sale por donde se entró.
+    h.dispatch(tecla("Alt+o")).await.expect("host vivo");
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     assert_ne!(
         activo(&siguiente_foto(&mut sub).await),
         Some(procesos),
         "y se SALE de él: un anillo que entra y no sale es una trampa"
+    );
+
+    // Y el tabulador también saca, aunque no entre: vuelve a un listado.
+    let mut atras = false;
+    for _ in 0..6 {
+        h.dispatch(tecla_alt("o")).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if activo(&siguiente_foto(&mut sub).await) == Some(procesos) {
+            atras = true;
+            break;
+        }
+    }
+    assert!(atras, "de vuelta dentro del panel");
+    h.dispatch(tecla("Tab")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let fuera = activo(&foto).expect("hay activo");
+    assert_ne!(fuera, procesos, "`Tab` saca del panel lateral");
+    assert!(
+        foto.slots
+            .iter()
+            .any(|v| matches!(v, SlotView::Browser(b) if b.slot_id == fuera)),
+        "y lo hace a un LISTADO"
     );
 }
 
