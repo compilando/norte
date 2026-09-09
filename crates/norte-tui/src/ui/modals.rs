@@ -31,7 +31,7 @@ pub(crate) const MODAL_PATH_CHARS: usize = 46;
 ///
 /// Es SEMÁNTICO, no un color: lo que se declara aquí es el papel de la línea,
 /// y el tema decide con qué se pinta. Un modal que no declare nada sigue
-/// saliendo en texto plano, que es como salían los 56 — la migración es una
+/// saliendo en texto plano, que es como salían los 26 — la migración es una
 /// línea cada vez y no un big bang.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum LineKind {
@@ -200,7 +200,7 @@ pub(crate) fn is_warning_modal(modal: &crate::app::Modal) -> bool {
 /// texto de siempre y se convierte a líneas planas, que es exactamente como
 /// se pintaba antes.
 ///
-/// Así declarar papeles es un cambio POR MODAL. La alternativa —tocar las 56
+/// Así declarar papeles es un cambio POR MODAL. La alternativa —tocar las 26
 /// variantes de golpe— era un diff de miles de líneas para una mejora que se
 /// aprecia en cinco.
 pub(crate) fn modal_title_body(

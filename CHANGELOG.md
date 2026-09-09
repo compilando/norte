@@ -15,7 +15,7 @@ independently through `PROTOCOL_VERSION`.
   out in the same colour and the same weight: the last thing you found was the
   only thing you could touch. Each line now declares its ROLE — data, label or
   hint, destination, field, warning, error — and the theme decides how it is
-  painted. A modal that declares nothing looks exactly as it did, so the 56 of
+  painted. A modal that declares nothing looks exactly as it did, so the 26 of
   them migrate one at a time.
   In `TransferName`: the destination stands out and the source dims, the label
   sits ABOVE the field (it was below — you read the name and then found out

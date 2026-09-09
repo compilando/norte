@@ -19,7 +19,7 @@ an in-band `→`.
 Only the last one is a bug in the usual sense. The rest come from one place: a
 modal's body was a single `String`, and `draw_modal` painted it as a flat
 `Paragraph`. **There was no way to paint any part of a modal differently from
-any other part** — not in this one, not in the other 55.
+any other part** — not in this one, not in the other 25.
 
 The comparison that settled it: the graphical host already models this with
 FIELDS. `DialogView` carries `destination`, `subject`, `asker`, `body`,
@@ -41,7 +41,7 @@ TUI on the poor side of it.
 ### B — Redesign this one modal with a framed field
 
 - Advantage: the best-looking result for this dialog alone.
-- Drawback: one modal painted unlike the other 55, and the next improvement
+- Drawback: one modal painted unlike the other 25, and the next improvement
   is another special case. It moves the divergence inside the TUI.
 
 ### C — Give a modal line a ROLE, and migrate one modal at a time
@@ -105,7 +105,7 @@ not, because both only exercised `mem`.
 ### Positive
 
 - Every modal can have a hierarchy, and the ones that need it most get it
-  first. The remaining 55 paint identically until someone migrates them.
+  first. The remaining 24 paint identically until someone migrates them.
 - Two spoofs that the corpus described and the code allowed are closed, and
   closed by a mechanism a file name cannot reach.
 - `modal_height` finally has a test tying it to the body it is supposed to
@@ -124,7 +124,7 @@ not, because both only exercised `mem`.
 
 - Two sources of truth for a modal's geometry still exist: `modal_height`
   declares the height and the composer decides the body. The new test ties
-  them for the migrated modals only; the other 55 keep the old arrangement.
+  them for the migrated modals only; the other 24 keep the old arrangement.
 - A local path is now spelled the way the OS spells it, and that is exactly
   the form `TransferDest` refuses on purpose — it reads wire form, because
   guessing a scheme is how a copy lands on a backend the reader did not mean.
