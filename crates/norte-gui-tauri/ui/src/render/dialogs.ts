@@ -39,6 +39,8 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   if (top === undefined) {
     return;
   }
+  // El campo al que devolver el foco cuando la caja nueva esté montada.
+  let refocar: HTMLInputElement | null = null;
   const box = document.createElement("div");
   box.className = "dialog";
   box.setAttribute("role", "dialog");
@@ -194,6 +196,16 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
     // cada tecla lo vaciaba: lo que llegaba a `fs.mkdir` era el último
     // carácter. Reusar el nodo conserva de paso el cursor y la selección.
     const previo = this.dialogoPintado === top.id ? this.dialogoInput : null;
+    // Reusar el nodo no basta: la caja del diálogo se rehace en cada
+    // repintado y el campo se MUEVE a la nueva, y mover un nodo lo saca del
+    // documento un instante, que es lo que le quita el foco. Cada tecla
+    // provoca un parche, así que cada tecla dejaba el campo sin foco y la
+    // siguiente se iba al host como un acorde. Se apunta si lo tenía y se
+    // le devuelve al final, con la caja ya montada.
+    const teniaFoco = previo !== null && document.activeElement === previo;
+    if (teniaFoco) {
+      refocar = previo;
+    }
     let input = previo;
     if (input === null) {
       input = document.createElement("input");
@@ -279,4 +291,7 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   box.append(choices);
   this.dialogsRoot.replaceChildren(box);
   this.dialogoPintado = top.id;
+  if (refocar !== null) {
+    refocar.focus();
+  }
 }

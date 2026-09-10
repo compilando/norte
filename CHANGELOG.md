@@ -171,6 +171,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`F10` and `q` close the window.** `app.quit` was classified as "not
+  applicable to a window — the window manager closes it", which left the quit
+  key of all seven presets, and the menu's own "Quit" entry, doing nothing.
+  It now asks to close through the same path as the close button, with the
+  same `[ui] confirm_quit` question. With it, no command the orthodox preset
+  binds is left dimmed in the window's key sheet.
+- **A menu's dropdown hung one title too far to the right.** Its left edge
+  was a guess in cells — `12ch` per title — while the titles are painted with
+  pixel padding and do not measure the same, so the error added up towards
+  the right until "Help" opened under the next title. The renderer now
+  measures the painted title and hangs the list from it; the cell count stays
+  only as a fallback.
+- **The dialog field lost the keyboard on every key.** Each key sends
+  `dialog_input`, the host answers with a patch, the dialog box is rebuilt and
+  the reused input is MOVED into the new box — and moving a node takes it out
+  of the document for an instant, which drops its focus. Deleting a digit in
+  "Font size" left the field unfocused and the next key went to the host as a
+  chord. The renderer now gives the focus back once the new box is mounted.
 - **The window's setting prompt was painted under the settings.** `enter` on
   a text or number row opened the one-field prompt, but `#dialogs` came
   before `#settings` in the document and this window has no `z-index`

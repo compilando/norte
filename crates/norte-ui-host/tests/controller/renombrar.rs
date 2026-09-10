@@ -856,6 +856,29 @@ async fn sin_confirmacion_cerrar_no_abre_nada() {
     );
 }
 
+/// `F10` —`app.quit` en los siete presets— cierra la ventana por el MISMO
+/// camino que el botón de cerrar. Estaba clasificado como «no aplica a una
+/// ventana», y el lector pulsaba la tecla de salir de siempre sin que pasara
+/// nada.
+#[tokio::test]
+async fn la_tecla_de_salir_cierra_la_ventana() {
+    let mut cfg = ajustes_de_prueba();
+    cfg.common.ui_confirm_quit = norte_config::ConfirmQuit::Never;
+    let (h, _snap) = host_en_con(arbol(), "mem:///casa", cfg).await;
+    let mut efectos = h.native_effects();
+
+    let ack = h.dispatch(tecla("F10")).await.expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    assert!(
+        matches!(efecto, norte_ui_host::dto::NativeEffect::CloseWindow),
+        "{efecto:?}"
+    );
+}
+
 /// `[ui] quick_search` elige el modo también en la VENTANA.
 ///
 /// El host arrancaba el buscador incremental en `Filter` a fuego, así que

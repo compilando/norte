@@ -166,6 +166,10 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.copy-path",
     "app.theme",
     "app.menu",
+    // Salir por la tecla, como en el terminal: la ventana la tenía como
+    // «la cierra el gestor de ventanas», y `F10`, `q` y «Salir» del menú no
+    // hacían nada. Va por el mismo camino que el botón de cerrar.
+    "app.quit",
     "profile.pick",
     "profile.save-as",
     "profile.next",
@@ -529,6 +533,9 @@ pub enum Efecto {
     /// ofrece las mismas órdenes del catálogo, ordenadas por tema, para
     /// quien no sabe el nombre de lo que busca.
     Menu,
+    /// Pide cerrar la ventana: el mismo camino que el botón de cerrar, con
+    /// la misma pregunta de `[ui] confirm_quit`.
+    Salir,
     /// Abre el selector de PERFILES (ADR 0079).
     PerfilElegir,
     /// Guardar el espacio de trabajo de AHORA como un perfil (#318).
@@ -817,6 +824,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.palette" => Efecto::Paleta,
         "app.help" => Efecto::Ayuda,
         "app.settings" => Efecto::Ajustes,
+        "app.quit" => Efecto::Salir,
         "app.extensions" => Efecto::Extensiones,
         "app.agents" => Efecto::Agentes,
         "pane.copy-path" => Efecto::CopiarRuta,

@@ -24,8 +24,12 @@ const NO_APLICA: &[&str] = &[
     // `--pick` es un modo de la CLI: una ventana no tiene tubería a la que
     // contestar.
     "app.pick-accept",
-    // La cierra el gestor de ventanas.
-    "app.quit",
+    // `app.quit` estuvo aquí con «la cierra el gestor de ventanas», y era
+    // verdad a medias: el gestor la cierra, pero `F10` y `q` —las teclas de
+    // salir de los siete presets, y la entrada «Salir» del menú— no hacían
+    // NADA en la ventana. Ahora piden salir por el mismo camino que el
+    // botón de cerrar (`pedir_salir`), con la misma pregunta de
+    // `[ui] confirm_quit`.
     // «Pantalla completa» es una respuesta con forma de terminal: esconder
     // los paneles para ver lo que hay detrás no significa nada en una ventana
     // que ES el gestor.

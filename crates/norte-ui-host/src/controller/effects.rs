@@ -176,6 +176,7 @@ impl Estado {
             | Efecto::Agentes
             | Efecto::Tema
             | Efecto::Menu
+            | Efecto::Salir
             | Efecto::PerfilElegir
             | Efecto::PerfilGuardarComo
             | Efecto::PerfilVecino { .. }
@@ -713,6 +714,7 @@ impl Estado {
             Efecto::Agentes => self.abrir_agentes(),
             Efecto::Tema => self.abrir_tema(),
             Efecto::Menu => self.abrir_menu(),
+            Efecto::Salir => self.pedir_salir(),
             Efecto::PerfilElegir => self.pedir_perfiles(None, buzon),
             Efecto::PerfilGuardarComo => self.pedir_guardar_perfil(),
             Efecto::PerfilVecino { atras } => self.pedir_perfiles(Some(!atras), buzon),
