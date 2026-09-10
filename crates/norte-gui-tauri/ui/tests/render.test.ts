@@ -2154,7 +2154,9 @@ describe("los ajustes", () => {
     const { screen, enviadas } = montar();
     screen.paint(conAjustes());
     const filas = [...document.querySelectorAll(".settings-row")];
-    (filas[0] as HTMLElement).dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    (filas[0] as HTMLElement).dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true }),
+    );
     expect(enviadas).toEqual([{ action: "settings_activate", row: 0 }]);
   });
 
@@ -2221,12 +2223,85 @@ describe("el gestor de extensiones", () => {
     expect(filas[0]?.querySelectorAll(".extensions-cap")).toHaveLength(2);
   });
 
-  it("no hay ni un control para aprobar o encender", () => {
+  it("la ficha dice quién está elegida y cuenta las instaladas y las encendidas", () => {
     const { screen } = montar();
     screen.paint(conExtensiones());
-    const caja = document.querySelector(".extensions") as HTMLElement;
-    expect(caja.querySelectorAll("button")).toHaveLength(0);
-    expect(caja.querySelectorAll("input")).toHaveLength(0);
+    expect(document.querySelector(".extensions-pane-name")?.textContent).toBe(
+      "FTP de ACME",
+    );
+    // Dos cuentas: «2 instaladas · 1 encendidas», sin marcadores Fluent.
+    const resumen = document.querySelector(".extensions-summary")?.textContent ?? "";
+    expect(resumen).toContain("2 ");
+    expect(resumen).toContain("1 ");
+    expect(resumen).not.toContain("$");
+    // Sin ficha pedida, se dice cómo pedirla en vez de dejar el hueco.
+    expect(document.querySelector(".extensions-detail-hint")).not.toBeNull();
+  });
+
+  it("los botones dicen lo que van a hacer y mandan la acción de la fila elegida", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conExtensiones());
+    const acciones = document.querySelector(".extensions-actions") as HTMLElement;
+    // La elegida está aprobada y encendida: revocar, apagar, ayuda, y
+    // desinstalar; nunca «alternar».
+    const etiquetas = [...acciones.querySelectorAll("button")].map((b) => b.textContent);
+    expect(etiquetas).toEqual([
+      catalogoReal()["ext-revoke"],
+      catalogoReal()["ext-disable"],
+      catalogoReal()["ext-help"],
+      catalogoReal()["ext-uninstall"],
+    ]);
+    (acciones.querySelector(".extensions-action-uninstall") as HTMLButtonElement).click();
+    (acciones.querySelector(".extensions-action-enabled") as HTMLButtonElement).click();
+    (acciones.querySelector(".extensions-action-help") as HTMLButtonElement).click();
+    expect(enviadas).toEqual([
+      { action: "extension_govern", row: 0, id: "acme.ftp", change: "uninstall" },
+      { action: "extension_govern", row: 0, id: "acme.ftp", change: "enabled" },
+      { action: "extension_help", row: 0, id: "acme.ftp" },
+    ]);
+    // Desinstalar se pinta como lo que es, y el clic sobre un botón no
+    // vuelve a seleccionar la fila.
+    expect(
+      acciones
+        .querySelector(".extensions-action-uninstall")
+        ?.getAttribute("data-destructive"),
+    ).toBe("true");
+    expect(enviadas.some((a) => a.action === "extension_select_row")).toBe(false);
+  });
+
+  it("sobre una sin aprobar, aprobar es el botón principal y encender no se ofrece", () => {
+    const { screen, enviadas } = montar();
+    const v = conExtensiones();
+    if (v.extensions !== null) {
+      v.extensions.cursor = 1;
+    }
+    screen.paint(v);
+    const acciones = document.querySelector(".extensions-actions") as HTMLElement;
+    const aprobar = acciones.querySelector(
+      ".extensions-action-approval",
+    ) as HTMLButtonElement;
+    expect(aprobar.textContent).toBe(catalogoReal()["ext-approve"]);
+    expect(aprobar.getAttribute("data-primary")).toBe("true");
+    const encender = acciones.querySelector(
+      ".extensions-action-enabled",
+    ) as HTMLButtonElement;
+    expect(encender.disabled).toBe(true);
+    // Y dice por qué, con la frase que el host contestaría.
+    expect(encender.title).toBe(catalogoReal()["host-extension-not-approved"]);
+    // Sin página de ayuda, sin botón de ayuda.
+    expect(acciones.querySelector(".extensions-action-help")).toBeNull();
+    aprobar.click();
+    expect(enviadas).toEqual([
+      { action: "extension_govern", row: 1, id: "org.norte.demo", change: "approval" },
+    ]);
+  });
+
+  it("cerrar manda la misma tecla que cierra", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conExtensiones());
+    (document.querySelector(".extensions-close") as HTMLButtonElement).click();
+    expect(enviadas).toHaveLength(1);
+    expect(enviadas[0]).toMatchObject({ action: "key", key: "Escape" });
   });
 
   it("«cargando» no se pinta igual que «ninguna»", () => {

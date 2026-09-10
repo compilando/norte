@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 60;
+export const BRIDGE_VERSION = 61;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -841,6 +841,9 @@ export interface ProgramOutputView {
   failed: boolean;
 }
 
+/** Qué cambia `extension_govern` (puente 61): los tres verbos del gestor. */
+export type ExtensionChange = "approval" | "enabled" | "uninstall";
+
 export interface ExtensionsView {
   rows: ExtensionRowView[];
   cursor: number;
@@ -1256,6 +1259,18 @@ export type UiAction =
   /** El doble clic sobre una fila de los ajustes: lo que hace `enter` (puente 60). */
   | { action: "settings_activate"; row: number }
   | { action: "extension_select_row"; row: number }
+  /**
+   * Un BOTÓN del gestor sobre una fila (puente 61): la señala y hace lo que
+   * el verbo del teclado haría sobre ella, preguntas incluidas. `approval`
+   * concede o revoca según cómo esté; `enabled` enciende o apaga;
+   * `uninstall` borra sus ficheros y retira su consentimiento, tras preguntar.
+   * Viaja con el `id` que la fila tenía: el catálogo se repide de fondo y
+   * una fila borrada por encima corre las de debajo; el host rehúsa si ya
+   * no casa.
+   */
+  | { action: "extension_govern"; row: number; id: string; change: ExtensionChange }
+  /** La página de ayuda de la extensión de esa fila (puente 61). */
+  | { action: "extension_help"; row: number; id: string }
   | { action: "agent_select_row"; row: number; generation: number }
   | { action: "select_tab"; slot_id: number }
   | { action: "picker_select_row"; row: number; generation: number }
