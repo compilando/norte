@@ -132,7 +132,11 @@ fn compose(app: &App, area: Rect) -> Composed {
     // La insignia de avisos sin leer (spec 2026-09-10), a la DERECHA de lo
     // que haya, salvo que lo que haya sea el propio mensaje o una espera:
     // ahí la barra ya está diciendo lo más nuevo. Solo si cabe entera.
-    let tapa = app.message.is_some() || app.busy.as_ref().is_some_and(|b| b.visible());
+    let tapa = app.message.is_some()
+        || app
+            .busy
+            .as_ref()
+            .is_some_and(norte_frontend::busy::Busy::visible);
     if app.notices_unread > 0 && !tapa {
         let badge = format!("!{}", app.notices_unread);
         let ancho = cells(&badge);
@@ -156,6 +160,10 @@ fn compose(app: &App, area: Rect) -> Composed {
 
 /// La línea de estado sin la insignia, y las columnas del indicador de
 /// sesión si va en ella.
+#[expect(
+    clippy::too_many_lines,
+    reason = "una cadena de prioridades, y cada eslabón lleva su porqué"
+)]
 fn compose_line(app: &App, area: Rect) -> Composed {
     let mut session = None;
     let pane = app.focused();

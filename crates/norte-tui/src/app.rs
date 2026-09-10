@@ -1060,6 +1060,10 @@ pub use norte_frontend::shortcuts::ShortcutsState as Shortcuts;
 impl App {
     /// App con foco en el pane izquierdo.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "un campo por línea: los defaults del App"
+    )]
     pub fn new(left: Pane, right: Pane) -> Self {
         Self {
             panes: crate::panel::PaneSlots::new(left, right),

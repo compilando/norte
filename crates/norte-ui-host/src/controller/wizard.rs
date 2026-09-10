@@ -3,6 +3,9 @@
 //! pantalla de ajustes (`escribir_ajuste`). El modelo es el compartido con
 //! el terminal; aquí va la vista previa del tema en vivo y la escritura.
 
+// El mismo `impl Estado` partido en trozos: los imports del padre, como en
+// los otros módulos de `controller` (ADR 0086).
+#[allow(clippy::wildcard_imports)]
 use super::*;
 use norte_frontend::wizard::{Outcome, Wizard};
 

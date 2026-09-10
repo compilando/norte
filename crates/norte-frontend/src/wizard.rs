@@ -219,8 +219,7 @@ impl Wizard {
     /// Backspace: el paso anterior, si lo hay.
     pub fn back(&mut self) {
         self.step = match self.step {
-            Step::Preset => Step::Preset,
-            Step::Theme => Step::Preset,
+            Step::Preset | Step::Theme => Step::Preset,
             Step::Icons => Step::Theme,
         };
     }
