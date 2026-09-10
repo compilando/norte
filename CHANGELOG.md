@@ -171,6 +171,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The window's setting prompt was painted under the settings.** `enter` on
+  a text or number row opened the one-field prompt, but `#dialogs` came
+  before `#settings` in the document and this window has no `z-index`
+  anywhere: the veil darkened and no field appeared, while the invisible
+  dialog kept the keyboard. Dialogs now come after every selector and panel,
+  before only the help and the fatal notice, and a test pins that order
+  against `index.html`.
+- **"restart required" was on sixteen of eighteen settings rows.** The window
+  re-reads the whole configuration after a write, and almost everything is
+  read at the moment it is used — the bars on every snapshot, the editor and
+  the diff tool when launched, the search mode when searching, confirm-on-quit
+  when quitting — so it changes at once. The badge now marks only what the
+  host resolves once at startup (language, fonts, reduced motion) and what a
+  pane fixes when it is created (hidden files, the `..` row).
 - **`F10` and `q` quit from inside a side panel.** With the keyboard in the
   tree, the places sidebar, the processes panel or the log, `app.quit` was
   not in the panel's allowlist, so the panel swallowed it and only `Ctrl+C`

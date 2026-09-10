@@ -289,15 +289,27 @@ fn filas_de(cfg: &norte_frontend::config::FrontendConfig, lang: Lang) -> Vec<Row
 /// Lo que la ventana NO puede aplicar sin reiniciar, por id del catálogo.
 ///
 /// El catálogo compartido dice qué se aplica en caliente desde el punto de
-/// vista del terminal, que recarga todo. La ventana recarga por el camino del
-/// cambio de perfil —tema, keymap, columnas, favoritos, disposición— y lo
-/// que ese camino deja fuera es exactamente lo que `fuera_de_alcance_en_caliente`
-/// nombra al escribir: el idioma, las fuentes y el movimiento reducido. Y lo
-/// que se fija al crear cada hueco —los ocultos, la fila `..`— o al arrancar
-/// —ratón, barras, cómo busca, si pregunta al salir— tampoco cambia hasta la
-/// siguiente ventana.
+/// vista del terminal, que recarga todo. La ventana relee la configuración
+/// ENTERA al escribir un ajuste (`aplicar_config`), y casi todo se lee en el
+/// momento de usarse —las barras al proyectar cada foto, el editor y el
+/// comparador al lanzarlos, el modo de búsqueda al buscar, si pregunta al
+/// salir al salir—, así que cambia al instante. Lo que no: lo que quien
+/// hospeda resuelve una vez al arrancar —el idioma, las fuentes, el
+/// movimiento reducido, que es lo que `fuera_de_alcance_en_caliente`
+/// nombra—, y lo que se fija al crear cada hueco —los ocultos y la fila
+/// `..`—, que los huecos ya abiertos no releen. Marcar TODO lo demás como
+/// «requiere reinicio» era mentir dieciséis veces en una pantalla.
 fn pide_reinicio(id: &str) -> bool {
-    !matches!(id, "ui.theme" | "keymap.preset")
+    matches!(
+        id,
+        "ui.lang"
+            | "ui.font"
+            | "ui.mono-font"
+            | "ui.font-size"
+            | "ui.reduce-motion"
+            | "ui.show-hidden"
+            | "ui.parent-entry"
+    )
 }
 
 /// Una fila del registro, proyectada.
