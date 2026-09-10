@@ -40,9 +40,32 @@ pub struct Palette {
     visible: Vec<usize>,
     /// Posición de la selección DENTRO de `visible`.
     cursor: usize,
+    /// Claves lanzadas hace poco, la más reciente primero (spec 2026-09-10):
+    /// con la consulta vacía van arriba, en ese orden. Vienen de la sesión
+    /// ([`crate::session::SessionBody::palette_recent`]).
+    recent: Vec<String>,
+}
+
+/// ¿Es `needle` subsecuencia de `hay`? (`cpf` casa `copy path` porque `c`,
+/// `p`, `f`... — sí, `f` no: casa `cop` y `pat`; lo que importa es que cada
+/// byte aparezca en orden). Vacío casa todo. Solo bytes plegados.
+fn is_subsequence(needle: &[u8], hay: &[u8]) -> bool {
+    let mut it = hay.iter();
+    needle.iter().all(|b| it.any(|h| h == b))
 }
 
 impl Palette {
+    /// [`Self::new`] con los comandos recientes: con la consulta vacía, las
+    /// filas cuya clave esté en `recent` van primero, en el orden de
+    /// `recent`. Una clave que ya no tiene fila (un plugin desinstalado, un
+    /// comando que este frontend no implementa) no pinta nada.
+    #[must_use]
+    pub fn with_recent(rows: Vec<crate::palette::Row>, recent: &[String]) -> Self {
+        let mut p = Self::new(rows);
+        p.recent = recent.to_vec();
+        p.recompute();
+        p
+    }
     /// Abre la palette sobre `rows` (la snapshot precomputada de `App`):
     /// pliega el haystack de cada fila y arranca con la query vacía (todo
     /// visible). El fold es sobre `text`+`desc` (lo PINTADO, ya enmascarado
@@ -60,9 +83,19 @@ impl Palette {
             query: Vec::new(),
             visible: Vec::new(),
             cursor: 0,
+            recent: Vec::new(),
         };
         p.recompute();
         p
+    }
+
+    /// ¿Es la fila `i`-ésima de [`Self::rows`] una de las recientes? Para
+    /// que quien pinta pueda decirlo (un separador, un tono).
+    #[must_use]
+    pub fn is_recent(&self, i: usize) -> bool {
+        self.rows
+            .get(i)
+            .is_some_and(|r| self.recent.iter().any(|k| *k == r.key))
     }
 
     /// Añade filas a una palette YA abierta, conservando lo tecleado.
@@ -88,15 +121,38 @@ impl Palette {
     /// (el cache YA vigente) y clampa el cursor.
     fn recompute(&mut self) {
         self.visible = if self.query.is_empty() {
-            (0..self.rows.len()).collect()
+            // Las recientes primero, en su orden; luego el resto en el
+            // orden de las filas.
+            let mut out: Vec<usize> = self
+                .recent
+                .iter()
+                .filter_map(|k| self.rows.iter().position(|r| r.key == *k))
+                .collect();
+            let rest: Vec<usize> = (0..self.rows.len()).filter(|i| !out.contains(i)).collect();
+            out.extend(rest);
+            out
         } else {
             let q = crate::nav::fold(&self.query);
-            self.folds
+            let exact: Vec<usize> = self
+                .folds
                 .iter()
                 .enumerate()
                 .filter(|(_, f)| f.contains(&q))
                 .map(|(i, _)| i)
-                .collect()
+                .collect();
+            if exact.is_empty() {
+                // Sin substring, subsecuencia: `cpf` llega a «copy path».
+                // Solo como RESPALDO, para que teclear lo que se ve siga
+                // dando lo que se ve, y nada más, mientras case algo.
+                self.folds
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| is_subsequence(q.as_bytes(), f.as_bytes()))
+                    .map(|(i, _)| i)
+                    .collect()
+            } else {
+                exact
+            }
         };
         self.clamp_cursor();
     }
@@ -224,6 +280,40 @@ mod palette_tests {
             row("app.quit", "quit norte", "q"),
             row("app.help", "this help", "f1"),
         ]
+    }
+
+    /// Recientes arriba con la consulta vacía, en su orden; una clave sin
+    /// fila no pinta nada; y una consulta las devuelve al orden normal.
+    #[test]
+    fn palette_recientes_van_primero_solo_con_la_consulta_vacia() {
+        let recent = vec!["app.help".to_owned(), "plugin:ya-no:existe".to_owned()];
+        let mut p = Palette::with_recent(rows(), &recent);
+        let visibles: Vec<&str> = p
+            .visible()
+            .iter()
+            .map(|&i| p.rows()[i].key.as_str())
+            .collect();
+        assert_eq!(visibles, ["app.help", "app.quit"]);
+        assert!(p.is_recent(p.visible()[0]) && !p.is_recent(p.visible()[1]));
+        p.push_char('q');
+        assert_eq!(p.selected().as_deref(), Some("app.quit"));
+    }
+
+    /// Sin substring, subsecuencia: `qn` casa «quit norte». Y mientras haya
+    /// substring, la subsecuencia no mete ruido.
+    #[test]
+    fn palette_cae_a_subsecuencia_cuando_nada_casa_entero() {
+        let mut p = Palette::new(rows());
+        for c in "qn".chars() {
+            p.push_char(c);
+        }
+        assert_eq!(p.selected().as_deref(), Some("app.quit"));
+        let mut p = Palette::new(rows());
+        for c in "help".chars() {
+            p.push_char(c);
+        }
+        assert_eq!(p.visible().len(), 1, "substring exacto: solo app.help");
+        assert!(super::is_subsequence(b"", b"x") && !super::is_subsequence(b"ba", b"ab"));
     }
 
     #[test]

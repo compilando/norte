@@ -282,6 +282,10 @@ pub struct PaletteRowView {
     /// elige qué código de tercero correr. Un texto enmascarado que viaja sin
     /// su bandera se lee como fiel.
     pub hostile: bool,
+    /// Va arriba por ser de los últimos lanzados (spec 2026-09-10). Solo
+    /// con la consulta vacía; con consulta, el orden es el de lo que casa.
+    #[serde(default)]
+    pub recent: bool,
 }
 
 /// Lo que puede seguir a un prefijo a medias.

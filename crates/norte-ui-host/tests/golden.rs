@@ -1204,6 +1204,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
                 chord: "ctrl+f3".to_owned(),
                 enabled: true,
                 hostile: false,
+                recent: false,
             }],
             cursor: Some(0),
             total: 42,
@@ -2199,6 +2200,7 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
                         chord: "ctrl+f3".to_owned(),
                         hostile: false,
                         enabled: true,
+                        recent: false,
                     }],
                     cursor: Some(0),
                     total: 42,
@@ -2335,8 +2337,8 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    // Puente 62: `RowView.icon` e `icon_hostile` (ADR 0105).
-    const FORMA: u64 = 17_848_094_378_618_174_567;
+    // Puente 63: la ola de usabilidad (spec 2026-09-10).
+    const FORMA: u64 = 9_502_970_461_236_339_452;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

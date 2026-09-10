@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 62;
+export const BRIDGE_VERSION = 63;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -558,6 +558,9 @@ export interface PaletteRowView {
    *  ser cierto en una fila de PLUGIN, y esta es la pantalla donde se elige
    *  qué código de tercero correr. */
   hostile: boolean;
+  /** Va arriba por ser de los últimos lanzados (solo con la consulta
+   *  vacía). Opcional: un host anterior al puente 63 no lo manda. */
+  recent?: boolean;
 }
 
 export interface PaletteView {

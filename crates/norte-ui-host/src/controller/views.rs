@@ -409,6 +409,7 @@ impl Estado {
         let p = self.paleta.as_ref()?;
         let filas = p.rows();
         let visibles = p.visible();
+        let sin_consulta = p.query_display().is_empty();
         Some(crate::dto::PaletteView {
             query: clamp_display(p.query_display()),
             rows: visibles
@@ -417,8 +418,11 @@ impl Estado {
                 // consulta vacía TODAS las filas son visibles, y las de
                 // plugin las pone un tercero.
                 .take(crate::bridge::MAX_ROWS_PER_BATCH)
-                .filter_map(|i| filas.get(*i))
-                .map(|r| crate::dto::PaletteRowView {
+                .filter_map(|i| filas.get(*i).map(|r| (*i, r)))
+                .map(|(i, r)| crate::dto::PaletteRowView {
+                    // Reciente solo mientras va arriba por serlo: con
+                    // consulta el orden es el de lo que casa.
+                    recent: sin_consulta && p.is_recent(i),
                     text: clamp_display(r.text.clone()),
                     desc: clamp_display(r.desc.clone()),
                     chord: clamp_display(r.chord.clone()),

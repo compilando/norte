@@ -499,6 +499,7 @@ impl Estado {
                 let elegido = p.selected();
                 self.paleta = None;
                 if let Some(cmd) = elegido {
+                    norte_frontend::session::note_palette_recent(&mut self.paleta_recientes, &cmd);
                     // El cierre viaja en su PROPIO parche y antes que el
                     // efecto. Sin él, un renderer que aplica parches —que es
                     // lo que hace el de referencia— recibía el cambio del

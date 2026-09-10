@@ -851,7 +851,7 @@ pub async fn dispatch(
                 }
                 Err(e) => app.message = Some(error_message(&e)),
             }
-            app.palette = Some(Palette::new(rows));
+            app.palette = Some(Palette::with_recent(rows, &app.palette_recent));
         }
         // `F11` (S3): overlay de ajustes — las filas nacen del `cfg` VIGENTE
         // (mismo criterio que `help_lines`/`app.palette_rows`: reconstruidas

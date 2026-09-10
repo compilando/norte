@@ -219,16 +219,20 @@ export function paintPalette(this: Screen, palette: PaletteView | null): void {
     fila.setAttribute("aria-selected", String(palette.cursor === i));
     fila.dataset["enabled"] = String(r.enabled);
     fila.dataset["hostile"] = String(r.hostile);
-    const texto = document.createElement("span");
-    texto.className = "palette-text";
-    texto.textContent = r.text;
+    fila.dataset["recent"] = String(r.recent === true);
+    // La etiqueta humana primero y entera, el id atenuado, el chord a la
+    // derecha: es lo que se lee, en ese orden. El id sigue en el DOM porque
+    // es lo que un lector que ya lo sabe teclea.
     const desc = document.createElement("span");
     desc.className = "palette-desc";
     desc.textContent = r.desc;
+    const texto = document.createElement("span");
+    texto.className = "palette-text";
+    texto.textContent = r.text;
     const chord = document.createElement("span");
     chord.className = "palette-chord";
     chord.textContent = r.chord;
-    fila.append(texto, desc, chord);
+    fila.append(desc, texto, chord);
     if (r.hostile) {
       // Solo una fila de PLUGIN puede serlo, y esta es la pantalla donde
       // se elige qué código de tercero correr: un texto enmascarado que

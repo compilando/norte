@@ -2637,6 +2637,9 @@ struct Estado {
     /// Es un contexto de entrada más, como el buscador incremental y el
     /// visor: mientras esté abierta, las teclas de texto son suyas.
     paleta: Option<norte_frontend::palette_state::Palette>,
+    /// Las últimas claves lanzadas desde la paleta, la más reciente primero
+    /// (spec 2026-09-10). Viven en la sesión de UI, como en el terminal.
+    paleta_recientes: Vec<String>,
     /// Por qué menú se desplegó la última vez. Se reabre por ahí: empezar
     /// siempre por el primero obliga a recorrer la barra entera en cada
     /// gesto, y quien usa dos entradas del mismo menú lo paga cada vez.
@@ -3201,6 +3204,7 @@ impl Estado {
             token: 0,
             locale,
             paleta: None,
+            paleta_recientes: Vec::new(),
             menu: None,
             ayuda: None,
             ajustes: None,

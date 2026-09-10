@@ -857,6 +857,10 @@ pub struct App {
     pub help_chords: std::sync::Arc<crate::help::TuiChords>,
     /// Command palette abierta (`Ctrl+P`/vim `:`, H1 T4): `None` = cerrada.
     pub palette: Option<Palette>,
+    /// Las últimas claves lanzadas desde la paleta, la más reciente primero
+    /// (spec 2026-09-10). Viven en la sesión de UI: se leen al restaurarla y
+    /// se escriben con ella.
+    pub palette_recent: Vec<String>,
     /// Filas de la palette PRECOMPUTADAS del keymap vigente
     /// ([`crate::palette::build_rows`]) — igual criterio que `help_lines`/
     /// `dialog_hints`: se reconstruyen en el arranque y en cada hot-reload
@@ -1031,6 +1035,7 @@ impl App {
             version_line: "",
             help_chords: default_help_chords(),
             palette: None,
+            palette_recent: Vec::new(),
             palette_rows: Vec::new(),
             mouse: crate::mouse::MouseState::default(),
             settings: None,

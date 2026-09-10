@@ -66,6 +66,7 @@ impl Estado {
             self.poner_arbol(arbol, None);
         }
         self.aplicar_sesion(&body);
+        self.paleta_recientes.clone_from(&body.palette_recent);
         self.sesion.conocidos = body.slots.keys().copied().collect();
         for (id, estado) in &body.slots {
             self.sesion.touched.insert(*id, estado.touched_ms);
@@ -334,6 +335,7 @@ impl Estado {
         let mut body = self.sesion.leida.clone();
         body.layouts
             .insert(self.clave_de_sesion(), self.arbol.clone());
+        body.palette_recent.clone_from(&self.paleta_recientes);
         for (id, hueco) in &self.huecos {
             body.slots.insert(
                 *id,

@@ -21,8 +21,9 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.paleta = Some(norte_frontend::palette_state::Palette::new(
+        self.paleta = Some(norte_frontend::palette_state::Palette::with_recent(
             self.filas_de_paleta(),
+            &self.paleta_recientes,
         ));
         self.pedir_filas_de_plugin(backend, buzon);
         let cambio = ViewChange::Palette {

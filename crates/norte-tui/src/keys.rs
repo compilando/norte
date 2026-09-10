@@ -384,6 +384,9 @@ pub async fn on_key(
                 let cmd = app.palette.as_ref().and_then(Palette::selected);
                 app.palette = None;
                 if let Some(cmd) = cmd {
+                    // Lo lanzado va arriba la próxima vez (spec 2026-09-10);
+                    // la sesión lo guarda con el siguiente empuje.
+                    norte_frontend::session::note_palette_recent(&mut app.palette_recent, &cmd);
                     // (P1) Enter sobre una fila de PLUGIN: la
                     // `key` es `plugin:{id}:{command}`
                     // (`palette::plugin_rows`, jamás pintada)

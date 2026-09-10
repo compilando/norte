@@ -247,7 +247,10 @@ use serde::{Deserialize, Serialize};
 ///   si la columna está abierta lo decide el host desde el listado entero,
 ///   no el renderer desde las filas que ve, o desplazarse a una página sin
 ///   iconos la cerraría y correría todos los nombres.
-pub const BRIDGE_VERSION: u32 = 62;
+/// - **63**: la ola de usabilidad (spec 2026-09-10), en UN salto.
+///   `PaletteRowView.recent`: la fila va arriba por ser de las últimas
+///   lanzadas, solo con la consulta vacía.
+pub const BRIDGE_VERSION: u32 = 63;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

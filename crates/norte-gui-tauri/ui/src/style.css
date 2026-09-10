@@ -485,17 +485,25 @@ body {
   opacity: 0.55;
 }
 
-.palette-text {
-  flex: 0 0 24ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* La etiqueta humana crece y se lee entera; el id va después, atenuado y a
+   ancho fijo. Es el mismo reparto que el terminal. */
 .palette-desc {
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0.8;
+}
+
+.palette-text {
+  flex: 0 0 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.6;
+}
+
+/* Una reciente va arriba por serlo, y lo dice con un punto delante. */
+.palette-row[data-recent="true"]::before {
+  content: "• ";
+  color: var(--info-fg);
 }
 
 .palette-chord {

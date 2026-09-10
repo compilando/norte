@@ -12,6 +12,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{HOSTILE_BADGE, centered, clear_themed};
 use crate::app::display_name;
 use crate::theme::TuiTheme;
+use norte_frontend::display::cells;
 use norte_frontend::middle_ellipsis;
 use norte_i18n::{t, ta};
 
@@ -780,6 +781,27 @@ pub(crate) fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette,
     let area = centered(frame.area(), 60, rows.min(frame.area().height.max(3)));
     clear_themed(frame, area, theme);
     let inner = usize::from(area.width.saturating_sub(3));
+    // Tres columnas, por CELDAS (spec 2026-09-10): la etiqueta humana
+    // primero y entera —es lo que se lee—, el id atenuado, y el chord a la
+    // derecha. El recorte cae sobre la etiqueta y sobre el id, cada uno en
+    // su columna; antes se recortaba la línea compuesta y un id largo se
+    // comía la etiqueta hasta dejar «sw…ane».
+    let chord_w = palette
+        .visible()
+        .iter()
+        .map(|&i| cells(&palette.rows()[i].chord))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let id_w = 22.min(inner.saturating_sub(chord_w + 3) / 3);
+    let label_w = inner.saturating_sub(id_w + chord_w + 4).max(1);
+    let fit = |s: &str, w: usize| {
+        let s = middle_ellipsis(s, w);
+        let pad = w.saturating_sub(cells(&s));
+        format!("{s}{}", " ".repeat(pad))
+    };
+    let dim = ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM);
+    let sin_consulta = palette.query_display().is_empty();
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = if palette.visible().is_empty() {
         (vec![ListItem::new(Line::raw(" —"))], None)
     } else {
@@ -789,8 +811,19 @@ pub(crate) fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette,
                 .iter()
                 .map(|&i| {
                     let row = &palette.rows()[i];
-                    let text = format!(" {:<24} {:<32} {}", row.text, row.desc, row.chord);
-                    ListItem::new(Line::raw(middle_ellipsis(&text, inner)))
+                    // Una reciente se marca solo mientras va arriba por
+                    // serlo: con consulta, el orden es el de lo que casa.
+                    let mark = if sin_consulta && palette.is_recent(i) {
+                        "•"
+                    } else {
+                        " "
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(mark.to_owned(), theme.role(Role::Info)),
+                        Span::raw(format!("{} ", fit(&row.desc, label_w))),
+                        Span::styled(format!("{} ", fit(&row.text, id_w)), dim),
+                        Span::raw(format!("{:>chord_w$}", row.chord)),
+                    ]))
                 })
                 .collect(),
             Some(palette.cursor()),

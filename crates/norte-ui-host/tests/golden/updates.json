@@ -699,6 +699,7 @@
           "desc": "Ordenar por nombre",
           "enabled": true,
           "hostile": false,
+          "recent": false,
           "text": "pane.sort-name"
         }
       ],
