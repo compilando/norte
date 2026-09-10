@@ -2,7 +2,7 @@
 source: crates/norte-tui/tests/snapshots_ui.rs
 expression: text
 ---
-" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+" Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "  ┌ Ayuda ───────────────────────────────────────────────────────────────────┐  "
 "┌/│  Esto es norte             █ comprobable.                               ║│─┐"
 "│N│  Dos paneles, un destino   █                                            ║│a│"
@@ -13,8 +13,8 @@ expression: text
 "│ │  Contestar a un diálogo    ║   miró, y comprobar es justo para lo que   ║│ │"
 "│ │  Ajustes y temas           ║   esto existe.                             ║│ │"
 "│ │                            ║                                            ║│ │"
-"│ │Operaciones                 ║   F5        copiar la selección al otro pa…║│ │"
-"│ │  Copiar, mover, renombrar …║   F6        mover la selección al otro pane█│ │"
+"│ │Operaciones                 ║   F5           copiar la selección al otro…║│ │"
+"│ │  Copiar, mover, renombrar …║   F6           mover la selección al otro …█│ │"
 "│ │ [Tab] índice ↔ texto [PgDn] bajar [PgUp] subir [/] filtrar …     231/257 │ │"
 "└─└──────────────────────────────────────────────────────────────────────────┘─┘"
 " /casa  2/5                                                                     "

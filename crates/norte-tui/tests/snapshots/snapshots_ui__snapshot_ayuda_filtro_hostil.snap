@@ -2,7 +2,7 @@
 source: crates/norte-tui/tests/snapshots_ui.rs
 expression: text
 ---
-" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+" Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "  ┌ Ayuda ───────────────────────────────────────────────────────────────────┐  "
 "┌/│                              Esto es norte                              █│─┐"
 "│N│                              ───────────────────────────────────────────║│a│"

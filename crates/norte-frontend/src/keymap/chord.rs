@@ -289,6 +289,11 @@ impl std::fmt::Display for Chord {
 ///   is a genuinely DIFFERENT binding from `ctrl+k` (`Char('K')` vs
 ///   `Char('k')`) — printing `Ctrl+K` for the latter would name a chord the
 ///   reader does not have;
+/// - an upper-case ASCII letter UNDER a modifier gets an explicit `Shift+`:
+///   `alt+C` prints `Alt+Shift+C`. The stored chord carries Shift in the
+///   letter's case, but a reader shown `Alt+C` cannot tell whether the case
+///   matters — and it does, `alt+c` is usually another command. Only under a
+///   modifier: a bare `Y` already reads as "the capital";
 /// - anything else passes through untouched. Nothing is invented.
 ///
 /// This is DISPLAY only. The keymap, [`parse_chord`] and every stored string
@@ -302,6 +307,11 @@ impl std::fmt::Display for Chord {
 /// assert_eq!(paint_chord("ctrl+k"), "Ctrl+k");
 /// assert_eq!(paint_chord("y"), "y", "the bound key is the lower-case one");
 /// assert_eq!(paint_chord("g g"), "g g");
+/// // An upper-case letter UNDER a modifier is Shift, and the label says so:
+/// // `Alt+C` alone leaves the reader guessing whether the case matters.
+/// assert_eq!(paint_chord("alt+C"), "Alt+Shift+C");
+/// assert_eq!(paint_chord("ctrl+alt+K"), "Ctrl+Alt+Shift+K");
+/// assert_eq!(paint_chord("Y"), "Y", "alone, the letter is the whole story");
 /// ```
 #[must_use]
 pub fn paint_chord(raw: &str) -> String {
@@ -312,14 +322,27 @@ pub fn paint_chord(raw: &str) -> String {
         if i > 0 {
             out.push(' ');
         }
-        for (j, token) in key.split('+').enumerate() {
+        let tokens: Vec<&str> = key.split('+').collect();
+        for (j, token) in tokens.iter().enumerate() {
             if j > 0 {
                 out.push('+');
+            }
+            // The letter's case carries Shift in the stored chord (see
+            // `parse_chord`); a reader is told to press it. Only under a
+            // modifier: a bare `Y` already reads as "the capital".
+            if j == tokens.len() - 1 && j > 0 && es_letra_mayuscula(token) {
+                out.push_str("Shift+");
             }
             out.push_str(&pretty_token(token));
         }
     }
     out
+}
+
+/// Un token que es exactamente una letra ASCII mayúscula.
+fn es_letra_mayuscula(token: &str) -> bool {
+    let mut chars = token.chars();
+    matches!((chars.next(), chars.next()), (Some(c), None) if c.is_ascii_uppercase())
 }
 
 /// One token of a chord, spelled for a reader. See [`paint_chord`] for the

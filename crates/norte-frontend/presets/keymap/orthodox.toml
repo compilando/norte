@@ -158,7 +158,10 @@ keymap = [
     # escribir en esta gramática o ya significan otra cosa aquí.
     { on = ["alt+plus"], run = "mark.extension-add" },
     { on = ["alt+-"], run = "mark.extension-remove" },
-    { on = ["alt+F"], run = "mark.files" },
+    # Minúscula: `alt+f` estaba libre, y una mayúscula bajo Alt es pedir Shift
+    # sin decirlo. Las otras cuatro (`alt+C/A/D/R`) siguen con Shift porque su
+    # minúscula está ocupada, y la etiqueta lo dice ahora (`Alt+Shift+C`).
+    { on = ["alt+f"], run = "mark.files" },
     { on = ["alt+D"], run = "mark.dirs" },
     { on = ["alt+R"], run = "mark.restore" },
     { on = ["plus"], run = "mark.pattern-add" },

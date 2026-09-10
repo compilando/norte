@@ -75,10 +75,30 @@ pub(crate) const DROP_MAX: u16 = 44;
 /// medir— y con la barra fijada eso dejaba la fila en blanco. Los títulos no
 /// dependen de que haya nada abierto; el desplegable sí.
 pub(crate) fn menu_titles(area: Rect) -> Vec<(String, u16, u16)> {
+    let nombres: Vec<String> = norte_frontend::menu::MENUS
+        .iter()
+        .map(|m| norte_i18n::t(m.title))
+        .collect();
+    // Dos espacios entre títulos cuando caben, uno cuando no. Con diez menús
+    // la barra en castellano mide 82 columnas a doble espacio, y en un
+    // terminal de 80 el último —«Ayuda», justo el que un lector nuevo busca—
+    // desaparecía. Apretar la barra antes que amputarla: lo que tiene que
+    // decir es qué menús HAY.
+    let ancho = |sep: usize| -> usize {
+        nombres
+            .iter()
+            .map(|n| UnicodeWidthStr::width(n.as_str()) + sep)
+            .sum()
+    };
+    let holgado = ancho(2) <= usize::from(area.width);
     let mut titles = Vec::new();
     let mut x = area.x;
-    for m in norte_frontend::menu::MENUS {
-        let label = format!(" {} ", norte_i18n::t(m.title));
+    for nombre in nombres {
+        let label = if holgado {
+            format!(" {nombre} ")
+        } else {
+            format!(" {nombre}")
+        };
         let w = u16::try_from(UnicodeWidthStr::width(label.as_str())).unwrap_or(0);
         let x1 = x.saturating_add(w).saturating_sub(1);
         titles.push((label, x, x1));

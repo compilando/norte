@@ -21,6 +21,10 @@ pub struct Menu {
 /// que ninguno está declarado `Planned`, porque un menú que ofrece algo que no
 /// está construido es peor que no tener menú.
 pub const MENUS: &[Menu] = &[
+    // Diez grupos por lo que el lector QUIERE HACER, no por dónde vive el
+    // comando: leer un fichero, cambiarlo, elegir sobre qué, ir a otro sitio,
+    // mover los paneles, las pestañas, buscar, qué se ve, las herramientas y
+    // la ayuda. Todo lo construido está en alguno; nada en dos.
     Menu {
         title: "menu-file",
         items: &[
@@ -32,13 +36,31 @@ pub const MENUS: &[Menu] = &[
             // hace a un fichero, no con lo que se cambia de la pantalla.
             "pane.properties",
             "pane.dir-size",
+            "pane.copy-path",
+            "app.quit",
+        ],
+    },
+    // Lo que ESCRIBE: aparte de lo que solo lee, porque es lo que pasa por el
+    // journal y lo que un lector quiere encontrar junto.
+    Menu {
+        title: "menu-operate",
+        items: &[
             "pane.copy",
             "pane.move",
             "pane.rename",
+            "pane.rename-batch",
+            "pane.ai-rename",
             "pane.mkdir",
             "pane.delete",
             "pane.delete-permanent",
-            "app.quit",
+            "pane.chmod",
+            "pane.pack",
+            "pane.unpack",
+            "pane.test-archive",
+            "pane.split-file",
+            "pane.combine-files",
+            "pane.checksum",
+            "pane.checksum-verify",
         ],
     },
     Menu {
@@ -48,19 +70,42 @@ pub const MENUS: &[Menu] = &[
             "mark.all",
             "mark.invert",
             "mark.clear",
+            "mark.restore",
             "mark.pattern-add",
             "mark.pattern-remove",
+            "mark.extension-add",
+            "mark.extension-remove",
+            "mark.files",
+            "mark.dirs",
+        ],
+    },
+    // A DÓNDE mira un panel: subir, volver, favoritos, volúmenes, conectar.
+    // #140 los ponía en Paneles por esa misma razón; con un menú propio de
+    // navegación, es aquí donde se buscan.
+    Menu {
+        title: "menu-go",
+        items: &[
+            "nav.parent",
+            "nav.back",
+            "nav.forward",
+            "pane.history",
+            "pane.hotlist",
+            "pane.select-drive",
+            "pane.connect",
+            "pane.disconnect",
+            "pane.refresh",
+            "pane.command-line",
+            "app.terminal",
         ],
     },
     Menu {
         title: "menu-panels",
         items: &[
             "pane.switch",
-            // #140: conectar y desconectar cambian DÓNDE mira un panel, que es
-            // de lo que va este menú.
-            "pane.connect",
-            "pane.disconnect",
+            "layout.focus-next",
+            "layout.focus-prev",
             "pane.mirror",
+            "pane.mirror-target",
             "pane.pull",
             "pane.swap",
             "layout.split-h",
@@ -70,6 +115,7 @@ pub const MENUS: &[Menu] = &[
             "layout.shrink",
             "layout.equalize",
             "layout.set-target",
+            "app.toggle-panels",
         ],
     },
     Menu {
@@ -89,6 +135,7 @@ pub const MENUS: &[Menu] = &[
             "pane.quick-search",
             "pane.search",
             "pane.semantic-search",
+            "pane.compare-files",
             "pane.compare-dirs",
             "pane.sync-dirs",
         ],
@@ -96,10 +143,16 @@ pub const MENUS: &[Menu] = &[
     Menu {
         title: "menu-view",
         items: &[
-            "layout.places",
+            "pane.toggle-hidden",
+            "pane.columns",
+            // #138: el orden es de la VISTA, y aquí es donde se cambia lo que
+            // la vista enseña.
+            "pane.sort-menu",
+            "pane.names-encoding",
             // #136: el árbol es otra columna de navegación al lado del
             // listado, como el sidebar.
             "pane.tree",
+            "layout.places",
             "layout.preview",
             "layout.processes",
             "layout.metadata",
@@ -107,21 +160,25 @@ pub const MENUS: &[Menu] = &[
             // sentido — los dos contestan «¿qué está haciendo esto?».
             "layout.log",
             "layout.pick",
-            "profile.pick",
-            "pane.toggle-hidden",
-            "pane.columns",
-            // #138: el orden es de la VISTA, y aquí es donde se cambia lo que
-            // la vista enseña.
-            "pane.sort-menu",
-            "pane.names-encoding",
             "app.theme",
-            "app.settings",
+        ],
+    },
+    // Lo que se administra: extensiones, agentes, ajustes, perfiles. La
+    // paleta va aquí y no en Ayuda, porque desde ella se HACE.
+    Menu {
+        title: "menu-tools",
+        items: &[
             "app.extensions",
+            "app.agents",
+            "app.settings",
+            "profile.pick",
+            "profile.save-as",
+            "app.palette",
         ],
     },
     Menu {
         title: "menu-help",
-        items: &["app.help", "app.palette"],
+        items: &["app.help"],
     },
 ];
 
