@@ -755,12 +755,24 @@ export class Screen {
       dom.scroller.className = "statusbar";
       dom.scroller.setAttribute("role", "status");
       dom.scroller.setAttribute("aria-live", "polite");
+      // La insignia de avisos abre el registro por SU botón de la barra
+      // de paneles: el índice se resuelve contra la barra que el host
+      // acaba de mandar, y el host abre el panel por el mismo despacho que
+      // la tecla. Sin botón de registro (un plugin lo retiró), no se pulsa.
+      const registro = view.panel_bar.buttons.findIndex((b) => b.kind === "log");
+      const abrirRegistro =
+        registro < 0
+          ? null
+          : () => {
+              this.send({ action: "panel_bar_activate", button: registro });
+            };
       dom.scroller.replaceChildren(
         ...statusNodes(
           view.status,
           view.connection.state,
           (k) => this.t(k),
           this.rechazo,
+          abrirRegistro,
         ),
       );
       return;

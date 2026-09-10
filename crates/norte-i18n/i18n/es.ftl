@@ -447,6 +447,9 @@ degraded-reason-unknown = motivo desconocido
 msg-plugin-notice = ⚑ { $plugin }: { $text }
 msg-plugin-hooks-disabled = ⚑ { $plugin }: sus hooks se apagaron tras tres fallos seguidos — desactívalo y vuelve a activarlo en el gestor de extensiones para reintentar
 msg-plugin-effect-denied = ⚑ { $plugin }: tu policy denegó un fichero que este plugin pidió escribir (regla para actor "plugin"); se dice una vez mientras norte corre
+# La insignia de avisos caducados sin leer (spec 2026-09-10): su título,
+# para el puntero y para un lector de pantalla. Pulsarla abre el registro.
+status-notices = Avisos sin leer — abrir el registro
 status-connection-failed = ✗ no se pudo conectar
 status-failed-subject = { $banner } — esquema { $scheme }, host { $host } ({ $reason })
 failed-reason-secret-missing = falta el secreto

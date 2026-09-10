@@ -258,6 +258,9 @@ pub struct MouseState {
     /// El indicador de sesión suelta de la barra de estado del último frame.
     /// `None` = la ventana es la dueña, o la barra estaba diciendo otra cosa.
     session_zone: Option<crate::ui::SessionZone>,
+    /// La insignia de avisos sin leer del último frame (spec 2026-09-10).
+    /// `None` = ninguno sin leer, o la barra estaba diciendo otra cosa.
+    notices_zone: Option<crate::ui::NoticeZone>,
     /// Los bordes arrastrables del último frame.
     borders: Vec<ResizeBorder>,
     /// Los huecos que se colocaron en el último frame, para saber qué panel
@@ -355,6 +358,9 @@ pub struct FrameZones {
     pub extensions: Vec<crate::ui::ExtensionZone>,
     /// El indicador de sesión suelta de la barra de estado, si se pintó.
     pub session: Option<crate::ui::SessionZone>,
+    /// La insignia de avisos sin leer de la barra de estado, si se pintó
+    /// (spec 2026-09-10).
+    pub notices: Option<crate::ui::NoticeZone>,
     /// Los bordes arrastrables.
     pub borders: Vec<ResizeBorder>,
     /// Los huecos colocados, para saber qué panel hay bajo un click.
@@ -388,6 +394,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
         tree: tree_zones,
         extensions: extension_zones,
         session: session_zone,
+        notices: notices_zone,
         borders,
         slots,
     } = zones;
@@ -415,6 +422,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     app.mouse.tree_zones = tree_zones;
     app.mouse.extension_zones = extension_zones;
     app.mouse.session_zone = session_zone;
+    app.mouse.notices_zone = notices_zone;
     app.mouse.borders = borders;
     app.mouse.slots = slots;
 }
@@ -908,6 +916,20 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
         app.mouse.drag.cancel();
         app.mouse.last_click = None;
         return After::SessionHelp;
+    }
+    // La insignia de avisos sin leer (spec 2026-09-10): pulsarla abre el
+    // panel de registro, que es donde fueron a parar, por el MISMO despacho
+    // que su botón de la barra de paneles y que su tecla.
+    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
+        && app
+            .mouse
+            .notices_zone
+            .is_some_and(|z| z.row == ev.row && ev.column >= z.x0 && ev.column <= z.x1)
+    {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.pending_panel_command = Some(format!("layout.{}", crate::logview::KIND));
+        return After::PanelBar;
     }
     // El ARRASTRE de un borde va antes que todo lo del listado, y en los tres
     // tiempos del gesto: mientras dura, el puntero se sale del borde y no por

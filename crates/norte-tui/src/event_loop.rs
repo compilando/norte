@@ -389,6 +389,8 @@ pub async fn run(
         turn::spawn_probes(app, backend, &mut work);
         tokio::select! {
             _ = session_tick.tick() => {
+                // Un segundo más para el aviso de la barra (spec 2026-09-10).
+                app.tick_notices();
                 push_session(app, &mut session_push);
                 // #179: soltar el journal cuando lleva un rato sin
                 // usarse. Este proceso lo tomaba en la primera mutación

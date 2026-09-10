@@ -553,6 +553,7 @@ pub async fn after_frame(
             tree: ui::tree_zones(app, painted),
             extensions: ui::extension_zones(app, painted),
             session: ui::session_zone(app, painted),
+            notices: ui::notices_zone(app, painted),
             borders: ui::resize_borders(app, painted),
             slots: ui::panel_slots(app, painted),
         },

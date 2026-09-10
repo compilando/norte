@@ -446,6 +446,9 @@ degraded-reason-unknown = unknown reason
 msg-plugin-notice = ⚑ { $plugin }: { $text }
 msg-plugin-hooks-disabled = ⚑ { $plugin }: its hooks were switched off after three failures in a row — disable and re-enable it in the extension manager to try again
 msg-plugin-effect-denied = ⚑ { $plugin }: your policy denied a file this plugin asked to write (rule for actor "plugin"); said once while norte runs
+# The badge of expired notices nobody read (spec 2026-09-10): its title,
+# for the pointer and for a screen reader. Clicking it opens the log.
+status-notices = Unread notices — open the log
 status-connection-failed = ✗ could not connect
 status-failed-subject = { $banner } — scheme { $scheme }, host { $host } ({ $reason })
 failed-reason-secret-missing = the secret is missing

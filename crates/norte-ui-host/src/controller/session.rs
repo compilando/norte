@@ -95,6 +95,49 @@ impl Estado {
     /// con un diálogo delante no se guarda lo que se está decidiendo, como en
     /// el terminal. Con un `put` en vuelo se espera a que conteste: dos
     /// escrituras cruzadas con la misma revisión son un conflicto seguro.
+    /// Un tic de un segundo sobre el aviso de la barra (spec 2026-09-10,
+    /// `[ui] notice_seconds`): pasado el tope, el mensaje sale de la barra,
+    /// va al registro por `tracing` y `notices_unread` cuenta uno más. Con
+    /// `0` no caduca nada. Abrir el panel de registro pone la cuenta a
+    /// cero. Devuelve el parche de estado si algo cambió; los tests lo hacen
+    /// avanzar tic a tic, sin reloj.
+    pub(super) fn caducar_aviso(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
+        let mut cambio = false;
+        let registro_abierto = self
+            .arbol
+            .slot_ids()
+            .into_iter()
+            .any(|id| self.arbol.kind_of(id).is_some_and(|k| k.as_str() == "log"));
+        if registro_abierto && self.status.notices_unread != 0 {
+            self.status.notices_unread = 0;
+            cambio = true;
+        }
+        match self.status.message.as_deref() {
+            None => {
+                self.mensaje_ticks = 0;
+                self.mensaje_contado = None;
+            }
+            Some(msg) => {
+                if self.mensaje_contado.as_deref() == Some(msg) {
+                    self.mensaje_ticks = self.mensaje_ticks.saturating_add(1);
+                } else {
+                    self.mensaje_contado = Some(msg.to_owned());
+                    self.mensaje_ticks = 1;
+                }
+                let tope = self.config.common.ui_chrome.notice_seconds();
+                if tope > 0 && self.mensaje_ticks >= tope {
+                    let text = self.status.message.take().unwrap_or_default();
+                    self.mensaje_ticks = 0;
+                    self.mensaje_contado = None;
+                    self.status.notices_unread = self.status.notices_unread.saturating_add(1);
+                    tracing::warn!(target: "norte::notice", "{text}");
+                    cambio = true;
+                }
+            }
+        }
+        cambio.then(|| self.parche(vec![ViewChange::Status(self.status.clone())]))
+    }
+
     pub(super) fn empujar_sesion(
         &mut self,
         backend: &Arc<dyn HostBackend>,

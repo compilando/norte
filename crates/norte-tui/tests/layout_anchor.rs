@@ -102,6 +102,7 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
             tree: ui::tree_zones(app, area),
             extensions: ui::extension_zones(app, area),
             session: ui::session_zone(app, area),
+            notices: ui::notices_zone(app, area),
             borders: ui::resize_borders(app, area),
             slots: ui::panel_slots(app, area),
         },

@@ -256,7 +256,9 @@ use serde::{Deserialize, Serialize};
 ///   `[ui] pane_footer` apagado. `ViewSnapshot.key_bar` y el cambio
 ///   `key_bar`: la barra de teclas de función, derivada del keymap de la
 ///   pantalla que tiene el teclado; `key_bar_activate` la pulsa y el host
-///   sintetiza la tecla.
+///   sintetiza la tecla. `StatusView.notices_unread`: avisos que caducaron
+///   (`[ui] notice_seconds`) sin que nadie abriera el registro; la
+///   insignia abre el registro por su botón de la barra de paneles.
 pub const BRIDGE_VERSION: u32 = 63;
 
 /// Tope de una cadena que cruza al renderer, en bytes.

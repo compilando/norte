@@ -109,6 +109,54 @@ async fn el_menu_de_orden_es_el_selector_de_columnas() {
 
 /// `pane.toggle-hidden` aparta los dotfiles del panel y lo ANUNCIA.
 ///
+/// Un aviso de la barra caduca a los `[ui] notice_seconds` segundos (spec
+/// 2026-09-10): sale de `status.message` y `notices_unread` cuenta uno más.
+/// Se espera la FOTO, sin dormir: el tic de un segundo es del host.
+#[tokio::test]
+async fn un_aviso_caduca_y_deja_una_insignia() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b".oculto".to_vec(), false)],
+    );
+    let backend = Arc::new(f);
+    let mut ajustes = ajustes_de_prueba();
+    ajustes.common.ui_chrome.notice_seconds = Some(1);
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    assert_eq!(snap.status.notices_unread, 0);
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.toggle-hidden").await;
+    let despues = foto(&h, &mut sub).await;
+    assert!(
+        despues.status.message.is_some(),
+        "ocultar se dice en la barra"
+    );
+    foto_hasta(&h, &mut sub, "el aviso caducó a la insignia", |f| {
+        (f.status.message.is_none() && f.status.notices_unread == 1).then_some(())
+    })
+    .await;
+}
+
 /// Presentación-solo (#107): el provider no vuelve a listar, así que el
 /// backend no ve una petición más.
 #[tokio::test]

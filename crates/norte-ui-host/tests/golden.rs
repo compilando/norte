@@ -1209,6 +1209,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         status: StatusView {
             message: Some("2 entradas".to_owned()),
             banners: vec![],
+            notices_unread: 2,
             pending: Some(norte_ui_host::dto::PendingView {
                 chords: "ctrl+x".to_owned(),
                 count: Some(12),
@@ -2195,6 +2196,7 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             ViewChange::Status(StatusView {
                 message: Some("2 entradas".to_owned()),
                 banners: Vec::new(),
+                notices_unread: 0,
                 pending: None,
             }),
         ),
@@ -2371,7 +2373,7 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
     // Puente 63: la ola de usabilidad (spec 2026-09-10).
-    const FORMA: u64 = 4_277_977_454_138_785_347;
+    const FORMA: u64 = 12_671_679_031_904_561_038;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

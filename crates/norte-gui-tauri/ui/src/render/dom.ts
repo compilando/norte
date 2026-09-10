@@ -308,6 +308,7 @@ export function statusNodes(
   connection: string,
   tr: (k: string) => string,
   rechazo: string | null = null,
+  onNotices: (() => void) | null = null,
 ): Node[] {
   const nodes: Node[] = [];
   if (rechazo !== null) {
@@ -369,6 +370,23 @@ export function statusNodes(
   const msg = document.createElement("span");
   msg.textContent = status.message ?? "";
   nodes.push(msg);
+  // Los avisos caducados sin leer (puente 63): una insignia `!n` que abre
+  // el registro, por el botón de la barra de paneles — el mismo despacho
+  // que su tecla. Sin sitio donde abrirlo (sin botón), la insignia solo
+  // cuenta.
+  const sinLeer = status.notices_unread ?? 0;
+  if (sinLeer > 0 && status.message === null) {
+    const insignia = document.createElement("button");
+    insignia.type = "button";
+    insignia.className = "notices";
+    insignia.textContent = `!${String(sinLeer)}`;
+    insignia.title = tr("status-notices");
+    insignia.setAttribute("aria-label", tr("status-notices"));
+    if (onNotices !== null) {
+      insignia.addEventListener("click", onNotices);
+    }
+    nodes.push(insignia);
+  }
   if (status.pending !== null) {
     const p = document.createElement("span");
     p.className = "pending";

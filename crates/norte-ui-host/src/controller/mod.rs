@@ -1360,7 +1360,13 @@ async fn actor(
                     }
                 }
             }
-            Mensaje::SesionTic => estado.empujar_sesion(&backend, &buzon),
+            Mensaje::SesionTic => {
+                estado.empujar_sesion(&backend, &buzon);
+                // Y un segundo más para el aviso de la barra (spec 2026-09-10).
+                if let Some(u) = estado.caducar_aviso() {
+                    let _ = updates.send(u);
+                }
+            }
             Mensaje::SesionPuesta(datos) => {
                 let (res, cuerpo) = *datos;
                 for u in estado.sesion_puesta(res, cuerpo, &backend, &buzon) {
@@ -2889,6 +2895,11 @@ struct Estado {
     ultima_barra: Option<crate::dto::PanelBarView>,
     /// La última barra de TECLAS que cruzó, por lo mismo (spec 2026-09-10).
     ultima_teclas: Option<crate::dto::KeyBarView>,
+    /// Cuántos tics de un segundo lleva `status.message` en la barra (spec
+    /// 2026-09-10): en TICS para que un test lo haga avanzar sin dormir.
+    mensaje_ticks: u32,
+    /// El texto que se estaba contando: si cambia, la cuenta vuelve a cero.
+    mensaje_contado: Option<String>,
     /// El reparto del ÚLTIMO tamaño conocido: quién se pinta, quién no, y en
     /// qué orden se tabula. Vive y muere con el tamaño, no con el árbol.
     reparto: Resolved,
@@ -3283,6 +3294,8 @@ impl Estado {
             kinds,
             ultima_barra: None,
             ultima_teclas: None,
+            mensaje_ticks: 0,
+            mensaje_contado: None,
             reparto,
             viewport,
             roles,

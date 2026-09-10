@@ -265,6 +265,48 @@ impl KeyBars {
 }
 
 impl App {
+    /// ¿Está el panel de registro en la disposición? Es lo que pone a cero
+    /// los avisos sin leer: si está, el lector los tiene delante.
+    #[must_use]
+    pub fn log_panel_open(&self) -> bool {
+        self.layout.slot_ids().into_iter().any(|id| {
+            self.layout
+                .kind_of(id)
+                .is_some_and(|k| k.as_str() == crate::logview::KIND)
+        })
+    }
+
+    /// Un tic de un segundo sobre el aviso de la barra (spec 2026-09-10,
+    /// `[ui] notice_seconds`): pasado el tope, el mensaje sale de la barra,
+    /// va al registro (por `tracing`, que es lo que el panel enseña) y la
+    /// insignia `!n` cuenta uno más. Con `0` no caduca nada: el mensaje se
+    /// queda hasta la siguiente tecla, como siempre. Los banners
+    /// persistentes no pasan por aquí: son estado, no aviso.
+    pub fn tick_notices(&mut self) {
+        if self.log_panel_open() {
+            self.notices_unread = 0;
+        }
+        let Some(msg) = self.message.as_deref() else {
+            self.message_ticks = 0;
+            self.message_counted = None;
+            return;
+        };
+        if self.message_counted.as_deref() == Some(msg) {
+            self.message_ticks = self.message_ticks.saturating_add(1);
+        } else {
+            self.message_counted = Some(msg.to_owned());
+            self.message_ticks = 1;
+        }
+        let tope = self.chrome.notice_seconds();
+        if tope > 0 && self.message_ticks >= tope {
+            let text = self.message.take().unwrap_or_default();
+            self.message_ticks = 0;
+            self.message_counted = None;
+            self.notices_unread = self.notices_unread.saturating_add(1);
+            tracing::warn!(target: "norte::notice", "{text}");
+        }
+    }
+
     /// Las celdas de la pantalla que tiene las teclas AHORA: un modal o un
     /// overlay delante, las del diálogo; el visor a pantalla completa, las
     /// suyas; si no, las de los listados. El mismo orden que `on_key` usa
@@ -511,6 +553,16 @@ pub struct App {
     pub modal: Option<Modal>,
     /// Último mensaje para la barra (error por categoría o resultado).
     pub message: Option<String>,
+    /// Cuántos tics de un segundo lleva [`Self::message`] en la barra (spec
+    /// 2026-09-10). Se cuenta en TICS y no con un `Instant` para que un test
+    /// lo haga avanzar sin dormir; `[ui] notice_seconds` es el tope.
+    pub message_ticks: u32,
+    /// El texto que se estaba contando: si cambia, la cuenta vuelve a cero.
+    pub message_counted: Option<String>,
+    /// Avisos que caducaron sin que el lector abriera el registro. La barra
+    /// pinta `!n` a la derecha mientras haya alguno; abrir el panel de
+    /// registro lo pone a cero.
+    pub notices_unread: u32,
     /// Todo lo que este proceso sabe de la sesión guardada (L2).
     pub session: SessionUi,
     /// Panel de tasks vivo.
@@ -1032,6 +1084,9 @@ impl App {
             which_key: None,
             modal: None,
             message: None,
+            message_ticks: 0,
+            message_counted: None,
+            notices_unread: 0,
             session: SessionUi::default(),
             board: crate::tasks::TaskBoard::default(),
             viewer: None,

@@ -1175,6 +1175,7 @@
     "status": {
       "banners": [],
       "message": "2 entradas",
+      "notices_unread": 2,
       "pending": {
         "chords": "ctrl+x",
         "count": 12

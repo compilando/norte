@@ -2132,6 +2132,12 @@ pub struct StatusView {
     pub message: Option<String>,
     /// Avisos persistentes (degradación, journal, sesión), acotados.
     pub banners: Vec<BannerView>,
+    /// Avisos que caducaron sin que el lector abriera el registro (spec
+    /// 2026-09-10, `[ui] notice_seconds`). El renderer pinta una insignia
+    /// mientras haya alguno; pulsarla abre el panel de registro por el
+    /// botón de la barra de paneles. Abrirlo lo pone a cero.
+    #[serde(default)]
+    pub notices_unread: u32,
     /// Lo que hay tecleado a medias: una secuencia, un contador, o las dos
     /// cosas. Se pinta SIEMPRE que exista — un prefijo pendiente que no se
     /// ve es un prefijo que no se puede cancelar.

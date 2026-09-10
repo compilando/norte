@@ -45,7 +45,7 @@ pub use overlays::{
 pub use pane::painted_len_and_selection;
 pub use panels::{PlaceZone, TreeZone, places_zones, tree_zones};
 pub use pickers::draw_theme_picker;
-pub use status::{SessionZone, session_zone};
+pub use status::{NoticeZone, SessionZone, notices_zone, session_zone};
 pub use text::fit_hint_groups;
 
 pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};

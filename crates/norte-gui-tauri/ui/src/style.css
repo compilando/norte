@@ -485,6 +485,18 @@ body {
   margin-left: 8px;
 }
 
+/* La insignia de avisos caducados sin leer (puente 63): a la derecha de
+   la barra de estado, con el color de aviso, y se pulsa. */
+.notices {
+  font: inherit;
+  margin-left: auto;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: var(--warning-fg);
+  cursor: pointer;
+}
+
 .tasks {
   padding: 0 6px;
   overflow: auto;

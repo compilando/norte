@@ -363,6 +363,10 @@ export interface PendingView {
 export interface StatusView {
   message: string | null;
   banners: BannerView[];
+  /** Avisos caducados sin leer (puente 63): una insignia mientras haya
+   *  alguno; pulsarla abre el registro. Opcional: un host anterior no lo
+   *  manda. */
+  notices_unread?: number;
   pending: PendingView | null;
 }
 
