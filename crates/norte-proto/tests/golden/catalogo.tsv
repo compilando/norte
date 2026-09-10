@@ -53,6 +53,7 @@ plugin.run_command	Request	Direct	methods::PluginRunCommandParams	methods::Plugi
 plugin.set_approval	Request	Direct	methods::PluginSetApprovalParams	methods::PluginSetApprovalResult	
 plugin.set_config	Request	Direct	methods::PluginSetConfigParams	methods::PluginSetConfigResult	
 plugin.set_enabled	Request	Direct	methods::PluginSetEnabledParams	methods::PluginSetEnabledResult	
+plugin.uninstall	Request	Direct	methods::PluginUninstallParams	methods::PluginUninstallResult	
 policy.approval_required	Notification	Direct	methods::PolicyApprovalRequired	()	
 policy.decide	Request	Direct	methods::PolicyDecideParams	methods::PolicyDecideResult	
 policy.grant_scope	Request	Direct	methods::GrantScopeParams	methods::GrantScopeResult	

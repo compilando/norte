@@ -1138,6 +1138,12 @@
     "id": "org.norte.demo"
   },
   "plugin_set_enabled_result": {},
+  "plugin_uninstall_params": {
+    "id": "org.norte.demo"
+  },
+  "plugin_uninstall_result": {
+    "was_approved": true
+  },
   "policy_approval_required": {
     "approval_id": 7,
     "detail": {

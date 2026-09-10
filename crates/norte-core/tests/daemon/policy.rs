@@ -1415,6 +1415,13 @@ pub(super) const BROKEN_MANIFEST: &str = "no es toml [[[";
 /// y uno ROTO (`rota`, TOML inválido). Devuelve también la ruta `cfg` para
 /// poder abrir un `PluginRegistry` fresco sobre ella y comprobar persistencia.
 pub(super) async fn spawn_daemon_plugins_ok_y_roto() -> (TestDaemon, PathBuf) {
+    spawn_daemon_plugins_con(&[]).await
+}
+
+/// Como [`spawn_daemon_plugins_ok_y_roto`], más los `(id, manifiesto)` que
+/// se pasen, sembrados ANTES de arrancar: el daemon descubre una vez, al
+/// arrancar, y un test sobre su registro en memoria tiene que sembrar antes.
+pub(super) async fn spawn_daemon_plugins_con(extra: &[(&str, &str)]) -> (TestDaemon, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let cfg = dir.path().join("cfg");
     let ok_dir = cfg.join("plugins").join("org.norte.demo");
@@ -1423,6 +1430,11 @@ pub(super) async fn spawn_daemon_plugins_ok_y_roto() -> (TestDaemon, PathBuf) {
     std::fs::create_dir_all(&rota_dir).expect("mkdir rota");
     std::fs::write(ok_dir.join("plugin.toml"), DEMO_MANIFEST).expect("write manifest ok");
     std::fs::write(rota_dir.join("plugin.toml"), BROKEN_MANIFEST).expect("write manifest roto");
+    for (id, manifiesto) in extra {
+        let d = cfg.join("plugins").join(id);
+        std::fs::create_dir_all(&d).expect("mkdir extra");
+        std::fs::write(d.join("plugin.toml"), manifiesto).expect("write manifest extra");
+    }
 
     let socket = dir.path().join("d.sock");
     let engine = Arc::new(Engine::new());
@@ -1550,6 +1562,142 @@ async fn plugin_gestor_e2e_lista_gobierna_y_persiste() {
         .await
         .expect_err("un agente no gobierna consentimiento");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+}
+
+/// `plugin.uninstall` (0.71.0, ADR 0104): borra el directorio, retira el
+/// consentimiento y —lo que la CLI no podía— lo olvida en el registro EN
+/// MEMORIA del daemon, que hasta aquí seguía listando lo borrado hasta
+/// reiniciar. Un agente no puede; un id que no está, tampoco.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "seis pasos sobre el MISMO daemon: partirlos es perder el registro en memoria que se prueba"
+)]
+async fn plugin_uninstall_por_el_wire_borra_olvida_y_retira_el_consentimiento() {
+    // Y un roto con id VÁLIDO, para el paso 5: `rota` no es un id y no se
+    // puede nombrar por el wire.
+    let (d, cfg) = spawn_daemon_plugins_con(&[("org.norte.rota", BROKEN_MANIFEST)]).await;
+    let human = connected_client(&d).await;
+    let _: methods::PluginSetApprovalResult = human
+        .call(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.demo".into(),
+                approved: true,
+                expected_digest: None,
+            },
+        )
+        .await
+        .expect("aprobar");
+
+    // 1) Un AGENTE no desinstala: retirar un consentimiento es tan del humano
+    //    como darlo, y borrar ficheros de su configuración, más.
+    let agent = connected_agent(&d, "s1").await;
+    let err = agent
+        .call::<_, methods::PluginUninstallResult>(
+            methods::PLUGIN_UNINSTALL,
+            &methods::PluginUninstallParams {
+                id: "org.norte.demo".into(),
+            },
+        )
+        .await
+        .expect_err("un agente no desinstala");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+    assert!(
+        cfg.join("plugins").join("org.norte.demo").is_dir(),
+        "y el directorio sigue"
+    );
+
+    // 2) El humano sí, y el informe dice que había consentimiento.
+    let r: methods::PluginUninstallResult = human
+        .call(
+            methods::PLUGIN_UNINSTALL,
+            &methods::PluginUninstallParams {
+                id: "org.norte.demo".into(),
+            },
+        )
+        .await
+        .expect("desinstalar");
+    assert!(r.was_approved, "tenía consentimiento, y se dice");
+    assert!(
+        !cfg.join("plugins").join("org.norte.demo").exists(),
+        "el directorio se borró"
+    );
+
+    // 3) El MISMO daemon ya no lo lista: el registro en memoria lo olvidó.
+    let list: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list tras desinstalar");
+    assert!(
+        list.plugins.iter().all(|p| p.id != "org.norte.demo"),
+        "sigue listado tras desinstalar: {:?}",
+        list.plugins.iter().map(|p| &p.id).collect::<Vec<_>>()
+    );
+
+    // 4) Y el consentimiento se fue con él: un plugin instalado después bajo
+    //    el mismo id nace sin aprobar.
+    let ok_dir = cfg.join("plugins").join("org.norte.demo");
+    std::fs::create_dir_all(&ok_dir).expect("mkdir de nuevo");
+    std::fs::write(ok_dir.join("plugin.toml"), DEMO_MANIFEST).expect("write manifest");
+    let fresco = norte_core::PluginRegistry::discover(&cfg).expect("discover fresco");
+    let reinstalado = fresco
+        .list()
+        .plugins
+        .into_iter()
+        .find(|p| p.id == "org.norte.demo")
+        .expect("vuelve a descubrirse");
+    assert!(!reinstalado.approved, "nace sin aprobar");
+    assert!(!reinstalado.enabled, "y apagado");
+
+    // 5) Un plugin ROTO —listado en `errors`, no en `plugins`— se desinstala
+    //    igual, y el MISMO daemon deja de anunciarlo como «no cargó»: el
+    //    cadáver salía de `plugins` y se quedaba en `errors`.
+    let rota = cfg.join("plugins").join("org.norte.rota");
+    let list: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list");
+    assert!(
+        list.errors.iter().any(|e| e.dir == "org.norte.rota"),
+        "el daemon lo anuncia como roto: {:?}",
+        list.errors
+    );
+    let r: methods::PluginUninstallResult = human
+        .call(
+            methods::PLUGIN_UNINSTALL,
+            &methods::PluginUninstallParams {
+                id: "org.norte.rota".into(),
+            },
+        )
+        .await
+        .expect("desinstalar un roto");
+    assert!(!r.was_approved, "un roto nunca tuvo consentimiento");
+    assert!(!rota.exists(), "y su directorio se borró");
+    let list: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list");
+    assert!(
+        list.errors.iter().all(|e| e.dir != "org.norte.rota"),
+        "un roto desinstalado no se sigue anunciando: {:?}",
+        list.errors
+    );
+
+    // 6) Lo que no está, o no es un id, es INVALID_PARAMS — nunca una ruta.
+    for id in ["org.norte.nunca", "../fuera"] {
+        let err = human
+            .call::<_, methods::PluginUninstallResult>(
+                methods::PLUGIN_UNINSTALL,
+                &methods::PluginUninstallParams { id: id.into() },
+            )
+            .await
+            .expect_err("no está");
+        assert!(
+            matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS),
+            "{id}"
+        );
+    }
 }
 
 // ---------- #66: gate de actor en task.* y connection.trust_host_key ----------

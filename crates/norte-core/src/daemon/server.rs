@@ -237,6 +237,15 @@ struct Shared {
     /// `set_enabled`) re-leen y persisten `plugins-state.toml` bajo el lock. El
     /// `Mutex` std basta: el dispatch es serial y las secciones son cortas.
     plugins: Mutex<crate::plugins::PluginRegistry>,
+    /// Serializa cada ESCRITURA de `plugins-state.toml` con la foto de la
+    /// que sale (ADR 0104). El `Mutex` de arriba no cruza un `.await`, y
+    /// `persist_state` fusiona la foto sobre el fichero: dos gobiernos en
+    /// vuelo desde dos conexiones humanas —ventana y terminal— podían
+    /// escribir en orden inverso al de sus fotos, y con `uninstall` en medio
+    /// eso resucitaba en disco un consentimiento, anclado a un manifiesto ya
+    /// borrado, que uno instalado después con el mismo id heredaría. Se toma
+    /// ANTES de mutar la memoria y se suelta DESPUÉS de persistir.
+    plugins_state_io: tokio::sync::Mutex<()>,
     /// Informes de las últimas Tasks de undo (#71), por `task_id`: el humano
     /// que deshizo consulta QUÉ pasó (`policy.undo_report`) — sin esto, un
     /// undo que saltó/bloqueó todo parece «done». Anillo acotado a
@@ -878,6 +887,7 @@ impl Daemon {
             approvals: Arc::clone(&approvals),
             undo_reports: Mutex::new(std::collections::VecDeque::new()),
             plugins: Mutex::new(plugins),
+            plugins_state_io: tokio::sync::Mutex::new(()),
             plugin_runtime,
             column_pool: Arc::new(crate::plugins::ColumnPool::default()),
             log_ring: std::sync::OnceLock::new(),
@@ -2777,6 +2787,10 @@ async fn dispatch(
             let p: methods::PluginSetEnabledParams = parse_params(req.params)?;
             handle_plugin_set_enabled(&conn.actor, &p, shared).await
         }
+        methods::PLUGIN_UNINSTALL => {
+            let p: methods::PluginUninstallParams = parse_params(req.params)?;
+            handle_plugin_uninstall(&conn.actor, &p, shared).await
+        }
         // plugin.run_command (M4-P4): ABIERTO (ejecutar no consiente nada).
         methods::PLUGIN_RUN_COMMAND => handle_plugin_run_command(req.params, shared).await,
         // plugin.preview (M4-P5): ABIERTO (previsualizar no consiente nada).
@@ -3539,6 +3553,10 @@ async fn handle_plugin_set_approval(
     // Muta EN MEMORIA bajo el lock y captura el snapshot + el dir; el lock se
     // libera al cerrar el bloque, ANTES de cualquier `.await` (regla 2: nada de
     // I/O bloqueante en el reactor, ni sostener un std::Mutex a través de await).
+    // Y la foto va al disco en exclusiva con las de sus hermanos (ADR 0104,
+    // `Shared::plugins_state_io`): se toma antes de mutar y se suelta al
+    // salir, ya persistido.
+    let _escritura = shared.plugins_state_io.lock().await;
     let (applied, rancio, snapshot, dir) = {
         let mut reg = shared.plugins.lock().expect("plugins lock sano");
         // Lo que se CONCEDE tiene que ser lo que el humano LEYÓ (#282). Este
@@ -3612,7 +3630,9 @@ async fn handle_plugin_set_enabled(
             "only a human (non-agent) connection may enable a plugin",
         ));
     }
-    // Mismo patrón regla-2 que set_approval: muta bajo el lock, persiste fuera.
+    // Mismo patrón regla-2 que set_approval: muta bajo el lock, persiste fuera,
+    // y la escritura en exclusiva (`Shared::plugins_state_io`).
+    let _escritura = shared.plugins_state_io.lock().await;
     let (applied, snapshot, dir) = {
         let mut reg = shared.plugins.lock().expect("plugins lock sano");
         let applied = reg.set_enabled_in_memory(&p.id, p.enabled);
@@ -3634,6 +3654,86 @@ async fn handle_plugin_set_enabled(
         .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
     tracing::info!(id = %p.id, "plugin (des)activado por el humano");
     to_value(&methods::PluginSetEnabledResult {})
+}
+
+/// `plugin.uninstall` (0.71.0, ADR 0104): un HUMANO desinstala un plugin.
+/// Misma barrera que [`handle_plugin_set_approval`]: retirar un
+/// consentimiento es tan del humano como darlo, y borrar ficheros de su
+/// configuración, más.
+///
+/// El trabajo lo hace [`crate::plugins::uninstall`], el mismo que la CLI:
+/// valida el id ANTES de convertirlo en ruta, borra `plugins/<id>/` y deja
+/// la entrada de estado apagada y sin aprobar. Lo que la CLI no podía hacer
+/// es lo que sigue: olvidarlo también en el registro EN MEMORIA, que hasta
+/// aquí seguía listando —y decorando con— lo borrado hasta reiniciar.
+///
+/// Un id que no es un id, o que no está instalado, es `INVALID_PARAMS`,
+/// como el id desconocido de sus hermanos; un fallo de I/O es
+/// `INTERNAL_ERROR`. El borrado va en `spawn_blocking` (regla 2) y SIN el
+/// lock del registro: el lock se toma después, solo para olvidar.
+// `skip_all` sin `id = %p.id`: el id crudo del wire no va al log sin validar
+// — idéntico razonamiento que [`handle_plugin_set_approval`]. Se loguea
+// (info) SOLO tras el borrado, cuando `uninstall` ya lo validó como id.
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_uninstall(
+    actor: &Actor,
+    p: &methods::PluginUninstallParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may uninstall a plugin",
+        ));
+    }
+    // La escritura del estado, en exclusiva con las de sus hermanos: ver
+    // `Shared::plugins_state_io`. Se toma antes del borrado y se suelta tras
+    // olvidar en memoria, así que ningún `set_*` en vuelo puede persistir
+    // una foto en la que este plugin sigue aprobado ENCIMA de lo que
+    // `uninstall` acaba de escribir.
+    let _escritura = shared.plugins_state_io.lock().await;
+    // `expect`: nadie panica bajo el lock del registro —solo se mutan mapas y
+    // vectores—, así que no puede quedar envenenado. Vale para los catorce
+    // usos de este fichero.
+    let dir = shared
+        .plugins
+        .lock()
+        .expect("plugins lock sano")
+        .config_dir()
+        .to_path_buf();
+    let id = p.id.clone();
+    let informe = tokio::task::spawn_blocking(move || crate::plugins::uninstall(&dir, &id))
+        .await
+        .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "uninstall task panicked"))?
+        .map_err(|e| {
+            use crate::plugins::UninstallError as U;
+            match e {
+                U::InvalidId => RpcError::protocol(codes::INVALID_PARAMS, "not a plugin id"),
+                U::NotInstalled(_) => {
+                    RpcError::protocol(codes::INVALID_PARAMS, "plugin is not installed")
+                }
+                // Sin el texto del error de I/O en la RESPUESTA: cita la ruta
+                // bajo el home del usuario, y esto también lo lee un cliente.
+                // Al registro sí: `log.tail` es solo de humanos.
+                U::Io(io) => {
+                    tracing::warn!(error = %io, "uninstall: fallo de I/O");
+                    RpcError::protocol(codes::INTERNAL_ERROR, "uninstall: io error")
+                }
+            }
+        })?;
+    shared
+        .plugins
+        .lock()
+        .expect("plugins lock sano")
+        .forget_in_memory(&informe.id);
+    tracing::info!(
+        id = %informe.id,
+        was_approved = informe.was_approved,
+        "plugin desinstalado por el humano"
+    );
+    to_value(&methods::PluginUninstallResult {
+        was_approved: informe.was_approved,
+    })
 }
 
 /// `plugin.run_command` (M4-P4): ejecuta un comando de un plugin YA aprobado y

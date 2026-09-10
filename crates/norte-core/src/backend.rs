@@ -2417,6 +2417,44 @@ impl Backend {
         }
     }
 
+    /// Desinstala un plugin (0.71.0, ADR 0104): borra su directorio y deja su
+    /// estado apagado y sin aprobar. Devuelve si tenía consentimiento, que
+    /// es lo que acaba de dejar de existir.
+    ///
+    /// Embebido: [`crate::plugins::uninstall`] en `spawn_blocking`, lo mismo
+    /// que hace la CLI. Remoto: `plugin.uninstall` contra el daemon, que
+    /// además lo olvida en su registro en memoria.
+    ///
+    /// # Invariante de seguridad (defensa en profundidad)
+    /// Igual que [`Self::plugins_set_approval`]: el gate «solo humano» vive
+    /// en la capa wire.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si el id no es un id o no está instalado;
+    /// [`Error::Io`] si el borrado o el estado fallan.
+    pub async fn plugins_uninstall(&self, id: &str) -> Result<bool, Error> {
+        match self {
+            Self::Embedded(_) => {
+                let dir = crate::connect::config_dir();
+                let id = id.to_owned();
+                let informe =
+                    tokio::task::spawn_blocking(move || crate::plugins::uninstall(&dir, &id))
+                        .await
+                        .map_err(|_| Error::Internal { panic: true })?
+                        .map_err(|e| {
+                            use crate::plugins::UninstallError as U;
+                            match e {
+                                U::InvalidId | U::NotInstalled(_) => Error::NotFound,
+                                U::Io(_) => Error::Io { retryable: false },
+                            }
+                        })?;
+                Ok(informe.was_approved)
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugins_uninstall(id).await.map(|r| r.was_approved),
+        }
+    }
+
     /// Ejecuta un comando de un plugin YA aprobado y activado (M4-P4) y devuelve
     /// su salida. Embebido: registro EFÍMERO por-llamada + un `PluginRuntime`
     /// nuevo, TODO en `spawn_blocking` (la instanciación compila WASM: pesada y

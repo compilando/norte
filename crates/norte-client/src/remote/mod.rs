@@ -2127,6 +2127,23 @@ impl RemoteBackend {
         Ok(())
     }
 
+    /// `plugin.uninstall` contra el daemon (0.71.0, ADR 0104): borra el
+    /// plugin, retira su consentimiento y lo olvida en el registro del daemon.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon: `INVALID_PARAMS` si no es un id o no está
+    /// instalado; `INVALID_REQUEST` desde una conexión de agente.
+    pub async fn plugins_uninstall(
+        &self,
+        id: &str,
+    ) -> Result<methods::PluginUninstallResult, Error> {
+        self.call_timed(
+            methods::PLUGIN_UNINSTALL,
+            &methods::PluginUninstallParams { id: id.to_owned() },
+        )
+        .await
+    }
+
     /// `plugin.run_command` contra el daemon (M4-P4): devuelve la salida del
     /// comando. El daemon ya redacta los fallos de runtime a `Internal`.
     ///
