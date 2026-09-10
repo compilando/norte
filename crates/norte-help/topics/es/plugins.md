@@ -52,6 +52,13 @@ eso es lo que concede aprobarlo. Los schemes que norte sirve por sí mismo
 —`file`, `sftp`, `ftp`, `s3`— no los puede reclamar una extensión, así que
 aprobar una jamás la pone delante de un backend propio.
 
+La pantalla es la misma en el terminal y en la ventana: la lista a la
+izquierda y, a la derecha, la extensión elegida con su estado, sus
+capacidades y una fila de botones: encender o apagar, aprobar o revocar,
+ajustes, desinstalar, ayuda. Cada botón hace exactamente lo que hace su
+tecla; las teclas están en el pie. Pulsar una fila la elige, y pulsar la fila
+ya elegida abre sus ajustes, como `Intro`.
+
 Las extensiones entran desde la línea de comandos: `norte plugin install
 <dir>` trae una sin aprobar, y `norte plugin list` enseña los mismos dos hechos
 que esta pantalla. Salen por cualquiera de los dos lados. La tecla de quitar

@@ -101,6 +101,7 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
             panels: ui::panel_zones(app, frame.area),
             places: ui::places_zones(app, frame.area),
             tree: ui::tree_zones(app, frame.area),
+            extensions: ui::extension_zones(app, frame.area),
             session: ui::session_zone(app, frame.area),
             borders: ui::resize_borders(app, frame.area),
             slots: ui::panel_slots(app, frame.area),
@@ -1376,4 +1377,150 @@ fn un_click_en_un_panel_lateral_le_da_el_teclado() {
         .expect("el panel se colocó");
     let _ = mouse::handle(&mut app, ev(ABAJO, r.x + 1, r.y + 1));
     assert_eq!(app.key_owner(), KeyOwner::Processes);
+}
+
+/// Un plugin de prueba del gestor, aprobado y encendido.
+fn plugin(id: &str, name: &str, category: &str) -> norte_proto::methods::PluginInfo {
+    norte_proto::methods::PluginInfo {
+        id: id.into(),
+        name: name.into(),
+        publisher: "norte".into(),
+        version: "1.0.0".into(),
+        category: category.into(),
+        capabilities: Vec::new(),
+        approved: true,
+        enabled: true,
+        description: None,
+        commands: Vec::new(),
+        columns: Vec::new(),
+        has_help: false,
+        manifest_digest: None,
+    }
+}
+
+/// Una `App` con el gestor de extensiones abierto sobre dos plugins, pintada
+/// a `w`×`h`. Devuelve las líneas para contrastar las zonas con el texto.
+fn app_con_gestor(w: u16, h: u16) -> (App, Vec<String>) {
+    let mut app = app_pintada(3);
+    app.extensions = Some(norte_tui::app::ExtensionManager {
+        plugins: vec![
+            plugin("org.norte.uno", "Uno", "columns"),
+            plugin("org.norte.dos", "Dos", "previewer"),
+        ],
+        errors: Vec::new(),
+        cursor: 0,
+        config: None,
+    });
+    let lineas = pintar_en(&mut app, w, h);
+    (app, lineas)
+}
+
+/// La fila y la columna de la primera aparición de `texto` en lo pintado.
+///
+/// `TestBackend::to_string()` envuelve cada fila entre comillas: la primera
+/// celda de la pantalla es el segundo carácter de la línea.
+fn donde(lineas: &[String], texto: &str) -> (u16, u16) {
+    for (y, l) in lineas.iter().enumerate() {
+        let l = l.strip_prefix('"').unwrap_or(l);
+        if let Some(byte) = l.find(texto) {
+            let col = l[..byte].chars().count();
+            return (
+                u16::try_from(y).expect("fila"),
+                u16::try_from(col).expect("columna"),
+            );
+        }
+    }
+    panic!("{texto:?} no está pintado:\n{}", lineas.join("\n"));
+}
+
+/// El gestor de extensiones nació mudo al ratón: `overlay_open` devolvía
+/// `Nothing` para todo. Un clic en una fila la elige, y en la fila YA
+/// elegida abre sus ajustes — lo que su pie promete («pulsa Intro, o la
+/// fila»). Contrastado contra el TEXTO pintado: la fila que se pulsa es la
+/// que enseña «Dos».
+#[test]
+fn clic_en_una_fila_del_gestor_la_elige_y_repetirlo_abre_sus_ajustes() {
+    let (mut app, lineas) = app_con_gestor(100, 24);
+    let (row, col) = donde(&lineas, "Dos v1.0.0");
+    assert_eq!(
+        mouse::handle(&mut app, ev(ABAJO, col, row)),
+        After::Nothing,
+        "elegir no habla con el backend"
+    );
+    assert_eq!(app.extensions.as_ref().unwrap().cursor, 1);
+    assert_eq!(
+        mouse::handle(&mut app, ev(ABAJO, col, row)),
+        After::Extension("dialog.confirm"),
+        "la fila ya elegida abre sus ajustes por el MISMO comando que Intro"
+    );
+}
+
+/// Los botones de la ficha disparan EL MISMO comando que su tecla, y salen
+/// de lo pintado: el ratón encuentra «[Apagar]» donde el frame lo puso.
+#[test]
+fn los_botones_de_la_ficha_disparan_el_comando_de_su_tecla() {
+    let (mut app, lineas) = app_con_gestor(100, 24);
+    // Los tests de este fichero pintan en inglés (el locale por defecto sin
+    // `[ui] lang`), así que las etiquetas son las de `en.ftl`.
+    for (etiqueta, cmd) in [
+        ("[Disable]", "dialog.toggle-enabled"),
+        ("[Revoke]", "dialog.approve"),
+        ("[Settings]", "dialog.confirm"),
+        ("[Uninstall]", "dialog.remove"),
+    ] {
+        let (row, col) = donde(&lineas, etiqueta);
+        assert_eq!(
+            mouse::handle(&mut app, ev(ABAJO, col + 1, row)),
+            After::Extension(cmd),
+            "{etiqueta}"
+        );
+    }
+    // Y entre dos botones no hay nada: el espacio no es un botón.
+    let (row, col) = donde(&lineas, "[Disable] [Revoke]");
+    let hueco = col + u16::try_from("[Disable]".len()).unwrap();
+    assert_eq!(
+        mouse::handle(&mut app, ev(ABAJO, hueco, row)),
+        After::Nothing
+    );
+}
+
+/// La rueda mueve el cursor de la lista, y elegir OTRA fila con los
+/// ajustes de la anterior abiertos los cierra: la ficha no puede enseñar un
+/// plugin y los ajustes de otro.
+#[test]
+fn la_rueda_mueve_el_cursor_y_cambiar_de_fila_cierra_los_ajustes_ajenos() {
+    let (mut app, lineas) = app_con_gestor(100, 24);
+    let _ = mouse::handle(&mut app, ev(MouseEventKind::ScrollDown, 50, 10));
+    assert_eq!(app.extensions.as_ref().unwrap().cursor, 1);
+    let _ = mouse::handle(&mut app, ev(MouseEventKind::ScrollUp, 50, 10));
+    assert_eq!(app.extensions.as_ref().unwrap().cursor, 0);
+    app.extensions.as_mut().unwrap().config = Some(norte_tui::app::PluginConfigPanel {
+        plugin_id: "org.norte.uno".into(),
+        plugin_name: "Uno".into(),
+        state: norte_frontend::plugin_config::PluginConfigState::new(Vec::new()),
+    });
+    let (row, col) = donde(&lineas, "Dos v1.0.0");
+    let _ = mouse::handle(&mut app, ev(ABAJO, col, row));
+    let mgr = app.extensions.as_ref().unwrap();
+    assert_eq!(mgr.cursor, 1);
+    assert!(mgr.config.is_none(), "los ajustes eran de «Uno»");
+}
+
+/// En un terminal estrecho no hay ficha ni botones, pero las filas de la
+/// lista de siempre siguen siendo pulsables — con la descripción debajo,
+/// que NO es una fila.
+#[test]
+fn en_estrecho_las_filas_se_pulsan_y_la_descripcion_no() {
+    let (mut app, lineas) = app_con_gestor(W, H);
+    let (row, col) = donde(&lineas, "Dos v1.0.0");
+    let _ = mouse::handle(&mut app, ev(ABAJO, col, row));
+    assert_eq!(app.extensions.as_ref().unwrap().cursor, 1);
+    // La cabecera de categoría de encima no es un plugin.
+    let (row, col) = donde(&lineas, "previewer");
+    let _ = mouse::handle(&mut app, ev(ABAJO, col, row));
+    assert_eq!(
+        app.extensions.as_ref().unwrap().cursor,
+        1,
+        "una cabecera no elige nada"
+    );
 }

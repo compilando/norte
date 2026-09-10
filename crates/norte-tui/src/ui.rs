@@ -37,7 +37,10 @@ pub use geometry::{
     tab_strip_for,
 };
 pub use help::{draw_help, help_body_size, help_group_is_painted, help_layout, help_sidebar_width};
-pub use overlays::{draw_shortcuts, draw_which_key, plugin_description_line};
+pub use overlays::{
+    ExtensionHit, ExtensionZone, draw_shortcuts, draw_which_key, extension_zones,
+    plugin_description_line,
+};
 pub use pane::painted_len_and_selection;
 pub use panels::{PlaceZone, TreeZone, places_zones, tree_zones};
 pub use pickers::draw_theme_picker;
@@ -262,6 +265,37 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
     draw_status(frame, status_area, app);
 }
 
+/// El pie con el que se pinta el GESTOR de extensiones, o `None` cuando lo
+/// que se ve es la caja de ajustes estrecha.
+///
+/// Con ficha (ADR 0104) los ajustes van DENTRO del gestor, con el pie del
+/// panel de ajustes; en un terminal estrecho la ficha no cabe y los ajustes
+/// tienen su caja, como antes. La ficha hospeda los ajustes solo de la
+/// extensión ELEGIDA: un panel de otra —o de una que ya no está en la
+/// lista— tiene su caja.
+///
+/// Una función porque la decisión la toman DOS: el pintor y el ratón, que
+/// mide sus zonas contra lo que se pintó.
+pub(crate) fn extensions_footer<'a>(
+    app: &'a App,
+    mgr: &crate::app::ExtensionManager,
+    frame_width: u16,
+) -> Option<&'a str> {
+    let Some(panel) = &mgr.config else {
+        return Some(&app.dialog_hints.extensions);
+    };
+    let ancho_util = frame_width
+        .saturating_sub(6)
+        .clamp(24, 120)
+        .saturating_sub(2);
+    let en_ficha = ancho_util >= EXTENSIONS_WIDE_MIN
+        && mgr
+            .plugins
+            .get(mgr.cursor)
+            .is_some_and(|p| panel.plugin_id == p.id);
+    en_ficha.then_some(app.dialog_hints.plugin_config.as_str())
+}
+
 /// Pinta el frame completo: panes (o viewer) + panel de tasks + barra de
 /// estado + modal por encima.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
@@ -330,30 +364,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         draw_connections_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }
     if let Some(mgr) = &app.extensions {
-        // Con ficha (ADR 0104) los ajustes van DENTRO del gestor, con el
-        // pie del panel de ajustes; en un terminal estrecho la ficha no
-        // cabe y los ajustes tienen su caja, como antes.
-        let ancho_util = frame
-            .area()
-            .width
-            .saturating_sub(6)
-            .clamp(24, 120)
-            .saturating_sub(2);
-        // La ficha hospeda los ajustes solo de la extensión ELEGIDA: un panel
-        // de otra —o de una que ya no está en la lista— tiene su caja.
-        let en_ficha = ancho_util >= EXTENSIONS_WIDE_MIN
-            && mgr
-                .plugins
-                .get(mgr.cursor)
-                .is_some_and(|p| mgr.config.as_ref().is_some_and(|c| c.plugin_id == p.id));
-        match &mgr.config {
-            Some(panel) if !en_ficha => {
+        match (extensions_footer(app, mgr, frame.area().width), &mgr.config) {
+            (Some(hint), _) => draw_extensions(frame, mgr, &app.theme, hint),
+            (None, Some(panel)) => {
                 draw_plugin_config_panel(frame, panel, &app.theme, &app.dialog_hints.plugin_config);
             }
-            Some(_) => {
-                draw_extensions(frame, mgr, &app.theme, &app.dialog_hints.plugin_config);
-            }
-            None => draw_extensions(frame, mgr, &app.theme, &app.dialog_hints.extensions),
+            (None, None) => {}
         }
     }
     if let Some(popup) = &app.nav_popup {

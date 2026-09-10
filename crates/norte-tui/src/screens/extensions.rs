@@ -155,6 +155,35 @@ pub async fn on_extensions_key(
     }
 }
 
+/// Un clic en el gestor: un botón de la ficha, o la fila ya elegida.
+///
+/// El MISMO despacho que la tecla (`on_extensions_list_cmd`, y para
+/// `app.help` el mismo puente que `F1`): un botón que encendiera una
+/// extensión por un camino y la tecla por otro sería dos gestores que
+/// divergen en cuanto uno crece un detalle (ADR 0077, dentro de un solo
+/// frontend). Lo que el botón NO hace es pasar por el allowlist del panel
+/// de ajustes: el clic es explícito, y apagar una extensión con sus
+/// ajustes a la vista es exactamente lo que el lector pidió.
+pub async fn on_extensions_click(
+    app: &mut App,
+    backend: &Backend,
+    lang: norte_help::Lang,
+    help_lines: &[ratatui::text::Line<'static>],
+    cmd: &str,
+) {
+    if app.extensions.is_none() {
+        return;
+    }
+    if cmd == "app.help" {
+        extensions_help(app, lang, help_lines);
+        return;
+    }
+    if !ALLOW_EXTENSIONS.contains(&cmd) {
+        return;
+    }
+    on_extensions_list_cmd(app, backend, cmd).await;
+}
+
 /// G3c: teclas RAW mientras un `string`/`int` de `[config]` se edita
 /// (`on_extensions_key`'s guard `editing`) — mismo idioma que
 /// `on_nav_popup_key`'s `name_input`.

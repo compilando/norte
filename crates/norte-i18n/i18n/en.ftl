@@ -764,6 +764,7 @@ ext-enable = Enable
 ext-disable = Disable
 ext-uninstall = Uninstall
 ext-help = Help
+ext-settings = Settings
 ext-close = Close
 ext-installed = installed
 ext-enabled = on

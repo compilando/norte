@@ -29,26 +29,7 @@ pub(crate) fn draw_extensions(
     theme: &TuiTheme,
     hint: &str,
 ) {
-    // MAJOR-1(c) H1 close: el ancho por CONTENIDO (igual que antes,
-    // clamp(24, 80)) puede quedarse corto para el footer GENERADO — mismo
-    // criterio de sizing que [`draw_nav_popup`] (medir el footer en CELDAS,
-    // `Line::width`, y crecer si hace falta), tope en el ancho del frame.
-    // Con ficha (ADR 0104, nivelación con la ventana) el tope sube a 120:
-    // dos columnas en 80 son dos columnas estrechas.
-    let footer_w = Line::raw(format!(" {hint} ")).width();
-    let min_width = u16::try_from(footer_w.saturating_add(4)).unwrap_or(u16::MAX);
-    let width = frame
-        .area()
-        .width
-        .saturating_sub(6)
-        .clamp(24, 120)
-        .max(min_width)
-        .min(frame.area().width);
-    let area = centered(
-        frame.area(),
-        width,
-        frame.area().height.saturating_sub(4).max(6),
-    );
+    let area = extensions_area(frame.area(), hint);
     clear_themed(frame, area, theme);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -63,50 +44,268 @@ pub(crate) fn draw_extensions(
     // comandos y sus ajustes—. Con menos de [`EXTENSIONS_WIDE_MIN`] celdas
     // útiles no caben dos columnas legibles y se pinta la lista de siempre,
     // con la descripción bajo cada fila y los ajustes en su propia caja.
-    if inner_area.width < EXTENSIONS_WIDE_MIN || mgr.plugins.is_empty() {
+    let Some((lista_area, ficha_area)) = extensions_columns(mgr, inner_area) else {
         let inner = usize::from(inner_area.width.saturating_sub(2));
-        let lines = extensions_list_lines(mgr, theme, inner, true);
+        let (lines, _) = extensions_list_lines(mgr, theme, inner, true);
         frame.render_widget(Paragraph::new(lines), inner_area);
         return;
-    }
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Min(1)])
-        .split(inner_area);
-    let lista = extensions_list_lines(mgr, theme, usize::from(cols[0].width), false);
-    frame.render_widget(Paragraph::new(lista), cols[0]);
+    };
+    let (lista, _) = extensions_list_lines(mgr, theme, usize::from(lista_area.width), false);
+    frame.render_widget(Paragraph::new(lista), lista_area);
     let borde = Block::default()
         .borders(Borders::LEFT)
         .border_style(theme.role(Role::BorderUnfocused));
-    let ficha_area = borde.inner(cols[1]);
-    frame.render_widget(borde, cols[1]);
+    frame.render_widget(
+        borde,
+        Rect {
+            x: ficha_area.x.saturating_sub(1),
+            width: 1,
+            ..ficha_area
+        },
+    );
     if let Some(p) = mgr.plugins.get(mgr.cursor) {
+        // Los BOTONES en la primera fila de la ficha, como en la ventana:
+        // son lo que el lector busca, y en una fila fija —no dentro del
+        // párrafo, cuyo ajuste de línea movería cada uno según lo largo
+        // que sea el nombre— para que el ratón los encuentre donde se
+        // pintaron. Debajo, una fila en blanco y la ficha.
+        let botones = extension_buttons(p);
+        let mut spans = Vec::new();
+        let mut x = 0usize;
+        for (etiqueta, _) in &botones {
+            let w = UnicodeWidthStr::width(etiqueta.as_str());
+            if x + w > usize::from(ficha_area.width) {
+                break;
+            }
+            spans.push(Span::styled(etiqueta.clone(), theme.role(Role::Selection)));
+            spans.push(Span::raw(" "));
+            x += w + 1;
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect {
+                height: 1.min(ficha_area.height),
+                ..ficha_area
+            },
+        );
+        let cuerpo = Rect {
+            y: ficha_area.y.saturating_add(BUTTON_ROWS),
+            height: ficha_area.height.saturating_sub(BUTTON_ROWS),
+            ..ficha_area
+        };
         let ficha = extension_pane_lines(p, mgr.config.as_ref(), theme);
         frame.render_widget(
             Paragraph::new(ficha).wrap(ratatui::widgets::Wrap { trim: false }),
-            ficha_area,
+            cuerpo,
         );
     }
 }
+
+/// Filas que la fila de botones y su blanco le quitan a la ficha.
+const BUTTON_ROWS: u16 = 2;
 
 /// Celdas útiles a partir de las que el gestor pinta la ficha al lado de la
 /// lista. Por debajo, la lista de siempre.
 pub(crate) const EXTENSIONS_WIDE_MIN: u16 = 64;
 
+/// La caja del gestor en un frame de `frame_area`, con `hint` en el pie.
+///
+/// MAJOR-1(c) H1 close: el ancho por CONTENIDO (igual que antes, clamp(24,
+/// 80)) puede quedarse corto para el footer GENERADO — mismo criterio de
+/// sizing que [`draw_nav_popup`] (medir el footer en CELDAS, `Line::width`,
+/// y crecer si hace falta), tope en el ancho del frame. Con ficha (ADR
+/// 0104, nivelación con la ventana) el tope sube a 120: dos columnas en 80
+/// son dos columnas estrechas.
+///
+/// Una función y no un cálculo dentro del pintor porque el ratón la
+/// necesita: medir por un lado y pintar por otro es cómo un click acaba
+/// en la fila de al lado.
+fn extensions_area(frame_area: Rect, hint: &str) -> Rect {
+    let footer_w = Line::raw(format!(" {hint} ")).width();
+    let min_width = u16::try_from(footer_w.saturating_add(4)).unwrap_or(u16::MAX);
+    let width = frame_area
+        .width
+        .saturating_sub(6)
+        .clamp(24, 120)
+        .max(min_width)
+        .min(frame_area.width);
+    centered(
+        frame_area,
+        width,
+        frame_area.height.saturating_sub(4).max(6),
+    )
+}
+
+/// `(lista, ficha)` dentro de `inner_area`, o `None` cuando no caben dos
+/// columnas y el gestor pinta la lista de siempre. La ficha ya viene sin
+/// la columna de su borde izquierdo.
+fn extensions_columns(
+    mgr: &crate::app::ExtensionManager,
+    inner_area: Rect,
+) -> Option<(Rect, Rect)> {
+    if inner_area.width < EXTENSIONS_WIDE_MIN || mgr.plugins.is_empty() {
+        return None;
+    }
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Min(1)])
+        .split(inner_area);
+    let ficha = Block::default().borders(Borders::LEFT).inner(cols[1]);
+    Some((cols[0], ficha))
+}
+
+/// Los botones de la ficha para `p`: `(etiqueta, comando)`, en el orden en
+/// que se pintan. Los mismos verbos y las mismas etiquetas que los botones
+/// de la ventana (`ext-*`), y cada uno dispara EL MISMO comando que su
+/// tecla: un botón que hiciera otra cosa que la tecla sería dos gestores.
+fn extension_buttons(p: &norte_proto::methods::PluginInfo) -> Vec<(String, &'static str)> {
+    let mut out = vec![
+        (
+            format!(
+                "[{}]",
+                t(if p.enabled {
+                    "ext-disable"
+                } else {
+                    "ext-enable"
+                })
+            ),
+            "dialog.toggle-enabled",
+        ),
+        (
+            format!(
+                "[{}]",
+                t(if p.approved {
+                    "ext-revoke"
+                } else {
+                    "ext-approve"
+                })
+            ),
+            "dialog.approve",
+        ),
+        (format!("[{}]", t("ext-settings")), "dialog.confirm"),
+        (format!("[{}]", t("ext-uninstall")), "dialog.remove"),
+    ];
+    if p.has_help {
+        out.push((format!("[{}]", t("ext-help")), "app.help"));
+    }
+    out
+}
+
+/// Qué hay bajo una celda pulsable del gestor de extensiones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionHit {
+    /// La fila del plugin `index` de la lista.
+    Row(usize),
+    /// Un botón de la ficha: el comando `dialog.*`/`app.help` que dispara,
+    /// el mismo que su tecla.
+    Button(&'static str),
+}
+
+/// Una celda pulsable del gestor de extensiones, en el frame pintado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtensionZone {
+    /// Fila de la pantalla.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+    /// Qué hay ahí.
+    pub hit: ExtensionHit,
+}
+
+/// Las zonas pulsables del gestor de extensiones en el frame de `area`, o
+/// nada si no está abierto —o si lo que se ve es la caja de ajustes
+/// estrecha, que no tiene ratón—.
+///
+/// Comparte con el pintor del gestor la caja, el reparto en columnas y las
+/// líneas de la lista, y por lo mismo que [`super::places_zones`]: el
+/// gestor de la TUI nació mudo al ratón —un clic en una fila o donde la
+/// ventana tiene sus botones no hacía nada— y la forma de que no vuelva a
+/// pasar es que lo pulsable salga de lo pintado.
+#[must_use]
+pub fn extension_zones(app: &crate::app::App, area: Rect) -> Vec<ExtensionZone> {
+    let Some(mgr) = &app.extensions else {
+        return Vec::new();
+    };
+    let Some(hint) = super::extensions_footer(app, mgr, area.width) else {
+        return Vec::new();
+    };
+    let caja = extensions_area(area, hint);
+    let inner_area = Block::default().borders(Borders::ALL).inner(caja);
+    let mut zonas = Vec::new();
+    let (lista_area, ficha, ancho, con_descripcion) = match extensions_columns(mgr, inner_area) {
+        Some((lista, ficha)) => (lista, Some(ficha), usize::from(lista.width), false),
+        None => (
+            inner_area,
+            None,
+            usize::from(inner_area.width.saturating_sub(2)),
+            true,
+        ),
+    };
+    let (_, filas) = extensions_list_lines(mgr, &app.theme, ancho, con_descripcion);
+    for (i, index) in filas.iter().enumerate() {
+        let Some(index) = index else { continue };
+        let Ok(offset) = u16::try_from(i) else { break };
+        if offset >= lista_area.height {
+            break;
+        }
+        zonas.push(ExtensionZone {
+            row: lista_area.y.saturating_add(offset),
+            x0: lista_area.x,
+            x1: lista_area
+                .x
+                .saturating_add(lista_area.width)
+                .saturating_sub(1),
+            hit: ExtensionHit::Row(*index),
+        });
+    }
+    if let Some(ficha) = ficha
+        && ficha.height > 0
+        && let Some(p) = mgr.plugins.get(mgr.cursor)
+    {
+        let mut x = usize::from(ficha.x);
+        let tope = usize::from(ficha.x) + usize::from(ficha.width);
+        for (etiqueta, cmd) in extension_buttons(p) {
+            let w = UnicodeWidthStr::width(etiqueta.as_str());
+            if x + w > tope {
+                break;
+            }
+            let (Ok(x0), Ok(x1)) = (u16::try_from(x), u16::try_from(x + w - 1)) else {
+                break;
+            };
+            zonas.push(ExtensionZone {
+                row: ficha.y,
+                x0,
+                x1,
+                hit: ExtensionHit::Button(cmd),
+            });
+            x += w + 1;
+        }
+    }
+    zonas
+}
+
 /// Las líneas de la LISTA del gestor: cabeceras de categoría, una fila por
 /// plugin y los directorios que no cargaron al final. `con_descripcion`
 /// mete la descripción bajo cada fila —la lista estrecha, sin ficha— o la
 /// deja para la ficha.
+///
+/// Devuelve también, por línea, el índice del plugin cuya fila es —`None`
+/// para cabeceras, descripciones y errores—: es lo que el ratón necesita
+/// para saber qué fila pulsó, y sale de la MISMA lista que se pinta.
 fn extensions_list_lines<'a>(
     mgr: &'a crate::app::ExtensionManager,
     theme: &TuiTheme,
     inner: usize,
     con_descripcion: bool,
-) -> Vec<Line<'a>> {
+) -> (Vec<Line<'a>>, Vec<Option<usize>>) {
     let mut lines: Vec<Line<'_>> = Vec::new();
+    let mut filas: Vec<Option<usize>> = Vec::new();
     if mgr.plugins.is_empty() && mgr.errors.is_empty() {
         lines.push(Line::raw(t("ext-empty")));
-        return lines;
+        filas.push(None);
+        return (lines, filas);
     }
     let mut last_cat: Option<&str> = None;
     for (i, p) in mgr.plugins.iter().enumerate() {
@@ -114,14 +313,18 @@ fn extensions_list_lines<'a>(
             last_cat = Some(p.category.as_str());
             let (cat, _) = display_name(p.category.as_bytes());
             lines.push(Line::styled(cat, theme.role(Role::Title)));
+            filas.push(None);
         }
         if con_descripcion {
             lines.push(plugin_line(p, i == mgr.cursor, theme));
+            filas.push(Some(i));
             if let Some(desc_line) = plugin_description_line(p, theme, inner) {
                 lines.push(desc_line);
+                filas.push(None);
             }
         } else {
             lines.push(plugin_row_compact(p, i == mgr.cursor, theme, inner));
+            filas.push(Some(i));
         }
     }
     for e in &mgr.errors {
@@ -137,8 +340,9 @@ fn extensions_list_lines<'a>(
             format!(" {HOSTILE_BADGE} {dir}: {reason}"),
             theme.role(Role::Error),
         ));
+        filas.push(None);
     }
-    lines
+    (lines, filas)
 }
 
 /// Una fila COMPACTA de la lista con ficha: `> nombre v1.0 ✓` o `⚠`. Las

@@ -15,7 +15,7 @@ pub mod profile_save;
 pub mod settings;
 pub mod side_nav;
 
-pub use extensions::on_extensions_key;
+pub use extensions::{on_extensions_click, on_extensions_key};
 pub use help::{HelpDispatch, on_help_key, run_plugin_command};
 pub use pickers::{
     apply_theme, on_columns_key, on_connections_picker_key, on_layout_picker_key,
