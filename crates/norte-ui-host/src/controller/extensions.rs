@@ -352,6 +352,12 @@ impl Estado {
             (Some("dialog.toggle-enabled"), _) => {
                 return self.gobernar_elegida(Cambio::Encendido, backend, buzon);
             }
+            // Desinstalar es `dialog.remove`, el verbo que en la lista de
+            // favoritos quita una entrada: aquí quita la extensión entera, y
+            // por eso pregunta antes.
+            (Some("dialog.remove"), _) => {
+                return self.gobernar_elegida(Cambio::Desinstalacion, backend, buzon);
+            }
             _ => return (self.aplicada(), Vec::new()),
         }
         let cambio = ViewChange::Extensions {
@@ -612,7 +618,213 @@ impl Estado {
                 let fuera = self.gobernar(&id, Gobierno::Encender(!encendida), backend, buzon);
                 (self.aplicada(), fuera)
             }
+            // Desinstalar SIEMPRE pregunta: borra ficheros y no tiene vuelta.
+            Cambio::Desinstalacion => self.preguntar_por_desinstalacion(&id),
         }
+    }
+
+    /// Lo que un BOTÓN hace sobre una fila (puente 61): señalarla y gobernar
+    /// la señalada, por el mismo camino que la tecla. Que sea el mismo camino
+    /// es el punto: las preguntas —conceder enumera, desinstalar avisa— se
+    /// hacen una vez, aquí, y ningún botón las esquiva.
+    pub(super) fn gobernar_por_raton(
+        &mut self,
+        row: u32,
+        id: &str,
+        cambio: Cambio,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Con un diálogo delante, no: el gestor es modal para el teclado
+        // (`input.rs` corta antes de llegar aquí) y tiene que serlo para el
+        // ratón, o un clic detrás de la pregunta de consentimiento revocaría
+        // sin preguntar, o apilaría una segunda pregunta sobre la primera.
+        if !self.dialogos.is_empty() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        // Antes de mover nada: una ventana de solo lectura no repinta un
+        // cursor movido por una acción que va a rehusar.
+        if self.efectos == crate::commands::Efectos::SoloLectura {
+            return Self::no_muta();
+        }
+        let Some(e) = self.extensiones.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let Some(movio) = Self::fila_de_extension(e, row, id) else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let (ack, mut fuera) = self.gobernar_elegida(cambio, backend, buzon);
+        if movio {
+            // El cursor se movió con el clic, y eso se pinta aunque lo que
+            // sigue sea una pregunta: la fila resaltada es la que el diálogo
+            // describe.
+            let cambio = ViewChange::Extensions {
+                extensions: self.vista_extensiones(),
+            };
+            fuera.push(self.parche(vec![cambio]));
+        }
+        (ack, fuera)
+    }
+
+    /// Señala la fila que un clic nombra, si sigue siendo la que el
+    /// renderer vio. `None` si ya no está o ya no es esa: el catálogo se
+    /// repide de fondo y una fila borrada por encima corre las de debajo.
+    /// `Some(movio)` dice si el cursor cambió de sitio.
+    fn fila_de_extension(
+        e: &mut crate::extensions::Extensiones,
+        row: u32,
+        id: &str,
+    ) -> Option<bool> {
+        let fila = e.filas().get(row as usize)?;
+        if fila.id != id {
+            return None;
+        }
+        let movio = e.elegida() != Some(id);
+        e.senalar(row as usize);
+        Some(movio)
+    }
+
+    /// Abre la pregunta de desinstalar, con el nombre y el id dentro.
+    ///
+    /// El cuerpo dice lo que se pierde: los ficheros de la extensión Y su
+    /// consentimiento —uno instalado después bajo el mismo id nace sin él—,
+    /// porque «¿desinstalar?» a secas se lee como «¿apagar del todo?», y no
+    /// es eso.
+    pub(super) fn preguntar_por_desinstalacion(
+        &mut self,
+        id: &str,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(nombre) = self
+            .extensiones
+            .as_ref()
+            .and_then(|e| e.concesion(id))
+            .map(|c| c.nombre)
+        else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let modal = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id: modal,
+            title_key: "modal-extension-uninstall-title".to_owned(),
+            destination: None,
+            subject: Some(crate::dto::DialogLine {
+                text: clamp_display(id.to_owned()),
+                hostile: false,
+            }),
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: vec![
+                crate::dto::DialogLine {
+                    text: nombre.0,
+                    hostile: nombre.1,
+                },
+                crate::dto::DialogLine {
+                    text: norte_i18n::t_in(self.lang, "modal-extension-uninstall-note"),
+                    hostile: false,
+                },
+            ],
+            overflow_note: String::new(),
+            overflow_hostile: false,
+            // `confirm`, como el borrado de ficheros: es la respuesta
+            // afirmativa de un diálogo normal, y la ETIQUETA es la que dice
+            // qué se confirma. `approve` queda para conceder capabilities.
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-uninstall".to_owned(),
+                    destructive: true,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: None,
+            input_hostile: false,
+            input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
+        };
+        self.dialogos.push(Dialogo {
+            id: modal,
+            vista: vista.clone(),
+            tecleado: Tecleado::Texto(String::new()),
+            reconocido: true,
+            al_confirmar: Some(Pendiente::DesinstalarExtension { id: id.to_owned() }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// La ayuda de la extensión de esa fila (puente 61): lo que `app.help`
+    /// hace sobre la fila elegida en el terminal, y por el mismo molde — el
+    /// gestor se cierra y la ayuda se abre con esa página como RAÍZ, con el
+    /// catálogo que el gestor ya tenía para que la lateral no espere al
+    /// daemon. Sin página se dice y no se abre nada: una ayuda que se abre en
+    /// el índice cuando se pidió la de UNA extensión es la ventana
+    /// contestando otra pregunta.
+    pub(super) fn ayuda_de_extension(
+        &mut self,
+        row: u32,
+        id: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Modal para el ratón como para el teclado: abrir la ayuda cerraría
+        // el gestor bajo una pregunta pendiente, y el sí de esa pregunta se
+        // encontraría sin catálogo con el que comparar lo que concede.
+        if !self.dialogos.is_empty() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        let Some(e) = self.extensiones.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        if Self::fila_de_extension(e, row, id).is_none() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        let Some(fila) = e.fila_elegida() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        if !fila.has_help {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-extensions-no-help".to_owned(),
+                },
+                self.decir("msg-extensions-no-help"),
+            );
+        }
+        let catalogo = e.catalogo().to_vec();
+        let mut ayuda = crate::help::Ayuda::abrir(
+            self.lang,
+            self.contexto_de_ayuda(),
+            &self.efectivo,
+            &self.efectivo_visor,
+            self.hechos(),
+        );
+        ayuda.set_plugins(&catalogo);
+        let pagina = norte_help::TopicId::new(id);
+        ayuda.estado.open_as_root(&pagina);
+        if ayuda.estado.current() != &pagina {
+            // El modelo compartido no abre lo que no tiene, y lo hace en
+            // silencio: un id que no llegó a ser nodo dejaría al lector en la
+            // página del contexto, que no es lo que pidió. Se dice, y el
+            // gestor se queda.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-extensions-no-help".to_owned(),
+                },
+                self.decir("msg-extensions-no-help"),
+            );
+        }
+        self.extensiones = None;
+        self.ayuda = Some(ayuda);
+        let mut fuera = vec![self.parche(vec![ViewChange::Extensions { extensions: None }])];
+        fuera.extend(self.parche_de_ayuda(backend, buzon));
+        (self.aplicada(), fuera)
     }
 
     /// Abre la pregunta de conceder capabilities, con las capabilities
@@ -774,6 +986,11 @@ impl Estado {
             let llamada = match que {
                 Gobierno::Aprobar(v, digest) => backend2.plugin_set_approval(id2, v, digest),
                 Gobierno::Encender(v) => backend2.plugin_set_enabled(id2, v),
+                // Si tenía consentimiento no cambia lo que sigue: el catálogo
+                // se repide igual, y la pregunta ya lo dijo antes del sí.
+                Gobierno::Desinstalar => {
+                    Box::pin(async move { backend2.plugin_uninstall(id2).await.map(|_| ()) })
+                }
             };
             let res = match tokio::time::timeout(PLAZO_PLUGINS, llamada).await {
                 Ok(r) => r,

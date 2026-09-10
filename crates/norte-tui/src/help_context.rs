@@ -67,7 +67,11 @@ pub const CONTEXTS: &[&str] = &[
 /// prose about another.
 fn modal_context(modal: &Modal) -> &'static str {
     match modal {
-        Modal::ConfirmDelete { .. } | Modal::ConfirmTransfer { .. } => "dialog.confirm",
+        // Desinstalar una extensión es un borrado que pregunta: misma
+        // página que el borrado.
+        Modal::ConfirmDelete { .. }
+        | Modal::ConfirmPluginUninstall { .. }
+        | Modal::ConfirmTransfer { .. } => "dialog.confirm",
         Modal::ConfirmQuit => "dialog.quit",
         Modal::Collision { .. } => "dialog.collision",
         Modal::ApproveAgentOp { .. } => "dialog.approval",
@@ -173,6 +177,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         // meter en su credencial.
         | Modal::AskSecret { .. } => false,
         Modal::ConfirmDelete { .. }
+        | Modal::ConfirmPluginUninstall { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit
         | Modal::Collision { .. }
@@ -278,6 +283,11 @@ mod tests {
                 name_hostile: false,
                 caps: vec![("leer ficheros".to_owned(), false)],
                 digest: None,
+            },
+            Modal::ConfirmPluginUninstall {
+                id: "org.acme.demo".to_owned(),
+                name: "Demo".to_owned(),
+                name_hostile: false,
             },
             Modal::ConfirmTransfer {
                 kind: TransferKind::Copy,

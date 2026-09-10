@@ -752,6 +752,26 @@ ext-state-on = approved · on
 ext-state-off = approved · off
 ext-config-title = Its settings
 ext-commands-title = Commands
+# Puente 61: the window's manager gains a detail pane with buttons. The
+# four verbs are the keyboard's (`dialog.add`, `dialog.toggle-enabled`,
+# `dialog.remove`, `app.help`) with their state resolved into a label, so a
+# button never says "toggle". The counters are composed by the renderer as
+# `N installed · M on`: two nouns, no placeholders, because the window's
+# catalogue has no arguments to fill.
+ext-approve = Approve
+ext-revoke = Revoke
+ext-enable = Enable
+ext-disable = Disable
+ext-uninstall = Uninstall
+ext-help = Help
+ext-close = Close
+ext-installed = installed
+ext-enabled = on
+ext-actions = actions on this extension
+ext-detail-hint = press Enter, or click the row, to see its settings
+ext-errors-title = Did not load
+ext-counts-commands = commands
+ext-counts-columns = columns
 plugin-output-title = Extension output
 plugin-output-empty = (it printed nothing)
 plugin-output-truncated = the output was cut: it was longer than fits
@@ -2051,6 +2071,13 @@ host-extension-changed = the capabilities it declares changed since the question
 host-extension-too-many-caps = it declares more capabilities than fit on one screen; not granted from here
 host-extension-updated = done; the catalogue is being fetched again to confirm it
 modal-extension-approve-title = grant these capabilities?
+# Uninstalling from the manager (ADR 0104). The note says what is lost —
+# the files AND the approval — because "uninstall?" alone reads as "switch
+# it off for good?", and it is not that: a plugin installed later under the
+# same id starts unapproved.
+modal-extension-uninstall-title = uninstall this extension?
+modal-extension-uninstall-note = its files are deleted and its approval is withdrawn; this cannot be undone
+dialog-uninstall = Uninstall
 host-settings-closed = settings were closed; the value was not written
 msg-nav-at-root = already at the root
 msg-nothing-selected = nothing selected

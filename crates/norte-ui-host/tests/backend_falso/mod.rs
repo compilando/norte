@@ -1128,6 +1128,24 @@ impl HostBackend for Falso {
         Box::pin(async move { fallo.map_or(Ok(()), Err) })
     }
 
+    fn plugin_uninstall(&self, id: String) -> BoxFuture<'static, Result<bool, Error>> {
+        self.gobierno
+            .lock()
+            .expect("gobierno")
+            .push(format!("uninstall:{id}"));
+        self.latido();
+        let fallo = self.error_al_gobernar.lock().expect("gobierno").clone();
+        let mut tenia = false;
+        if fallo.is_none() {
+            // Y desaparece del catálogo: el host lo REPIDE tras un OK, y una
+            // fila que siguiera ahí sería la pantalla enseñando lo borrado.
+            let mut plugins = self.plugins.lock().expect("plugins");
+            tenia = plugins.iter().any(|p| p.id == id && p.approved);
+            plugins.retain(|p| p.id != id);
+        }
+        Box::pin(async move { fallo.map_or(Ok(tenia), Err) })
+    }
+
     fn plugin_set_config(
         &self,
         id: String,

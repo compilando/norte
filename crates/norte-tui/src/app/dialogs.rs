@@ -16,6 +16,13 @@ pub const ALLOW_CONFIRM: &[&str] = &[
     "dialog.cancel",
 ];
 
+/// ALLOWLIST de `Modal::ConfirmPluginUninstall` (ADR 0104): como
+/// [`ALLOW_CONFIRM`] pero SIN `dialog.approve`. Es la tecla que el lector
+/// acaba de pulsar en la lista para conceder capabilities, y sobre este
+/// modal borra ficheros; en el host solo `confirm` es afirmativo, y el pie
+/// del modal no debe ofrecer una tecla que aquí no significa nada.
+pub const ALLOW_UNINSTALL: &[&str] = &["dialog.confirm", "dialog.deny", "dialog.cancel"];
+
 /// ALLOWLIST de `Modal::Collision`: overwrite/skip/rename/newer eligen
 /// política y reintentan; `cancel` cierra. Excluye A PROPÓSITO
 /// `dialog.confirm`/`dialog.approve` — no hay respuesta inocua que Enter
@@ -107,6 +114,9 @@ pub const ALLOW_EXTENSIONS: &[&str] = &[
     "dialog.down",
     "dialog.approve",
     "dialog.toggle-enabled",
+    // Desinstalar (ADR 0104): el verbo que en la lista de favoritos quita
+    // una entrada quita aquí la extensión entera, y por eso pregunta.
+    "dialog.remove",
     "dialog.confirm",
     "dialog.cancel",
 ];
@@ -409,6 +419,18 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
                 DialogOutcome::Confirmed
             } else {
                 DialogOutcome::Cancelled // dialog.deny | dialog.cancel
+            })
+        }
+        // Desinstalar una extensión es un borrado que pregunta, con la
+        // semántica de borrar ficheros (Enter confirma) — salvo que aquí
+        // `dialog.approve` no está en la lista: ver [`ALLOW_UNINSTALL`].
+        Modal::ConfirmPluginUninstall { .. } => {
+            if !ALLOW_UNINSTALL.contains(&cmd) {
+                return None;
+            }
+            Some(match cmd {
+                "dialog.confirm" => DialogOutcome::Confirmed,
+                _ => DialogOutcome::Cancelled, // dialog.deny | dialog.cancel
             })
         }
         // M4-IA-2: `SemanticHits` es igualmente una superficie de decisión

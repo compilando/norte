@@ -109,6 +109,19 @@ pub enum Modal {
         /// entre la pregunta y la respuesta.
         digest: Option<String>,
     },
+    /// Confirmación de DESINSTALAR una extensión (ADR 0104): borra sus
+    /// ficheros y retira su consentimiento, y no tiene vuelta —no hay
+    /// `plugin.install` por el wire—. Pregunta por eso, y el cuerpo dice las
+    /// dos cosas que se pierden: «¿desinstalar?» a secas se lee como
+    /// «¿apagar del todo?».
+    ConfirmPluginUninstall {
+        /// El id de la extensión, tal como el core la nombra.
+        id: String,
+        /// Su nombre, ya saneado para pintar.
+        name: String,
+        /// El nombre difiere del real y hay que marcarlo.
+        name_hostile: bool,
+    },
     /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
     /// papelera.
     ConfirmDelete {

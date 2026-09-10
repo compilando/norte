@@ -194,6 +194,9 @@ impl Estado {
                     Pendiente::Borrar { .. }
                     | Pendiente::Transferir { .. }
                     | Pendiente::Soltar { .. }
+                    // Desinstalar es un borrado que pregunta: misma página
+                    // que el borrado.
+                    | Pendiente::DesinstalarExtension { .. }
                     | Pendiente::Salir,
                 ) => "dialog.confirm",
                 Some(

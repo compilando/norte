@@ -436,6 +436,34 @@ pub enum UiAction {
         /// Fila, en el orden en que viajaron.
         row: u32,
     },
+    /// Gobierna la extensión de esa fila desde un BOTÓN (puente 61): la
+    /// señala y hace exactamente lo que el verbo del teclado haría sobre ella
+    /// —`dialog.add`, `dialog.toggle-enabled`, `dialog.remove`—, con las
+    /// mismas preguntas. Un botón no es un atajo para saltarse el diálogo de
+    /// consentimiento o el de borrado: es otra forma de llegar a él.
+    ///
+    /// Lleva la fila Y su id: el catálogo se repide tras cada gobierno y
+    /// aterriza de fondo, así que una fila borrada por ENCIMA de la pulsada
+    /// corre todas las de debajo, y un índice solo nombraría a la vecina.
+    /// Si el id de esa fila ya no es este, se rehúsa como obsoleta.
+    ExtensionGovern {
+        /// Fila, en el orden en que viajaron.
+        row: u32,
+        /// El id que el renderer vio en esa fila.
+        id: String,
+        /// Qué se cambia.
+        change: ExtensionChange,
+    },
+    /// Abre la ayuda en la página de la extensión de esa fila (puente 61), lo
+    /// que `app.help` hace sobre la fila elegida en el terminal. Cierra el
+    /// gestor, como allí: la ayuda lo sustituye. Misma pareja fila+id que
+    /// [`Self::ExtensionGovern`], por la misma razón.
+    ExtensionHelp {
+        /// Fila, en el orden en que viajaron.
+        row: u32,
+        /// El id que el renderer vio en esa fila.
+        id: String,
+    },
     /// Pone el cursor de un selector en esa fila (un click).
     PickerSelectRow {
         /// Fila, en el orden en que viajaron.
@@ -577,4 +605,24 @@ pub enum UiAction {
     /// si no, contesta con [`crate::dto::NativeEffect::CloseWindow`]. Quien
     /// hospeda no decide esto: es configuración.
     RequestQuit,
+}
+
+/// Qué cambia [`UiAction::ExtensionGovern`] de una extensión (puente 61).
+///
+/// Los tres verbos del gestor, con nombre propio y no con el del teclado:
+/// un renderer pinta botones, y «añadir» sobre una extensión ya aprobada
+/// significa revocar — lo resuelve el host mirando cómo está, igual que con
+/// la tecla.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionChange {
+    /// Conceder sus capabilities si no las tiene; retirárselas si las tiene.
+    /// Conceder PREGUNTA, enumerándolas.
+    Approval,
+    /// Encenderla si está apagada; apagarla si está encendida. Encender una
+    /// sin aprobar se rehúsa y se dice.
+    Enabled,
+    /// Desinstalarla: borrar sus ficheros y retirar su consentimiento.
+    /// PREGUNTA, porque es irreversible.
+    Uninstall,
 }

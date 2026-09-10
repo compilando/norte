@@ -180,7 +180,8 @@ pub(crate) fn is_warning_modal(modal: &crate::app::Modal) -> bool {
         Modal::ConfirmDelete {
             permanent: true,
             ..
-        } | Modal::ApproveAgentOp { .. }
+        } | Modal::ConfirmPluginUninstall { .. }
+            | Modal::ApproveAgentOp { .. }
             | Modal::TrustHostKey { .. }
             | Modal::TrustLuaInit { .. }
     )
@@ -307,6 +308,24 @@ fn modal_title_text(
                 vec![t("modal-plugin-approval-note"), hints.approval.clone()],
             ]
             .concat()
+            .join("\n"),
+        ),
+        // Desinstalar (ADR 0104): el nombre aparte de la frase, con su
+        // bandera, y la nota que dice las DOS cosas que se pierden.
+        // Y el id, que es lo ÚNICO que el core valida: dos extensiones pueden
+        // llamarse igual, y el nombre lo escribe el manifiesto.
+        Modal::ConfirmPluginUninstall {
+            id,
+            name,
+            name_hostile,
+        } => (
+            t("modal-extension-uninstall-title"),
+            [
+                format!("{name}{}", if *name_hostile { HOSTILE_BADGE } else { "" }),
+                format!("  {id}"),
+                t("modal-extension-uninstall-note"),
+                hints.uninstall.clone(),
+            ]
             .join("\n"),
         ),
         Modal::ConfirmDelete { items, permanent } => (

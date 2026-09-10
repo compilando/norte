@@ -234,7 +234,13 @@ use serde::{Deserialize, Serialize};
 ///   editor es el compartido con el terminal (`norte_frontend::settings`), y
 ///   lo escrito se relee y se aplica por el mismo camino que un cambio de
 ///   perfil.
-pub const BRIDGE_VERSION: u32 = 60;
+/// - **61**: el gestor de extensiones (F12) se GOBIERNA con el ratón.
+///   Llegan `extension_govern` —aprobar o revocar, encender o apagar, y
+///   desinstalar (ADR 0104), la fila señalada y el mismo camino que el
+///   verbo del teclado, preguntas incluidas— y `extension_help`, la página
+///   de ayuda de una extensión. Ningún DTO cambia: lo que la ventana pinta
+///   con botones ya viajaba.
+pub const BRIDGE_VERSION: u32 = 61;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

@@ -52,10 +52,14 @@ eso es lo que concede aprobarlo. Los schemes que norte sirve por sí mismo
 —`file`, `sftp`, `ftp`, `s3`— no los puede reclamar una extensión, así que
 aprobar una jamás la pone delante de un backend propio.
 
-Las extensiones entran y salen desde la línea de comandos: `norte plugin
-install <dir>` trae una sin aprobar, `norte plugin list` enseña los mismos dos
-hechos que esta pantalla, y `norte plugin uninstall <id>` la quita **con su
-aprobación** —un plugin instalado después con el mismo id empieza de cero.
+Las extensiones entran desde la línea de comandos: `norte plugin install
+<dir>` trae una sin aprobar, y `norte plugin list` enseña los mismos dos hechos
+que esta pantalla. Salen por cualquiera de los dos lados. La tecla de quitar
+(y, en la ventana, el botón) de esta pantalla pregunta antes, porque
+desinstalar borra los ficheros de la extensión **y su aprobación** —un plugin
+instalado después con el mismo id empieza de cero. `norte plugin uninstall
+<id>` hace lo mismo sin preguntar, y un daemon que ya está en marcha no se
+entera hasta que reinicia.
 
 > 💡 `norte doctor` informa de qué le pasa a una extensión instalada: un manifiesto que no parsea, un digest que ya no cuadra, una página de ayuda por encima del tope de tamaño.
 
