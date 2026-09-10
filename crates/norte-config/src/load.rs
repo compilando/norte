@@ -1893,7 +1893,7 @@ fn parse_spec_entries(
         };
         let format = match entry.format.as_deref() {
             None => None,
-            Some(f @ ("exact" | "iec" | "si" | "relative" | "iso" | "octal" | "rwx")) => {
+            Some(f @ ("exact" | "iec" | "si" | "relative" | "iso" | "smart" | "octal" | "rwx")) => {
                 Some(f.to_owned())
             }
             Some(_) => {

@@ -150,7 +150,8 @@ async fn main() -> Result<()> {
     // los listados iniciales (#117): ellos también piden los attrs
     // configurados — sin esto, las celdas attr nacen en blanco hasta el
     // primer cd/refresh.
-    let columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+    let columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
+        .with_date_format(cfg.common.ui_chrome.date_format());
     let start_attrs = columns.attr_ids_for(start.scheme());
     let left = initial_pane(&backend, &start, &start_attrs).await?;
     let right = initial_pane(&backend, &start, &start_attrs).await?;

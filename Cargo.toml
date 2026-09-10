@@ -227,6 +227,13 @@ keyring = { version = "3", default-features = false }
 # se mueva age o russh. Volver a mirarlo cuando alguno de los dos publique.
 age = "0.11"
 zeroize = "1"
+# Hora LOCAL para la columna de fecha (`TimeFormat::Smart`, spec 2026-09-10).
+# `jiff` lee /etc/localtime y `TZ` sin el fallo de `time::local_offset` en
+# multihilo, no tiene `unsafe` de plataforma, está mantenida (BurntSushi) y
+# YA estaba en el grafo como transitiva: no entra nada nuevo a compilar.
+# Alternativas: `chrono` (también en el grafo, pero su `Local` tira de
+# `iana-time-zone` y de un tzdb propio), o parsear TZif a mano (no).
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-bundle-platform"] }
 # Solo dev (norte-connect): generación de claves ed25519 efímeras en tests
 # (host keys / client keys del servidor SSH in-process). Misma major que la
 # que russh usa internamente.

@@ -754,7 +754,8 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         )
     });
 
-    let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+    let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
+        .with_date_format(cfg.common.ui_chrome.date_format());
     // Un id de columna que no parsea no desaparece en silencio: `doctor` lo
     // reporta, y aquí al menos queda en el log de arranque.
     for malo in &columnas.invalid {

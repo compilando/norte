@@ -39,6 +39,9 @@ toml_edit.workspace = true
 # compartida en vez de duplicado. In-workspace, sin coste de build nuevo
 # fuera de compilar un crate que ya se compilaba de todas formas.
 norte-i18n.workspace = true
+# La hora LOCAL de `TimeFormat::Smart` (spec 2026-09-10): ver la
+# justificación en el `Cargo.toml` del workspace.
+jiff.workspace = true
 # H3b: the help corpus and its model. The dependency runs frontend → help and
 # never the other way (`norte_help::resolve`'s rustdoc says why): a
 # `norte-help` that knew about a frontend could only ever serve one of the

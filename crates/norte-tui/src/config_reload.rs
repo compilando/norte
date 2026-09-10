@@ -113,7 +113,8 @@ pub async fn reload_config(
                 // dispara este mismo camino y es idempotente con lo ya
                 // aplicado en memoria.
                 app.columns =
-                    norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+                    norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
+                        .with_date_format(cfg.common.ui_chrome.date_format());
                 for i in 0..app.panes.len() {
                     app.apply_scheme_sort(i);
                 }

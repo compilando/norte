@@ -456,6 +456,13 @@ pub enum TimeFormat {
     Relative,
     /// RFC 3339 UTC al minuto (`2026-07-31T09:41Z`) — libre de locale.
     Iso,
+    /// Hora LOCAL con la precisión que la distancia pide (spec 2026-09-10):
+    /// `14:02` si es de hoy, `09-10 14:02` si es de este año, `2025-09-10`
+    /// si es anterior. Numérico a propósito: cabe en 11 celdas en cualquier
+    /// idioma y se compara a ojo. Necesita el `now` del caller Y la zona
+    /// ([`format_mtime_tz`] para fijarla; [`format_mtime_in`] usa la del
+    /// sistema).
+    Smart,
 }
 
 /// Formato de un word de modo POSIX (#117).
@@ -634,8 +641,23 @@ pub fn format_mtime_in(
     now_ms: i64,
     lang: norte_i18n::Lang,
 ) -> String {
+    format_mtime_tz(mtime_ms, fmt, now_ms, lang, &jiff::tz::TimeZone::system())
+}
+
+/// [`format_mtime_in`] con la ZONA dada — la que [`TimeFormat::Smart`]
+/// necesita para saber qué es «hoy». Los frontends pasan la del sistema;
+/// los tests, una fija, para que una foto no dependa de la máquina.
+#[must_use]
+pub fn format_mtime_tz(
+    mtime_ms: i64,
+    fmt: TimeFormat,
+    now_ms: i64,
+    lang: norte_i18n::Lang,
+    tz: &jiff::tz::TimeZone,
+) -> String {
     match fmt {
         TimeFormat::Iso => iso_utc_minutes(mtime_ms),
+        TimeFormat::Smart => smart_local(mtime_ms, now_ms, tz),
         TimeFormat::Relative => {
             let delta_s = (now_ms.saturating_sub(mtime_ms)) / 1000;
             if delta_s < 60 {
@@ -652,6 +674,34 @@ pub fn format_mtime_in(
             };
             norte_i18n::ta_in(lang, key, &[("n", &n.to_string())])
         }
+    }
+}
+
+/// [`TimeFormat::Smart`]: hora local con la precisión que la distancia pide.
+/// Un instante fuera del rango de `jiff` (±9999 años: mtime basura de un
+/// provider hostil) cae al ISO UTC, que sabe pintar cualquier `i64` —
+/// jamás un panic ni una celda vacía.
+fn smart_local(mtime_ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
+    let (Ok(ts), Ok(now)) = (
+        jiff::Timestamp::from_millisecond(mtime_ms),
+        jiff::Timestamp::from_millisecond(now_ms),
+    ) else {
+        return iso_utc_minutes(mtime_ms);
+    };
+    let z = ts.to_zoned(tz.clone());
+    let n = now.to_zoned(tz.clone());
+    if z.date() == n.date() {
+        format!("{:02}:{:02}", z.hour(), z.minute())
+    } else if z.year() == n.year() {
+        format!(
+            "{:02}-{:02} {:02}:{:02}",
+            z.month(),
+            z.day(),
+            z.hour(),
+            z.minute()
+        )
+    } else {
+        format!("{:04}-{:02}-{:02}", z.year(), z.month(), z.day())
     }
 }
 
@@ -1051,6 +1101,28 @@ mod model_tests {
         assert_eq!(format_mtime(now, TimeFormat::Iso, now), "2024-07-03T09:46Z");
     }
 
+    /// `Smart` (spec 2026-09-10): tres precisiones según la distancia, en la
+    /// zona DADA — aquí UTC+2, para que «hoy» se decida en local y no en UTC
+    /// (a las 23:30 UTC del 2 de julio son las 01:30 del 3 en Madrid).
+    #[test]
+    fn smart_es_hora_local_con_tres_precisiones() {
+        let tz = jiff::tz::TimeZone::fixed(jiff::tz::offset(2));
+        let en = norte_i18n::Lang::En;
+        let now = 1_720_000_000_000; // 2024-07-03T09:46:40Z → 11:46 local
+        let f = |ms| format_mtime_tz(ms, TimeFormat::Smart, now, en, &tz);
+        assert_eq!(f(now), "11:46", "hoy: solo la hora, local");
+        // 23:30Z del 2 de julio = 01:30 del 3 en local: SIGUE siendo hoy.
+        assert_eq!(f(1_719_963_000_000), "01:30");
+        // 21:30Z del 2 de julio = 23:30 del 2: ayer → mes-día y hora.
+        assert_eq!(f(1_719_955_800_000), "07-02 23:30");
+        // Otro año: solo la fecha.
+        assert_eq!(f(951_782_400_000), "2000-02-29");
+        assert!(f(now).len() <= 11 && f(1_719_955_800_000).len() <= 11);
+        // Fuera del rango de jiff: cae al ISO UTC, que sabe pintar todo.
+        assert!(f(i64::MIN).ends_with('Z'));
+        assert!(f(i64::MAX).ends_with('Z'));
+    }
+
     /// #117 encoding-audit L3: tiempos EXTREMOS (mtime basura de un
     /// provider hostil) — jamás un panic, siempre una cadena con forma.
     #[test]
@@ -1092,7 +1164,8 @@ pub fn default_layout_items() -> Vec<(Builtin, LayoutItem)> {
         // celda a la izquierda): el layout presupuesta el ancho TOTAL de la
         // fila — sin esto, la última columna desbordaba el pane y el
         // terminal la recortaba. 11 = «1023.9 GiB» (10) + separador;
-        // 10 = «hace 364d» (9) + separador.
+        // 12 = «09-10 14:02» (11, el `Smart` de este año) + separador —
+        // «hace 364d» (9) cabe de sobra.
         (
             Builtin::Size,
             LayoutItem {
@@ -1104,7 +1177,7 @@ pub fn default_layout_items() -> Vec<(Builtin, LayoutItem)> {
         (
             Builtin::Mtime,
             LayoutItem {
-                policy: WidthPolicy::Fixed(10),
+                policy: WidthPolicy::Fixed(12),
                 measured: 0,
                 is_name: false,
             },
@@ -1202,8 +1275,21 @@ const SIZE_FORMATS: &[(&str, SizeFormat)] = &[
 ];
 
 /// Tabla str ↔ enum de `Mtime` — mismas reglas que [`SIZE_FORMATS`].
-const TIME_FORMATS: &[(&str, TimeFormat)] =
-    &[("relative", TimeFormat::Relative), ("iso", TimeFormat::Iso)];
+const TIME_FORMATS: &[(&str, TimeFormat)] = &[
+    ("relative", TimeFormat::Relative),
+    ("iso", TimeFormat::Iso),
+    ("smart", TimeFormat::Smart),
+];
+
+/// [`TimeFormat`] de un `[ui] date_format` (spec 2026-09-10).
+#[must_use]
+pub fn time_format_of(f: norte_config::DateFormat) -> TimeFormat {
+    match f {
+        norte_config::DateFormat::Smart => TimeFormat::Smart,
+        norte_config::DateFormat::Relative => TimeFormat::Relative,
+        norte_config::DateFormat::Iso => TimeFormat::Iso,
+    }
+}
 
 /// Tabla str ↔ enum de columnas con hint `Mode` — mismas reglas que
 /// [`SIZE_FORMATS`]. Las cadenas entran al vocabulario global de config
@@ -1320,6 +1406,12 @@ pub fn format_name(b: Builtin, style: &ColumnStyle) -> Option<&'static str> {
 pub struct ColumnsSettings {
     default_set: Option<Vec<ColumnId>>,
     default_sort: crate::sort::SortSpec,
+    /// `[ui] date_format` (spec 2026-09-10): el formato de las columnas de
+    /// tiempo cuando ningún spec lo fija. `None` = el de siempre (`relative`),
+    /// que es lo que un `ColumnsSettings` de test o de `doctor` quiere: la
+    /// hora local de `smart` depende de la máquina, y una foto no puede.
+    /// Los frontends la reciben por [`Self::with_date_format`].
+    default_time: Option<TimeFormat>,
     schemes:
         std::collections::BTreeMap<String, (Option<Vec<ColumnId>>, Option<crate::sort::SortSpec>)>,
     /// La lista `default` CRUDA tal cual vino de config (#108 7a): el picker
@@ -1470,6 +1562,9 @@ impl ColumnsSettings {
     ) -> ColumnStyle {
         let key = id.to_string();
         let mut style = ColumnStyle::default_for_id(id, catalog);
+        if let Some(t) = self.default_time {
+            style.time_format = t;
+        }
         let global = self.specs_global.get(&key);
         let scoped = self.specs_schemes.get(scheme).and_then(|m| m.get(&key));
         for spec in [global, scoped].into_iter().flatten() {
@@ -1493,6 +1588,14 @@ impl ColumnsSettings {
             }
         }
         style
+    }
+
+    /// Fija el formato de tiempo por defecto desde `[ui] date_format`
+    /// (spec 2026-09-10). Un spec de columna sigue ganando.
+    #[must_use]
+    pub fn with_date_format(mut self, f: norte_config::DateFormat) -> Self {
+        self.default_time = Some(time_format_of(f));
+        self
     }
 
     /// [`Self::style_for_id`] para un builtin — la firma histórica (7b).
@@ -2324,7 +2427,9 @@ mod style_tests {
     /// spec imposible de escribir.
     #[test]
     fn la_tabla_de_formatos_es_subconjunto_del_vocabulario_de_config() {
-        let config_vocab = ["exact", "iec", "si", "relative", "iso", "octal", "rwx"];
+        let config_vocab = [
+            "exact", "iec", "si", "relative", "iso", "smart", "octal", "rwx",
+        ];
         for (s, _) in SIZE_FORMATS {
             assert!(config_vocab.contains(s), "{s} no está en config");
         }
@@ -2343,7 +2448,7 @@ mod style_tests {
             };
             assert!(format_name(Builtin::Size, &style).is_some(), "{f:?}");
         }
-        for f in [TimeFormat::Relative, TimeFormat::Iso] {
+        for f in [TimeFormat::Relative, TimeFormat::Iso, TimeFormat::Smart] {
             let style = ColumnStyle {
                 time_format: f,
                 ..ColumnStyle::default_for(Builtin::Mtime)

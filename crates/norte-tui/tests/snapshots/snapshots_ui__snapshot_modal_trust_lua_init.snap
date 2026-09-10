@@ -5,7 +5,7 @@ expression: render(&app)
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "                                                                                "
 "┌/casa─────────────────────────────────┐┌/otro─────────────────────────────────┐"
-"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
+"│Nombre▲             Tamaño       Fecha││Nombre▲             Tamaño       Fecha│"
 "│ ┌¿Ejecutar el init.lua del proyecto?───────────────────────────────────────┐ │"
 "│ │repo/.norte/init.lua (sha256 ab12cd34ef56ab78ab12cd34ef56ab78) se         │ │"
 "│ │ejecutará CON TUS PERMISOS. El script de un repo clonado puede hacer todo │ │"

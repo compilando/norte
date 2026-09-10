@@ -5,10 +5,10 @@ expression: "lines.join(\"\\n\")"
  Archivo Operar Marcar Ir Paneles       
  S  V  P  D  Á  R                       
 ┌/casa─────────────────────────────────┐
-│Nombre▲               Tamaño     Fecha│
-│   f00                   1 B          │
-│   f01                   1 B          │
-│   f02                   1 B          │
-│   f03                   1 B          │
+│Nombre▲             Tamaño       Fecha│
+│   f00                 1 B            │
+│   f01                 1 B            │
+│   f02                 1 B            │
+│   f03                 1 B            │
 └──────────────────────────────────────┘
  /casa  1/60

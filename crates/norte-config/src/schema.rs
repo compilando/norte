@@ -458,8 +458,8 @@ pub struct ColumnSpecSection {
     /// `"left"` | `"right"` — closed, validated at load.
     #[serde(default)]
     pub align: Option<String>,
-    /// `"exact"` | `"iec"` | `"si"` | `"relative"` | `"iso"` | `"octal"` |
-    /// `"rwx"` — closed, validated at load; whether it FITS the column is
+    /// `"exact"` | `"iec"` | `"si"` | `"relative"` | `"iso"` | `"smart"` |
+    /// `"octal"` | `"rwx"` — closed, validated at load; whether it FITS the column is
     /// the frontend's call (doctor reports mismatches).
     #[serde(default)]
     pub format: Option<String>,

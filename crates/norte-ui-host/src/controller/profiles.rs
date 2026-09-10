@@ -147,7 +147,8 @@ impl Estado {
             self.resolver_dialogo = Resolver::new(dialogo);
         }
         // Columnas y favoritos.
-        self.columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+        self.columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
+            .with_date_format(cfg.common.ui_chrome.date_format());
         self.config = cfg;
         self.sembrar_sitios();
         // Y la DISPOSICIÓN que la configuración nombre, si nombra otra: es lo
