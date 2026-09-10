@@ -110,3 +110,4 @@ edits.
 | [0102](0102-a-side-panel-follows-and-tab-is-the-listing-ring.md) | A side panel FOLLOWS the active listing, and `Tab` is the listing ring | accepted |
 | [0103](0103-a-modal-line-declares-its-role-and-the-default-scheme-goes-unsaid.md) | A modal line declares its ROLE, and the default scheme goes unsaid | accepted |
 | [0104](0104-an-extension-is-uninstalled-from-the-manager-and-the-manager-has-buttons.md) | An extension is uninstalled from the manager, and the manager has buttons | accepted |
+| [0105](0105-an-icon-is-a-column-left-of-the-name-and-a-decorator-says-what-it-is.md) | An icon is a column left of the name, and a decorator is told what an entry is | accepted |

@@ -24,7 +24,7 @@ Seven kinds, one world each, chosen by `category` in the manifest:
 | --- | --- | --- | --- |
 | `previewer` | `norte-plugin` | `previewer` (and `command`) | a rendering of a file in the viewer, plain or styled |
 | `command` | `norte-plugin` | `command` (and `previewer`) | a verb in the palette, run with an argument |
-| `decorator` | `norte-decorator` | `decorator` | a badge and a theme role on each row of a listing |
+| `decorator` | `norte-decorator` | `decorator` | an icon left of the name, or a badge and a theme role right of it, on each row of a listing (ADR 0105) |
 | `columns` | `norte-columns` | `columns` | a value per entry for a column the user adds |
 | `provider` | `norte-provider` | `provider` | a backend behind a URL scheme of your own (`webdav://…`) |
 | `renamer` | `norte-renamer` | `renamer` | a proposed new name per marked entry, reviewed before anything is renamed (ADR 0095) |
@@ -68,8 +68,12 @@ previewer = [{ mimetypes = ["text/*", "application/json"] }]
 id = "hello"                   # ≤ 64 chars
 title = "Say hello"            # ≤ 120 chars; at most 32 commands
 
-# decorator: no fields; the host asks you about every visible page
+# decorator: the host asks you about every visible page, name and kind
+# (file, dir, symlink, other). `slot` says where your glyph goes: `icon`
+# is the fixed-width column LEFT of the name, `badge` (the default) the
+# git-status place to its right. One row can carry both, from two plugins.
 [[contributions.decorator]]
+slot = "icon"
 
 # columns: each column the user can add, by id, with its header
 [[contributions.columns]]

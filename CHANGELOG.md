@@ -81,6 +81,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **File icons are a column left of the name, folders included** (ADR 0105,
+  protocol 0.72.0, bridge 62, WIT `norte:plugin` 0.10.0). A decorator's
+  manifest now says which slot it fills — `icon`, a fixed-width column left
+  of the name, or `badge`, the git-status place right of it — and a row can
+  carry one of each from two plugins, where before the first plugin silenced
+  the second. The column opens for the whole listing the moment one row has
+  an icon, so names stay aligned, and the terminal's header moves with it.
+  `decorate` receives each entry's kind along with its name, so
+  `file-icons` gives folders the folder icon whatever they are called, links
+  the link icon, and files what their name says — spreadsheets and slides
+  included. The package bump means every installed plugin is rebuilt
+  (`just plugins force`) and re-approved in the manager; a guest built
+  against 0.9.0 is listed as such with both versions.
 - **An extension is uninstalled from the manager, on both frontends** (ADR
   0104, protocol 0.71.0). `plugin.uninstall` does what `norte plugin
   uninstall` did on disk — delete the directory, leave the state switched off
