@@ -32,7 +32,6 @@
          el plugin, que decide cuándo contesta su comando—. -->
     <div id="plugin-output" data-open="false"></div>
     <div id="program-output" data-open="false"></div>
-    <div id="dialogs"></div>
     <!-- La ayuda va la ÚLTIMA a propósito: se abre encima de lo que
          hubiera —también encima del visor y de un diálogo— y el orden del
          documento es lo que decide quién tapa a quién sin inventarse un
@@ -64,6 +63,15 @@
          ayuda y los diálogos van por encima, y esos SÍ se quedan las
          teclas. -->
     <div id="ai-rename" data-open="false"></div>
+    <!-- Los diálogos van DESPUÉS de todos los selectores y paneles, y antes
+         solo de la ayuda: un diálogo se queda el teclado por encima de lo que
+         hubiera, así que tiene que pintarse encima. Declarados antes que
+         `#settings`, el prompt que pide el valor de un ajuste (puente 60)
+         abría DEBAJO de los ajustes: se veía el velo oscurecerse y ningún
+         campo — un diálogo con el teclado que nadie podía ver. La salida de
+         un plugin sigue antes que ellos, que es lo que aquel comentario pide.
+         -->
+    <div id="dialogs"></div>
     <div id="help" data-open="false"></div>
     <div id="fatal" role="alert"></div>
     <script type="module" src="./src/main.ts"></script>
