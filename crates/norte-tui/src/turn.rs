@@ -548,6 +548,7 @@ pub async fn after_frame(
             menus: ui::menu_zones(app, painted),
             panels: ui::panel_zones(app, painted),
             keys: ui::key_zones(app, painted),
+            modal: ui::modal_zones(app, painted),
             places: ui::places_zones(app, painted),
             tree: ui::tree_zones(app, painted),
             extensions: ui::extension_zones(app, painted),

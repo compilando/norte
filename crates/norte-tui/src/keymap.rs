@@ -67,6 +67,42 @@ pub fn chord_from_crossterm(mods: CtMods, code: CtCode) -> Option<Chord> {
     Some(Chord::new(m, neutral))
 }
 
+/// La inversa de [`chord_from_crossterm`]: un [`Chord`] neutro → el evento
+/// de crossterm que lo produciría. Para SINTETIZAR una tecla desde un
+/// botón (spec 2026-09-10): un clic en `[Enter] Confirm` es pulsar Enter,
+/// y va por `on_key` como si el terminal lo hubiera entregado. `None` para
+/// lo que la TUI no puede entregar (`cmd`, que aquí nunca llega).
+#[must_use]
+pub fn crossterm_from_chord(chord: Chord) -> Option<(CtMods, CtCode)> {
+    let (m, code) = chord.parts();
+    if m.cmd {
+        return None;
+    }
+    let ct = match code {
+        KeyCode::Char(c) => CtCode::Char(c),
+        KeyCode::F(n) => CtCode::F(n),
+        KeyCode::Enter => CtCode::Enter,
+        KeyCode::Tab => CtCode::Tab,
+        KeyCode::Esc => CtCode::Esc,
+        KeyCode::Backspace => CtCode::Backspace,
+        KeyCode::Up => CtCode::Up,
+        KeyCode::Down => CtCode::Down,
+        KeyCode::Left => CtCode::Left,
+        KeyCode::Right => CtCode::Right,
+        KeyCode::Home => CtCode::Home,
+        KeyCode::End => CtCode::End,
+        KeyCode::PageUp => CtCode::PageUp,
+        KeyCode::PageDown => CtCode::PageDown,
+        KeyCode::Insert => CtCode::Insert,
+        KeyCode::Delete => CtCode::Delete,
+    };
+    let mut mods = CtMods::NONE;
+    mods.set(CtMods::CONTROL, m.ctrl);
+    mods.set(CtMods::ALT, m.alt);
+    mods.set(CtMods::SHIFT, m.shift);
+    Some((mods, ct))
+}
+
 /// Los comandos que el TUI sabe ejecutar — la fuente ÚNICA contra la que
 /// se valida todo keymap (los mismos nombres que verán la palette y el
 /// wire, ADR 0006).

@@ -236,9 +236,68 @@ pub struct DialogHints {
     /// footer, which the function above replaces. A new prose-hinted modal needs
     /// an arm here too.
     pub modals_inert: bool,
+    /// `[ui] dialog_buttons` (spec 2026-09-10): la línea de teclas de un
+    /// modal se pinta como BOTONES pulsables en vez de como texto. Lo pone
+    /// quien construye los hints desde la config; `build` lo deja apagado
+    /// porque un `Effective` no sabe de ajustes.
+    pub buttons: bool,
+}
+
+/// Un botón de la línea de teclas de un modal: el chord pintado y su verbo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HintButton {
+    /// El chord tal y como lo escribe [`paint_chord`] (`Enter`, `Esc`, `F5`).
+    pub chord: String,
+    /// El verbo, en el idioma del lector.
+    pub label: String,
+}
+
+/// Los botones de una línea de teclas generada por [`dialog_hints`]
+/// (`[Enter] confirm [Esc] cancel`), o `None` si la línea no tiene esa
+/// forma —una pista en prosa, o el aviso de «cierra la ayuda»—.
+///
+/// La forma es la de este módulo y de nadie más: cada grupo empieza por `[`,
+/// el chord acaba en `] ` y el verbo llega hasta el ` [` siguiente. Un verbo
+/// puede llevar espacios; un chord no lleva `]`.
+#[must_use]
+pub fn hint_buttons(line: &str) -> Option<Vec<HintButton>> {
+    if !line.starts_with('[') {
+        return None;
+    }
+    let mut out = Vec::new();
+    for group in line.split(" [") {
+        let group = group.strip_prefix('[').unwrap_or(group);
+        let (chord, label) = group.split_once("] ")?;
+        if chord.is_empty() || label.is_empty() {
+            return None;
+        }
+        out.push(HintButton {
+            chord: chord.to_owned(),
+            label: label.to_owned(),
+        });
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 impl DialogHints {
+    /// ¿Es `text` una de las líneas de teclas que este conjunto generó? Es
+    /// lo que deja marcar como botones la línea de un cuerpo compuesto como
+    /// `String` sin adivinar por la forma: igualdad exacta con lo generado.
+    #[must_use]
+    pub fn is_hint_line(&self, text: &str) -> bool {
+        !self.modals_inert
+            && [
+                &self.confirm,
+                &self.collision,
+                &self.approval,
+                &self.uninstall,
+                &self.trust_host,
+                &self.ask_secret,
+            ]
+            .into_iter()
+            .any(|h| !h.is_empty() && h == text)
+    }
+
     /// Reconstruye todos los hints del efectivo `dialog` vigente.
     #[must_use]
     pub fn build(eff: &Effective) -> Self {
@@ -283,6 +342,7 @@ impl DialogHints {
             // solo `with_modals_inert` levanta el flag, y solo mientras una
             // ayuda tape el modal.
             modals_inert: false,
+            buttons: false,
         }
     }
 

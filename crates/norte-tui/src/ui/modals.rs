@@ -21,9 +21,11 @@ use ratatui::Frame;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+use ratatui::layout::Rect;
+
 use super::text::{badge_prefixed, clamp_chars, tail_window};
 use super::{HOSTILE_BADGE, centered, clear_themed};
-use crate::app::{AI_RENAME_PAIR_LIMIT, SEMANTIC_HIT_LIMIT, display_name};
+use crate::app::{AI_RENAME_PAIR_LIMIT, App, SEMANTIC_HIT_LIMIT, display_name};
 use crate::theme::TuiTheme;
 use norte_frontend::middle_ellipsis;
 use norte_i18n::{t, ta};
@@ -62,6 +64,11 @@ pub(crate) enum LineKind {
     Warning,
     /// Por qué esto no se puede hacer todavía.
     Error,
+    /// La línea de teclas pintada como BOTONES (spec 2026-09-10,
+    /// `[ui] dialog_buttons`): cada `[chord] verbo` es un botón con el rol
+    /// `button`, y una zona del ratón que sintetiza su chord. Si la línea
+    /// no tiene esa forma o no cabe, se pinta como `Dim`.
+    Buttons,
 }
 
 /// Una línea del cuerpo de un modal.
@@ -143,7 +150,9 @@ fn line_style(kind: LineKind, theme: &TuiTheme) -> ratatui::style::Style {
         // Medido sobre el fondo de su propio tema da 2,30:1 en
         // `catppuccin-latte` y 2,45:1 en `gruvbox-light`, cuando WCAG AA pide
         // 4,5 para texto. `Info` da 4,34 y 5,82 en los mismos dos.
-        LineKind::Dim => theme.role(Role::Info),
+        // Los botones se pintan por tramos con `Role::Button`; el estilo de
+        // LÍNEA es el de una pista, para lo que quede fuera de un botón.
+        LineKind::Dim | LineKind::Buttons => theme.role(Role::Info),
         LineKind::Strong => theme.role(Role::Title),
         // El fondo de una fila seleccionada: es exactamente lo que un campo
         // es —lo que tienes «cogido»— y ya significa eso en el listado.
@@ -217,6 +226,170 @@ pub(crate) fn is_warning_modal(modal: &crate::app::Modal) -> bool {
 /// variantes de golpe— era un diff de miles de líneas para una mejora que se
 /// aprecia en cinco.
 pub(crate) fn modal_title_body(
+    modal: &crate::app::Modal,
+    reinterpret: Option<norte_encoding::NameEncoding>,
+    hints: &crate::hints::DialogHints,
+) -> (String, ModalBody) {
+    let (title, mut body) = modal_title_body_raw(modal, reinterpret, hints);
+    // `[ui] dialog_buttons` (spec 2026-09-10): la línea de teclas que
+    // GENERÓ `dialog_hints` pasa a botones. Por igualdad exacta con lo
+    // generado, no por la forma: un nombre de fichero puede empezar por `[`.
+    // Vale para los dos cuerpos con papeles y para las 55 variantes que
+    // componen `String`, sin tocar ninguna.
+    if hints.buttons {
+        for line in &mut body {
+            if line.kind != LineKind::Field
+                && hints.is_hint_line(&line.text)
+                && crate::hints::hint_buttons(&line.text).is_some()
+            {
+                line.kind = LineKind::Buttons;
+            }
+        }
+    }
+    (title, body)
+}
+
+/// Un botón de la línea de teclas, ya colocado: dónde empieza (celda
+/// relativa al interior de la caja), qué se pinta y qué chord sintetiza.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ButtonCell {
+    /// Celda del interior donde empieza.
+    pub x0: usize,
+    /// El texto del botón, con su aire: ` Enter Confirm `.
+    pub text: String,
+    /// El chord pintado (`Enter`, `F5`…), el que hay que sintetizar.
+    pub chord: String,
+}
+
+/// Los botones de una línea de teclas en `interior` celdas, separados por
+/// un espacio, o `None` si la línea no es de teclas o no caben todos:
+/// medio botón no es un botón, y entonces la línea se pinta como pista.
+#[must_use]
+pub(crate) fn button_cells(text: &str, interior: usize) -> Option<Vec<ButtonCell>> {
+    let mut x = 0;
+    let mut out = Vec::new();
+    for b in crate::hints::hint_buttons(text)? {
+        let painted = format!(" {} {} ", b.chord, b.label);
+        let w = UnicodeWidthStr::width(painted.as_str());
+        if x + w > interior {
+            return None;
+        }
+        out.push(ButtonCell {
+            x0: x,
+            text: painted,
+            chord: b.chord,
+        });
+        x += w + 1;
+    }
+    Some(out)
+}
+
+/// La caja de un modal, medida una vez para quien pinta y para quien
+/// resuelve un clic: el mismo cuerpo, el mismo ancho, el mismo sitio.
+pub(crate) struct ModalFrame {
+    /// El título.
+    pub title: String,
+    /// El cuerpo con papeles.
+    pub body: ModalBody,
+    /// Dónde cae la caja, bordes incluidos.
+    pub area: Rect,
+    /// Solo `TrustLuaInit` envuelve su cuerpo; las demás vienen por líneas.
+    pub envuelve: bool,
+    /// El interior: el ancho menos los dos bordes.
+    pub interior: usize,
+}
+
+/// Mide el modal como lo pinta [`draw_modal`].
+#[must_use]
+pub(crate) fn modal_frame(
+    modal: &crate::app::Modal,
+    reinterpret: Option<norte_encoding::NameEncoding>,
+    hints: &crate::hints::DialogHints,
+    frame_area: Rect,
+) -> ModalFrame {
+    let (title, body) = modal_title_body(modal, reinterpret, hints);
+    let envuelve = matches!(modal, crate::app::Modal::TrustLuaInit { .. });
+    let width = modal_width(&title, &body, frame_area.width);
+    let interior = usize::from(width.saturating_sub(2));
+    let height = if envuelve {
+        ALTO_ENVUELTO
+    } else {
+        alto_del_cuerpo(&body)
+    };
+    ModalFrame {
+        title,
+        body,
+        area: centered(frame_area, width, height),
+        envuelve,
+        interior,
+    }
+}
+
+/// Un botón pulsable de un modal (spec 2026-09-10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModalZone {
+    /// Fila.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+    /// El chord pintado que el botón sintetiza (`Enter`, `Esc`, `F5`).
+    pub chord: String,
+}
+
+/// Las zonas de los botones del modal activo, del MISMO cálculo que el
+/// pintado. Vacío sin modal, con el cuerpo envuelto (sus filas no son las
+/// del cuerpo) o con la línea pintada como pista por no caber.
+#[must_use]
+pub fn modal_zones(app: &App, area: Rect) -> Vec<ModalZone> {
+    let Some(modal) = &app.modal else {
+        return Vec::new();
+    };
+    let inert = app
+        .help
+        .as_ref()
+        .is_some_and(|help| help.over_modal)
+        .then(|| app.dialog_hints.with_modals_inert());
+    let hints = inert.as_ref().unwrap_or(&app.dialog_hints);
+    let f = modal_frame(modal, app.focused().name_encoding(), hints, area);
+    if f.envuelve {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (i, line) in f.body.iter().enumerate() {
+        if line.kind != LineKind::Buttons {
+            continue;
+        }
+        let Some(cells) = button_cells(&line.text, f.interior) else {
+            continue;
+        };
+        let row = f
+            .area
+            .y
+            .saturating_add(1)
+            .saturating_add(u16::try_from(i).unwrap_or(u16::MAX));
+        for c in cells {
+            let w = UnicodeWidthStr::width(c.text.as_str());
+            let x0 = f
+                .area
+                .x
+                .saturating_add(1)
+                .saturating_add(u16::try_from(c.x0).unwrap_or(u16::MAX));
+            out.push(ModalZone {
+                row,
+                x0,
+                x1: x0
+                    .saturating_add(u16::try_from(w).unwrap_or(u16::MAX))
+                    .saturating_sub(1),
+                chord: c.chord,
+            });
+        }
+    }
+    out
+}
+
+fn modal_title_body_raw(
     modal: &crate::app::Modal,
     reinterpret: Option<norte_encoding::NameEncoding>,
     hints: &crate::hints::DialogHints,
@@ -605,8 +778,6 @@ pub(crate) fn draw_modal(
     reinterpret: Option<norte_encoding::NameEncoding>,
     hints: &crate::hints::DialogHints,
 ) {
-    use crate::app::Modal;
-    let (title, body) = modal_title_body(modal, reinterpret, hints);
     // Un borrado PERMANENTE (o aprobar una mutación de agente) tiñe el borde
     // de aviso (rol `warning`).
     let border = if is_warning_modal(modal) {
@@ -614,26 +785,40 @@ pub(crate) fn draw_modal(
     } else {
         theme.role(Role::ModalBorder)
     };
-    // Solo este modal envuelve: su cuerpo es UN mensaje largo; el resto ya
-    // viene troceado por líneas.
-    let envuelve = matches!(modal, Modal::TrustLuaInit { .. });
-    let width = modal_width(&title, &body, frame.area().width);
-    // El interior de la caja: el ancho menos los dos bordes. Es lo que un
-    // CAMPO tiene que ocupar entero.
-    let interior = usize::from(width.saturating_sub(2));
-    // El alto se DERIVA del cuerpo que se acaba de componer, no de una tabla
-    // por variante: así no hay dos números que puedan discrepar. El que
-    // envuelve es la excepción, y se declara como tal.
-    let height = if envuelve {
-        ALTO_ENVUELTO
-    } else {
-        alto_del_cuerpo(&body)
-    };
-    let area = centered(frame.area(), width, height);
+    // La caja se MIDE en `modal_frame`, que es lo que también lee el ratón:
+    // el alto se deriva del cuerpo y el ancho del título y las líneas, así
+    // que no hay dos números que puedan discrepar.
+    let ModalFrame {
+        title,
+        body,
+        area,
+        envuelve,
+        interior,
+    } = modal_frame(modal, reinterpret, hints, frame.area());
     clear_themed(frame, area, theme);
     let lineas: Vec<ratatui::text::Line<'_>> = body
         .iter()
         .map(|l| {
+            // Los botones (spec 2026-09-10): un tramo por botón con el rol
+            // `button`, separados por un espacio; si no caben, la pista de
+            // siempre.
+            if l.kind == LineKind::Buttons
+                && let Some(cells) = button_cells(&l.text, interior)
+            {
+                let mut spans = Vec::new();
+                let mut x = 0;
+                for c in cells {
+                    if c.x0 > x {
+                        spans.push(ratatui::text::Span::raw(" ".repeat(c.x0 - x)));
+                    }
+                    x = c.x0 + UnicodeWidthStr::width(c.text.as_str());
+                    spans.push(ratatui::text::Span::styled(
+                        c.text,
+                        theme.role(Role::Button),
+                    ));
+                }
+                return ratatui::text::Line::from(spans);
+            }
             // Un campo se rellena hasta el borde. Con el fondo acabando donde
             // acaba el texto parece texto RESALTADO, no un sitio donde
             // escribir — y además no se ve cuánto cabe. Es una decisión de

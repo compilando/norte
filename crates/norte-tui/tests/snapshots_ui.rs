@@ -1001,6 +1001,78 @@ fn snapshot_modal_transfer_name_cjk_largo() {
 }
 
 #[test]
+/// Los botones de un modal (spec 2026-09-10, `[ui] dialog_buttons`): la
+/// línea de teclas generada se pinta como ` Enter confirm ` ` Esc cancel `
+/// con el rol `button` (monocromo: invertido), cada botón es una zona, y un
+/// clic en uno deja la tecla sintetizada para `on_key`. Apagado, la línea
+/// vuelve a ser la pista de texto y no hay zonas.
+#[test]
+fn los_botones_de_un_modal_se_pintan_y_un_clic_es_su_tecla() {
+    let mut app = app_base();
+    app.dialog_hints = default_dialog_hints();
+    app.dialog_hints.buttons = true;
+    app.modal = Some(Modal::ConfirmDelete {
+        items: vec![vp("file:///casa/notas.txt")],
+        permanent: false,
+    });
+    let area = ratatui::layout::Rect::new(0, 0, 80, 16);
+    let zonas = ui::modal_zones(&app, area);
+    assert!(
+        zonas.iter().any(|z| z.chord == "Enter") && zonas.iter().any(|z| z.chord == "Esc"),
+        "un botón por verbo: {zonas:?}"
+    );
+    let enter = zonas.iter().find(|z| z.chord == "Enter").expect("Enter");
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let buf = terminal.backend().buffer();
+    let fila: String = (enter.x0..=enter.x1)
+        .map(|x| buf[(x, enter.row)].symbol().to_string())
+        .collect();
+    assert!(fila.contains("Enter"), "el botón pinta su chord: {fila:?}");
+    let boton = app.theme.role(norte_theme::Role::Button);
+    let celda = buf[(enter.x0, enter.row)].style();
+    assert!(
+        celda.bg == boton.bg && celda.add_modifier.contains(boton.add_modifier),
+        "el botón lleva el rol `button`: {celda:?} vs {boton:?}"
+    );
+    let pista = render(&app);
+    assert!(
+        !pista.contains("[Enter]"),
+        "con botones, no hay corchetes: {pista}"
+    );
+
+    norte_tui::mouse::after_frame(
+        &mut app,
+        None,
+        norte_tui::mouse::FrameZones {
+            modal: zonas.clone(),
+            ..Default::default()
+        },
+    );
+    let clic = crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: enter.x0 + 1,
+        row: enter.row,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    assert_eq!(
+        norte_tui::mouse::handle(&mut app, clic),
+        norte_tui::mouse::After::SynthKey
+    );
+    assert_eq!(
+        app.pending_key.map(|k| k.code),
+        Some(crossterm::event::KeyCode::Enter)
+    );
+
+    app.dialog_hints.buttons = false;
+    assert!(ui::modal_zones(&app, area).is_empty(), "apagado, sin zonas");
+    assert!(
+        render(&app).contains("[Enter]"),
+        "apagado, la pista de texto"
+    );
+}
+
+#[test]
 fn snapshot_modal_papelera_y_permanente() {
     let mut app = app_base();
     app.modal = Some(Modal::ConfirmDelete {

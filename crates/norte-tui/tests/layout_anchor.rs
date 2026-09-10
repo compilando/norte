@@ -97,6 +97,7 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
             menus: ui::menu_zones(app, area),
             panels: ui::panel_zones(app, area),
             keys: ui::key_zones(app, area),
+            modal: ui::modal_zones(app, area),
             places: ui::places_zones(app, area),
             tree: ui::tree_zones(app, area),
             extensions: ui::extension_zones(app, area),

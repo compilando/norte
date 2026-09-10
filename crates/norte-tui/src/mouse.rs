@@ -239,6 +239,9 @@ pub struct MouseState {
     /// Las celdas pulsables de la barra de teclas del último frame (spec
     /// 2026-09-10). Vacío = barra apagada, o sin fila donde pintarla.
     key_zones: Vec<crate::ui::KeyZone>,
+    /// Los botones del modal activo del último frame (spec 2026-09-10).
+    /// Vacío = sin modal, o su línea de teclas pintada como pista.
+    modal_zones: Vec<crate::ui::ModalZone>,
     /// Las zonas pulsables de las barras de pestañas del último frame.
     ///
     /// Vacío = ningún panel tiene pestañas, que es el caso de siempre.
@@ -342,6 +345,8 @@ pub struct FrameZones {
     pub panels: Vec<crate::ui::PanelZone>,
     /// Las celdas de la barra de teclas (spec 2026-09-10).
     pub keys: Vec<crate::ui::KeyZone>,
+    /// Los botones del modal activo (spec 2026-09-10).
+    pub modal: Vec<crate::ui::ModalZone>,
     /// Las filas del sidebar de sitios (#226).
     pub places: Vec<crate::ui::PlaceZone>,
     /// Las filas del árbol (#136).
@@ -378,6 +383,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
         menus: menu_zones,
         panels: panel_zones,
         keys: key_zones,
+        modal: modal_zones,
         places: places_zones,
         tree: tree_zones,
         extensions: extension_zones,
@@ -404,6 +410,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     app.mouse.menu_zones = menu_zones;
     app.mouse.panel_zones = panel_zones;
     app.mouse.key_zones = key_zones;
+    app.mouse.modal_zones = modal_zones;
     app.mouse.places_zones = places_zones;
     app.mouse.tree_zones = tree_zones;
     app.mouse.extension_zones = extension_zones;
@@ -470,12 +477,12 @@ pub enum After {
     /// que su tecla (`on_extensions_click`). Aquí no se puede: encender,
     /// aprobar o desinstalar hablan con el backend.
     Extension(&'static str),
-    /// Se pulsó una celda de la barra de teclas (spec 2026-09-10): la tecla
-    /// queda en `App::pending_key` y el run loop la despacha por `on_key`,
-    /// que es el ÚNICO camino con los tres resolvers a mano. Un clic en la
-    /// barra ES pulsar la tecla; no hay un segundo despacho que pueda
-    /// divergir.
-    KeyBar,
+    /// Se pulsó una celda de la barra de teclas o un botón de un modal
+    /// (spec 2026-09-10): la tecla queda en `App::pending_key` y el run loop
+    /// la despacha por `on_key`, que es el ÚNICO camino con los tres
+    /// resolvers a mano. Un clic ahí ES pulsar la tecla; no hay un segundo
+    /// despacho que pueda divergir.
+    SynthKey,
 }
 
 /// El índice ABSOLUTO en `entries` de una posición PINTADA del pane.
@@ -819,7 +826,26 @@ fn por_encima_de_los_paneles(app: &mut App, ev: MouseEvent) -> Option<After> {
             crossterm::event::KeyCode::F(key),
             KeyModifiers::NONE,
         ));
-        return Some(After::KeyBar);
+        return Some(After::SynthKey);
+    }
+    // Un botón de un modal (spec 2026-09-10), por el mismo camino: el chord
+    // pintado se sintetiza y `on_key` lo resuelve contra el diálogo, igual
+    // que si el terminal lo hubiera entregado. Un chord que la TUI no puede
+    // entregar (no hay ninguno en un preset) se ignora.
+    if clic
+        && let Some(chord) = app
+            .mouse
+            .modal_zones
+            .iter()
+            .find(|z| z.row == ev.row && ev.column >= z.x0 && ev.column <= z.x1)
+            .map(|z| z.chord.clone())
+        && let Ok(chord) = norte_frontend::keymap::parse_chord(&chord.to_lowercase())
+        && let Some((mods, code)) = crate::keymap::crossterm_from_chord(chord)
+    {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.pending_key = Some(crossterm::event::KeyEvent::new(code, mods));
+        return Some(After::SynthKey);
     }
     if rueda_en_el_visor(app, ev) {
         return Some(After::Nothing);
@@ -1470,7 +1496,7 @@ pub async fn on_mouse(
         }
         // La tecla sintetizada la despacha el bucle por `on_key`, justo
         // después de este gesto: aquí no están los tres resolvers.
-        self::After::KeyBar => {}
+        self::After::SynthKey => {}
         // #324: un botón de la barra de paneles va por el MISMO despacho que
         // su atajo. Dos caminos para abrir el mismo panel divergen en cuanto
         // uno de los dos crece un detalle — es la lección de ADR 0077 aplicada

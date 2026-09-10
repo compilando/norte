@@ -188,7 +188,7 @@ fn la_barra_de_teclas_pinta_lo_atado_y_un_clic_es_la_tecla() {
     };
     assert_eq!(
         norte_tui::mouse::handle(&mut app, clic),
-        norte_tui::mouse::After::KeyBar
+        norte_tui::mouse::After::SynthKey
     );
     assert_eq!(
         app.pending_key.map(|k| k.code),
