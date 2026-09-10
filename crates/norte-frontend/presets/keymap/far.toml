@@ -114,6 +114,9 @@ keymap = [
     # Ver la nota larga en krusader.toml.
     { on = ["alt+9"], run = "app.theme" },
     { on = ["ctrl+p"], run = "app.palette" },
+    # F9 is the menu bar in FAR (attested: "F9 — Show menu"); alt+m stays as
+    # the shared chord every preset carries (spec 2026-09-10).
+    { on = ["f9"], run = "app.menu" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },

@@ -915,7 +915,8 @@ async fn el_tema_se_ve_por_dentro_y_dice_lo_que_no_pinta() {
     })
     .await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F9")).await.expect("host vivo");
+    // `alt+9` desde la spec 2026-09-10: F9 es el menú, como en toda la familia.
+    h.dispatch(tecla_alt("9")).await.expect("host vivo");
     let t = siguiente_tema(&mut sub).await.expect("abre");
 
     assert_eq!(t.name, "retro");
@@ -944,7 +945,8 @@ async fn un_tema_sin_efectos_no_dice_nada_de_ellos() {
     })
     .await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F9")).await.expect("host vivo");
+    // `alt+9` desde la spec 2026-09-10: F9 es el menú, como en toda la familia.
+    h.dispatch(tecla_alt("9")).await.expect("host vivo");
     let t = siguiente_tema(&mut sub).await.expect("abre");
     assert!(t.unsupported_effects.is_empty());
 }

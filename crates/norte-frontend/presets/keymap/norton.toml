@@ -71,10 +71,13 @@ keymap = [
     # (libre en Norton).
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
-    # El tema, en `alt+9`. F9 está libre aquí pero es el menú desplegable en
-    # Norton Commander. Ver la nota larga en krusader.toml.
+    # El tema, en `alt+9`. F9 es el menú desplegable en Norton Commander, y
+    # desde la spec 2026-09-10 lo es también aquí; `alt+m` sigue como el
+    # acorde compartido que llevan los siete presets. Ver la nota larga en
+    # krusader.toml.
     { on = ["alt+9"], run = "app.theme" },
     { on = ["ctrl+p"], run = "app.palette" },
+    { on = ["f9"], run = "app.menu" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },

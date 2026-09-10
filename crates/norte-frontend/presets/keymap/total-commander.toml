@@ -19,8 +19,12 @@
 # is that command and is bound in its own preset; borrowing it into this one
 # would put a Krusader chord in a Total Commander transcription.
 #
-# Omitted families (norte has no concept): the menu bar (F9, F10 non-Alt+F4,
-# Shift+F10); button bars and breadcrumb bars (Alt+F11/F12, Alt+Shift+F11/12);
+# F9 ("Activate left/right menu" in the source) IS bound, to `app.menu`, since
+# norte grew a menu bar (spec 2026-09-10); the source's left/right distinction
+# has no counterpart — one menu bar, one key.
+#
+# Omitted families (norte has no concept): the rest of the menu bar keys (F10
+# non-Alt+F4, Shift+F10); button bars and breadcrumb bars (Alt+F11/F12, Alt+Shift+F11/12);
 # window minimize (Shift+Esc); clipboard file/text ops (Ctrl+C/X/V, and the
 # same inside the command line); the alternate/Lister viewer variants
 # (Alt+F3, Alt+Shift+F3, Alt+Shift+F7 "find in separate process"); in-place
@@ -66,6 +70,8 @@ keymap = [
     # El tema, en `alt+9`, el mismo que los otros tres presets importados.
     # Ver la nota larga en krusader.toml.
     { on = ["alt+9"], run = "app.theme" },
+    # F9 = menu bar, attested ("Activate left/right menu"); see the header.
+    { on = ["f9"], run = "app.menu" },
     # `alt+p` y no `ctrl+P`: la mayúscula es el shift en la gramática y NO en
     # el cable — mismo byte que `ctrl+p`, que aquí es `pane.copy-path`. Ver la
     # nota larga en krusader.toml. Hay test.

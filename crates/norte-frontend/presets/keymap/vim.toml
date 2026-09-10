@@ -14,7 +14,9 @@ keymap = [
     { on = ["ctrl+c"], run = "app.quit" },
     { on = ["tab"], run = "pane.switch" },
     { on = ["f1"], run = "app.help" },
-    { on = ["f9"], run = "app.theme" },
+    # F9 abre el MENÚ (spec 2026-09-10), como en orthodox; el tema, en alt+9.
+    { on = ["f9"], run = "app.menu" },
+    { on = ["alt+9"], run = "app.theme" },
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
     { on = ["?"], run = "app.help" },
