@@ -102,6 +102,42 @@ pub enum Cd {
     Swapped,
 }
 
+/// Pide al backend las decoraciones —iconos, insignias— y las columnas de
+/// plugin del listado que un pane tiene AHORA, con la clase de cada entrada
+/// (ADR 0105), y deja la respuesta en vuelo en `decorate_fetch`.
+///
+/// Lo llama el desenlace de cada `cd` y el ARRANQUE: los dos listados
+/// iniciales se construían sin pedir nada, así que un `ntc` recién abierto
+/// no tenía ni un icono hasta el primer `cd`, y el lector concluía que el
+/// plugin no funcionaba.
+pub fn request_decorations(
+    app: &App,
+    backend: &Backend,
+    decorate_fetch: &mut BySlot<DecorateFetch>,
+    pane: usize,
+) {
+    let dir = app.panes[pane].dir().clone();
+    let paths: Vec<VPath> = app.panes[pane]
+        .entries()
+        .iter()
+        .map(|e| e.path.clone())
+        .collect();
+    let kinds: Vec<norte_proto::EntryKind> =
+        app.panes[pane].entries().iter().map(|e| e.kind).collect();
+    let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+    decorate_fetch.set(
+        app.panes.slot_of(pane),
+        crate::probes::spawn_decorate_fetch(
+            backend,
+            app.panes.slot_of(pane),
+            dir,
+            paths,
+            kinds,
+            plugin_cols,
+        ),
+    );
+}
+
 /// El desenlace COMPLETO de un `cd`: el pane que aterrizó se reordena por el
 /// esquema de su localización, se le piden las decoraciones de plugin y se
 /// aplica el resultado ([`apply_cd`]: relleno paginado y sonda).
@@ -123,26 +159,7 @@ pub fn settle_cd(
 ) {
     if let Some(pane) = cd_landed_pane(&outcome) {
         app.apply_scheme_sort(pane);
-        let dir = app.panes[pane].dir().clone();
-        let paths: Vec<VPath> = app.panes[pane]
-            .entries()
-            .iter()
-            .map(|e| e.path.clone())
-            .collect();
-        let kinds: Vec<norte_proto::EntryKind> =
-            app.panes[pane].entries().iter().map(|e| e.kind).collect();
-        let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
-        decorate_fetch.set(
-            app.panes.slot_of(pane),
-            crate::probes::spawn_decorate_fetch(
-                backend,
-                app.panes.slot_of(pane),
-                dir,
-                paths,
-                kinds,
-                plugin_cols,
-            ),
-        );
+        request_decorations(app, backend, decorate_fetch, pane);
         // Y el árbol, si hay uno: este listado es dónde mira el panel ahora, y
         // el panel de al lado tiene que decir lo mismo. Solo por el ENFOCADO —
         // un listado del otro lado que termina de cargar no es dónde está

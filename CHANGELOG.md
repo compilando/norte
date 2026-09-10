@@ -9,6 +9,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **A daemon a frontend started stops with its last client.** The window,
+  `ntc --daemon` and a one-shot `norte --daemon …` start a daemon when none
+  answers, and it used to outlive them by five minutes: a process nobody
+  could see and nobody had asked for. They now start it with
+  `--idle-timeout 2`, so two seconds after the last client disconnects — with
+  no task running — it exits; a client that reconnects within that margin
+  finds the same daemon, and a second client keeps it alive. `norte daemon
+  run` by hand keeps its five minutes. The argv is built once, in the SDK
+  (`daemon_run_argv`), instead of in four places.
+
 - **A detached window says so quietly, and explains itself on demand.** A
   terminal that started while another window held the session greeted the
   reader with «another window owns the session; this one runs on its own» in
@@ -208,6 +218,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The terminal's initial listings carried no icons or badges until the
+  first `cd`.** Both panes are built at startup outside the path a `cd`
+  takes, and only that path asked the decorators; a freshly opened `ntc`
+  showed bare rows and the reader concluded the plugin did not work. The
+  event loop now requests decorations for the initial panes through the same
+  function every `cd` uses.
 - **`F10` and `q` close the window.** `app.quit` was classified as "not
   applicable to a window — the window manager closes it", which left the quit
   key of all seven presets, and the menu's own "Quit" entry, doing nothing.

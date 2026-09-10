@@ -32,7 +32,7 @@ use crate::keys::on_key;
 use crate::lua::{RunOutcome, load_lua, start_lua_run};
 use crate::mouse;
 use crate::nav;
-use crate::navigate::settle_cd;
+use crate::navigate::{request_decorations, settle_cd};
 use crate::overlays::watch_refresh_allowed;
 use crate::paste::route_paste;
 use crate::probes::{DecorateFetch, Probed};
@@ -311,6 +311,12 @@ pub async fn run(
     // Todo lo que este bucle deja pedido y aún no ha cosechado (ver
     // [`InFlight`]): rellenos, sondas y los trabajos de fondo.
     let mut work = InFlight::default();
+    // Los listados INICIALES también se decoran (ADR 0105): `main` los
+    // construye sin pasar por `settle_cd`, y sin esto un `ntc` recién abierto
+    // no tenía ni un icono ni una insignia hasta el primer `cd`.
+    for pane in 0..app.panes.len() {
+        request_decorations(app, backend, &mut work.decorate, pane);
+    }
     let mut dir_watch = norte_frontend::watch::DirWatch::new();
     let mut dir_watch_alive = true;
     loop {
