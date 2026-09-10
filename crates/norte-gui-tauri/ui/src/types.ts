@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 62;
+export const BRIDGE_VERSION = 63;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -174,6 +174,9 @@ export interface BrowserSlotView {
   pruned_note?: string;
   /** Cuantas hay marcadas y cuanto pesan, ya dicho. Vacio = sin marcas. */
   marked_note?: string;
+  /** El pie del listado (cuentas, marcado, espacio libre), ya redactado.
+   *  Vacio o ausente = `[ui] pane_footer` apagado. Puente 63. */
+  footer?: string;
   columns: ColumnHeader[];
   state: SlotState;
   quick: QuickView | null;
@@ -360,6 +363,10 @@ export interface PendingView {
 export interface StatusView {
   message: string | null;
   banners: BannerView[];
+  /** Avisos caducados sin leer (puente 63): una insignia mientras haya
+   *  alguno; pulsarla abre el registro. Opcional: un host anterior no lo
+   *  manda. */
+  notices_unread?: number;
   pending: PendingView | null;
 }
 
@@ -549,6 +556,16 @@ export interface ImageView {
   height: number;
 }
 
+/** El asistente de primer arranque (puente 63): un paso, sus filas y el
+ *  cursor, todo ya traducido. Un click en una fila la elige y la confirma. */
+export interface WizardView {
+  title: string;
+  question: string;
+  rows: string[];
+  cursor: number;
+  hint: string;
+}
+
 export interface PaletteRowView {
   text: string;
   desc: string;
@@ -558,6 +575,9 @@ export interface PaletteRowView {
    *  ser cierto en una fila de PLUGIN, y esta es la pantalla donde se elige
    *  qué código de tercero correr. */
   hostile: boolean;
+  /** Va arriba por ser de los últimos lanzados (solo con la consulta
+   *  vacía). Opcional: un host anterior al puente 63 no lo manda. */
+  recent?: boolean;
 }
 
 export interface PaletteView {
@@ -625,9 +645,29 @@ export interface PanelButtonView {
 }
 
 /** La barra de paneles (#324, puente 51): qué paneles hay y cómo están. */
+/** La barra de teclas de función (puente 63): diez celdas con lo que cada
+ *  `F` hace en la pantalla que tiene el teclado. Un click vuelve como la
+ *  TECLA, y el host la sintetiza. */
+export interface KeyBarView {
+  /** `[ui] key_bar`: si la barra se pinta. */
+  bar: boolean;
+  /** `F1`..`F10`, en orden. */
+  cells: KeyCellView[];
+}
+
+export interface KeyCellView {
+  key: number;
+  /** Vacía = la tecla no ata nada aquí, y la celda no se pulsa. */
+  label: string;
+  command: string | null;
+}
+
 export interface PanelBarView {
   /** `[ui] panel_bar`: si la barra se pinta. */
   bar: boolean;
+  /** `[ui] panel_bar_style = "names"`: nombre con la letra marcada, o solo
+   *  la letra. Opcional: un host anterior al puente 63 no lo manda. */
+  names?: boolean;
   /** Un click vuelve como el ÍNDICE aquí, nunca como un comando. */
   buttons: PanelButtonView[];
 }
@@ -1113,8 +1153,13 @@ export interface ViewSnapshot {
   tasks: TaskView[];
   menu: MenuView;
   panel_bar: PanelBarView;
+  /** Opcional: un host anterior al puente 63 no la manda. */
+  key_bar?: KeyBarView;
   profiles: ProfilePickerView | null;
   palette: PaletteView | null;
+  /** El asistente de primer arranque (puente 63), si está abierto. Opcional:
+   *  un host anterior no lo manda. */
+  wizard?: WizardView | null;
   whichkey: WhichKeyView | null;
   help: HelpView | null;
   settings: SettingsView | null;
@@ -1161,6 +1206,7 @@ export type ViewChange =
       filling_note?: string;
       pruned_note?: string;
       marked_note?: string;
+      footer?: string;
       marks: number;
     }
   | { change: "slot_state"; slot_id: number; state: SlotState }
@@ -1179,8 +1225,10 @@ export type ViewChange =
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "menu"; menu: MenuView }
   | { change: "panel_bar"; panel_bar: PanelBarView }
+  | { change: "key_bar"; key_bar: KeyBarView }
   | { change: "profiles"; profiles: ProfilePickerView | null }
   | { change: "palette"; palette: PaletteView | null }
+  | { change: "wizard"; wizard: WizardView | null }
   | { change: "help"; help: HelpView | null }
   | { change: "settings"; settings: SettingsView | null }
   | { change: "extensions"; extensions: ExtensionsView | null }
@@ -1302,7 +1350,10 @@ export type UiAction =
   | { action: "menu_point_row"; row: number }
   | { action: "menu_activate_row"; row: number }
   | { action: "menu_close" }
+  | { action: "wizard_open" }
+  | { action: "wizard_activate_row"; row: number }
   | { action: "panel_bar_activate"; button: number }
+  | { action: "key_bar_activate"; key: number }
   | { action: "resize_slot"; slot_id: number; cells: number }
   | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };
@@ -1332,6 +1383,9 @@ export interface HostCatalog {
   busy_threshold_ms?: number;
   /** `[ui] font`, `mono_font`, `font_size` y `reduce_motion`. */
   appearance?: Appearance;
+  /** No hay `norte.toml` de usuario todavía (puente 63): el renderer abre el
+   *  asistente de primer arranque al pintar la primera foto. */
+  first_run?: boolean;
 }
 
 /** Lo que esta ventana pinta y no es color. Cada campo `null` = no lo dice la

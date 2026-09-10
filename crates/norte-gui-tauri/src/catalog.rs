@@ -61,6 +61,13 @@ pub struct HostCatalog {
     pub busy_threshold_ms: u64,
     /// Lo que esta ventana pinta y no es color: fuentes y movimiento.
     pub appearance: Appearance,
+    /// No hay `norte.toml` de usuario todavía (spec 2026-09-10): el renderer
+    /// abre el asistente de primer arranque al pintar la primera foto. Lo
+    /// decide el arranque, que es quien mira el disco; `NORTE_NO_WIZARD` lo
+    /// apaga, como en el terminal. Con `default`: un catálogo anterior no lo
+    /// trae, y no traerlo es «no es el primero».
+    #[serde(default)]
+    pub first_run: bool,
 }
 
 /// `[ui] font`, `mono_font`, `font_size` y `reduce_motion`, para el renderer.
@@ -135,6 +142,7 @@ pub fn catalogo(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog
         busy_threshold_ms: u64::try_from(norte_frontend::busy::THRESHOLD.as_millis())
             .unwrap_or(250),
         appearance: Appearance::default(),
+        first_run: false,
     }
 }
 

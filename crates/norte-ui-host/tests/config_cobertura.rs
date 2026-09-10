@@ -47,6 +47,10 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         hotlist: _,
         ui_diff: _,
         ui_diff_detached: _,
+        // El cromo (spec 2026-09-10): la barra de teclas, el estilo de la
+        // barra de paneles, el pie del panel, el formato de fecha, la
+        // caducidad de los avisos y los botones de diálogo. Cada foto los lee.
+        ui_chrome: _,
 
         // ─── La lee la cáscara al ARRANCAR con el resolutor compartido, así
         //     que acepta un preset o la ruta a un `.toml` (ADR 0020).

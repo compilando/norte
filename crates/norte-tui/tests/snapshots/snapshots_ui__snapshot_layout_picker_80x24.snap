@@ -3,10 +3,10 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: text
 ---
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
-" S  V  P  D  Á  R                                                               "
+" Sitios  Visor  Procesos  Detalles  Árbol  Registro                             "
 "┌/casa─────────────────────────────────┐┌/otro─────────────────────────────────┐"
-"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
-"│  /docs                               ││   cosa                  1 B          │"
+"│Nombre▲             Tamaño       Fecha││Nombre▲             Tamaño       Fecha│"
+"│  /docs                               ││   cosa                1 B            │"
 "│  /src ┌ Disposición ────────────────────────────────────────────────┐        │"
 "│  @enla│ orthodox · de fábrica·······································│        │"
 "│   nota│ simple · de fábrica  ·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"

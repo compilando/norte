@@ -17,6 +17,10 @@
 # quickfilter ("foo -> Quick search, quick select or quick filter"), so
 # binding one here would shadow that.
 #
+# F9 stays `app.terminal`, as the source attests ("F9 -> Terminal"): the
+# other six presets bind F9 to the menu (spec 2026-09-10), but a Krusader
+# reader has F9 in the fingers as the terminal, and the menu keeps `alt+m`.
+#
 # Omitted families (norte has no concept): Alt+F1..F12 and Ctrl+F1..F12 /
 # Ctrl+Shift+F1..F12 are explicitly "Standard (Plasma) key-bindings" per the
 # source itself, not Krusader's — never Krusader's to bind (drive selection

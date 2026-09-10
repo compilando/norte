@@ -5,7 +5,9 @@ name = "gruvbox-light"
 [roles]
 background       = { bg = "#fbf1c7" }
 regular          = { fg = "#3c3836" }
-selection        = { fg = "#3c3836", bg = "#ebdbb2" }
+selection           = { fg = "#fbf1c7", bg = "#b57614" }
+selection-unfocused = { fg = "#3c3836", bg = "#ebdbb2" }
+button              = { fg = "#fbf1c7", bg = "#8f3f71" }
 border-focus     = { fg = "#b57614", bold = true }
 border-unfocused = { fg = "#a89984", dim = true }
 modal-border     = { fg = "#8f3f71" }

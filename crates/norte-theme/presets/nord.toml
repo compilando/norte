@@ -3,7 +3,9 @@ name = "nord"
 [roles]
 background       = { bg = "#2e3440" }
 regular          = { fg = "#d8dee9" }
-selection        = { fg = "#eceff4", bg = "#434c5e" }
+selection           = { fg = "#2e3440", bg = "#88c0d0" }
+selection-unfocused = { fg = "#eceff4", bg = "#434c5e" }
+button              = { fg = "#2e3440", bg = "#b48ead" }
 border-focus     = { fg = "#88c0d0", bold = true }
 border-unfocused = { fg = "#4c566a", dim = true }
 modal-border     = { fg = "#b48ead" }

@@ -447,6 +447,9 @@ degraded-reason-unknown = motivo desconocido
 msg-plugin-notice = ⚑ { $plugin }: { $text }
 msg-plugin-hooks-disabled = ⚑ { $plugin }: sus hooks se apagaron tras tres fallos seguidos — desactívalo y vuelve a activarlo en el gestor de extensiones para reintentar
 msg-plugin-effect-denied = ⚑ { $plugin }: tu policy denegó un fichero que este plugin pidió escribir (regla para actor "plugin"); se dice una vez mientras norte corre
+# La insignia de avisos caducados sin leer (spec 2026-09-10): su título,
+# para el puntero y para un lector de pantalla. Pulsarla abre el registro.
+status-notices = Avisos sin leer — abrir el registro
 status-connection-failed = ✗ no se pudo conectar
 status-failed-subject = { $banner } — esquema { $scheme }, host { $host } ({ $reason })
 failed-reason-secret-missing = falta el secreto
@@ -487,6 +490,8 @@ col-attr-s3-content-type = Tipo de contenido
 col-attr-archive-method = Método
 col-attr-archive-packed-size = Comprimido
 col-attr-archive-crc32 = CRC-32
+pane-footer-counts = { $dirs } dirs · { $files } ficheros · { $size }
+pane-footer-free = { $free } libres
 status-marked = { $n } marcadas, { $size }
 status-marked-with-dirs = { $n } marcadas, { $size } + { $dirs } dirs
 status-marks-pruned = { $n } marcas caídas, sus entradas ya no están
@@ -689,6 +694,8 @@ menu-bar-label = Barra de menús
 # Lo mismo para la barra de paneles (#324), que en la ventana es una fila de
 # botones con landmark propio.
 panelbar-label = Barra de paneles
+# Y la de teclas (spec 2026-09-10), la fila de teclas de función.
+keybar-label = Barra de teclas
 # La marca de novedad de un botón de la barra, para un lector de pantalla.
 panelbar-attention = Novedades
 # H3c, y clave SEPARADA a propósito: `palette-hint` lo pintan los DOS
@@ -935,6 +942,28 @@ panelbar-viewer = Visor
 panelbar-processes = Procesos
 panelbar-metadata = Detalles
 panelbar-log = Registro
+
+# El asistente de primer arranque (spec 2026-09-10): tres preguntas cuando
+# aún no hay norte.toml de usuario. Esc en cualquier paso = «no volver a
+# preguntar».
+wizard-title = Bienvenido a norte
+wizard-step-preset = teclas
+wizard-step-theme = tema
+wizard-step-icons = iconos
+wizard-ask-preset = ¿Qué gestor de ficheros tienes en los dedos? Las teclas lo siguen.
+wizard-ask-theme = Elige un tema. Lo que ves mientras te mueves es lo que eliges.
+wizard-ask-icons = ¿Ves aquí tres iconos: 📁 🖼 ⚙ ? Si salen como cuadros, la fuente del terminal no tiene emoji.
+wizard-icons-yes = Sí, los veo — usar iconos
+wizard-icons-no = No — insignias ASCII
+wizard-hint = [Intro] siguiente · [Retroceso] atrás · [Esc] dejar lo de serie y no volver a preguntar
+wizard-preset-orthodox = estilo mc: teclas F, Tab entre paneles. El de serie.
+wizard-preset-vim = hjkl, contadores, : para la paleta.
+wizard-preset-cua = Ctrl+C/X/V y teclas al estilo Windows.
+wizard-preset-krusader = las teclas de Krusader, transcritas.
+wizard-preset-far = las teclas de FAR Manager, transcritas.
+wizard-preset-norton = las teclas de Norton Commander.
+wizard-preset-total-commander = las teclas de Total Commander, transcritas.
+wizard-done = Guardado. Cámbialo cuando quieras desde la pantalla de ajustes.
 menu-item-layout-places = Panel de sitios
 menu-item-layout-preview = Visor acoplado
 menu-item-layout-processes = Panel de procesos
@@ -1810,6 +1839,18 @@ setting-ui-diff-detached-name = El comparador abre ventana
 setting-ui-diff-detached-desc = Si ese comparador abre una ventana propia (Meld, Kompare) en vez de ocupar el terminal. Mismo trato que el editor, y por lo mismo.
 setting-ui-confirm-quit-name = Confirmar antes de salir
 setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
+setting-ui-key-bar-name = Barra de teclas
+setting-ui-key-bar-desc = Si la fila de teclas de función (F1–F10 y qué hace cada una en la pantalla actual) se queda fijada abajo. Se lee del keymap, así que reatar una tecla cambia su etiqueta, y pulsar una celda con el ratón ejecuta el comando.
+setting-ui-panel-bar-style-name = Etiquetas de la barra de paneles
+setting-ui-panel-bar-style-desc = Cómo nombra sus botones la barra de paneles: el nombre del panel con la letra de acceso subrayada (names) o solo la letra (letters). Con menos de sesenta celdas los nombres pasan solos a letras.
+setting-ui-pane-footer-name = Pie del panel
+setting-ui-pane-footer-desc = Si cada listado lleva un pie con sus cuentas (directorios, ficheros, bytes), lo marcado, y el espacio libre del volumen donde vive el directorio.
+setting-ui-date-format-name = Formato de fecha
+setting-ui-date-format-desc = Cómo pinta la columna de modificación una fecha cuando el ajuste de columnas no fija uno: la hora si es de hoy, día y hora si es de este año, la fecha si es anterior (smart); hace cuánto (relative); o fecha y hora completas (iso). Los tres en hora local.
+setting-ui-notice-seconds-name = Segundos de aviso
+setting-ui-notice-seconds-desc = Cuánto se queda un aviso en la línea de estado antes de pasar al anillo de avisos y dejar solo una insignia. 0 lo mantiene hasta la siguiente tecla. Los banners persistentes (una conexión degradada, un journal que no abre) no caducan: son estado, no aviso.
+setting-ui-dialog-buttons-name = Botones en los diálogos
+setting-ui-dialog-buttons-desc = Si la línea de teclas de un diálogo se pinta como botones que se pueden pulsar, cada uno con su tecla, en vez de como una línea de teclas.
 setting-keymap-preset-name = Preset de keymap
 setting-keymap-preset-desc = Preset base de atajos de teclado (orthodox, vim o cua). Las capas de usuario/proyecto pueden seguir rebindeando encima.
 keymap-unavailable-not-built = { $command }: aún no está construido ({ $reason }, issue #{ $issue })

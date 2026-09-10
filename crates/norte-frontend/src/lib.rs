@@ -43,10 +43,12 @@ mod decoration;
 pub mod diffpair;
 pub mod display;
 pub mod error;
+pub mod footer;
 pub mod format;
 pub mod help;
 pub mod help_badge;
 pub mod help_chords;
+pub mod keybar;
 pub mod keymap;
 pub mod keysheet;
 pub mod layout;
@@ -86,6 +88,7 @@ pub mod viewer;
 pub mod viewport;
 pub mod watch;
 pub mod whichkey;
+pub mod wizard;
 
 pub use decoration::{
     BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration, sanitize_icon,

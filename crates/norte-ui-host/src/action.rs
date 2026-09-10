@@ -560,6 +560,15 @@ pub enum UiAction {
     },
     /// Cierra el menú desplegado sin ejecutar nada (un click fuera).
     MenuClose,
+    /// Abre el asistente de primer arranque (spec 2026-09-10, puente 63).
+    /// Lo manda el renderer al arrancar cuando el catálogo dice
+    /// `first_run`: no hay `norte.toml` de usuario todavía.
+    WizardOpen,
+    /// Elige una fila del asistente Y la confirma: lo que hace un click.
+    WizardActivateRow {
+        /// Qué fila, en el orden en que viajaron.
+        row: u32,
+    },
     /// Pulsa un botón de la barra de paneles (#324, puente 51): abre el
     /// panel si está cerrado y lo cierra si está abierto.
     ///
@@ -569,6 +578,15 @@ pub enum UiAction {
     PanelBarActivate {
         /// Qué botón, en el orden en que viajaron.
         button: u32,
+    },
+    /// Pulsa una celda de la barra de teclas (spec 2026-09-10, puente 63).
+    ///
+    /// Lleva la TECLA (`1`..=`10`) y no el comando: el host la sintetiza
+    /// como `F<n>` y la despacha por el mismo camino que una tecla de
+    /// verdad, contra la pantalla que tenga el teclado en ese momento.
+    KeyBarActivate {
+        /// Qué tecla de función.
+        key: u32,
     },
     /// Arrastra el borde que hay entre `slot_id` y el hueco de al lado.
     ///

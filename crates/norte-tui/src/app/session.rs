@@ -58,6 +58,7 @@ impl App {
             active: self.session_key_active(),
             layouts,
             slots: self.session.orphans.clone(),
+            palette_recent: self.palette_recent.clone(),
         };
         for id in self.layout.slot_ids() {
             let Some(pane) = self.panes.browser(id) else {
@@ -126,6 +127,7 @@ impl App {
         if let Some(tree) = body.layouts.get(&clave) {
             self.set_layout(tree.clone());
         }
+        self.palette_recent.clone_from(&body.palette_recent);
         // Lo de los OTROS perfiles se guarda entero para volver a escribirlo:
         // este proceso mira un perfil y el documento es de todos.
         self.session.other_layouts = body

@@ -446,8 +446,9 @@ impl Estado {
         // solo recibiera el de la paleta seguiría pintando la ayuda debajo.
         if k.ctrl && !k.alt && !k.meta && k.key.eq_ignore_ascii_case("p") {
             self.ayuda = None;
-            self.paleta = Some(norte_frontend::palette_state::Palette::new(
+            self.paleta = Some(norte_frontend::palette_state::Palette::with_recent(
                 self.filas_de_paleta(),
+                &self.paleta_recientes,
             ));
             self.pedir_filas_de_plugin(backend, buzon);
             let cambios = vec![

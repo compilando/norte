@@ -235,6 +235,99 @@ pub enum KeyOwner {
     Log,
 }
 
+/// Las celdas de la barra de teclas de las tres pantallas (spec
+/// 2026-09-10), en el idioma vigente al construirlas.
+#[derive(Debug, Clone, Default)]
+pub struct KeyBars {
+    /// Con los listados o un panel lateral: el efectivo `browse`.
+    pub browse: Vec<norte_frontend::keybar::KeyCell>,
+    /// Con el visor a pantalla completa.
+    pub viewer: Vec<norte_frontend::keybar::KeyCell>,
+}
+
+impl KeyBars {
+    /// De los dos efectivos con teclas de función, en el idioma activo. El
+    /// de `dialog` no entra: ningún preset ata una `F` ahí, y con un modal o
+    /// un overlay delante la fila va en blanco (`App::key_bar_cells`).
+    #[must_use]
+    pub fn build(
+        browse: &norte_frontend::keymap::Effective,
+        viewer: &norte_frontend::keymap::Effective,
+    ) -> Self {
+        let lang = norte_i18n::active();
+        Self {
+            browse: norte_frontend::keybar::cells_in(browse, lang),
+            viewer: norte_frontend::keybar::cells_in(viewer, lang),
+        }
+    }
+}
+
+impl App {
+    /// ¿Está el panel de registro en la disposición? Es lo que pone a cero
+    /// los avisos sin leer: si está, el lector los tiene delante.
+    #[must_use]
+    pub fn log_panel_open(&self) -> bool {
+        self.layout.slot_ids().into_iter().any(|id| {
+            self.layout
+                .kind_of(id)
+                .is_some_and(|k| k.as_str() == crate::logview::KIND)
+        })
+    }
+
+    /// Un tic de un segundo sobre el aviso de la barra (spec 2026-09-10,
+    /// `[ui] notice_seconds`): pasado el tope, el mensaje sale de la barra,
+    /// va al registro (por `tracing`, que es lo que el panel enseña) y la
+    /// insignia `!n` cuenta uno más. Con `0` no caduca nada: el mensaje se
+    /// queda hasta la siguiente tecla, como siempre. Los banners
+    /// persistentes no pasan por aquí: son estado, no aviso.
+    pub fn tick_notices(&mut self) {
+        if self.log_panel_open() {
+            self.notices_unread = 0;
+        }
+        let Some(msg) = self.message.as_deref() else {
+            self.message_ticks = 0;
+            self.message_counted = None;
+            return;
+        };
+        if self.message_counted.as_deref() == Some(msg) {
+            self.message_ticks = self.message_ticks.saturating_add(1);
+        } else {
+            self.message_counted = Some(msg.to_owned());
+            self.message_ticks = 1;
+        }
+        let tope = self.chrome.notice_seconds();
+        if tope > 0 && self.message_ticks >= tope {
+            let text = self.message.take().unwrap_or_default();
+            self.message_ticks = 0;
+            self.message_counted = None;
+            self.notices_unread = self.notices_unread.saturating_add(1);
+            // `info`, no `warn`: «copiado 1 fichero» no es un aviso, y el
+            // nivel es por lo que se filtra el panel de registro.
+            tracing::info!(target: "norte::notice", "{text}");
+        }
+    }
+
+    /// Las celdas de la pantalla que tiene las teclas AHORA: con un modal o
+    /// un overlay delante, NINGUNA —la fila va en blanco: ningún preset ata
+    /// una `F` en `[dialog]`, y una celda que anunciara un verbo que el modal
+    /// activo rehúsa sería la mentira que `hints` existe para no contar—; el
+    /// visor a pantalla completa, las suyas; si no, las de los listados. El
+    /// visor se pregunta ANTES que `overlay_open`, que lo incluye: es el mismo
+    /// orden que `vista_barra_de_teclas` en la ventana (ADR 0077).
+    #[must_use]
+    pub fn key_bar_cells(&self) -> &[norte_frontend::keybar::KeyCell] {
+        if self.modal.is_some() || self.help.is_some() || self.wizard.is_some() {
+            &[]
+        } else if self.viewer.is_some() {
+            &self.key_bars.viewer
+        } else if crate::mouse::overlay_open(self) {
+            &[]
+        } else {
+            &self.key_bars.browse
+        }
+    }
+}
+
 /// Lo que hace un click sobre una fila del sidebar de sitios (#226).
 ///
 /// Lo que el modelo podía hacer ya está hecho al volver; esto es lo que
@@ -465,6 +558,16 @@ pub struct App {
     pub modal: Option<Modal>,
     /// Último mensaje para la barra (error por categoría o resultado).
     pub message: Option<String>,
+    /// Cuántos tics de un segundo lleva [`Self::message`] en la barra (spec
+    /// 2026-09-10). Se cuenta en TICS y no con un `Instant` para que un test
+    /// lo haga avanzar sin dormir; `[ui] notice_seconds` es el tope.
+    pub message_ticks: u32,
+    /// El texto que se estaba contando: si cambia, la cuenta vuelve a cero.
+    pub message_counted: Option<String>,
+    /// Avisos que caducaron sin que el lector abriera el registro. La barra
+    /// pinta `!n` a la derecha mientras haya alguno; abrir el panel de
+    /// registro lo pone a cero.
+    pub notices_unread: u32,
     /// Todo lo que este proceso sabe de la sesión guardada (L2).
     pub session: SessionUi,
     /// Panel de tasks vivo.
@@ -521,6 +624,20 @@ pub struct App {
     /// se elige — pero por defecto va puesta, porque el que no sabe que el
     /// panel existe tampoco sabe que existe la opción de enseñarlo.
     pub panel_bar: bool,
+    /// El cromo configurable (spec 2026-09-10): barra de teclas, estilo de
+    /// la barra de paneles, pie del panel, formato de fecha, caducidad de
+    /// los avisos y botones de diálogo. Cada frame lo lee; `reload_config`
+    /// lo vuelve a copiar. Un `App` de test arranca con la barra de teclas
+    /// y el pie APAGADOS por lo mismo que la barra de paneles: una fila que
+    /// aparece sola cambiaría los índices de ochenta tests que no van de esto.
+    pub chrome: norte_config::UiChrome,
+    /// Los volúmenes del host, cacheados para el pie de cada panel (spec
+    /// 2026-09-10). Los pide el bucle cuando [`Self::volumes_stale`] lo
+    /// dice —al aterrizar un listado y al refrescar—, nunca un frame:
+    /// `host.volumes` monta y consulta espacio en cada filesystem.
+    pub volumes: Vec<norte_proto::methods::Volume>,
+    /// Hay que volver a pedir [`Self::volumes`].
+    pub volumes_stale: bool,
     /// La fila `..` está encendida (`[ui] parent_entry`).
     ///
     /// Se guarda aquí además de en cada pane porque un pane NUEVO —una
@@ -839,6 +956,16 @@ pub struct App {
     /// efectivo se mueva al `Resolver` compartido. `ui::draw_*` los lee en
     /// vez de una clave Fluent estática.
     pub dialog_hints: crate::hints::DialogHints,
+    /// Las celdas de la barra de teclas por pantalla (spec 2026-09-10),
+    /// PRECOMPUTADAS de los tres efectivos como `dialog_hints`: en el
+    /// arranque y en cada hot-reload OK, antes de que se muden al
+    /// `Resolver`. Cada frame elige cuál pintar según qué pantalla tiene
+    /// las teclas.
+    pub key_bars: KeyBars,
+    /// Una tecla que el ratón pidió sintetizar: un clic en la barra de
+    /// teclas ES pulsar la tecla, y el bucle la despacha por `on_key`, que
+    /// es el único camino con los tres resolvers a mano.
+    pub pending_key: Option<crossterm::event::KeyEvent>,
     /// Versión y revisión del binario (`norte_frontend::version::VERSION_LINE`),
     /// pintadas en el marco de la ayuda. Vacía = no se pinta: es lo que
     /// reciben los tests, cuyos snapshots no pueden depender del commit.
@@ -850,12 +977,20 @@ pub struct App {
     pub help_chords: std::sync::Arc<crate::help::TuiChords>,
     /// Command palette abierta (`Ctrl+P`/vim `:`, H1 T4): `None` = cerrada.
     pub palette: Option<Palette>,
+    /// Las últimas claves lanzadas desde la paleta, la más reciente primero
+    /// (spec 2026-09-10). Viven en la sesión de UI: se leen al restaurarla y
+    /// se escriben con ella.
+    pub palette_recent: Vec<String>,
     /// Filas de la palette PRECOMPUTADAS del keymap vigente
     /// ([`crate::palette::build_rows`]) — igual criterio que `help_lines`/
     /// `dialog_hints`: se reconstruyen en el arranque y en cada hot-reload
     /// OK, ANTES de que los efectivos se muevan al `Resolver`. Abrir la
     /// palette (`dispatch`, brazo `app.palette`) solo clona esta snapshot.
     pub palette_rows: Vec<crate::palette::Row>,
+    /// El asistente de primer arranque (spec 2026-09-10), mientras está
+    /// abierto. Es un overlay más: se queda las teclas, y el modelo es el
+    /// compartido con la ventana.
+    pub wizard: Option<norte_frontend::wizard::Wizard>,
     /// Estado del ratón (captura aparte, que es de la terminal): la
     /// geometría PINTADA del último frame, el gesto armado y el último
     /// click. La geometría la devuelve el run loop tras cada `draw`
@@ -930,6 +1065,10 @@ pub use norte_frontend::shortcuts::ShortcutsState as Shortcuts;
 impl App {
     /// App con foco en el pane izquierdo.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "un campo por línea: los defaults del App"
+    )]
     pub fn new(left: Pane, right: Pane) -> Self {
         Self {
             panes: crate::panel::PaneSlots::new(left, right),
@@ -958,6 +1097,9 @@ impl App {
             which_key: None,
             modal: None,
             message: None,
+            message_ticks: 0,
+            message_counted: None,
+            notices_unread: 0,
             session: SessionUi::default(),
             board: crate::tasks::TaskBoard::default(),
             viewer: None,
@@ -970,6 +1112,13 @@ impl App {
             profile_picker: None,
             menu_bar: true,
             panel_bar: true,
+            chrome: norte_config::UiChrome {
+                key_bar: Some(false),
+                pane_footer: Some(false),
+                ..Default::default()
+            },
+            volumes: Vec::new(),
+            volumes_stale: true,
             pending_panel_command: None,
             // Apagada hasta que el arranque diga: un `App` de test no lee
             // configuración, y una fila que aparece sola cambiaría los
@@ -1016,10 +1165,14 @@ impl App {
             subshell_chord: None,
             pending_osc52: None,
             dialog_hints: crate::hints::DialogHints::default(),
+            key_bars: KeyBars::default(),
+            pending_key: None,
             version_line: "",
             help_chords: default_help_chords(),
             palette: None,
+            palette_recent: Vec::new(),
             palette_rows: Vec::new(),
+            wizard: None,
             mouse: crate::mouse::MouseState::default(),
             settings: None,
             shortcuts: None,

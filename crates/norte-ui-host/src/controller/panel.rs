@@ -465,8 +465,76 @@ impl Estado {
                 hueco.pane.marked_dirs(),
                 self.lang,
             )),
+            footer: clamp_display(self.pie_de(hueco)),
             marks: hueco.pane.marks_len() as u64,
         }
+    }
+
+    /// El pie de un listado (spec 2026-09-10), redactado por el crate
+    /// compartido; vacío con `[ui] pane_footer` apagado.
+    pub(super) fn pie_de(&self, hueco: &Hueco) -> String {
+        if !self.config.common.ui_chrome.pane_footer() {
+            return String::new();
+        }
+        let counts =
+            norte_frontend::footer::counts(hueco.pane.entries(), hueco.pane.is_parent_row(0));
+        let marked = norte_frontend::footer::Marked {
+            n: hueco.pane.marks_len(),
+            bytes: hueco.pane.marked_bytes(),
+            dirs: hueco.pane.marked_dirs(),
+        };
+        let free = norte_frontend::space::free_for(hueco.pane.dir(), &self.volumenes_pie);
+        norte_frontend::footer::pane_footer(counts, marked, free, self.lang)
+    }
+
+    /// Pide los volúmenes para el pie, si el pie está encendido y no hay ya
+    /// una petición en vuelo. Se llama al aterrizar un listado: es cuando
+    /// el panel puede haber cambiado de volumen.
+    pub(super) fn pedir_volumenes_de_pie(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        if !self.config.common.ui_chrome.pane_footer() || self.pie_en_vuelo {
+            return;
+        }
+        self.pie_en_vuelo = true;
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.volumes()).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::VolumenesDePie(res))))
+                .await;
+        });
+    }
+
+    /// Los volúmenes del pie llegaron: se cachean y, si el pie de algún
+    /// listado cambia con ellos, su cabecera viaja de nuevo. Un fallo deja
+    /// la cache como estaba: el pie calla el espacio antes que inventarlo.
+    pub(super) fn aplicar_volumenes_de_pie(
+        &mut self,
+        res: Result<Vec<norte_proto::methods::Volume>, Error>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        self.pie_en_vuelo = false;
+        let vols = res.ok()?;
+        let antes: Vec<(u32, String)> = self
+            .huecos
+            .iter()
+            .map(|(id, h)| (*id, self.pie_de(h)))
+            .collect();
+        self.volumenes_pie = vols;
+        let cambios: Vec<ViewChange> = antes
+            .into_iter()
+            .filter_map(|(id, viejo)| {
+                let h = self.huecos.get(&id)?;
+                (self.pie_de(h) != viejo).then(|| self.cabecera_de(id, h))
+            })
+            .collect();
+        (!cambios.is_empty()).then(|| self.parche(cambios))
     }
 
     pub(super) fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
@@ -483,6 +551,7 @@ impl Estado {
             filling_note,
             pruned_note,
             marked_note,
+            footer,
             marks,
         } = self.cabecera_de(id, hueco)
         else {
@@ -506,6 +575,7 @@ impl Estado {
             filling_note,
             pruned_note,
             marked_note,
+            footer,
             columns: self.cabeceras(hueco),
             state: hueco.estado.clone(),
             quick: hueco.pane.quick().map(|q| crate::dto::QuickView {

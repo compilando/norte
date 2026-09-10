@@ -5,7 +5,9 @@ import type { Screen } from "../render";
 import type {
   BrowserSlotView,
   MenuView,
+  KeyBarView,
   PanelBarView,
+  WizardView,
   PaletteView,
   TabGroupView,
   WhichKeyView,
@@ -41,6 +43,9 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
   fila.className = "panelbar";
   fila.setAttribute("role", "toolbar");
   fila.setAttribute("aria-label", this.t("panelbar-label"));
+  // `[ui] panel_bar_style`: con nombres o solo con la letra. El nombre
+  // sigue en el título del botón en los dos casos.
+  fila.dataset["names"] = String(bar.names !== false);
   for (const [i, b] of bar.buttons.entries()) {
     const boton = document.createElement("button");
     boton.type = "button";
@@ -74,6 +79,118 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
     fila.append(boton);
   }
   this.panelBarRoot.replaceChildren(fila);
+}
+
+/**
+ * La barra de teclas de función (puente 63): diez celdas con lo que cada
+ * `F` hace en la pantalla que tiene el teclado. El host la deriva del
+ * keymap; aquí solo se pinta, y un click devuelve la TECLA, que el host
+ * sintetiza — no hay un segundo despacho que pueda divergir.
+ *
+ * Su raíz se busca por id y, si el documento no la trae (un test, una
+ * página anterior), se crea al final del cuerpo: es una fila `fixed` abajo,
+ * y el orden del documento no le importa.
+ */
+export function paintKeyBar(this: Screen, bar: KeyBarView | null): void {
+  const doc = this.root.ownerDocument;
+  let raiz = doc.getElementById("keybar");
+  if (raiz === null) {
+    raiz = doc.createElement("div");
+    raiz.id = "keybar";
+    doc.body.append(raiz);
+  }
+  const visible = bar !== null && bar.bar;
+  const alto = visible ? "var(--cell-h)" : "0px";
+  if (this.keyBarHeight !== alto) {
+    doc.documentElement.style.setProperty("--keybar-h", alto);
+    this.keyBarHeight = alto;
+    this.viewportSucio = true;
+  }
+  if (!visible) {
+    raiz.replaceChildren();
+    return;
+  }
+  const fila = doc.createElement("nav");
+  fila.className = "keybar";
+  fila.setAttribute("role", "toolbar");
+  fila.setAttribute("aria-label", this.t("keybar-label"));
+  for (const c of bar.cells) {
+    const boton = doc.createElement("button");
+    boton.type = "button";
+    boton.className = "keybar-cell";
+    boton.dataset["bound"] = String(c.command !== null);
+    boton.disabled = c.command === null;
+    if (c.command !== null) {
+      boton.title = `F${String(c.key)} · ${c.command}`;
+    }
+    const num = doc.createElement("span");
+    num.className = "keybar-num";
+    num.textContent = String(c.key);
+    const etiqueta = doc.createElement("span");
+    etiqueta.className = "keybar-label";
+    etiqueta.textContent = c.label;
+    boton.append(num, etiqueta);
+    boton.addEventListener("click", () => {
+      this.send({ action: "key_bar_activate", key: c.key });
+    });
+    fila.append(boton);
+  }
+  raiz.replaceChildren(fila);
+}
+
+/**
+ * El asistente de primer arranque (puente 63): el título del paso, la
+ * pregunta, las filas con el cursor y la línea de teclas. Todo llega ya
+ * traducido; un click en una fila la elige y la confirma. Su raíz se busca
+ * por id y, si el documento no la trae, se crea al final del cuerpo: es un
+ * velo a pantalla completa, y el orden del documento no le importa.
+ */
+export function paintWizard(this: Screen, wizard: WizardView | null): void {
+  const doc = this.root.ownerDocument;
+  let raiz = doc.getElementById("wizard");
+  if (raiz === null) {
+    raiz = doc.createElement("div");
+    raiz.id = "wizard";
+    doc.body.append(raiz);
+  }
+  if (wizard === null) {
+    raiz.replaceChildren();
+    raiz.dataset["open"] = "false";
+    return;
+  }
+  raiz.dataset["open"] = "true";
+  const caja = doc.createElement("section");
+  caja.className = "wizard";
+  caja.setAttribute("role", "dialog");
+  caja.setAttribute("aria-modal", "true");
+  caja.setAttribute("aria-label", wizard.title);
+  const titulo = doc.createElement("h2");
+  titulo.className = "wizard-title";
+  titulo.textContent = wizard.title;
+  const pregunta = doc.createElement("p");
+  pregunta.className = "wizard-question";
+  pregunta.textContent = wizard.question;
+  const lista = doc.createElement("ul");
+  lista.className = "wizard-rows";
+  lista.setAttribute("role", "listbox");
+  for (const [i, texto] of wizard.rows.entries()) {
+    const fila = doc.createElement("li");
+    fila.className = "wizard-row";
+    fila.id = `wizard-row-${String(i)}`;
+    fila.setAttribute("role", "option");
+    fila.setAttribute("aria-selected", String(wizard.cursor === i));
+    fila.textContent = texto;
+    fila.addEventListener("click", () => {
+      this.send({ action: "wizard_activate_row", row: i });
+    });
+    lista.append(fila);
+  }
+  lista.setAttribute("aria-activedescendant", `wizard-row-${String(wizard.cursor)}`);
+  const pista = doc.createElement("p");
+  pista.className = "wizard-hint";
+  pista.textContent = wizard.hint;
+  caja.append(titulo, pregunta, lista, pista);
+  raiz.replaceChildren(caja);
 }
 
 /**
@@ -219,16 +336,20 @@ export function paintPalette(this: Screen, palette: PaletteView | null): void {
     fila.setAttribute("aria-selected", String(palette.cursor === i));
     fila.dataset["enabled"] = String(r.enabled);
     fila.dataset["hostile"] = String(r.hostile);
-    const texto = document.createElement("span");
-    texto.className = "palette-text";
-    texto.textContent = r.text;
+    fila.dataset["recent"] = String(r.recent === true);
+    // La etiqueta humana primero y entera, el id atenuado, el chord a la
+    // derecha: es lo que se lee, en ese orden. El id sigue en el DOM porque
+    // es lo que un lector que ya lo sabe teclea.
     const desc = document.createElement("span");
     desc.className = "palette-desc";
     desc.textContent = r.desc;
+    const texto = document.createElement("span");
+    texto.className = "palette-text";
+    texto.textContent = r.text;
     const chord = document.createElement("span");
     chord.className = "palette-chord";
     chord.textContent = r.chord;
-    fila.append(texto, desc, chord);
+    fila.append(desc, texto, chord);
     if (r.hostile) {
       // Solo una fila de PLUGIN puede serlo, y esta es la pantalla donde
       // se elige qué código de tercero correr: un texto enmascarado que

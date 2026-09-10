@@ -72,6 +72,7 @@ mod transfer;
 mod tree;
 mod viewer;
 mod views;
+mod wizard;
 
 /// Capacidad del buzón del actor. Acotado a propósito: si el renderer manda
 /// más rápido de lo que el host aplica, se le hace esperar — jamás se crece
@@ -921,6 +922,10 @@ enum Fondo {
     /// Aparte de los del selector por el mismo motivo que los dos catálogos
     /// de plugins: son dos superficies con dos vidas.
     SitiosVolumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// Los volúmenes para el PIE de los listados (spec 2026-09-10). Aparte
+    /// de los de sitios y del selector por lo mismo: otra vida, y llega sin
+    /// que nadie haya abierto nada.
+    VolumenesDePie(Result<Vec<norte_proto::methods::Volume>, Error>),
     /// Los subdirectorios de una rama del ÁRBOL, ya filtrados y ordenados.
     ///
     /// Sin `Result`: una rama que no se deja leer llega VACÍA y se marca como
@@ -1356,7 +1361,13 @@ async fn actor(
                     }
                 }
             }
-            Mensaje::SesionTic => estado.empujar_sesion(&backend, &buzon),
+            Mensaje::SesionTic => {
+                estado.empujar_sesion(&backend, &buzon);
+                // Y un segundo más para el aviso de la barra (spec 2026-09-10).
+                if let Some(u) = estado.caducar_aviso() {
+                    let _ = updates.send(u);
+                }
+            }
             Mensaje::SesionPuesta(datos) => {
                 let (res, cuerpo) = *datos;
                 for u in estado.sesion_puesta(res, cuerpo, &backend, &buzon) {
@@ -2637,6 +2648,18 @@ struct Estado {
     /// Es un contexto de entrada más, como el buscador incremental y el
     /// visor: mientras esté abierta, las teclas de texto son suyas.
     paleta: Option<norte_frontend::palette_state::Palette>,
+    /// El asistente de primer arranque (spec 2026-09-10), mientras está
+    /// abierto. Un overlay más: se queda las teclas.
+    asistente: Option<norte_frontend::wizard::Wizard>,
+    /// Las últimas claves lanzadas desde la paleta, la más reciente primero
+    /// (spec 2026-09-10). Viven en la sesión de UI, como en el terminal.
+    paleta_recientes: Vec<String>,
+    /// Los volúmenes del host, cacheados para el pie de cada listado (spec
+    /// 2026-09-10). Se piden cuando un listado aterriza, nunca por foto:
+    /// `host.volumes` monta y consulta espacio en cada filesystem.
+    volumenes_pie: Vec<norte_proto::methods::Volume>,
+    /// Hay una petición de [`Self::volumenes_pie`] en vuelo: no se apila otra.
+    pie_en_vuelo: bool,
     /// Por qué menú se desplegó la última vez. Se reabre por ahí: empezar
     /// siempre por el primero obliga a recorrer la barra entera en cada
     /// gesto, y quien usa dos entradas del mismo menú lo paga cada vez.
@@ -2874,6 +2897,13 @@ struct Estado {
     /// con la de ahora y manda la nueva si difiere: es lo que hace que la
     /// barra se actualice por cualquier camino sin que cada camino lo sepa.
     ultima_barra: Option<crate::dto::PanelBarView>,
+    /// La última barra de TECLAS que cruzó, por lo mismo (spec 2026-09-10).
+    ultima_teclas: Option<crate::dto::KeyBarView>,
+    /// Cuántos tics de un segundo lleva `status.message` en la barra (spec
+    /// 2026-09-10): en TICS para que un test lo haga avanzar sin dormir.
+    mensaje_ticks: u32,
+    /// El texto que se estaba contando: si cambia, la cuenta vuelve a cero.
+    mensaje_contado: Option<String>,
     /// El reparto del ÚLTIMO tamaño conocido: quién se pinta, quién no, y en
     /// qué orden se tabula. Vive y muere con el tamaño, no con el árbol.
     reparto: Resolved,
@@ -3201,6 +3231,10 @@ impl Estado {
             token: 0,
             locale,
             paleta: None,
+            asistente: None,
+            paleta_recientes: Vec::new(),
+            volumenes_pie: Vec::new(),
+            pie_en_vuelo: false,
             menu: None,
             ayuda: None,
             ajustes: None,
@@ -3264,6 +3298,9 @@ impl Estado {
             arbol,
             kinds,
             ultima_barra: None,
+            ultima_teclas: None,
+            mensaje_ticks: 0,
+            mensaje_contado: None,
             reparto,
             viewport,
             roles,
@@ -3759,8 +3796,27 @@ impl Estado {
             UiAction::MenuPointRow { row } => self.apuntar_en_menu(*row),
             UiAction::MenuActivateRow { row } => self.activar_del_menu(*row, backend, buzon),
             UiAction::MenuClose => self.cerrar_menu(),
+            UiAction::WizardOpen => self.abrir_asistente(),
+            UiAction::WizardActivateRow { row } => {
+                self.activar_fila_de_asistente(*row, backend, buzon)
+            }
             UiAction::PanelBarActivate { button } => {
                 self.pulsar_barra_de_paneles(*button, backend, buzon)
+            }
+            // Una celda de la barra de teclas ES la tecla: se sintetiza y va
+            // por `tecla`, contra la pantalla que tenga el teclado.
+            UiAction::KeyBarActivate { key } => {
+                if !(1..=u32::from(norte_frontend::keybar::CELLS)).contains(key) {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                }
+                let k = crate::keys::KeyInput {
+                    key: format!("F{key}"),
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    meta: false,
+                };
+                self.tecla(&k, backend, buzon)
             }
             UiAction::ResizeSlot { slot_id, cells } => {
                 self.arrastrar_borde(*slot_id, *cells, backend, buzon)

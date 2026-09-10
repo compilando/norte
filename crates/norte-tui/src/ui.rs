@@ -29,7 +29,8 @@ mod text;
 // `tests/`, `mouse.rs` y `event_loop.rs` nombran todo esto por `ui::..`, asi
 // que es la API de este modulo y no baja a `pub(crate)`.
 pub use chrome::{
-    MenuHit, MenuZone, PanelZone, TabAction, TabZone, menu_zones, panel_zones, tab_zones,
+    KeyZone, MenuHit, MenuZone, PanelZone, TabAction, TabZone, key_zones, menu_zones, panel_zones,
+    tab_zones,
 };
 pub use compare::draw_compare;
 pub use geometry::{
@@ -44,7 +45,7 @@ pub use overlays::{
 pub use pane::painted_len_and_selection;
 pub use panels::{PlaceZone, TreeZone, places_zones, tree_zones};
 pub use pickers::draw_theme_picker;
-pub use status::{SessionZone, session_zone};
+pub use status::{NoticeZone, SessionZone, notices_zone, session_zone};
 pub use text::fit_hint_groups;
 
 pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
@@ -55,13 +56,15 @@ pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
 // él— es exactamente lo que se desincronizaba.
 #[cfg(test)]
 pub(crate) use chrome::panel_buttons;
-use chrome::{draw_menu, draw_panel_bar};
+use chrome::{draw_key_bar, draw_menu, draw_panel_bar};
 pub(crate) use geometry::{
     body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_rect,
 };
 use modals::draw_modal;
+pub use modals::{ModalZone, modal_zones};
 use overlays::{
     EXTENSIONS_WIDE_MIN, draw_extensions, draw_palette, draw_plugin_config_panel, draw_settings,
+    draw_wizard,
 };
 use pane::draw_pane;
 use panels::{
@@ -123,28 +126,60 @@ fn marca_destino(app: &App, i: usize) -> bool {
     norte_frontend::layout::target_worth_marking(app.panes.len()) && app.target_index() == Some(i)
 }
 
+/// El pie de un listado (spec 2026-09-10), o `None` con `[ui] pane_footer`
+/// apagado. Lo redacta el crate compartido; aquí solo se juntan las cuentas
+/// del pane con el espacio libre de su volumen (de la cache de `App`).
+fn pane_footer(app: &App, pane: &crate::app::Pane, width: u16) -> Option<String> {
+    if !app.chrome.pane_footer() {
+        return None;
+    }
+    let counts = norte_frontend::footer::counts(pane.entries(), pane.is_parent_row(0));
+    let marked = norte_frontend::footer::Marked {
+        n: pane.marks_len(),
+        bytes: pane.marked_bytes(),
+        dirs: pane.marked_dirs(),
+    };
+    let free = norte_frontend::space::free_for(pane.dir(), &app.volumes);
+    // Lo que el borde deja: las dos esquinas y un espacio a cada lado. Los
+    // tramos que no caben se caen por prioridad, no por el medio.
+    let room = usize::from(width.saturating_sub(4));
+    Some(norte_frontend::footer::fit(
+        norte_frontend::footer::segments(counts, marked, free, norte_i18n::active()),
+        room,
+    ))
+}
+
 /// El cuerpo del frame: los dos panes —o el panel que los sustituye—, la
 /// franja de tareas y la barra de estado.
 ///
 /// Aparte de [`draw`] porque un reparto, dos ramas de sustitución y tres
 /// pintados no caben en una función que además monta todos los overlays.
-fn draw_body(frame: &mut Frame<'_>, app: &App) {
-    // UN reparto por frame: de él salen el cuerpo, los dos panes, la
-    // franja de tareas y la barra de estado.
-    let res = resolved_frame(app, frame.area());
-    let body = body_rect(&res, &app.layout).unwrap_or_else(|| chrome_body(app, frame.area()));
-    let tasks_area = slot_rect(&res, crate::panel::SLOT_TASKS).unwrap_or(Rect {
+/// Las dos franjas de abajo del cuerpo —tareas y estado— del reparto, con su
+/// respaldo cuando el árbol no las coloca. El respaldo del estado va al
+/// final del CUERPO, no del frame: la barra de teclas se reserva la última
+/// fila (spec 2026-09-10).
+fn bottom_strips(res: &norte_frontend::layout::Resolved, body: Rect) -> (Rect, Rect) {
+    let tasks_area = slot_rect(res, crate::panel::SLOT_TASKS).unwrap_or(Rect {
         x: body.x,
         y: body.y.saturating_add(body.height),
         width: body.width,
         height: 0,
     });
-    let status_area = slot_rect(&res, crate::panel::SLOT_STATUS).unwrap_or(Rect {
+    let status_area = slot_rect(res, crate::panel::SLOT_STATUS).unwrap_or(Rect {
         x: body.x,
-        y: frame.area().height.saturating_sub(1),
+        y: body.y.saturating_add(body.height).saturating_sub(1),
         width: body.width,
         height: 1,
     });
+    (tasks_area, status_area)
+}
+
+fn draw_body(frame: &mut Frame<'_>, app: &App) {
+    // UN reparto por frame: de él salen el cuerpo, los dos panes, la
+    // franja de tareas y la barra de estado.
+    let res = resolved_frame(app, frame.area());
+    let body = body_rect(&res, &app.layout).unwrap_or_else(|| chrome_body(app, frame.area()));
+    let (tasks_area, status_area) = bottom_strips(&res, body);
     let cols = pane_cols(&res, &app.layout);
     // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
     // frame; los tests lo fijan (`App::render_now_ms`) para snapshots
@@ -189,6 +224,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
                 // trabajo de sesión no puede poner a girar una cabecera a la
                 // que no le está pasando nada.
                 app.busy.as_ref().filter(|b| b.visible() && b.affects(i)),
+                pane_footer(app, pane, rect.width).as_deref(),
             );
         }
     }
@@ -387,6 +423,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(palette) = &app.palette {
         draw_palette(frame, palette, &app.theme);
     }
+    // El asistente de primer arranque (spec 2026-09-10): encima de la
+    // paleta y de los ajustes, debajo de un modal, como el resto de overlays
+    // que no son una pregunta de seguridad.
+    if let Some(wizard) = &app.wizard {
+        draw_wizard(frame, wizard, &app.theme);
+    }
     if let Some(settings) = &app.settings {
         draw_settings(frame, settings, &app.theme);
     }
@@ -449,6 +491,10 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             inert.as_ref().unwrap_or(&app.dialog_hints),
         );
     }
+    // La barra de teclas (spec 2026-09-10) va la ÚLTIMA: su fila está fuera
+    // del cuerpo, así que ningún overlay la tapa. Con un modal delante va en
+    // blanco (`App::key_bar_cells`): ningún preset ata una `F` en `[dialog]`.
+    draw_key_bar(frame, app);
 }
 
 /// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto

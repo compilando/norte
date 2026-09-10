@@ -446,6 +446,9 @@ degraded-reason-unknown = unknown reason
 msg-plugin-notice = ⚑ { $plugin }: { $text }
 msg-plugin-hooks-disabled = ⚑ { $plugin }: its hooks were switched off after three failures in a row — disable and re-enable it in the extension manager to try again
 msg-plugin-effect-denied = ⚑ { $plugin }: your policy denied a file this plugin asked to write (rule for actor "plugin"); said once while norte runs
+# The badge of expired notices nobody read (spec 2026-09-10): its title,
+# for the pointer and for a screen reader. Clicking it opens the log.
+status-notices = Unread notices — open the log
 status-connection-failed = ✗ could not connect
 status-failed-subject = { $banner } — scheme { $scheme }, host { $host } ({ $reason })
 failed-reason-secret-missing = the secret is missing
@@ -486,6 +489,8 @@ col-attr-s3-content-type = Content type
 col-attr-archive-method = Method
 col-attr-archive-packed-size = Packed
 col-attr-archive-crc32 = CRC-32
+pane-footer-counts = { $dirs } dirs · { $files } files · { $size }
+pane-footer-free = { $free } free
 status-marked = { $n } marked, { $size }
 status-marked-with-dirs = { $n } marked, { $size } + { $dirs } dirs
 status-marks-pruned = { $n } marks dropped, their entries are gone
@@ -682,6 +687,8 @@ menu-bar-label = Menu bar
 # The same for the panel bar (#324), which in the window is a row of buttons
 # with a landmark of its own.
 panelbar-label = Panel bar
+# And for the key bar (spec 2026-09-10), the row of function keys.
+keybar-label = Key bar
 # A bar button's attention mark, for a screen reader.
 panelbar-attention = Something new
 # H3c, and a SEPARATE key on purpose: `palette-hint` is painted by both
@@ -986,6 +993,27 @@ panelbar-viewer = Viewer
 panelbar-processes = Jobs
 panelbar-metadata = Details
 panelbar-log = Log
+
+# The first-run wizard (spec 2026-09-10): three questions when there is no
+# user norte.toml yet. Esc at any step means "do not ask again".
+wizard-title = Welcome to norte
+wizard-step-preset = keys
+wizard-step-theme = theme
+wizard-step-icons = icons
+wizard-ask-preset = Which file manager do you have in your fingers? The keys follow it.
+wizard-ask-theme = Pick a theme. What you see while you move is what you are choosing.
+wizard-ask-icons = Can you see three icons here: 📁 🖼 ⚙ ? If they show as boxes, your terminal font has no emoji.
+wizard-icons-yes = Yes, I see them — use icons
+wizard-icons-no = No — plain ASCII badges
+wizard-hint = [Enter] next · [Backspace] back · [Esc] keep defaults and never ask again
+wizard-preset-orthodox = mc-style: F-keys, Tab between panes. The default.
+wizard-preset-vim = hjkl, counts, : for the palette.
+wizard-preset-cua = Ctrl+C/X/V and Windows-style keys.
+wizard-preset-krusader = Krusader's bindings, transcribed.
+wizard-preset-far = FAR Manager's bindings, transcribed.
+wizard-preset-norton = Norton Commander's bindings.
+wizard-preset-total-commander = Total Commander's bindings, transcribed.
+wizard-done = Saved. Change any of it later with the settings screen.
 menu-item-layout-places = Places sidebar
 menu-item-layout-preview = Docked viewer
 menu-item-layout-processes = Processes panel
@@ -1848,6 +1876,18 @@ setting-ui-diff-detached-name = The comparison tool opens a window
 setting-ui-diff-detached-desc = Whether that comparison tool opens a window of its own (Meld, Kompare) instead of taking over the terminal. Same deal as the editor, for the same reason.
 setting-ui-confirm-quit-name = Confirm before quitting
 setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
+setting-ui-key-bar-name = Key bar
+setting-ui-key-bar-desc = Whether the row of function keys (F1–F10 and what each does on the current screen) stays pinned at the bottom. It is read from the keymap, so rebinding a key changes its label, and clicking a cell runs the command.
+setting-ui-panel-bar-style-name = Panel bar labels
+setting-ui-panel-bar-style-desc = How the panel bar names its buttons: the panel's name with its access letter underlined (names), or the letter alone (letters). Names fall back to letters on their own when the row is narrower than sixty cells.
+setting-ui-pane-footer-name = Pane footer
+setting-ui-pane-footer-desc = Whether every listing carries a footer with its counts (directories, files, bytes), what is marked, and the free space of the volume the directory lives on.
+setting-ui-date-format-name = Date format
+setting-ui-date-format-desc = How the modified column prints a date when the columns setting does not fix one: the time today, day and time this year, the date before that (smart); how long ago (relative); or the full date and time (iso). All three print local time.
+setting-ui-notice-seconds-name = Notice seconds
+setting-ui-notice-seconds-desc = How long a notice stays on the status line before it moves to the notice ring and only a badge remains. 0 keeps it until the next key. Persistent banners (a degraded connection, a journal that cannot open) never expire: they are state, not notices.
+setting-ui-dialog-buttons-name = Dialog buttons
+setting-ui-dialog-buttons-desc = Whether a dialog's key line is painted as buttons you can click, each showing its key, instead of a plain line of keys.
 setting-keymap-preset-name = Keymap preset
 setting-keymap-preset-desc = Base key-binding preset (orthodox, vim, or cua). User/project layers can still rebind on top.
 keymap-unavailable-not-built = { $command }: not built yet ({ $reason }, issue #{ $issue })

@@ -236,6 +236,49 @@ pub struct DialogHints {
     /// footer, which the function above replaces. A new prose-hinted modal needs
     /// an arm here too.
     pub modals_inert: bool,
+    /// `[ui] dialog_buttons` (spec 2026-09-10): la línea de teclas de un
+    /// modal se pinta como BOTONES pulsables en vez de como texto. Lo pone
+    /// quien construye los hints desde la config; `build` lo deja apagado
+    /// porque un `Effective` no sabe de ajustes.
+    pub buttons: bool,
+}
+
+/// Un botón de la línea de teclas de un modal: el chord pintado y su verbo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HintButton {
+    /// El chord tal y como lo escribe `paint_chord` (`Enter`, `Esc`, `F5`).
+    pub chord: String,
+    /// El verbo, en el idioma del lector.
+    pub label: String,
+}
+
+/// Los botones de una línea de teclas —la generada por [`dialog_hints`]
+/// (`[Enter] confirm [Esc] cancel`) o una escrita en Fluent (`[enter]
+/// confirm · [esc] cancel`)—, o `None` si la línea no tiene esa forma.
+///
+/// Cada grupo empieza por `[`, el chord acaba en `] ` y el verbo llega hasta
+/// el siguiente ` [` o ` · [`. Un verbo puede llevar espacios; un chord no
+/// lleva `]` ni espacios, y se pinta como lo escribe la documentación
+/// (`Enter`, no `enter`), que es también lo que el ratón sintetiza.
+#[must_use]
+pub fn hint_buttons(line: &str) -> Option<Vec<HintButton>> {
+    if !line.starts_with('[') {
+        return None;
+    }
+    let mut out = Vec::new();
+    for group in line.split(" [") {
+        let group = group.strip_prefix('[').unwrap_or(group);
+        let (chord, label) = group.split_once("] ")?;
+        let label = label.trim_end_matches(" ·").trim();
+        if chord.is_empty() || chord.contains(' ') || chord.len() > 16 || label.is_empty() {
+            return None;
+        }
+        out.push(HintButton {
+            chord: crate::keymap::paint_chord(chord),
+            label: label.to_owned(),
+        });
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 impl DialogHints {
@@ -283,6 +326,7 @@ impl DialogHints {
             // solo `with_modals_inert` levanta el flag, y solo mientras una
             // ayuda tape el modal.
             modals_inert: false,
+            buttons: false,
         }
     }
 

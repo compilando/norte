@@ -140,6 +140,7 @@ export class Session {
         slot.filling_note = c.filling_note ?? "";
         slot.pruned_note = c.pruned_note ?? "";
         slot.marked_note = c.marked_note ?? "";
+        slot.footer = c.footer ?? "";
         slot.marks = c.marks;
         return true;
       }
@@ -203,8 +204,14 @@ export class Session {
       case "panel_bar":
         s.panel_bar = c.panel_bar;
         return true;
+      case "key_bar":
+        s.key_bar = c.key_bar;
+        return true;
       case "profiles":
         s.profiles = c.profiles;
+        return true;
+      case "wizard":
+        s.wizard = c.wizard;
         return true;
       case "palette":
         s.palette = c.palette;

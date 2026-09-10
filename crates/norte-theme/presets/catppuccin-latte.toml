@@ -5,7 +5,9 @@ name = "catppuccin-latte"
 [roles]
 background       = { bg = "#eff1f5" }
 regular          = { fg = "#4c4f69" }
-selection        = { fg = "#4c4f69", bg = "#ccd0da" }
+selection           = { fg = "#eff1f5", bg = "#1e66f5" }
+selection-unfocused = { fg = "#4c4f69", bg = "#ccd0da" }
+button              = { fg = "#eff1f5", bg = "#8839ef" }
 border-focus     = { fg = "#1e66f5", bold = true }
 border-unfocused = { fg = "#9ca0b0", dim = true }
 modal-border     = { fg = "#8839ef" }

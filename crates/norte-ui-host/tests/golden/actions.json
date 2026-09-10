@@ -96,6 +96,10 @@
     "meta": false,
     "shift": false
   },
+  "key_bar_activate": {
+    "action": "key_bar_activate",
+    "key": 5
+  },
   "layout_activate_row": {
     "action": "layout_activate_row",
     "row": 0
@@ -291,5 +295,12 @@
   "window_focus": {
     "action": "window_focus",
     "focused": false
+  },
+  "wizard_activate_row": {
+    "action": "wizard_activate_row",
+    "row": 1
+  },
+  "wizard_open": {
+    "action": "wizard_open"
   }
 }

@@ -7,6 +7,36 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **The chrome of an orthodox manager, derived and configurable** (ADR
+  0106). A function-key bar on the last row of the terminal and a strip at
+  the bottom of the window, read from the keymap of the screen that owns the
+  keyboard; the panel bar names its buttons with the access letter
+  underlined; every listing carries a footer with counts, what is marked and
+  the free space of its volume; a dialog's key line is painted as clickable
+  buttons; a status notice expires into the log after eight seconds and
+  leaves a `!n` badge that opens it; the modified column prints local time
+  with the precision the distance asks for (`smart`); the palette reads the
+  human label first and keeps the last five commands on top; the focused
+  cursor takes the theme's accent and the other pane's stays grey. Six
+  `[ui]` keys (`key_bar`, `panel_bar_style`, `pane_footer`, `date_format`,
+  `notice_seconds`, `dialog_buttons`), each a row on the settings screen and
+  a section of the new `appearance` help page.
+- **A first-start wizard.** With no `norte.toml` of your own, both frontends
+  ask three things once — which file manager you have in your fingers, which
+  theme (previewed live), and whether your terminal shows icons — and write
+  the answers as configuration. Esc keeps the defaults and never asks again;
+  `ntc --setup` asks again; `NORTE_NO_WIZARD=1` keeps it closed.
+
+### Changed
+
+- **F9 opens the menu** in six presets, as in mc, FAR, Norton Commander and
+  Total Commander; the theme picker moves to `Alt+9`. Krusader keeps F9 as
+  the terminal, as its source attests.
+- **The mtime column is 12 cells** (was 10), to fit `09-10 14:02`.
+- The window's bridge is version 63.
+
 ### Fixed
 
 - **The terminal's extension manager answers the mouse.** It was the one

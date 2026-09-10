@@ -102,6 +102,7 @@ impl Estado {
                 self.aplicar_desconexion(slot, res, &destino, backend, buzon)
             }
             Fondo::SitiosVolumenes(res) => self.aplicar_sitios(res).into_iter().collect(),
+            Fondo::VolumenesDePie(res) => self.aplicar_volumenes_de_pie(res).into_iter().collect(),
             Fondo::RamasDeArbol(dir, hijos) => self
                 .aplicar_ramas(dir, hijos, backend, buzon)
                 .into_iter()

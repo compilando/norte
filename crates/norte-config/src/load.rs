@@ -1184,6 +1184,112 @@ impl ConfirmQuit {
     }
 }
 
+/// `[ui] panel_bar_style`: how the panel bar names its buttons.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PanelBarStyle {
+    /// The localized panel name with its access letter underlined. Default.
+    #[default]
+    Names,
+    /// Only the access letter — the row's original form.
+    Letters,
+}
+
+impl PanelBarStyle {
+    /// The wire string this variant round-trips from/to.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Names => "names",
+            Self::Letters => "letters",
+        }
+    }
+}
+
+/// `[ui] date_format`: the default format of the `mtime` column.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DateFormat {
+    /// The time today, day and time this year, the date before that. Default.
+    #[default]
+    Smart,
+    /// `11h ago`.
+    Relative,
+    /// `2026-09-10 14:02`.
+    Iso,
+}
+
+impl DateFormat {
+    /// The wire string this variant round-trips from/to.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Smart => "smart",
+            Self::Relative => "relative",
+            Self::Iso => "iso",
+        }
+    }
+}
+
+/// The `[ui]` keys that shape the CHROME around the listings (the key bar,
+/// the panel bar's labels, the pane footer, the date format, notice expiry
+/// and dialog buttons). All presentation-only, so every layer including
+/// Project is honored, last-present-wins per key. One struct rather than six
+/// more fields because the coverage sweeps destructure `CommonConfig` field
+/// by field and clippy caps the merge helpers' argument lists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UiChrome {
+    /// `[ui] key_bar` (None = pinned).
+    pub key_bar: Option<bool>,
+    /// `[ui] panel_bar_style` (None = names), validated.
+    pub panel_bar_style: Option<PanelBarStyle>,
+    /// `[ui] pane_footer` (None = shown).
+    pub pane_footer: Option<bool>,
+    /// `[ui] date_format` (None = smart), validated.
+    pub date_format: Option<DateFormat>,
+    /// `[ui] notice_seconds` (None = 8; 0 = until the next key), at most 600.
+    pub notice_seconds: Option<u32>,
+    /// `[ui] dialog_buttons` (None = buttons).
+    pub dialog_buttons: Option<bool>,
+}
+
+impl UiChrome {
+    /// The upper bound of `notice_seconds`: ten minutes is already "never
+    /// goes away on its own" in practice, and a larger number is a typo.
+    pub const MAX_NOTICE_SECONDS: u32 = 600;
+    /// What `notice_seconds` means when absent.
+    pub const DEFAULT_NOTICE_SECONDS: u32 = 8;
+
+    /// Effective `key_bar` (absent = pinned).
+    #[must_use]
+    pub fn key_bar(self) -> bool {
+        self.key_bar.unwrap_or(true)
+    }
+    /// Effective `panel_bar_style` (absent = names).
+    #[must_use]
+    pub fn panel_bar_style(self) -> PanelBarStyle {
+        self.panel_bar_style.unwrap_or_default()
+    }
+    /// Effective `pane_footer` (absent = shown).
+    #[must_use]
+    pub fn pane_footer(self) -> bool {
+        self.pane_footer.unwrap_or(true)
+    }
+    /// Effective `date_format` (absent = smart).
+    #[must_use]
+    pub fn date_format(self) -> DateFormat {
+        self.date_format.unwrap_or_default()
+    }
+    /// Effective `notice_seconds` (absent = 8).
+    #[must_use]
+    pub fn notice_seconds(self) -> u32 {
+        self.notice_seconds.unwrap_or(Self::DEFAULT_NOTICE_SECONDS)
+    }
+    /// Effective `dialog_buttons` (absent = buttons).
+    #[must_use]
+    pub fn dialog_buttons(self) -> bool {
+        self.dialog_buttons.unwrap_or(true)
+    }
+}
+
 /// `[ai]` already merged across layers and validated (ADR 0035 decision 3:
 /// scalars last-present-wins; `denied_prefixes` union; providers merge by
 /// name, later layer wins).
@@ -1404,6 +1510,10 @@ pub struct CommonConfig {
     /// `[ui] diff_detached` (last-wins; None = `false`): ese comparador abre
     /// VENTANA propia. Misma capa fail-closed que [`Self::ui_diff`].
     pub ui_diff_detached: Option<bool>,
+    /// The `[ui]` chrome keys (key bar, panel bar style, pane footer, date
+    /// format, notice expiry, dialog buttons), last-wins per key from ALL
+    /// layers including Project: presentation-only, like the scalars above.
+    pub ui_chrome: UiChrome,
     /// `[daemon] mode` (last-wins; None = embedded; never from Project —
     /// fail-closed, review MAJOR-1). Startup only.
     pub daemon_mode: Option<crate::schema::DaemonMode>,
@@ -1655,6 +1765,59 @@ fn merge_ui_flags(
     *ui_layout = ui.layout.clone().or(ui_layout.take());
 }
 
+/// Merges one layer's `[ui]` CHROME keys into the accumulator
+/// (last-present-wins per key), validating the two enums and the bound of
+/// `notice_seconds` so the diagnostic can name the source file. Same
+/// #73 caution as `parse_confirm_quit`: the message names the valid values,
+/// never the raw one.
+///
+/// # Errors
+/// [`ConfigError::Toml`] on an unknown `panel_bar_style`/`date_format` or a
+/// `notice_seconds` above [`UiChrome::MAX_NOTICE_SECONDS`].
+fn merge_ui_chrome(
+    acc: &mut UiChrome,
+    ui: &crate::schema::UiSection,
+    norte: &Path,
+) -> Result<(), ConfigError> {
+    let bad = |message: &str| ConfigError::Toml {
+        path: norte.to_path_buf(),
+        message: message.to_owned(),
+    };
+    acc.key_bar = ui.key_bar.or(acc.key_bar);
+    acc.pane_footer = ui.pane_footer.or(acc.pane_footer);
+    acc.dialog_buttons = ui.dialog_buttons.or(acc.dialog_buttons);
+    if let Some(raw) = &ui.panel_bar_style {
+        acc.panel_bar_style = Some(match raw.as_str() {
+            "names" => PanelBarStyle::Names,
+            "letters" => PanelBarStyle::Letters,
+            _ => {
+                return Err(bad(
+                    "[ui] panel_bar_style inválido: solo se admite «names» o «letters»",
+                ));
+            }
+        });
+    }
+    if let Some(raw) = &ui.date_format {
+        acc.date_format = Some(match raw.as_str() {
+            "smart" => DateFormat::Smart,
+            "relative" => DateFormat::Relative,
+            "iso" => DateFormat::Iso,
+            _ => {
+                return Err(bad(
+                    "[ui] date_format inválido: solo se admite «smart», «relative» o «iso»",
+                ));
+            }
+        });
+    }
+    if let Some(n) = ui.notice_seconds {
+        if n > UiChrome::MAX_NOTICE_SECONDS {
+            return Err(bad("[ui] notice_seconds inválido: el máximo es 600"));
+        }
+        acc.notice_seconds = Some(n);
+    }
+    Ok(())
+}
+
 /// Fusiona una capa de `[ui.columns]` sobre el acumulado (#108): last-wins
 /// por campo; los schemes se fusionan por clave (el último gana por campo).
 fn merge_ui_columns(
@@ -1730,7 +1893,7 @@ fn parse_spec_entries(
         };
         let format = match entry.format.as_deref() {
             None => None,
-            Some(f @ ("exact" | "iec" | "si" | "relative" | "iso" | "octal" | "rwx")) => {
+            Some(f @ ("exact" | "iec" | "si" | "relative" | "iso" | "smart" | "octal" | "rwx")) => {
                 Some(f.to_owned())
             }
             Some(_) => {
@@ -2098,6 +2261,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_diff_detached: Option<bool> = None;
     let mut ui_layout: Option<String> = None;
     let mut ui_columns = ColumnsConfig::default();
+    let mut ui_chrome = UiChrome::default();
     let mut daemon_mode: Option<DaemonMode> = None;
     let mut daemon_socket: Option<PathBuf> = None;
     let mut log_dir: Option<PathBuf> = None;
@@ -2161,6 +2325,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             {
                 preset = Some(p);
             }
+            // Antes de todo lo que MUEVE campos fuera de `parsed.ui`.
+            merge_ui_chrome(&mut ui_chrome, &parsed.ui, &norte)?;
             if let Some(l) = parsed.ui.lang {
                 ui_lang = Some(l);
             }
@@ -2267,6 +2433,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_diff,
         ui_diff_detached,
         ui_columns,
+        ui_chrome,
         daemon_mode,
         daemon_socket,
         log_dir,
@@ -2906,6 +3073,59 @@ format = "exact"
             };
             let cfg = load(&layers).expect("carga");
             assert_eq!(cfg.ui_confirm_quit, expected, "raw={raw}");
+        }
+    }
+
+    /// `[ui]` chrome: the six keys land, the two enums validate, the project
+    /// layer is honored (presentation-only), and a bad value names the file.
+    #[test]
+    fn ui_chrome_carga_valida_y_honra_proyecto() {
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("norte.toml"),
+            "[ui]\nkey_bar = false\npanel_bar_style = \"letters\"\ndate_format = \"iso\"\n\
+             notice_seconds = 30\n",
+        )
+        .unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("norte.toml"),
+            "[ui]\npane_footer = false\ndialog_buttons = false\ndate_format = \"relative\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let c = load(&layers).expect("carga").ui_chrome;
+        assert_eq!(c.key_bar, Some(false));
+        assert_eq!(c.panel_bar_style(), PanelBarStyle::Letters);
+        assert_eq!(c.date_format(), DateFormat::Relative, "la última capa gana");
+        assert_eq!(c.notice_seconds(), 30);
+        assert!(!c.pane_footer());
+        assert!(!c.dialog_buttons());
+
+        let empty = load(&Layers { dirs: vec![] }).expect("carga").ui_chrome;
+        assert_eq!(empty, UiChrome::default());
+        assert!(empty.key_bar() && empty.pane_footer() && empty.dialog_buttons());
+        assert_eq!(empty.panel_bar_style(), PanelBarStyle::Names);
+        assert_eq!(empty.date_format(), DateFormat::Smart);
+        assert_eq!(empty.notice_seconds(), 8);
+
+        for bad in [
+            "panel_bar_style = \"icons\"",
+            "date_format = \"unix\"",
+            "notice_seconds = 601",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("norte.toml"), format!("[ui]\n{bad}\n")).unwrap();
+            let layers = Layers {
+                dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+            };
+            let err = load(&layers).expect_err(bad);
+            assert!(matches!(err, ConfigError::Toml { .. }), "{bad}");
         }
     }
 

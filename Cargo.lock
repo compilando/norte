@@ -5227,6 +5227,7 @@ version = "0.3.0-alpha.3"
 dependencies = [
  "base64 0.22.1",
  "globset",
+ "jiff",
  "norte-config",
  "norte-encoding",
  "norte-help",

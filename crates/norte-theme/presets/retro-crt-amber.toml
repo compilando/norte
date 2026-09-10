@@ -7,7 +7,9 @@ name = "retro-crt-amber"
 [roles]
 background       = { bg = "#100c04" }
 regular          = { fg = "#ffb000" }
-selection        = { fg = "#ffe0a0", bg = "#4f3a13" }
+selection           = { fg = "#100c04", bg = "#ffb000" }
+selection-unfocused = { fg = "#ffe0a0", bg = "#4f3a13" }
+button              = { fg = "#100c04", bg = "#ffb000" }
 border-focus     = { fg = "#ffb000", bold = true }
 border-unfocused = { fg = "#8f6a1a", dim = true }
 modal-border     = { fg = "#e69a00" }

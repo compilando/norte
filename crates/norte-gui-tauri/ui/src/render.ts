@@ -85,6 +85,8 @@ export class Screen {
   menuBarHeight: string | null = null;
   /** Lo mismo para la barra de paneles (#324). */
   panelBarHeight: string | null = null;
+  /** La reserva de la barra de teclas, por lo mismo. */
+  keyBarHeight: string | null = null;
   /** La última foto pintada: lo que se repinta cuando cambia algo local. */
   ultimaVista: ViewSnapshot | null = null;
   /** Aviso local de una orden rechazada en la frontera (`rejected`). */
@@ -219,7 +221,9 @@ export class Screen {
     }
     this.paintMenu(view.menu);
     this.paintPanelBar(view.panel_bar);
+    this.paintKeyBar(view.key_bar ?? null);
     this.paintPalette(view.palette);
+    this.paintWizard(view.wizard ?? null);
     this.paintWhichKey(view.whichkey);
     this.paintHelp(view.help);
     this.paintSettings(view.settings);
@@ -242,12 +246,14 @@ export class Screen {
 
   /** En `render/menus.ts`. */
   readonly paintPanelBar = menus.paintPanelBar;
+  readonly paintKeyBar = menus.paintKeyBar;
 
   /** En `render/menus.ts`. */
   readonly paintMenu = menus.paintMenu;
 
   /** En `render/menus.ts`. */
   readonly paintPalette = menus.paintPalette;
+  readonly paintWizard = menus.paintWizard;
 
   /** En `render/menus.ts`. */
   readonly paintWhichKey = menus.paintWhichKey;
@@ -449,7 +455,12 @@ export class Screen {
       const canvas = document.createElement("div");
       canvas.className = "canvas";
       scroller.append(canvas);
-      el.append(tabs, title, header, scroller);
+      // El pie bajo el listado: cuentas, marcado y espacio libre, ya
+      // redactado en Rust. Vacío = `[ui] pane_footer` apagado, y no ocupa.
+      const footer = document.createElement("footer");
+      footer.className = "slot-footer";
+      footer.hidden = true;
+      el.append(tabs, title, header, scroller, footer);
       this.root.append(el);
       const busy = document.createElement("p");
       busy.className = "slot-busy";
@@ -461,6 +472,7 @@ export class Screen {
         header,
         scroller,
         canvas,
+        footer,
         busy,
         rows: new Map(),
         lastRange: null,
@@ -745,12 +757,24 @@ export class Screen {
       dom.scroller.className = "statusbar";
       dom.scroller.setAttribute("role", "status");
       dom.scroller.setAttribute("aria-live", "polite");
+      // La insignia de avisos abre el registro por SU botón de la barra
+      // de paneles: el índice se resuelve contra la barra que el host
+      // acaba de mandar, y el host abre el panel por el mismo despacho que
+      // la tecla. Sin botón de registro (un plugin lo retiró), no se pulsa.
+      const registro = view.panel_bar.buttons.findIndex((b) => b.kind === "log");
+      const abrirRegistro =
+        registro < 0
+          ? null
+          : () => {
+              this.send({ action: "panel_bar_activate", button: registro });
+            };
       dom.scroller.replaceChildren(
         ...statusNodes(
           view.status,
           view.connection.state,
           (k) => this.t(k),
           this.rechazo,
+          abrirRegistro,
         ),
       );
       return;
@@ -821,6 +845,10 @@ export class Screen {
     }
     dom.root.setAttribute("aria-label", slot.path_display);
     dom.generation = slot.generation;
+    // El pie (puente 63): vacío = apagado, y entonces no ocupa fila.
+    const pie = slot.footer ?? "";
+    dom.footer.textContent = pie;
+    dom.footer.hidden = pie === "";
 
     this.paintHeader(dom, slot);
 

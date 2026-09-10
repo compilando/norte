@@ -11,6 +11,10 @@
   --border-focus: #4c8fd0;
   --selection-bg: #2d4f76;
   --selection-fg: #ffffff;
+  --selection-unfocused-bg: #2a2f38;
+  --selection-unfocused-fg: #d8dee9;
+  --button-bg: #2d4f76;
+  --button-fg: #ffffff;
   --mark-bg: #6b4b16;
   --hostile-fg: #e0a33a;
   --status-bg: #191d24;
@@ -55,8 +59,66 @@ body {
      documento para pintar por encima de los paneles— y por tanto no ocupa
      sitio en el flujo. Con `[ui] menu_bar` apagada la variable es cero y no
      se pierde nada. */
-  height: calc(100vh - var(--menubar-h, 0px) - var(--panelbar-h, 0px));
+  height: calc(
+    100vh - var(--menubar-h, 0px) - var(--panelbar-h, 0px) - var(--keybar-h, 0px)
+  );
   margin-top: calc(var(--menubar-h, 0px) + var(--panelbar-h, 0px));
+}
+
+/* La barra de teclas (spec 2026-09-10): la ÚLTIMA fila, fija abajo y
+   reservada como las dos de arriba (`--keybar-h`). Diez celdas a partes
+   iguales; una tecla que no ata nada se queda con el fondo base. */
+.keybar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  height: var(--cell-h);
+  background: var(--panel-bg);
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.keybar-cell {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  cursor: pointer;
+  unicode-bidi: isolate;
+}
+
+.keybar-cell:disabled {
+  cursor: default;
+}
+
+.keybar-num {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  color: var(--fg);
+}
+
+.keybar-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 4px;
+  background: var(--status-bg);
+  color: var(--status-fg, inherit);
+}
+
+.keybar-cell[data-bound="false"] .keybar-label {
+  background: none;
 }
 
 /* La barra de paneles (#324): una fila fija bajo la de menús, reservada
@@ -94,6 +156,12 @@ body {
 
 .panelbar-letter {
   font-weight: bold;
+  text-decoration: underline;
+}
+
+/* `[ui] panel_bar_style = "letters"`: la fila de siempre, solo la letra. */
+.panelbar[data-names="false"] .panelbar-name {
+  display: none;
 }
 
 /* Tres estilos para tres estados, como en la TUI: abierto con el color de
@@ -246,6 +314,19 @@ body {
   unicode-bidi: isolate;
 }
 
+/* El pie del listado: una fila bajo el desplazable, atenuada, que se recorta
+   por el final si no cabe. Oculta cuando `[ui] pane_footer` está apagado. */
+.slot-footer {
+  flex: 0 0 var(--cell-h);
+  padding: 0 6px;
+  color: var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-top: 1px solid var(--border);
+  unicode-bidi: isolate;
+}
+
 .slot[data-role="target"] .slot-title::after {
   content: " →";
   color: var(--border-focus);
@@ -318,6 +399,13 @@ body {
 .row[aria-selected="true"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
+}
+
+/* El cursor de un panel SIN foco: presente pero apagado, para que dos
+   cursores no compitan por decir a dónde van las teclas. */
+[aria-current="false"] .row[aria-selected="true"] {
+  background: var(--selection-unfocused-bg);
+  color: var(--selection-unfocused-fg);
 }
 
 .row[data-marked="true"] {
@@ -397,6 +485,18 @@ body {
   margin-left: 8px;
 }
 
+/* La insignia de avisos caducados sin leer (puente 63): a la derecha de
+   la barra de estado, con el color de aviso, y se pulsa. */
+.notices {
+  font: inherit;
+  margin-left: auto;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: var(--warning-fg);
+  cursor: pointer;
+}
+
 .tasks {
   padding: 0 6px;
   overflow: auto;
@@ -405,6 +505,63 @@ body {
 .task {
   display: flex;
   gap: 8px;
+}
+
+/* El asistente de primer arranque (puente 63): un velo a pantalla completa
+   con una caja en el centro, como la paleta. */
+#wizard[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 45%);
+}
+
+#wizard[data-open="false"],
+#wizard:not([data-open]) {
+  display: none;
+}
+
+.wizard {
+  width: min(70ch, 90vw);
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  padding: 8px 12px;
+}
+
+.wizard-title {
+  margin: 0 0 8px;
+  font-size: inherit;
+  color: var(--title-fg);
+}
+
+.wizard-question,
+.wizard-hint {
+  margin: 4px 0;
+}
+
+.wizard-hint {
+  color: var(--info-fg);
+}
+
+.wizard-rows {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wizard-row {
+  padding: 0 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wizard-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
 }
 
 #palette[data-open="true"] {
@@ -474,17 +631,25 @@ body {
   opacity: 0.55;
 }
 
-.palette-text {
-  flex: 0 0 24ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* La etiqueta humana crece y se lee entera; el id va después, atenuado y a
+   ancho fijo. Es el mismo reparto que el terminal. */
 .palette-desc {
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0.8;
+}
+
+.palette-text {
+  flex: 0 0 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.6;
+}
+
+/* Una reciente va arriba por serlo, y lo dice con un punto delante. */
+.palette-row[data-recent="true"]::before {
+  content: "• ";
+  color: var(--info-fg);
 }
 
 .palette-chord {

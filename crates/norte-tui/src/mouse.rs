@@ -236,6 +236,12 @@ pub struct MouseState {
     /// Las zonas pulsables de la barra de menús del último frame.
     menu_zones: Vec<crate::ui::MenuZone>,
     panel_zones: Vec<crate::ui::PanelZone>,
+    /// Las celdas pulsables de la barra de teclas del último frame (spec
+    /// 2026-09-10). Vacío = barra apagada, o sin fila donde pintarla.
+    key_zones: Vec<crate::ui::KeyZone>,
+    /// Los botones del modal activo del último frame (spec 2026-09-10).
+    /// Vacío = sin modal, o su línea de teclas pintada como pista.
+    modal_zones: Vec<crate::ui::ModalZone>,
     /// Las zonas pulsables de las barras de pestañas del último frame.
     ///
     /// Vacío = ningún panel tiene pestañas, que es el caso de siempre.
@@ -252,6 +258,9 @@ pub struct MouseState {
     /// El indicador de sesión suelta de la barra de estado del último frame.
     /// `None` = la ventana es la dueña, o la barra estaba diciendo otra cosa.
     session_zone: Option<crate::ui::SessionZone>,
+    /// La insignia de avisos sin leer del último frame (spec 2026-09-10).
+    /// `None` = ninguno sin leer, o la barra estaba diciendo otra cosa.
+    notices_zone: Option<crate::ui::NoticeZone>,
     /// Los bordes arrastrables del último frame.
     borders: Vec<ResizeBorder>,
     /// Los huecos que se colocaron en el último frame, para saber qué panel
@@ -337,6 +346,10 @@ pub struct FrameZones {
     pub menus: Vec<crate::ui::MenuZone>,
     /// Las casillas de la barra de paneles (#324).
     pub panels: Vec<crate::ui::PanelZone>,
+    /// Las celdas de la barra de teclas (spec 2026-09-10).
+    pub keys: Vec<crate::ui::KeyZone>,
+    /// Los botones del modal activo (spec 2026-09-10).
+    pub modal: Vec<crate::ui::ModalZone>,
     /// Las filas del sidebar de sitios (#226).
     pub places: Vec<crate::ui::PlaceZone>,
     /// Las filas del árbol (#136).
@@ -345,6 +358,9 @@ pub struct FrameZones {
     pub extensions: Vec<crate::ui::ExtensionZone>,
     /// El indicador de sesión suelta de la barra de estado, si se pintó.
     pub session: Option<crate::ui::SessionZone>,
+    /// La insignia de avisos sin leer de la barra de estado, si se pintó
+    /// (spec 2026-09-10).
+    pub notices: Option<crate::ui::NoticeZone>,
     /// Los bordes arrastrables.
     pub borders: Vec<ResizeBorder>,
     /// Los huecos colocados, para saber qué panel hay bajo un click.
@@ -372,10 +388,13 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
         tabs: tab_zones,
         menus: menu_zones,
         panels: panel_zones,
+        keys: key_zones,
+        modal: modal_zones,
         places: places_zones,
         tree: tree_zones,
         extensions: extension_zones,
         session: session_zone,
+        notices: notices_zone,
         borders,
         slots,
     } = zones;
@@ -397,10 +416,13 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     app.mouse.tab_zones = tab_zones;
     app.mouse.menu_zones = menu_zones;
     app.mouse.panel_zones = panel_zones;
+    app.mouse.key_zones = key_zones;
+    app.mouse.modal_zones = modal_zones;
     app.mouse.places_zones = places_zones;
     app.mouse.tree_zones = tree_zones;
     app.mouse.extension_zones = extension_zones;
     app.mouse.session_zone = session_zone;
+    app.mouse.notices_zone = notices_zone;
     app.mouse.borders = borders;
     app.mouse.slots = slots;
 }
@@ -463,6 +485,12 @@ pub enum After {
     /// que su tecla (`on_extensions_click`). Aquí no se puede: encender,
     /// aprobar o desinstalar hablan con el backend.
     Extension(&'static str),
+    /// Se pulsó una celda de la barra de teclas o un botón de un modal
+    /// (spec 2026-09-10): la tecla queda en `App::pending_key` y el run loop
+    /// la despacha por `on_key`, que es el ÚNICO camino con los tres
+    /// resolvers a mano. Un clic ahí ES pulsar la tecla; no hay un segundo
+    /// despacho que pueda divergir.
+    SynthKey,
 }
 
 /// El índice ABSOLUTO en `entries` de una posición PINTADA del pane.
@@ -566,6 +594,7 @@ pub(crate) fn overlay_open(app: &App) -> bool {
         || app.viewer.is_some()
         || app.help.is_some()
         || app.palette.is_some()
+        || app.wizard.is_some()
         || app.settings.is_some()
         // K3c: el editor de atajos. Hoy está siempre detrás de `settings`, que
         // ya está en esta lista, pero eso es una propiedad de CÓMO se abre y no
@@ -788,6 +817,51 @@ fn por_encima_de_los_paneles(app: &mut App, ev: MouseEvent) -> Option<After> {
     if app.menu_bar && ev.row == 0 && clic {
         return Some(menu_click(app, ev.column, ev.row));
     }
+    // La barra de teclas (spec 2026-09-10): una celda pulsada es la tecla
+    // pulsada, y se despacha como tal. ANTES del cerrojo de los overlays por
+    // lo mismo que los botones de un modal de abajo: las zonas ya vienen
+    // vacías cuando no hay nada que pulsar (`key_zones`), y este orden no
+    // depende de que alguien se acuerde. Su fila no es de ningún panel.
+    if clic
+        && let Some(key) = app
+            .mouse
+            .key_zones
+            .iter()
+            .find(|z| z.row == ev.row && ev.column >= z.x0 && ev.column <= z.x1)
+            .map(|z| z.key)
+    {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.pending_key = Some(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::F(key),
+            KeyModifiers::NONE,
+        ));
+        return Some(After::SynthKey);
+    }
+    // Un botón de un modal (spec 2026-09-10), por el mismo camino: el chord
+    // pintado se sintetiza y `on_key` lo resuelve contra el diálogo, igual
+    // que si el terminal lo hubiera entregado. Un chord que la TUI no puede
+    // entregar (no hay ninguno en un preset) se ignora.
+    if clic
+        && let Some(chord) = app
+            .mouse
+            .modal_zones
+            .iter()
+            .find(|z| z.row == ev.row && ev.column >= z.x0 && ev.column <= z.x1)
+            .map(|z| z.chord.clone())
+        // La inversa de `paint_chord`, no un `to_lowercase`: `Alt+Shift+C`
+        // vuelve a `alt+C` y una `K` suelta sigue siendo `K`, que el keymap
+        // distingue de `k` (revisión M2).
+        && let Ok(chord) = norte_frontend::keymap::parse_chord(
+            &norte_frontend::keymap::unpaint_chord(&chord),
+        )
+        && let Some((mods, code)) = crate::keymap::crossterm_from_chord(chord)
+    {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.pending_key = Some(crossterm::event::KeyEvent::new(code, mods));
+        return Some(After::SynthKey);
+    }
     if rueda_en_el_visor(app, ev) {
         return Some(After::Nothing);
     }
@@ -849,6 +923,20 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
         app.mouse.drag.cancel();
         app.mouse.last_click = None;
         return After::SessionHelp;
+    }
+    // La insignia de avisos sin leer (spec 2026-09-10): pulsarla abre el
+    // panel de registro, que es donde fueron a parar, por el MISMO despacho
+    // que su botón de la barra de paneles y que su tecla.
+    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
+        && app
+            .mouse
+            .notices_zone
+            .is_some_and(|z| z.row == ev.row && ev.column >= z.x0 && ev.column <= z.x1)
+    {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.pending_panel_command = Some(format!("layout.{}", crate::logview::KIND));
+        return After::PanelBar;
     }
     // El ARRASTRE de un borde va antes que todo lo del listado, y en los tres
     // tiempos del gesto: mientras dura, el puntero se sale del borde y no por
@@ -1422,7 +1510,10 @@ pub async fn on_mouse(
     me: crossterm::event::MouseEvent,
 ) {
     match self::handle(app, me) {
-        self::After::Nothing => {}
+        // `SynthKey`: la tecla sintetizada la despacha el bucle por
+        // `on_key`, justo después de este gesto — aquí no están los tres
+        // resolvers. Nada que hacer, como con `Nothing`.
+        self::After::Nothing | self::After::SynthKey => {}
         // El indicador de sesión suelta: la explicación está en la ayuda, y
         // se abre por el MISMO constructor que `F1` sobre una fila de la
         // paleta — una página en mano, no un contexto que resolver.

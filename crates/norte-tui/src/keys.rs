@@ -298,6 +298,14 @@ pub async fn on_key(
         if let Some(params) = on_search_dialog_key(app, key.modifiers, key.code) {
             launch_search(app, backend, &mut work.fill, &mut work.search, params).await;
         }
+    } else if app.wizard.is_some() && !modal_wins(app) {
+        // El asistente de primer arranque (spec 2026-09-10): teclas FIJAS,
+        // como la paleta —no hay preset todavía, es justo lo que pregunta—.
+        // Lo elegido se escribe al terminar, por el mismo camino que la
+        // pantalla de ajustes.
+        if let Some(outcome) = crate::wizard::apply_key(app, key) {
+            crate::wizard::finish(app, backend, outcome).await;
+        }
     } else if app.sync.is_some() && !modal_wins(app) {
         // Panel de sincronización: teclas FIJAS, como las del
         // de diferencias. Va ANTES que él porque se pinta
@@ -384,6 +392,9 @@ pub async fn on_key(
                 let cmd = app.palette.as_ref().and_then(Palette::selected);
                 app.palette = None;
                 if let Some(cmd) = cmd {
+                    // Lo lanzado va arriba la próxima vez (spec 2026-09-10);
+                    // la sesión lo guarda con el siguiente empuje.
+                    norte_frontend::session::note_palette_recent(&mut app.palette_recent, &cmd);
                     // (P1) Enter sobre una fila de PLUGIN: la
                     // `key` es `plugin:{id}:{command}`
                     // (`palette::plugin_rows`, jamás pintada)

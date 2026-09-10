@@ -1,0 +1,87 @@
++++
+id = "appearance"
+title = "Lo que la pantalla enseña alrededor del listado"
+tags = ["basics"]
+see_also = ["settings", "dialogs", "panes", "help"]
+commands = ["app.settings", "app.menu", "layout.log"]
++++
+Alrededor de los dos listados norte pinta unas filas de cromo, y cada una es
+un ajuste bajo `[ui]` en `norte.toml` — o una fila de la pantalla de ajustes
+({{cmd:app.settings}}), que es lo mismo sin acordarse de los nombres de las
+claves. Apagar una devuelve su fila.
+
+La barra de teclas
+------------------
+
+La última fila de la pantalla nombra las diez teclas de función y qué hace
+cada una en la pantalla que tiene el teclado: el listado, o el visor. Se lee
+de tu keymap, así que reatar F5 cambia su etiqueta, y una tecla que aquí no
+hace nada enseña solo su número. Con un diálogo delante la fila se queda en
+blanco: ningún preset pone una tecla de función en un diálogo. Pulsar una
+celda con el ratón es pulsar la tecla. `key_bar = false` quita la fila.
+
+La barra de paneles
+-------------------
+
+Bajo el menú hay una fila con un botón por panel lateral — Sitios, Visor,
+Procesos, Detalles, Árbol, Registro —, cada uno con su nombre y la letra de
+acceso subrayada, si está abierto, si tiene el teclado y si tiene algo que
+contar. `panel_bar_style = "letters"` la deja en las letras solas, y los
+nombres pasan solos a letras cuando no caben todos. `panel_bar = false` quita
+la fila.
+
+El pie del panel
+----------------
+
+El borde inferior de cada listado cuenta lo que hay — directorios, ficheros,
+bytes —, luego lo marcado, y luego el espacio libre del volumen donde vive el
+directorio. Cuando el borde se queda corto cae primero el espacio libre y
+después la cuenta: lo que acabas de marcar es lo último en ceder.
+`pane_footer = false` deja el borde limpio.
+
+Fechas
+------
+
+La columna de modificación pinta la hora si el fichero cambió hoy, el día y
+la hora si cambió este año, y la fecha si no (`date_format = "smart"`, el de
+serie). `"relative"` pinta hace cuánto, y `"iso"` la fecha y la hora
+completas. Los tres en tu hora local. Un ajuste de columna (`[ui.columns]`)
+sigue mandando para esa columna.
+
+Avisos
+------
+
+Un mensaje en la línea de estado se queda `notice_seconds` segundos (ocho
+de serie), luego pasa al registro y deja una insignia `!n` a la derecha de la
+línea hasta que abras el panel de registro ({{cmd:layout.log}}) — pulsar la
+insignia lo abre. `0` mantiene un mensaje hasta la siguiente tecla, como
+antes. Los avisos persistentes — una conexión degradada, un journal que no
+abre — no caducan: son estado, no aviso.
+
+Botones en los diálogos
+-----------------------
+
+La línea de teclas de un diálogo se pinta como botones que se pueden pulsar,
+cada uno con su tecla. `dialog_buttons = false` pinta la línea de teclas de
+antes.
+
+El cursor
+---------
+
+La fila del cursor del panel que tiene el teclado lleva el color de acento
+del tema; el cursor del otro panel se queda en gris, para que dos cursores no
+compitan por decir a dónde van las teclas. Los dos son roles del tema
+(`selection` y `selection-unfocused`), y un tema propio puede fijarlos.
+
+El primer arranque
+------------------
+
+Sin un `norte.toml` tuyo todavía, norte pregunta tres cosas una vez: qué
+gestor de ficheros tienes en los dedos (las teclas lo siguen), qué tema, y si
+la fuente del terminal pinta iconos. Esc deja lo de serie y no vuelve a
+preguntar. `ntc --setup` vuelve a preguntar; `NORTE_NO_WIZARD=1` lo mantiene
+cerrado. F9 abre el menú en todos los presets menos el de Krusader, donde
+sigue siendo el terminal.
+
+> 💡 Cada fila de la pantalla de ajustes dice qué hace y aplica al momento.
+> El fichero es la interfaz de verdad; la pantalla es una forma de editarlo.

@@ -30,6 +30,179 @@ fn app_con_dir(depth: ColorDepth) -> App {
     app
 }
 
+/// La barra de paneles con NOMBRES (spec 2026-09-10): cada botón pinta su
+/// nombre con la letra de acceso subrayada; con `letters` o sin sitio para
+/// todos, vuelve a las letras; y las zonas del ratón miden lo mismo que lo
+/// pintado en los dos casos.
+#[test]
+fn la_barra_de_paneles_pinta_nombres_con_la_letra_subrayada_y_cae_a_letras() {
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.panel_bar = true;
+    app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Names);
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let fila: String = (0..80)
+        .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
+        .collect();
+    assert!(
+        fila.contains("Sitios"),
+        "con nombres se lee el nombre: {fila:?}"
+    );
+    let s = fila.find('S').expect("la S de Sitios");
+    let s = u16::try_from(fila[..s].chars().count()).expect("cabe");
+    assert!(
+        terminal.backend().buffer()[(s, 1)]
+            .modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "la letra de acceso va subrayada"
+    );
+    let zonas = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 80, 16));
+    let ancho_zona = zonas[0].x1 - zonas[0].x0 + 1;
+    assert_eq!(
+        usize::from(ancho_zona),
+        "Sitios".len() + 2,
+        "la zona mide lo pintado"
+    );
+
+    // Sin sitio para todos los nombres: letras, y zonas de tres celdas.
+    let mut terminal = Terminal::new(TestBackend::new(30, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let fila: String = (0..30)
+        .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
+        .collect();
+    assert!(!fila.contains("Sitios"), "sin sitio, letras: {fila:?}");
+    let zonas = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 30, 16));
+    assert_eq!(zonas[0].x1 - zonas[0].x0 + 1, 3);
+
+    // `letters` pedido a mano, con sitio de sobra: letras igual.
+    app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let fila: String = (0..80)
+        .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
+        .collect();
+    assert!(!fila.contains("Sitios"), "{fila:?}");
+}
+
+/// El pie del panel (spec 2026-09-10): con `[ui] pane_footer` encendido, el
+/// borde inferior dice cuántos directorios y ficheros hay y el espacio libre
+/// del volumen cacheado en `App`; apagado, el borde queda limpio; y con el
+/// buscador incremental abierto manda el buscador.
+#[test]
+fn el_pie_del_panel_cuenta_y_dice_el_espacio_libre() {
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.chrome.pane_footer = Some(true);
+    app.volumes = vec![norte_proto::methods::Volume {
+        mount: vp("file:///"),
+        label: None,
+        fs_type: "ext4".to_owned(),
+        kind: norte_proto::methods::VolumeKind::Fixed,
+        total_bytes: Some(200 << 30),
+        free_bytes: Some(120 << 30),
+        read_only: false,
+    }];
+    let fila_baja = |app: &App| -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, app)).expect("draw");
+        // La fila del borde inferior de los paneles: la última menos la barra
+        // de estado.
+        (0..100)
+            .map(|x| terminal.backend().buffer()[(x, 14)].symbol().to_string())
+            .collect()
+    };
+    let con = fila_baja(&app);
+    assert!(
+        con.contains("1 dirs") && con.contains("0 ficheros"),
+        "{con:?}"
+    );
+    assert!(con.contains("120") && con.contains("libres"), "{con:?}");
+
+    app.chrome.pane_footer = Some(false);
+    let sin = fila_baja(&app);
+    assert!(
+        !sin.contains("dirs"),
+        "apagado, el borde queda limpio: {sin:?}"
+    );
+}
+
+/// La barra de teclas (spec 2026-09-10): con `[ui] key_bar` encendido ocupa
+/// la ÚLTIMA fila con el número y la etiqueta de cada tecla atada, la barra
+/// de estado sube una fila, una celda vacía no es zona, y un clic en una
+/// celda deja la tecla sintetizada para que el bucle la despache por
+/// `on_key`. Apagada, la última fila vuelve a ser la de estado.
+#[test]
+fn la_barra_de_teclas_pinta_lo_atado_y_un_clic_es_la_tecla() {
+    use norte_frontend::keybar::KeyCell;
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.chrome.key_bar = Some(true);
+    app.key_bars.browse = vec![
+        KeyCell {
+            key: 1,
+            label: String::new(),
+            command: None,
+        },
+        KeyCell {
+            key: 2,
+            label: "Copiar".to_owned(),
+            command: Some("pane.copy".to_owned()),
+        },
+    ];
+    let area = ratatui::layout::Rect::new(0, 0, 80, 16);
+    let fila = |app: &App, y: u16| -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, app)).expect("draw");
+        (0..80)
+            .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+            .collect()
+    };
+    let ultima = fila(&app, 15);
+    assert!(ultima.contains("2Copiar"), "la celda atada: {ultima:?}");
+    assert!(
+        ultima.starts_with('1'),
+        "la vacía solo lleva el número: {ultima:?}"
+    );
+    assert!(
+        fila(&app, 14).contains("/casa"),
+        "la barra de estado sube una fila"
+    );
+
+    let zonas = ui::key_zones(&app, area);
+    assert_eq!(zonas.len(), 1, "una celda vacía no es zona: {zonas:?}");
+    assert_eq!((zonas[0].key, zonas[0].row), (2, 15));
+    norte_tui::mouse::after_frame(
+        &mut app,
+        None,
+        norte_tui::mouse::FrameZones {
+            keys: zonas.clone(),
+            ..Default::default()
+        },
+    );
+    let clic = crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: zonas[0].x0,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    assert_eq!(
+        norte_tui::mouse::handle(&mut app, clic),
+        norte_tui::mouse::After::SynthKey
+    );
+    assert_eq!(
+        app.pending_key.map(|k| k.code),
+        Some(crossterm::event::KeyCode::F(2)),
+        "el clic deja la tecla para `on_key`"
+    );
+
+    app.chrome.key_bar = Some(false);
+    assert!(
+        fila(&app, 15).contains("/casa"),
+        "apagada, la última fila es la de estado"
+    );
+}
+
 /// Un panel CERRADO no se pinta como un bloque encendido.
 ///
 /// La barra estilaba `Closed` con `Role::StatusBar`, que es el estilo de la

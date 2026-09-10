@@ -215,8 +215,86 @@ pub struct PanelZone {
     pub command: String,
 }
 
-/// Cuánto ocupa un botón: espacio, letra, marca de novedad.
-const ANCHO_BOTON: u16 = 3;
+/// Una celda pulsable de la barra de teclas (spec 2026-09-10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyZone {
+    /// Fila.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+    /// La tecla de función, `1`..=`10`.
+    pub key: u8,
+}
+
+/// Las celdas pulsables de la barra de teclas: el MISMO reparto que el
+/// pintado (`keybar::layout`), así que miden lo mismo. Una celda vacía —una
+/// tecla que no ata nada en esta pantalla— no es una zona: pulsarla no
+/// haría nada, y una zona que no hace nada confunde.
+#[must_use]
+pub fn key_zones(app: &App, area: Rect) -> Vec<KeyZone> {
+    let Some(bar) = crate::ui::geometry::key_bar_area(app, area) else {
+        return Vec::new();
+    };
+    let cells = app.key_bar_cells();
+    norte_frontend::keybar::layout(usize::from(bar.width))
+        .into_iter()
+        .zip(cells)
+        .filter(|(_, c)| c.command.is_some())
+        .map(|((x0, w), c)| KeyZone {
+            row: bar.y,
+            x0: bar.x.saturating_add(u16::try_from(x0).unwrap_or(u16::MAX)),
+            x1: bar
+                .x
+                .saturating_add(u16::try_from(x0 + w).unwrap_or(u16::MAX))
+                .saturating_sub(1),
+            key: c.key,
+        })
+        .collect()
+}
+
+/// Pinta la barra de teclas: diez celdas con el número y lo que hace cada
+/// tecla en la pantalla que tiene el teclado. El número lleva el estilo de
+/// la barra de estado y la etiqueta el de selección invertido, como en mc:
+/// dos tonos para que se lean como diez botones y no como una frase.
+pub(crate) fn draw_key_bar(frame: &mut Frame<'_>, app: &App) {
+    let Some(bar) = crate::ui::geometry::key_bar_area(app, frame.area()) else {
+        return;
+    };
+    clear_themed(frame, bar, &app.theme);
+    let cells = app.key_bar_cells();
+    let numero = app.theme.role(Role::Regular);
+    let etiqueta = app.theme.role(Role::StatusBar);
+    let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
+    for ((_, w), c) in norte_frontend::keybar::layout(usize::from(bar.width))
+        .into_iter()
+        .zip(cells)
+    {
+        let text = norte_frontend::keybar::cell_text(c, w);
+        let n = c.key.to_string().len();
+        let (num, label) = text.split_at(n);
+        spans.push(ratatui::text::Span::styled(num.to_owned(), numero));
+        // Una celda vacía se queda con el fondo base: una tecla que no hace
+        // nada no se pinta como un botón.
+        let estilo = if c.command.is_some() {
+            etiqueta
+        } else {
+            numero
+        };
+        spans.push(ratatui::text::Span::styled(label.to_owned(), estilo));
+    }
+    frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
+}
+
+/// ¿Se pintan los NOMBRES de los paneles? `[ui] panel_bar_style = "names"`
+/// y que quepan todos en la fila; si no, letras (spec 2026-09-10). Una sola
+/// respuesta para el pintado y para las zonas del ratón, que así miden lo
+/// mismo.
+fn con_nombres(app: &App, buttons: &[norte_frontend::panelbar::PanelButton], bar: Rect) -> bool {
+    app.chrome.panel_bar_style() == norte_config::PanelBarStyle::Names
+        && norte_frontend::panelbar::names_fit(buttons, usize::from(bar.width))
+}
 
 /// El kind del panel que tiene el teclado, si lo tiene un panel.
 ///
@@ -314,8 +392,12 @@ pub fn panel_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     };
     let mut x = bar.x;
     let mut out = Vec::new();
-    for b in panel_buttons(app, area) {
-        let fin = x.saturating_add(ANCHO_BOTON);
+    let botones = panel_buttons(app, area);
+    let nombres = con_nombres(app, &botones, bar);
+    for b in botones {
+        let ancho = u16::try_from(norte_frontend::panelbar::button_cell(&b, nombres).width)
+            .unwrap_or(u16::MAX);
+        let fin = x.saturating_add(ancho);
         // Un botón que no cabe ENTERO no se pinta ni se puede pulsar: media
         // letra no es un botón. Mismo criterio que los títulos del menú.
         if fin > bar.x.saturating_add(bar.width) {
@@ -341,8 +423,12 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
     clear_themed(frame, bar, &app.theme);
     let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
     let mut ancho = 0_u16;
-    for b in panel_buttons(app, frame.area()) {
-        if ancho.saturating_add(ANCHO_BOTON) > bar.width {
+    let botones = panel_buttons(app, frame.area());
+    let nombres = con_nombres(app, &botones, bar);
+    for b in botones {
+        let celda = norte_frontend::panelbar::button_cell(&b, nombres);
+        let ancho_boton = u16::try_from(celda.width).unwrap_or(u16::MAX);
+        if ancho.saturating_add(ancho_boton) > bar.width {
             break;
         }
         // Tres estilos para tres estados. Que un panel tenga el TECLADO no es
@@ -378,16 +464,23 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
         // La marca va DENTRO del ancho del botón (ocupa el espacio de la
         // derecha) para que la fila no cambie de tamaño según lo que pase: una
         // barra que baila se lee peor que una fija.
-        spans.push(ratatui::text::Span::styled(
-            format!(" {}", b.letter),
-            estilo,
-        ));
+        //
+        // Con nombres, la letra de acceso va SUBRAYADA dentro del nombre
+        // (spec 2026-09-10): tres spans —antes, la letra, después— y el
+        // mismo estilo de estado en los tres.
+        let subrayado = estilo.add_modifier(ratatui::style::Modifier::UNDERLINED);
+        let antes: String = celda.text.chars().take(celda.letter_at).collect();
+        let letra: String = celda.text.chars().skip(celda.letter_at).take(1).collect();
+        let despues: String = celda.text.chars().skip(celda.letter_at + 1).collect();
+        spans.push(ratatui::text::Span::styled(format!(" {antes}"), estilo));
+        spans.push(ratatui::text::Span::styled(letra, subrayado));
+        spans.push(ratatui::text::Span::styled(despues, estilo));
         spans.push(if b.attention {
             ratatui::text::Span::styled("·", app.theme.role(Role::Warning))
         } else {
             ratatui::text::Span::styled(" ", estilo)
         });
-        ancho = ancho.saturating_add(ANCHO_BOTON);
+        ancho = ancho.saturating_add(ancho_boton);
     }
     frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
 }

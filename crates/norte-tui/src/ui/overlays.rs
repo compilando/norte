@@ -12,6 +12,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{HOSTILE_BADGE, centered, clear_themed};
 use crate::app::display_name;
 use crate::theme::TuiTheme;
+use norte_frontend::display::cells;
 use norte_frontend::middle_ellipsis;
 use norte_i18n::{t, ta};
 
@@ -780,6 +781,27 @@ pub(crate) fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette,
     let area = centered(frame.area(), 60, rows.min(frame.area().height.max(3)));
     clear_themed(frame, area, theme);
     let inner = usize::from(area.width.saturating_sub(3));
+    // Tres columnas, por CELDAS (spec 2026-09-10): la etiqueta humana
+    // primero y entera —es lo que se lee—, el id atenuado, y el chord a la
+    // derecha. El recorte cae sobre la etiqueta y sobre el id, cada uno en
+    // su columna; antes se recortaba la línea compuesta y un id largo se
+    // comía la etiqueta hasta dejar «sw…ane».
+    let chord_w = palette
+        .visible()
+        .iter()
+        .map(|&i| cells(&palette.rows()[i].chord))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let id_w = 22.min(inner.saturating_sub(chord_w + 3) / 3);
+    let label_w = inner.saturating_sub(id_w + chord_w + 4).max(1);
+    let fit = |s: &str, w: usize| {
+        let s = middle_ellipsis(s, w);
+        let pad = w.saturating_sub(cells(&s));
+        format!("{s}{}", " ".repeat(pad))
+    };
+    let dim = ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM);
+    let sin_consulta = palette.query_display().is_empty();
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = if palette.visible().is_empty() {
         (vec![ListItem::new(Line::raw(" —"))], None)
     } else {
@@ -789,8 +811,19 @@ pub(crate) fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette,
                 .iter()
                 .map(|&i| {
                     let row = &palette.rows()[i];
-                    let text = format!(" {:<24} {:<32} {}", row.text, row.desc, row.chord);
-                    ListItem::new(Line::raw(middle_ellipsis(&text, inner)))
+                    // Una reciente se marca solo mientras va arriba por
+                    // serlo: con consulta, el orden es el de lo que casa.
+                    let mark = if sin_consulta && palette.is_recent(i) {
+                        "•"
+                    } else {
+                        " "
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(mark.to_owned(), theme.role(Role::Info)),
+                        Span::raw(format!("{} ", fit(&row.desc, label_w))),
+                        Span::styled(format!("{} ", fit(&row.text, id_w)), dim),
+                        Span::raw(format!("{:>chord_w$}", row.chord)),
+                    ]))
                 })
                 .collect(),
             Some(palette.cursor()),
@@ -814,6 +847,64 @@ pub(crate) fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette,
     let mut state = ListState::default();
     state.select(selected);
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// El asistente de primer arranque (spec 2026-09-10): una caja con el
+/// título del paso, la pregunta, las filas con el cursor y la línea de
+/// teclas. Mismo idioma visual que la paleta.
+pub(crate) fn draw_wizard(
+    frame: &mut Frame<'_>,
+    wizard: &norte_frontend::wizard::Wizard,
+    theme: &TuiTheme,
+) {
+    let lang = norte_i18n::active();
+    let rows = wizard.rows(lang);
+    let question = wizard.question(lang);
+    let hint = t("wizard-hint");
+    let width = 70.min(frame.area().width.max(20));
+    let inner = usize::from(width.saturating_sub(4));
+    // Pregunta + aire + filas + aire + teclas, más los dos bordes.
+    let height = u16::try_from(rows.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(6)
+        .min(frame.area().height.max(3));
+    let area = centered(frame.area(), width, height);
+    clear_themed(frame, area, theme);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", wizard.title(lang)))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(Role::ModalBorder));
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner_area);
+    frame.render_widget(
+        Paragraph::new(format!(" {}", middle_ellipsis(&question, inner))),
+        chunks[0],
+    );
+    let items: Vec<ListItem<'_>> = rows
+        .iter()
+        .map(|r| ListItem::new(Line::raw(format!(" {}", middle_ellipsis(r, inner)))))
+        .collect();
+    let mut state = ListState::default();
+    state.select(Some(wizard.cursor()));
+    frame.render_stateful_widget(
+        List::new(items).highlight_style(theme.role(Role::Selection)),
+        chunks[2],
+        &mut state,
+    );
+    frame.render_widget(
+        Paragraph::new(format!(" {}", middle_ellipsis(&hint, inner))).style(theme.role(Role::Info)),
+        chunks[3],
+    );
 }
 
 /// Overlay de ajustes (`app.settings`, S3): mismo idioma visual que

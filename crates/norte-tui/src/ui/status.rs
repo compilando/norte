@@ -35,11 +35,59 @@ pub(crate) fn marks_status_segments(pane: &Pane) -> (String, String) {
 }
 
 pub(crate) fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let (text, _) = compose(app, area);
+    let c = compose(app, area);
     frame.render_widget(
-        Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
+        Paragraph::new(c.text).style(app.theme.role(Role::StatusBar)),
         area,
     );
+}
+
+/// La zona de la insignia de avisos sin leer (spec 2026-09-10): un clic
+/// abre el panel de registro, que es donde fueron a parar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoticeZone {
+    /// Fila.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+}
+
+/// La zona de la insignia de avisos para el frame `area`, si se pinta.
+#[must_use]
+pub fn notices_zone(app: &App, area: Rect) -> Option<NoticeZone> {
+    let status = status_rect(app, area)?;
+    compose(app, status).notices.map(|(x0, x1)| NoticeZone {
+        row: status.y,
+        x0,
+        x1,
+    })
+}
+
+/// El rectángulo de la barra de estado del frame `area`, o `None` con un
+/// overlay delante: entonces no es pulsable, por la misma regla que la
+/// barra de paneles (`panel_bar_visible`).
+fn status_rect(app: &App, area: Rect) -> Option<Rect> {
+    use super::geometry::{body_rect, chrome_body, resolved_frame, slot_rect};
+    if crate::mouse::overlay_open(app) || app.menu.is_some() {
+        return None;
+    }
+    let res = resolved_frame(app, area);
+    let body = body_rect(&res, &app.layout).unwrap_or_else(|| chrome_body(app, area));
+    Some(slot_rect(&res, crate::panel::SLOT_STATUS).unwrap_or(Rect {
+        x: body.x,
+        y: body.y.saturating_add(body.height).saturating_sub(1),
+        width: body.width,
+        height: 1,
+    }))
+}
+
+/// Lo que compone la barra: el texto, y las columnas de lo que se pulsa.
+struct Composed {
+    text: String,
+    session: Option<(u16, u16)>,
+    notices: Option<(u16, u16)>,
 }
 
 /// Dónde cae el indicador de sesión suelta en el frame, si se está pintando.
@@ -66,33 +114,57 @@ pub struct SessionZone {
 /// celda de al lado.
 #[must_use]
 pub fn session_zone(app: &App, area: Rect) -> Option<SessionZone> {
-    use super::geometry::{body_rect, chrome_body, resolved_frame, slot_rect};
-    // Con un overlay delante no hay zona, por la misma regla que la barra
-    // de paneles (`panel_bar_visible`): el visor pinta su propio pie y no
-    // esta barra, y con la ayuda o un modal encima la barra no es pulsable.
-    // `handle_at` ya corta antes por `overlay_open`, pero eso es un orden
-    // de comprobaciones, no una garantía de esta función.
-    if crate::mouse::overlay_open(app) || app.menu.is_some() {
-        return None;
-    }
-    let res = resolved_frame(app, area);
-    let body = body_rect(&res, &app.layout).unwrap_or_else(|| chrome_body(app, area));
-    let status = slot_rect(&res, crate::panel::SLOT_STATUS).unwrap_or(Rect {
-        x: body.x,
-        y: area.height.saturating_sub(1),
-        width: body.width,
-        height: 1,
-    });
-    let (_, span) = compose(app, status);
-    span.map(|(x0, x1)| SessionZone {
+    // Con un overlay delante no hay zona (`status_rect`): el visor pinta su
+    // propio pie y no esta barra, y con la ayuda o un modal encima la barra
+    // no es pulsable. `handle_at` ya corta antes por `overlay_open`, pero
+    // eso es un orden de comprobaciones, no una garantía de esta función.
+    let status = status_rect(app, area)?;
+    compose(app, status).session.map(|(x0, x1)| SessionZone {
         row: status.y,
         x0,
         x1,
     })
 }
 
-/// La línea de estado, y las columnas del indicador de sesión si va en ella.
-fn compose(app: &App, area: Rect) -> (String, Option<(u16, u16)>) {
+/// La línea de estado, y las columnas de lo que se pulsa en ella.
+fn compose(app: &App, area: Rect) -> Composed {
+    let mut c = compose_line(app, area);
+    // La insignia de avisos sin leer (spec 2026-09-10), a la DERECHA de lo
+    // que haya, salvo que lo que haya sea el propio mensaje o una espera:
+    // ahí la barra ya está diciendo lo más nuevo. Solo si cabe entera.
+    let tapa = app.message.is_some()
+        || app
+            .busy
+            .as_ref()
+            .is_some_and(norte_frontend::busy::Busy::visible);
+    if app.notices_unread > 0 && !tapa {
+        let badge = format!("!{}", app.notices_unread);
+        let ancho = cells(&badge);
+        let fin = usize::from(area.width);
+        let usado = cells(&c.text);
+        if usado + 2 + ancho <= fin {
+            let pad = fin - usado - ancho - 1;
+            c.text = format!("{}{}{badge} ", c.text, " ".repeat(pad));
+            let x0 = area
+                .x
+                .saturating_add(u16::try_from(fin - ancho - 1).unwrap_or(u16::MAX));
+            c.notices = Some((
+                x0,
+                x0.saturating_add(u16::try_from(ancho).unwrap_or(u16::MAX))
+                    .saturating_sub(1),
+            ));
+        }
+    }
+    c
+}
+
+/// La línea de estado sin la insignia, y las columnas del indicador de
+/// sesión si va en ella.
+#[expect(
+    clippy::too_many_lines,
+    reason = "una cadena de prioridades, y cada eslabón lleva su porqué"
+)]
+fn compose_line(app: &App, area: Rect) -> Composed {
     let mut session = None;
     let pane = app.focused();
     let total = pane.entries().len();
@@ -261,7 +333,11 @@ fn compose(app: &App, area: Rect) -> (String, Option<(u16, u16)>) {
         let dir_text = norte_frontend::middle_ellipsis(&dir_text, room);
         format!(" {mark}{dir_text}{tail}")
     };
-    (text, session)
+    Composed {
+        text,
+        session,
+        notices: None,
+    }
 }
 
 #[cfg(test)]
@@ -316,12 +392,13 @@ mod tests {
         let mut app = app_dos_panes();
         let area = ratatui::layout::Rect::new(0, 0, 70, 1);
         assert!(
-            compose(&app, area).1.is_none(),
+            compose(&app, area).session.is_none(),
             "la dueña no tiene indicador"
         );
 
         app.session.detached = true;
-        let (linea, span) = compose(&app, area);
+        let c = compose(&app, area);
+        let (linea, span) = (c.text, c.session);
         let badge = app.session_banner().expect("hay indicador");
         let (x0, x1) = span.expect("y la barra sabe dónde");
         let byte = linea.find(&badge).expect("el indicador está en la línea");
@@ -339,7 +416,53 @@ mod tests {
 
         // Con un mensaje delante la línea es otra y no hay nada que pulsar.
         app.message = Some("copiado 1 fichero".to_string());
-        assert!(compose(&app, area).1.is_none());
+        assert!(compose(&app, area).session.is_none());
+    }
+
+    /// Un aviso caduca a los `notice_seconds` tics (spec 2026-09-10): sale
+    /// de la barra, la insignia `!n` cuenta uno más a la derecha y es
+    /// pulsable; con `0` no caduca nunca; un mensaje NUEVO reinicia la
+    /// cuenta; y abrir el panel de registro pone la insignia a cero.
+    #[test]
+    fn un_aviso_caduca_y_deja_una_insignia_pulsable() {
+        use super::compose;
+        let mut app = app_dos_panes();
+        let area = ratatui::layout::Rect::new(0, 0, 70, 1);
+        app.chrome.notice_seconds = Some(2);
+        app.message = Some("copiado 1 fichero".to_string());
+        app.tick_notices();
+        assert!(app.message.is_some(), "un tic: sigue");
+        app.message = Some("otro".to_string());
+        app.tick_notices();
+        assert!(app.message.is_some(), "un mensaje nuevo reinicia la cuenta");
+        app.tick_notices();
+        assert!(app.message.is_none(), "dos tics: caducó");
+        assert_eq!(app.notices_unread, 1);
+        let c = compose(&app, area);
+        assert!(
+            c.text.ends_with("!1 "),
+            "la insignia a la derecha: {:?}",
+            c.text
+        );
+        let (x0, x1) = c.notices.expect("pulsable");
+        assert_eq!((x0, x1), (67, 68));
+        assert!(barra(&app).contains("!1"));
+
+        // Con un mensaje delante, la barra dice lo más nuevo y no la insignia.
+        app.message = Some("nuevo".to_string());
+        assert!(compose(&app, area).notices.is_none());
+        // Con `0`, nada caduca.
+        app.chrome.notice_seconds = Some(0);
+        for _ in 0..5 {
+            app.tick_notices();
+        }
+        assert!(app.message.is_some());
+        // Abrir el registro deja la insignia a cero.
+        app.message = None;
+        assert_eq!(app.notices_unread, 1);
+        app.toggle_log();
+        app.tick_notices();
+        assert_eq!(app.notices_unread, 0);
     }
 
     /// En un terminal estrecho el indicador se recorta, y un indicador que no
@@ -354,12 +477,15 @@ mod tests {
         // Justo lo que ocupa con su margen: cabe.
         let justo = ratatui::layout::Rect::new(0, 0, u16::try_from(ancho + 1).expect("cabe"), 1);
         assert!(
-            compose(&app, justo).1.is_some(),
+            compose(&app, justo).session.is_some(),
             "cabe entero y se puede pulsar"
         );
         // Una celda menos: ya no.
         let corto = ratatui::layout::Rect::new(0, 0, u16::try_from(ancho).expect("cabe"), 1);
-        assert!(compose(&app, corto).1.is_none(), "recortado, sin zona");
+        assert!(
+            compose(&app, corto).session.is_none(),
+            "recortado, sin zona"
+        );
     }
 
     /// Con un overlay delante no hay zona, aunque la ventana siga suelta: el

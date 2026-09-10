@@ -81,6 +81,8 @@ pub async fn reload_config(
                 // pintado —y el ratón la sigue, porque lee ese mismo reparto—.
                 app.menu_bar = cfg.common.ui_menu_bar.unwrap_or(true);
                 app.panel_bar = cfg.common.ui_panel_bar.unwrap_or(true);
+                // El cromo entero, por lo mismo: cada frame lo lee.
+                app.chrome = cfg.common.ui_chrome;
                 // La fila `..`, también en caliente: es presentación, y el
                 // pane la pone o la quita sin tocar el listado.
                 app.set_parent_row(cfg.common.ui_parent_entry.unwrap_or(true));
@@ -111,7 +113,8 @@ pub async fn reload_config(
                 // dispara este mismo camino y es idempotente con lo ya
                 // aplicado en memoria.
                 app.columns =
-                    norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+                    norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
+                        .with_date_format(cfg.common.ui_chrome.date_format());
                 for i in 0..app.panes.len() {
                     app.apply_scheme_sort(i);
                 }
@@ -144,6 +147,9 @@ pub async fn reload_config(
                 // efectivo `dialog` VIGENTE, ANTES de que se mueva al
                 // resolver de abajo — mismo criterio que help_lines.
                 app.dialog_hints = DialogHints::build(&dialog);
+                app.dialog_hints.buttons = cfg.common.ui_chrome.dialog_buttons();
+                // Y la barra de teclas, de los tres (spec 2026-09-10).
+                app.key_bars = crate::app::KeyBars::build(&browse, &viewer);
                 // #142: el acorde de vuelta del subshell, del efectivo
                 // `browse` VIGENTE y antes de que se mude al resolver —
                 // mismo criterio. Un rebind que no llegara aquí dejaría al

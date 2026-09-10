@@ -28,6 +28,7 @@ impl Estado {
         // renderer vio de ella, y lo que el siguiente parche compara.
         if let UiUpdate::Snapshot(s) = &u {
             self.ultima_barra = Some(s.panel_bar.clone());
+            self.ultima_teclas = Some(s.key_bar.clone());
         }
         self.sequence += 1;
         BridgeEnvelope::new(self.instance.clone(), self.sequence, u)
@@ -46,6 +47,16 @@ impl Estado {
                 panel_bar: barra.clone(),
             });
             self.ultima_barra = Some(barra);
+        }
+        // Y la de teclas, por el mismo mecanismo (spec 2026-09-10): abrir un
+        // diálogo o el visor cambia qué pantalla tiene el teclado, y con
+        // ella lo que cada `F` hace.
+        let teclas = self.vista_barra_de_teclas();
+        if self.ultima_teclas.as_ref() != Some(&teclas) {
+            changes.push(ViewChange::KeyBar {
+                key_bar: teclas.clone(),
+            });
+            self.ultima_teclas = Some(teclas);
         }
         let base = self.sequence;
         self.sobre(UiUpdate::Patch(ViewPatch {

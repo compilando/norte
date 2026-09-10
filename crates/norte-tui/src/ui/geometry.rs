@@ -245,14 +245,37 @@ pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
     // de menús y la de paneles (#324). Se restan las que estén, y saturando —
     // es preferible una pantalla degradada a un reparto sobre altura negativa.
     let filas = u16::from(app.menu_bar) + u16::from(app.panel_bar);
-    if filas == 0 || area.height == 0 {
+    // Y la de teclas ABAJO (spec 2026-09-10): se resta del alto, no del
+    // origen. Mismo criterio que las dos de arriba: una sola resta, aquí.
+    let abajo = u16::from(key_bar_area(app, area).is_some());
+    if filas + abajo == 0 || area.height == 0 {
         return area;
     }
     Rect {
         y: area.y.saturating_add(filas),
-        height: area.height.saturating_sub(filas),
+        height: area.height.saturating_sub(filas).saturating_sub(abajo),
         ..area
     }
+}
+
+/// La fila donde va la barra de teclas (spec 2026-09-10), si está: la ÚLTIMA
+/// del frame, como en mc, far y norton, y la de estado queda encima. La fila
+/// se RESERVA aunque haya un overlay delante —abrir un modal no recoloca la
+/// pantalla de detrás, como con la barra de paneles—; lo que se pinta en
+/// ella lo decide `App::key_bar_cells`, y con un modal es nada.
+#[must_use]
+pub(crate) fn key_bar_area(app: &App, area: Rect) -> Option<Rect> {
+    // Con las tres barras en un terminal de tres filas no queda cuerpo; la
+    // de teclas es la que cede: `<=` para que no caiga fuera del búfer.
+    let arriba = u16::from(app.menu_bar) + u16::from(app.panel_bar);
+    if !app.chrome.key_bar() || area.height <= arriba.saturating_add(1) {
+        return None;
+    }
+    Some(Rect {
+        y: area.y.saturating_add(area.height).saturating_sub(1),
+        height: 1,
+        ..area
+    })
 }
 
 /// La fila donde va la barra de paneles, si está.

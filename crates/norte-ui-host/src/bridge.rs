@@ -247,7 +247,23 @@ use serde::{Deserialize, Serialize};
 ///   si la columna está abierta lo decide el host desde el listado entero,
 ///   no el renderer desde las filas que ve, o desplazarse a una página sin
 ///   iconos la cerraría y correría todos los nombres.
-pub const BRIDGE_VERSION: u32 = 62;
+/// - **63**: la ola de usabilidad (spec 2026-09-10), en UN salto.
+///   `PaletteRowView.recent`: la fila va arriba por ser de las últimas
+///   lanzadas, solo con la consulta vacía. `PanelBarView.names`: si los
+///   botones enseñan su nombre (`[ui] panel_bar_style`) o solo la letra.
+///   `BrowserSlotView.footer` y `BrowserHeader.footer`: el pie del listado
+///   (cuentas, marcado, espacio libre), ya redactado; vacío con
+///   `[ui] pane_footer` apagado. `ViewSnapshot.key_bar` y el cambio
+///   `key_bar`: la barra de teclas de función, derivada del keymap de la
+///   pantalla que tiene el teclado; `key_bar_activate` la pulsa y el host
+///   sintetiza la tecla. `StatusView.notices_unread`: avisos que caducaron
+///   (`[ui] notice_seconds`) sin que nadie abriera el registro; la
+///   insignia abre el registro por su botón de la barra de paneles.
+///   `ViewSnapshot.wizard`, el cambio `wizard` y las acciones `wizard_open`
+///   y `wizard_activate_row`: el asistente de primer arranque, que el
+///   renderer pide cuando el catálogo dice `first_run` y el host escribe
+///   por el camino de los ajustes.
+pub const BRIDGE_VERSION: u32 = 63;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

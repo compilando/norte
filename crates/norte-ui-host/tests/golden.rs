@@ -203,7 +203,10 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::MenuPointRow { .. } => "menu_point_row",
         UiAction::MenuActivateRow { .. } => "menu_activate_row",
         UiAction::MenuClose => "menu_close",
+        UiAction::WizardOpen => "wizard_open",
+        UiAction::WizardActivateRow { .. } => "wizard_activate_row",
         UiAction::PanelBarActivate { .. } => "panel_bar_activate",
+        UiAction::KeyBarActivate { .. } => "key_bar_activate",
         UiAction::ResizeSlot { .. } => "resize_slot",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
@@ -458,10 +461,16 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
         ("menu_point_row", UiAction::MenuPointRow { row: 3 }),
         ("menu_activate_row", UiAction::MenuActivateRow { row: 3 }),
         ("menu_close", UiAction::MenuClose),
+        ("wizard_open", UiAction::WizardOpen),
+        (
+            "wizard_activate_row",
+            UiAction::WizardActivateRow { row: 1 },
+        ),
         (
             "panel_bar_activate",
             UiAction::PanelBarActivate { button: 2 },
         ),
+        ("key_bar_activate", UiAction::KeyBarActivate { key: 5 }),
         (
             "resize_slot",
             UiAction::ResizeSlot {
@@ -919,6 +928,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
             filling_note: "cargando… (3)".to_owned(),
             pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
             marked_note: "2 marcadas, 4,0 kB".to_owned(),
+            footer: "1 dirs · 2 ficheros · 4,0 kB · 2 marcadas, 4,0 kB · 120 GiB libres".to_owned(),
             columns: vec![
                 ColumnHeader {
                     id: "name".to_owned(),
@@ -1129,10 +1139,40 @@ fn perfiles_de_referencia() -> norte_ui_host::dto::ProfilePickerView {
 
 /// La barra de menús con uno DESPLEGADO: la fixture tiene que llevar las dos
 /// mitades, porque son las dos que el renderer pinta.
+fn asistente_de_referencia() -> norte_ui_host::dto::WizardView {
+    norte_ui_host::dto::WizardView {
+        title: "Bienvenido a norte · 1/3 · teclas".to_owned(),
+        question: "¿Qué gestor de ficheros tienes en los dedos?".to_owned(),
+        rows: vec!["orthodox — estilo mc".to_owned(), "vim — hjkl".to_owned()],
+        cursor: 0,
+        hint: "[Intro] siguiente · [Esc] salir".to_owned(),
+    }
+}
+
+fn barra_de_teclas_de_referencia() -> norte_ui_host::dto::KeyBarView {
+    use norte_ui_host::dto::KeyCellView;
+    norte_ui_host::dto::KeyBarView {
+        bar: true,
+        cells: vec![
+            KeyCellView {
+                key: 1,
+                label: "Ayuda".to_owned(),
+                command: Some("app.help".to_owned()),
+            },
+            KeyCellView {
+                key: 2,
+                label: String::new(),
+                command: None,
+            },
+        ],
+    }
+}
+
 fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
     use norte_ui_host::dto::{PanelButtonState, PanelButtonView};
     norte_ui_host::dto::PanelBarView {
         bar: true,
+        names: true,
         buttons: vec![
             PanelButtonView {
                 kind: "places".to_owned(),
@@ -1186,6 +1226,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         status: StatusView {
             message: Some("2 entradas".to_owned()),
             banners: vec![],
+            notices_unread: 2,
             pending: Some(norte_ui_host::dto::PendingView {
                 chords: "ctrl+x".to_owned(),
                 count: Some(12),
@@ -1195,7 +1236,9 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         tasks: vec![task_de_referencia()],
         menu: menu_de_referencia(),
         panel_bar: barra_de_paneles_de_referencia(),
+        key_bar: barra_de_teclas_de_referencia(),
         profiles: Some(perfiles_de_referencia()),
+        wizard: Some(asistente_de_referencia()),
         palette: Some(norte_ui_host::dto::PaletteView {
             query: "orde".to_owned(),
             rows: vec![norte_ui_host::dto::PaletteRowView {
@@ -1204,6 +1247,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
                 chord: "ctrl+f3".to_owned(),
                 enabled: true,
                 hostile: false,
+                recent: false,
             }],
             cursor: Some(0),
             total: 42,
@@ -2141,6 +2185,8 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
                 filling_note: "cargando… (3)".to_owned(),
                 pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
                 marked_note: "2 marcadas, 4,0 kB".to_owned(),
+                footer: "1 dirs · 2 ficheros · 4,0 kB · 2 marcadas, 4,0 kB · 120 GiB libres"
+                    .to_owned(),
                 marks: 4,
             },
         ),
@@ -2148,6 +2194,7 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
 }
 
 /// Todo lo demás que puede cambiar de la pantalla.
+#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
 fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
     vec![
         ("layout", ViewChange::Layout(disposicion_de_referencia())),
@@ -2167,6 +2214,7 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             ViewChange::Status(StatusView {
                 message: Some("2 entradas".to_owned()),
                 banners: Vec::new(),
+                notices_unread: 0,
                 pending: None,
             }),
         ),
@@ -2174,6 +2222,18 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             "menu",
             ViewChange::Menu {
                 menu: menu_de_referencia(),
+            },
+        ),
+        (
+            "key_bar",
+            ViewChange::KeyBar {
+                key_bar: barra_de_teclas_de_referencia(),
+            },
+        ),
+        (
+            "wizard",
+            ViewChange::Wizard {
+                wizard: Some(asistente_de_referencia()),
             },
         ),
         (
@@ -2199,6 +2259,7 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
                         chord: "ctrl+f3".to_owned(),
                         hostile: false,
                         enabled: true,
+                        recent: false,
                     }],
                     cursor: Some(0),
                     total: 42,
@@ -2335,8 +2396,8 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    // Puente 62: `RowView.icon` e `icon_hostile` (ADR 0105).
-    const FORMA: u64 = 17_848_094_378_618_174_567;
+    // Puente 63: la ola de usabilidad (spec 2026-09-10).
+    const FORMA: u64 = 5_398_688_911_765_944_362;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

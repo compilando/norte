@@ -31,6 +31,13 @@ impl TuiTheme {
         Self { theme, depth }
     }
 
+    /// La profundidad de color con la que se pinta: para construir OTRO tema
+    /// con la misma (la vista previa del asistente).
+    #[must_use]
+    pub fn depth(&self) -> ColorDepth {
+        self.depth
+    }
+
     /// `true` si el tema declara efectos de GPU (la TUI los ignora; solo lo
     /// expone para diagnósticos).
     #[must_use]

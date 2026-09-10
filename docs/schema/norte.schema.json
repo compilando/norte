@@ -138,7 +138,7 @@
         },
         "format": {
           "default": null,
-          "description": "`\"exact\"` | `\"iec\"` | `\"si\"` | `\"relative\"` | `\"iso\"` | `\"octal\"` |\n`\"rwx\"` — closed, validated at load; whether it FITS the column is\nthe frontend's call (doctor reports mismatches).",
+          "description": "`\"exact\"` | `\"iec\"` | `\"si\"` | `\"relative\"` | `\"iso\"` | `\"smart\"` |\n`\"octal\"` | `\"rwx\"` — closed, validated at load; whether it FITS the column is\nthe frontend's call (doctor reports mismatches).",
           "type": [
             "string",
             "null"
@@ -438,6 +438,22 @@
             "null"
           ]
         },
+        "date_format": {
+          "default": null,
+          "description": "Default format of the `mtime` column when `[ui.columns]` does not fix\none: `\"smart\"` (default — the time today, day and time this year,\nthe date before that), `\"relative\"` (`11h ago`) or `\"iso\"`\n(`2026-09-10 14:02`). All three print LOCAL time.\n\n[`crate::load::load`] rejects other values (same pattern as\n`quick_search`) so its diagnostic can include the source path.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dialog_buttons": {
+          "default": null,
+          "description": "Whether a modal's key line is painted as buttons (`[ Enter  Confirm ]\n[ Esc  Cancel ]`, each clickable) instead of the plain\n`[enter] confirm · [esc] cancel` line. Absent = `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "diff": {
           "default": null,
           "description": "`[ui] diff` (#312): the program that compares TWO files, as an argv\ntemplate with the same field codes as `openers.toml` — `%F` expands to\nboth paths, `%d` to the pane's directory: `diff = [\"meld\", \"%F\"]`.\nAbsent = `diff -u`, which POSIX guarantees is there and whose output\nnorte holds on screen until a key is pressed.\n\n**Never honoured from the PROJECT layer**, same fail-closed rule as\n[`Self::editor`] and for the same reason: it names a program to run.",
@@ -493,6 +509,14 @@
             "null"
           ]
         },
+        "key_bar": {
+          "default": null,
+          "description": "Whether the row of function keys (F1–F10 with what each one does on\nthe current screen) stays pinned at the bottom. Absent = `true`.\n\nDerived from the effective keymap, never drawn by hand: rebinding F5\nchanges the label, and a screen that binds nothing to F7 shows an\nempty cell there. Clicking a cell runs the command.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "lang": {
           "default": null,
           "description": "Language (`es` or `en`). When absent, negotiate from the environment.",
@@ -533,11 +557,37 @@
             "null"
           ]
         },
+        "notice_seconds": {
+          "default": null,
+          "description": "Seconds a transient notice stays on the status line before it moves\nto the notice ring and only a badge remains. Absent = `8`; `0` keeps\nthe notice until the next key, the behaviour before this key\nexisted. Persistent banners (a degraded connection, a journal that\ncannot open) are state, not notices, and never expire.\n\n[`crate::load::load`] rejects values above 600.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pane_footer": {
+          "default": null,
+          "description": "Whether every listing carries a footer with its counts (directories,\nfiles, bytes), what is marked, and the free space of the volume the\ndirectory lives on. Absent = `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "panel_bar": {
           "default": null,
           "description": "Whether the panel bar is pinned under the menu bar. Absent = `true`.\n\nOn for the same reason the menu bar is: the side panels — places, tree,\njobs, details, the log — were reachable by shortcut, by menu and by the\npalette, and all three require knowing the panel exists. Nothing on\nscreen said so, which also means a panel contributed by a plugin was\ninvisible to anyone who did not go looking.\n\nIt costs one row, and `panel_bar = false` gives it back — every panel\nstill opens by its own key and from the menu.\n\n**Both frontends honour it.** This used to say the GUI ignored the key;\nit reads it (`PanelBarView.bar`).",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "panel_bar_style": {
+          "default": null,
+          "description": "How the panel bar names its buttons: `\"names\"` (default) paints the\nlocalized panel name with its access letter underlined; `\"letters\"`\npaints only the letter, the row's original form. Below 60 usable\ncells `names` falls back to letters on its own.\n\n[`crate::load::load`] rejects other values (same pattern as\n`quick_search`) so its diagnostic can include the source path.",
+          "type": [
+            "string",
             "null"
           ]
         },

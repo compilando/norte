@@ -65,6 +65,7 @@
   "browser_header": {
     "change": "browser_header",
     "filling_note": "cargando… (3)",
+    "footer": "1 dirs · 2 ficheros · 4,0 kB · 2 marcadas, 4,0 kB · 120 GiB libres",
     "hidden_note": "3 ocultas",
     "marked_note": "2 marcadas, 4,0 kB",
     "marks": 4,
@@ -458,6 +459,24 @@
       "topic_id": "copying"
     }
   },
+  "key_bar": {
+    "change": "key_bar",
+    "key_bar": {
+      "bar": true,
+      "cells": [
+        {
+          "command": "app.help",
+          "key": 1,
+          "label": "Ayuda"
+        },
+        {
+          "command": null,
+          "key": 2,
+          "label": ""
+        }
+      ]
+    }
+  },
   "layout": {
     "cells": [
       120,
@@ -631,6 +650,7 @@
           "desc": "Ordenar por nombre",
           "enabled": true,
           "hostile": false,
+          "recent": false,
           "text": "pane.sort-name"
         }
       ],
@@ -658,7 +678,8 @@
           "letter": "R",
           "state": "closed"
         }
-      ]
+      ],
+      "names": true
     }
   },
   "picker": {
@@ -864,6 +885,7 @@
     "banners": [],
     "change": "status",
     "message": "2 entradas",
+    "notices_unread": 0,
     "pending": null
   },
   "sync": {
@@ -1047,6 +1069,19 @@
         }
       ],
       "title": "ctrl+x"
+    }
+  },
+  "wizard": {
+    "change": "wizard",
+    "wizard": {
+      "cursor": 0,
+      "hint": "[Intro] siguiente · [Esc] salir",
+      "question": "¿Qué gestor de ficheros tienes en los dedos?",
+      "rows": [
+        "orthodox — estilo mc",
+        "vim — hjkl"
+      ],
+      "title": "Bienvenido a norte · 1/3 · teclas"
     }
   }
 }

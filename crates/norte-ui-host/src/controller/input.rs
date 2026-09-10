@@ -171,6 +171,13 @@ impl Estado {
         if !self.dialogos.is_empty() {
             return Some(self.tecla_en_dialogo(k, backend, buzon));
         }
+        // El asistente de primer arranque (spec 2026-09-10): detrás del
+        // diálogo, que es una pregunta de seguridad, y delante de todo lo
+        // demás — está preguntando qué teclas tener, así que las suyas son
+        // fijas.
+        if self.asistente.is_some() {
+            return Some(self.tecla_en_asistente(k, backend, buzon));
+        }
         // La SALIDA de un comando de extensión se queda TODAS las teclas
         // mientras está: pinta a pantalla completa, así que un modal que
         // dejara pasar la que no entiende no es un modal. `Enter` y `Escape`
@@ -499,6 +506,7 @@ impl Estado {
                 let elegido = p.selected();
                 self.paleta = None;
                 if let Some(cmd) = elegido {
+                    norte_frontend::session::note_palette_recent(&mut self.paleta_recientes, &cmd);
                     // El cierre viaja en su PROPIO parche y antes que el
                     // efecto. Sin él, un renderer que aplica parches —que es
                     // lo que hace el de referencia— recibía el cambio del

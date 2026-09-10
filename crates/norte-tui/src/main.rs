@@ -41,6 +41,9 @@ async fn main() -> Result<()> {
     let Some(args) = args_or_exit(parsed)? else {
         return Ok(()); // `--help`/`--version`: ya impreso.
     };
+    // `--setup` (spec 2026-09-10): volver a abrir el asistente de primer
+    // arranque. Se lee ANTES de que `args` se desmonte por campos.
+    let cli_setup = args.has("--setup");
     let (cli_preset, cli_layout, cli_profile, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
         args.text("--preset"),
         // `--layout` NO es texto por contrato: acaba siendo un nombre de
@@ -150,7 +153,8 @@ async fn main() -> Result<()> {
     // los listados iniciales (#117): ellos también piden los attrs
     // configurados — sin esto, las celdas attr nacen en blanco hasta el
     // primer cd/refresh.
-    let columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+    let columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
+        .with_date_format(cfg.common.ui_chrome.date_format());
     let start_attrs = columns.attr_ids_for(start.scheme());
     let left = initial_pane(&backend, &start, &start_attrs).await?;
     let right = initial_pane(&backend, &start, &start_attrs).await?;
@@ -209,6 +213,7 @@ async fn main() -> Result<()> {
     // nada en pantalla diciendo que existía.
     app.menu_bar = cfg.common.ui_menu_bar.unwrap_or(true);
     app.panel_bar = cfg.common.ui_panel_bar.unwrap_or(true);
+    app.chrome = cfg.common.ui_chrome;
     app.set_parent_row(cfg.common.ui_parent_entry.unwrap_or(true));
     // `[ui] layout`: una disposición guardada. Un layout que no carga NO deja
     // a norte sin pantalla — se avisa por la barra y se arranca con
@@ -267,6 +272,12 @@ async fn main() -> Result<()> {
     // efectivo `dialog` ANTES de que se mueva al `Resolver` de abajo — igual
     // que `help_lines`, se reconstruyen en cada hot-reload OK.
     app.dialog_hints = DialogHints::build(&dialog_eff);
+    // `[ui] dialog_buttons` (spec 2026-09-10): la línea de teclas como
+    // botones. Lo sabe la config, no el efectivo.
+    app.dialog_hints.buttons = app.chrome.dialog_buttons();
+    // La barra de teclas (spec 2026-09-10): de los TRES efectivos, aquí y en
+    // cada hot-reload OK, por lo mismo que los hints.
+    app.key_bars = norte_tui::app::KeyBars::build(&browse_eff, &viewer_eff);
     // #142: el acorde que devuelve los paneles, del MISMO efectivo y en el
     // mismo momento que lo de arriba. Si un rebind no llegara aquí, la tecla
     // que abre el subshell y la que lo cierra serían distintas.
@@ -326,6 +337,11 @@ async fn main() -> Result<()> {
     // browse/viewer ANTES de que se muevan al `Resolver` de abajo — mismo
     // criterio que `help_lines`/`dialog_hints`.
     app.palette_rows = norte_tui::palette::build_rows(&browse_eff, &viewer_eff);
+    // El asistente de primer arranque (spec 2026-09-10): sin `norte.toml` de
+    // usuario, o con `--setup`. Nunca bajo `--pick`.
+    if norte_tui::wizard::should_open(cli_setup, cli_pick).await {
+        norte_tui::wizard::open(&mut app, &cfg);
+    }
     let mut resolver = Resolver::new(browse_eff);
     let mut viewer_resolver = Resolver::new(viewer_eff);
     // H1 T2: resolver compartido por TODOS los overlays (modal, theme
@@ -585,7 +601,7 @@ fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -
 }
 
 /// Flags booleanos del TUI.
-const BOOL_FLAGS: &[&str] = &["--daemon", "--pick"];
+const BOOL_FLAGS: &[&str] = &["--daemon", "--pick", "--setup"];
 /// Flags con valor del TUI.
 const VALUE_FLAGS: &[&str] = &["--preset", "--layout", "--profile", "--socket", "--cd-file"];
 
@@ -611,6 +627,9 @@ Options:
       --pick             print the selection, NUL-terminated, and exit
       --cd-file PATH     write the final directory here, NUL-terminated
                          (used by the `norte shell-init` wrapper)
+      --setup            Run the first-start wizard again (keys, theme, icons).
+                         It also runs on its own when you have no norte.toml;
+                         NORTE_NO_WIZARD=1 keeps it closed
   -h, --help             Print help
   -V, --version          Print version
 ";

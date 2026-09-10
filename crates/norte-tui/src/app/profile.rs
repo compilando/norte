@@ -160,6 +160,9 @@ mod tests {
             ui_menu_bar: _,
             // — Igual que la de menús, y por lo mismo (#324).
             ui_panel_bar: _,
+            // — Se aplica en caliente: `reload_config` copia el cromo a `App`
+            //   y cada frame lo lee (spec 2026-09-10).
+            ui_chrome: _,
             // — Se aplica en caliente: la recarga se la pasa a los dos panes
             //   y la fila aparece o desaparece en el siguiente pintado.
             ui_parent_entry: _,

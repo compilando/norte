@@ -159,6 +159,25 @@ pub struct SessionBody {
     /// Estado por hueco, indexado por [`SlotId`].
     #[serde(default)]
     pub slots: BTreeMap<u32, SlotState>,
+    /// Las últimas claves de despacho lanzadas desde la paleta, la más
+    /// reciente primero, a lo sumo [`PALETTE_RECENT_CAP`] (spec 2026-09-10).
+    /// Es ESTADO, como el perfil activo: lo que hiciste, no lo que
+    /// decidiste. Un campo con `default` es aditivo: un cuerpo viejo lo lee
+    /// vacío y uno nuevo lo escribe; no sube [`SCHEMA_VERSION`].
+    #[serde(default)]
+    pub palette_recent: Vec<String>,
+}
+
+/// Cuántos comandos recientes guarda la paleta. Cinco: los que caben en la
+/// vista sin empujar la lista entera bajo el borde.
+pub const PALETTE_RECENT_CAP: usize = 5;
+
+/// Anota `key` como el comando más reciente de la paleta: lo pone primero,
+/// quita su repetición anterior y recorta a [`PALETTE_RECENT_CAP`].
+pub fn note_palette_recent(recent: &mut Vec<String>, key: &str) {
+    recent.retain(|k| k != key);
+    recent.insert(0, key.to_owned());
+    recent.truncate(PALETTE_RECENT_CAP);
 }
 
 impl SessionBody {
@@ -1086,6 +1105,7 @@ mod tests {
             active: String::new(),
             layouts: std::iter::once(("default".to_owned(), sin_listado)).collect(),
             slots: std::collections::BTreeMap::new(),
+            palette_recent: Vec::new(),
         };
         let v = body.to_value();
         assert!(matches!(

@@ -3,26 +3,26 @@ source: crates/norte-tui/tests/layout_anchor.rs
 expression: "lines.join(\"\\n\")"
 ---
  Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        
- S  V  P  D  Á  R                                                               
+ Sitios  Visor  Procesos  Detalles  Árbol  Registro                             
 ┌/casa─────────────────────────────────────────────────────────────────────────┐
-│Nombre▲                                                       Tamaño     Fecha│
-│   f00                                                           1 B          │
-│   f01                                                           1 B          │
-│   f02                                                           1 B          │
-│   f03                                                           1 B          │
-│   f04                                                           1 B          │
-│   f05                                                           1 B          │
-│   f06                                                           1 B          │
-│   f07                                                           1 B          │
-│   f08                                                           1 B          │
-│   f09                                                           1 B          │
-│   f10                                                           1 B          │
-│   f11                                                           1 B          │
-│   f12                                                           1 B          │
-│   f13                                                           1 B          │
-│   f14                                                           1 B          │
-│   f15                                                           1 B          │
-│   f16                                                           1 B          │
-│   f17                                                           1 B          │
+│Nombre▲                                                     Tamaño       Fecha│
+│   f00                                                         1 B            │
+│   f01                                                         1 B            │
+│   f02                                                         1 B            │
+│   f03                                                         1 B            │
+│   f04                                                         1 B            │
+│   f05                                                         1 B            │
+│   f06                                                         1 B            │
+│   f07                                                         1 B            │
+│   f08                                                         1 B            │
+│   f09                                                         1 B            │
+│   f10                                                         1 B            │
+│   f11                                                         1 B            │
+│   f12                                                         1 B            │
+│   f13                                                         1 B            │
+│   f14                                                         1 B            │
+│   f15                                                         1 B            │
+│   f16                                                         1 B            │
+│   f17                                                         1 B            │
 └──────────────────────────────────────────────────────────────────────────────┘
  /casa  1/60

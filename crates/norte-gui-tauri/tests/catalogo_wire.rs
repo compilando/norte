@@ -22,7 +22,8 @@ const FIXTURE: &str = r##"{
     "mono_font": "Iosevka",
     "font_size": 15.0,
     "reduce_motion": true
-  }
+  },
+  "first_run": false
 }"##;
 
 /// Ida y vuelta: los nombres del JSON son el contrato, no los de Rust.

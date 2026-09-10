@@ -337,6 +337,28 @@ pub async fn run(
                 request_decorations(app, backend, &mut work.decorate, pane);
             }
         }
+        // El espacio libre del pie de cada panel (spec 2026-09-10): se pide
+        // cuando un listado aterriza o se refresca, y solo si el pie está
+        // encendido — con él apagado la tabla de montaje no le hace falta a
+        // nadie. Un fallo deja la cache como estaba: el pie calla el espacio
+        // antes que inventarlo.
+        //
+        // EN LÍNEA pero ACOTADO (revisión M5): `Backend` no es `Clone`, así
+        // que no se puede lanzar a una tarea como hace la ventana, y la
+        // enumeración hace un `statvfs` por montaje con 200 ms de plazo cada
+        // uno — un montaje de red colgado paraba el bucle entero. El tope de
+        // 250 ms es el precio máximo por listado; pasado, el pie se queda con
+        // la tabla anterior, que sigue teniendo el montaje correcto.
+        if app.chrome.pane_footer()
+            && std::mem::take(&mut app.volumes_stale)
+            && let Ok(Ok(vols)) = tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                backend.volumes(false),
+            )
+            .await
+        {
+            app.volumes = vols;
+        }
         turn::drain_pending(
             app,
             backend,
@@ -378,6 +400,8 @@ pub async fn run(
         turn::spawn_probes(app, backend, &mut work);
         tokio::select! {
             _ = session_tick.tick() => {
+                // Un segundo más para el aviso de la barra (spec 2026-09-10).
+                app.tick_notices();
                 push_session(app, &mut session_push);
                 // #179: soltar el journal cuando lleva un rato sin
                 // usarse. Este proceso lo tomaba en la primera mutación
@@ -932,6 +956,31 @@ pub async fn run(
                         me,
                     )
                     .await;
+                    // Un clic en la barra de teclas dejó una tecla que
+                    // sintetizar (spec 2026-09-10): va por `on_key`, el
+                    // MISMO camino que la tecla de verdad, con los tres
+                    // resolvers. No hay segundo despacho que pueda divergir.
+                    if let Some(key) = app.pending_key.take() {
+                        on_key(
+                            app,
+                            backend,
+                            capture,
+                            &mut Console::new(&mut events, terminal),
+                            resolver,
+                            viewer_resolver,
+                            dialog_resolver,
+                            help_lines,
+                            lang,
+                            quick_mode,
+                            confirm_quit,
+                            &cfg,
+                            cli_preset.as_deref(),
+                            lua_host.as_ref(),
+                            &mut work,
+                            key,
+                        )
+                        .await;
+                    }
                 } else if let Event::Key(key) = event
                     && key.kind == crossterm::event::KeyEventKind::Press
                 {

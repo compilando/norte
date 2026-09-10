@@ -160,6 +160,9 @@ pub fn settle_cd(
     if let Some(pane) = cd_landed_pane(&outcome) {
         app.apply_scheme_sort(pane);
         request_decorations(app, backend, decorate_fetch, pane);
+        // El pie del panel dice el espacio libre de DONDE está: un listado
+        // nuevo puede estar en otro volumen.
+        app.volumes_stale = true;
         // Y el árbol, si hay uno: este listado es dónde mira el panel ahora, y
         // el panel de al lado tiene que decir lo mismo. Solo por el ENFOCADO —
         // un listado del otro lado que termina de cargar no es dónde está

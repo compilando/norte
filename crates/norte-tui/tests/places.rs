@@ -259,9 +259,13 @@ fn cerrado_no_pinta_nada() {
     app.render_now_ms = Some(0);
     let buf = buffer_de(&app, 100, 30);
     let f = filas(&buf);
+    // La fila 1 es la barra de paneles, que desde la spec 2026-09-10 nombra
+    // el panel («Sitios») justamente para que se sepa que existe: se salta.
     assert!(
         !f.iter()
-            .any(|row| row.contains(&norte_i18n::t_in(norte_i18n::Lang::Es, "places-title"))),
+            .enumerate()
+            .filter(|(i, _)| *i != 1)
+            .any(|(_, row)| row.contains(&norte_i18n::t_in(norte_i18n::Lang::Es, "places-title"))),
         "sin abrirlo, el título del sidebar no aparece"
     );
 }

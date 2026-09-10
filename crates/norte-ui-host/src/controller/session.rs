@@ -66,6 +66,7 @@ impl Estado {
             self.poner_arbol(arbol, None);
         }
         self.aplicar_sesion(&body);
+        self.paleta_recientes.clone_from(&body.palette_recent);
         self.sesion.conocidos = body.slots.keys().copied().collect();
         for (id, estado) in &body.slots {
             self.sesion.touched.insert(*id, estado.touched_ms);
@@ -84,6 +85,55 @@ impl Estado {
             .and_then(|n| n.to_str())
             .filter(|s| !s.is_empty())
             .map_or_else(|| "default".to_owned(), ToOwned::to_owned)
+    }
+
+    /// Un tic de un segundo sobre el aviso de la barra (spec 2026-09-10,
+    /// `[ui] notice_seconds`): pasado el tope, el mensaje sale de la barra,
+    /// va al registro por `tracing` y `notices_unread` cuenta uno más. Con
+    /// `0` no caduca nada. Abrir el panel de registro pone la cuenta a
+    /// cero. Devuelve el parche de estado si algo cambió; los tests lo hacen
+    /// avanzar tic a tic, sin reloj.
+    ///
+    /// La cuenta va por TEXTO: repetir la misma acción dentro del plazo no la
+    /// reinicia (revisión m10). Reiniciarla al asignar pediría un setter en
+    /// los ~40 sitios que escriben `status.message`; se deja dicho.
+    pub(super) fn caducar_aviso(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
+        let mut cambio = false;
+        let registro_abierto = self
+            .arbol
+            .slot_ids()
+            .into_iter()
+            .any(|id| self.arbol.kind_of(id).is_some_and(|k| k.as_str() == "log"));
+        if registro_abierto && self.status.notices_unread != 0 {
+            self.status.notices_unread = 0;
+            cambio = true;
+        }
+        match self.status.message.as_deref() {
+            None => {
+                self.mensaje_ticks = 0;
+                self.mensaje_contado = None;
+            }
+            Some(msg) => {
+                if self.mensaje_contado.as_deref() == Some(msg) {
+                    self.mensaje_ticks = self.mensaje_ticks.saturating_add(1);
+                } else {
+                    self.mensaje_contado = Some(msg.to_owned());
+                    self.mensaje_ticks = 1;
+                }
+                let tope = self.config.common.ui_chrome.notice_seconds();
+                if tope > 0 && self.mensaje_ticks >= tope {
+                    let text = self.status.message.take().unwrap_or_default();
+                    self.mensaje_ticks = 0;
+                    self.mensaje_contado = None;
+                    self.status.notices_unread = self.status.notices_unread.saturating_add(1);
+                    // `info`, no `warn`: «copiado 1 fichero» no es un aviso, y
+                    // el nivel es por lo que se filtra el panel de registro.
+                    tracing::info!(target: "norte::notice", "{text}");
+                    cambio = true;
+                }
+            }
+        }
+        cambio.then(|| self.parche(vec![ViewChange::Status(self.status.clone())]))
     }
 
     /// Mira si la pantalla cambió desde lo último escrito y, si cambió, la
@@ -334,6 +384,7 @@ impl Estado {
         let mut body = self.sesion.leida.clone();
         body.layouts
             .insert(self.clave_de_sesion(), self.arbol.clone());
+        body.palette_recent.clone_from(&self.paleta_recientes);
         for (id, hueco) in &self.huecos {
             body.slots.insert(
                 *id,

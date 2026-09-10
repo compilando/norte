@@ -375,6 +375,9 @@ pub fn after_panes_refresh(
     if refreshed == [false; 2] {
         return;
     }
+    // Un refresco es el momento en que el espacio libre puede haber
+    // cambiado sin que nadie navegue: se vuelve a pedir con él.
+    app.volumes_stale = true;
     release_refreshed_fill(&app.panes, &refreshed, fill, last_probed);
     reap_search_run(app, search_run);
     if app.help.is_some() {

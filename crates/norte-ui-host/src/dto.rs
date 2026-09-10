@@ -53,10 +53,16 @@ pub struct ViewSnapshot {
     /// La barra de paneles (#324): qué paneles hay, cómo están, y si alguno
     /// tiene algo que contar. Puente 51.
     pub panel_bar: PanelBarView,
+    /// La barra de teclas de función (spec 2026-09-10). Puente 63.
+    pub key_bar: KeyBarView,
     /// El selector de perfiles, si está abierto.
     pub profiles: Option<ProfilePickerView>,
     /// La paleta de comandos, si está abierta.
     pub palette: Option<PaletteView>,
+    /// El asistente de primer arranque (spec 2026-09-10), si está abierto.
+    /// Puente 63.
+    #[serde(default)]
+    pub wizard: Option<WizardView>,
     /// El panel de continuaciones, si hay un prefijo a medias.
     pub whichkey: Option<WhichKeyView>,
     /// La ayuda, si está abierta. Como el visor, ocupa la pantalla: mientras
@@ -207,10 +213,51 @@ pub struct PanelBarView {
     /// `[ui] panel_bar`: si la barra se pinta. Apagada, los paneles siguen
     /// abriéndose por su tecla, su menú y la paleta.
     pub bar: bool,
+    /// `[ui] panel_bar_style = "names"` (spec 2026-09-10): cada botón
+    /// enseña su nombre con la letra de acceso marcada; `false` = solo la
+    /// letra. Ausente en un host anterior al puente 63 = nombres.
+    #[serde(default = "default_true")]
+    pub names: bool,
     /// Los botones, en el orden en que se pintan. Un click vuelve como el
     /// ÍNDICE en esta lista (`UiAction::PanelBarActivate`), nunca como un
     /// comando: el renderer no despacha (ADR 0069).
     pub buttons: Vec<PanelButtonView>,
+}
+
+/// `true` para un campo que un host anterior no mandaba y que encendido es
+/// lo de siempre.
+fn default_true() -> bool {
+    true
+}
+
+/// La barra de teclas de función (spec 2026-09-10, puente 63): diez celdas
+/// con lo que cada `F` hace en la pantalla que tiene el teclado.
+///
+/// DERIVADA del keymap efectivo de esa pantalla —el diálogo si hay uno
+/// abierto, el visor si está a pantalla completa, los listados si no—, que
+/// es el mismo orden con el que el host elige resolver; por eso dice la
+/// verdad. Viaja entera con cada cambio, como la de paneles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyBarView {
+    /// `[ui] key_bar`: si la barra se pinta.
+    pub bar: bool,
+    /// Las diez celdas, `F1`..`F10` en orden. Un click vuelve como la TECLA
+    /// (`UiAction::KeyBarActivate`), nunca como un comando: el renderer no
+    /// despacha (ADR 0069), y una tecla sintetizada va por el mismo camino
+    /// que una de verdad.
+    pub cells: Vec<KeyCellView>,
+}
+
+/// Una celda de la barra de teclas.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyCellView {
+    /// `1`..=`10`.
+    pub key: u32,
+    /// La etiqueta corta, en el idioma de la sesión. Vacía = la tecla no
+    /// ata nada en esta pantalla, y la celda no se pulsa.
+    pub label: String,
+    /// El comando que corre, para el título del botón. `None` = nada.
+    pub command: Option<String>,
 }
 
 /// Un botón de la barra de paneles.
@@ -263,6 +310,24 @@ pub struct PaletteView {
     pub total: u64,
 }
 
+/// El asistente de primer arranque (spec 2026-09-10, puente 63): un paso,
+/// sus filas y el cursor. Todo ya traducido: el renderer pinta y devuelve
+/// filas o teclas, y el host escribe lo elegido por su camino de ajustes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WizardView {
+    /// `Bienvenido a norte · 1/3 · teclas`.
+    pub title: String,
+    /// La pregunta del paso.
+    pub question: String,
+    /// Las filas del paso, en orden. Un click vuelve como el ÍNDICE
+    /// (`UiAction::WizardActivateRow`).
+    pub rows: Vec<String>,
+    /// Cuál está elegida.
+    pub cursor: u64,
+    /// La línea de teclas.
+    pub hint: String,
+}
+
 /// Un comando ofrecido por la paleta.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaletteRowView {
@@ -282,6 +347,10 @@ pub struct PaletteRowView {
     /// elige qué código de tercero correr. Un texto enmascarado que viaja sin
     /// su bandera se lee como fiel.
     pub hostile: bool,
+    /// Va arriba por ser de los últimos lanzados (spec 2026-09-10). Solo
+    /// con la consulta vacía; con consulta, el orden es el de lo que casa.
+    #[serde(default)]
+    pub recent: bool,
 }
 
 /// Lo que puede seguir a un prefijo a medias.
@@ -1902,6 +1971,11 @@ pub struct BrowserSlotView {
     /// marcas.
     #[serde(default)]
     pub marked_note: String,
+    /// El pie del listado (spec 2026-09-10): cuántos directorios y ficheros,
+    /// cuánto pesan, lo marcado y el espacio libre del volumen, ya
+    /// redactado. Vacío = `[ui] pane_footer` apagado.
+    #[serde(default)]
+    pub footer: String,
     /// Las cabeceras de las columnas configuradas, en su orden. Incluye el
     /// nombre, que en las filas viaja aparte (`display_name`).
     pub columns: Vec<ColumnHeader>,
@@ -2080,6 +2154,12 @@ pub struct StatusView {
     pub message: Option<String>,
     /// Avisos persistentes (degradación, journal, sesión), acotados.
     pub banners: Vec<BannerView>,
+    /// Avisos que caducaron sin que el lector abriera el registro (spec
+    /// 2026-09-10, `[ui] notice_seconds`). El renderer pinta una insignia
+    /// mientras haya alguno; pulsarla abre el panel de registro por el
+    /// botón de la barra de paneles. Abrirlo lo pone a cero.
+    #[serde(default)]
+    pub notices_unread: u32,
     /// Lo que hay tecleado a medias: una secuencia, un contador, o las dos
     /// cosas. Se pinta SIEMPRE que exista — un prefijo pendiente que no se
     /// ve es un prefijo que no se puede cancelar.
@@ -2785,6 +2865,11 @@ pub enum ViewChange {
         /// Cuántas entradas hay marcadas y cuánto pesan, ya dicho. Vacío sin
         /// marcas: quien no marca no gana ruido.
         marked_note: String,
+        /// El pie del listado (spec 2026-09-10), ya redactado; viaja con la
+        /// cabecera porque cambia con lo mismo que ella: marcar, ocultar,
+        /// rellenar. Vacío = `[ui] pane_footer` apagado.
+        #[serde(default)]
+        footer: String,
         /// Cuántas entradas hay marcadas, en crudo.
         ///
         /// Sigue viajando al lado de [`Self::BrowserHeader::marked_note`] y
@@ -2879,10 +2964,22 @@ pub enum ViewChange {
         /// La barra entera.
         panel_bar: PanelBarView,
     },
+    /// La barra de teclas cambió: otra pantalla tiene el teclado, o un
+    /// perfil trajo otro keymap. Mismo mecanismo que la de paneles: el host
+    /// la compara con la última que mandó al armar cada parche.
+    KeyBar {
+        /// La barra entera.
+        key_bar: KeyBarView,
+    },
     /// La paleta se abrió, se filtró, se movió o se cerró.
     Palette {
         /// La paleta, o `None` si se cerró.
         palette: Option<PaletteView>,
+    },
+    /// El asistente de primer arranque se abrió, se movió o se cerró.
+    Wizard {
+        /// El asistente, o `None` si se cerró.
+        wizard: Option<WizardView>,
     },
     /// El panel de continuaciones apareció, cambió o se fue.
     WhichKey {

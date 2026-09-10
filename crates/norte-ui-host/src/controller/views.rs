@@ -125,8 +125,10 @@ impl Estado {
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
             panel_bar: self.vista_barra_de_paneles(),
+            key_bar: self.vista_barra_de_teclas(),
             profiles: self.vista_perfiles(),
             palette: self.vista_paleta(),
+            wizard: self.vista_asistente(),
             whichkey: self.vista_whichkey(),
             help: self.vista_ayuda(),
             settings: self.vista_ajustes(),
@@ -314,6 +316,39 @@ impl Estado {
         }
     }
 
+    /// La barra de teclas (spec 2026-09-10): las diez celdas del keymap de
+    /// la pantalla que tiene el teclado AHORA — el visor a pantalla completa
+    /// si está, los listados si no. Con un diálogo delante la fila va EN
+    /// BLANCO: ningún preset ata una tecla de función en `[dialog]`, y una
+    /// celda que anunciara un verbo que el modal activo rehúsa sería la
+    /// mentira que `hints` existe para no contar. El mismo orden que la TUI
+    /// (`App::key_bar_cells`), y por eso las dos barras dicen lo mismo.
+    pub(super) fn vista_barra_de_teclas(&self) -> crate::dto::KeyBarView {
+        let bar = self.config.common.ui_chrome.key_bar();
+        if !self.dialogos.is_empty() {
+            return crate::dto::KeyBarView {
+                bar,
+                cells: Vec::new(),
+            };
+        }
+        let eff = if self.visor.is_some() {
+            &self.efectivo_visor
+        } else {
+            self.resolver.effective()
+        };
+        crate::dto::KeyBarView {
+            bar,
+            cells: norte_frontend::keybar::cells_in(eff, self.lang)
+                .into_iter()
+                .map(|c| crate::dto::KeyCellView {
+                    key: u32::from(c.key),
+                    label: clamp_display(c.label),
+                    command: c.command.map(clamp_display),
+                })
+                .collect(),
+        }
+    }
+
     /// La proyección de la barra de paneles (#324).
     ///
     /// Lo que la TUI hace en `panel_buttons`, con lo que este host sabe: qué
@@ -326,6 +361,8 @@ impl Estado {
         crate::dto::PanelBarView {
             // Por defecto ENCENDIDA, igual que la de menús y que la TUI.
             bar: self.config.common.ui_panel_bar.unwrap_or(true),
+            names: self.config.common.ui_chrome.panel_bar_style()
+                == norte_config::PanelBarStyle::Names,
             buttons: botones
                 .iter()
                 .map(|b| {
@@ -409,6 +446,7 @@ impl Estado {
         let p = self.paleta.as_ref()?;
         let filas = p.rows();
         let visibles = p.visible();
+        let sin_consulta = p.query_display().is_empty();
         Some(crate::dto::PaletteView {
             query: clamp_display(p.query_display()),
             rows: visibles
@@ -417,8 +455,11 @@ impl Estado {
                 // consulta vacía TODAS las filas son visibles, y las de
                 // plugin las pone un tercero.
                 .take(crate::bridge::MAX_ROWS_PER_BATCH)
-                .filter_map(|i| filas.get(*i))
-                .map(|r| crate::dto::PaletteRowView {
+                .filter_map(|i| filas.get(*i).map(|r| (*i, r)))
+                .map(|(i, r)| crate::dto::PaletteRowView {
+                    // Reciente solo mientras va arriba por serlo: con
+                    // consulta el orden es el de lo que casa.
+                    recent: sin_consulta && p.is_recent(i),
                     text: clamp_display(r.text.clone()),
                     desc: clamp_display(r.desc.clone()),
                     chord: clamp_display(r.chord.clone()),

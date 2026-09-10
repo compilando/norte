@@ -53,6 +53,12 @@ pub fn roles_de_tema(theme: &norte_theme::Theme) -> Vec<(String, String)> {
     poner("border-focus", Role::BorderFocus, false);
     poner("selection-bg", Role::Selection, true);
     poner("selection-fg", Role::Selection, false);
+    // El cursor del panel SIN foco y los botones de diálogo (spec
+    // 2026-09-10): dos roles nuevos, dos parejas nuevas.
+    poner("selection-unfocused-bg", Role::SelectionUnfocused, true);
+    poner("selection-unfocused-fg", Role::SelectionUnfocused, false);
+    poner("button-bg", Role::Button, true);
+    poner("button-fg", Role::Button, false);
     poner("mark-bg", Role::Mark, true);
     poner("hostile-fg", Role::HostileBadge, false);
     poner("status-bg", Role::StatusBar, true);
@@ -551,6 +557,10 @@ mod tests {
                 "border-focus",
                 "selection-bg",
                 "selection-fg",
+                "selection-unfocused-bg",
+                "selection-unfocused-fg",
+                "button-bg",
+                "button-fg",
                 "mark-bg",
                 "hostile-fg",
                 "status-bg",

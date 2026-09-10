@@ -242,6 +242,45 @@ const CATALOG: &[SettingDef] = &[
         kind: SettingKind::Enum(&["auto", "always", "never"]),
         applies_live: true,
     },
+    // ─── El cromo (spec 2026-09-10): cada uno existe porque un lector lo
+    //     echa de menos en la primera hora, y un interruptor que solo vive en
+    //     el fichero es un interruptor que no encuentra nadie.
+    SettingDef {
+        id: "ui.key-bar",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
+        id: "ui.panel-bar-style",
+        section: Section::General,
+        kind: SettingKind::Enum(&["names", "letters"]),
+        applies_live: true,
+    },
+    SettingDef {
+        id: "ui.pane-footer",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
+        id: "ui.date-format",
+        section: Section::General,
+        kind: SettingKind::Enum(&["smart", "relative", "iso"]),
+        applies_live: true,
+    },
+    SettingDef {
+        id: "ui.notice-seconds",
+        section: Section::General,
+        kind: SettingKind::Int { min: 0, max: 600 },
+        applies_live: true,
+    },
+    SettingDef {
+        id: "ui.dialog-buttons",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
     SettingDef {
         id: "keymap.preset",
         section: Section::General,
@@ -354,6 +393,13 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
             .join(" "),
         "ui.diff-detached" => cfg.common.ui_diff_detached.unwrap_or(false).to_string(),
         "ui.confirm-quit" => cfg.common.ui_confirm_quit.as_str().to_owned(),
+        // Ausente = lo que el frontend hace de verdad, como `ui.menu-bar`.
+        "ui.key-bar" => cfg.common.ui_chrome.key_bar().to_string(),
+        "ui.panel-bar-style" => cfg.common.ui_chrome.panel_bar_style().as_str().to_owned(),
+        "ui.pane-footer" => cfg.common.ui_chrome.pane_footer().to_string(),
+        "ui.date-format" => cfg.common.ui_chrome.date_format().as_str().to_owned(),
+        "ui.notice-seconds" => cfg.common.ui_chrome.notice_seconds().to_string(),
+        "ui.dialog-buttons" => cfg.common.ui_chrome.dialog_buttons().to_string(),
         "keymap.preset" => cfg.common.preset.clone(),
         // Unreachable for anything in `CATALOG` (pinned by the coverage
         // test below); an id typo'd into `current_value` but not `CATALOG`
@@ -534,6 +580,29 @@ pub struct PendingWrite {
     /// New value as DISPLAY text (for the message + the optimistic row
     /// update [`SettingsState`] performs when it builds this value).
     pub display: String,
+}
+
+impl PendingWrite {
+    /// A write of a STRING value (spec 2026-09-10, the first-run wizard):
+    /// the typed `toml_edit::Value` is built here so a frontend that never
+    /// depends on `toml_edit` can still hand a write to its settings path.
+    ///
+    /// ```
+    /// use norte_frontend::settings::PendingWrite;
+    /// let w = PendingWrite::text("ui", "theme", "nord", "Theme".to_owned());
+    /// assert_eq!((w.section, w.key.as_str(), w.display.as_str()), ("ui", "theme", "nord"));
+    /// assert_eq!(w.value.as_str(), Some("nord"));
+    /// ```
+    #[must_use]
+    pub fn text(section: &'static str, key: &str, value: &str, name: String) -> Self {
+        Self {
+            section,
+            key: key.to_owned(),
+            value: toml_edit::Value::from(value),
+            name,
+            display: value.to_owned(),
+        }
+    }
 }
 
 /// Why [`SettingsState::edit_commit`] rejected the buffer — WITHOUT

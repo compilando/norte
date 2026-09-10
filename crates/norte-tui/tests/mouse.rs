@@ -99,10 +99,13 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
             tabs: ui::tab_zones(app, frame.area),
             menus: ui::menu_zones(app, frame.area),
             panels: ui::panel_zones(app, frame.area),
+            keys: ui::key_zones(app, frame.area),
+            modal: ui::modal_zones(app, frame.area),
             places: ui::places_zones(app, frame.area),
             tree: ui::tree_zones(app, frame.area),
             extensions: ui::extension_zones(app, frame.area),
             session: ui::session_zone(app, frame.area),
+            notices: ui::notices_zone(app, frame.area),
             borders: ui::resize_borders(app, frame.area),
             slots: ui::panel_slots(app, frame.area),
         },
@@ -394,6 +397,10 @@ fn sin_barra_de_menus_la_de_paneles_se_muda_a_la_fila_cero() {
 #[test]
 fn cada_boton_de_la_barra_cae_en_su_sitio() {
     let mut app = app_pintada(5);
+    // Las columnas de este test son las de LETRAS (tres celdas por botón);
+    // con nombres, las zonas siguen a lo pintado y lo comprueba
+    // `theme_render`.
+    app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
     let _ = pintar(&mut app);
     let pulsa = |app: &mut norte_tui::app::App, col: u16| {
         app.pending_panel_command = None;

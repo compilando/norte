@@ -283,6 +283,9 @@ pub struct Boot {
     /// color. Va aquí y no se relee en `main` porque la configuración ya está
     /// cargada y volver a mirarla sería una segunda lectura que puede diferir.
     pub appearance: crate::catalog::Appearance,
+    /// No hay `norte.toml` de usuario (spec 2026-09-10): el catálogo lo
+    /// lleva y el renderer abre el asistente de primer arranque.
+    pub first_run: bool,
 }
 
 /// Las disposiciones que el usuario tiene guardadas, YA leídas.
@@ -754,7 +757,8 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         )
     });
 
-    let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+    let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
+        .with_date_format(cfg.common.ui_chrome.date_format());
     // Un id de columna que no parsea no desaparece en silencio: `doctor` lo
     // reporta, y aquí al menos queda en el log de arranque.
     for malo in &columnas.invalid {
@@ -799,12 +803,25 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // pedida — que es lo que el lector no puede deducir solo.
     snapshot.status.message = aviso_layout
         .or_else(|| aviso_de_arranque(&cfg, lang, capas_lua_descartadas, cli.profile.as_deref()));
+    // El asistente de primer arranque (spec 2026-09-10): sin `norte.toml` de
+    // usuario y sin `NORTE_NO_WIZARD`, como en el terminal. Un `stat`, fuera
+    // del hilo de la UI (regla 2).
+    let first_run = if std::env::var_os("NORTE_NO_WIZARD").is_some() {
+        false
+    } else if let Some(dir) = norte_config::user_config_dir() {
+        !tokio::fs::try_exists(dir.join("norte.toml"))
+            .await
+            .unwrap_or(true)
+    } else {
+        false
+    };
     Ok(Boot {
         host,
         snapshot,
         lang,
         theme,
         appearance: crate::catalog::Appearance::de(&cfg.common),
+        first_run,
     })
 }
 
