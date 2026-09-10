@@ -18,7 +18,9 @@ pub use server::{Daemon, DaemonConfig};
 // depender del core, así que la dirección del socket y el JSON-RPC enmarcado
 // viven allí y se re-exportan aquí para que los consumidores de siempre
 // (CLI, MCP, tests e2e) sigan nombrándolos donde los nombraban.
-pub use norte_client::{Client, ClientError, default_socket_path, is_version_mismatch};
+pub use norte_client::{
+    Client, ClientError, daemon_run_argv, default_socket_path, is_version_mismatch,
+};
 
 /// Errores del ciclo de vida del daemon (lado servidor).
 #[derive(Debug, thiserror::Error)]

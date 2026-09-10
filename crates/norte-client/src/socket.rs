@@ -12,6 +12,53 @@ use std::path::PathBuf;
 /// `/tmp/norte-<uid>/daemon.sock` — el dir lo crea y VERIFICA el server:
 /// dueño = uid del proceso, modo 0700, jamás symlink.
 ///
+/// Segundos sin clientes ni tareas tras los que un daemon ARRANCADO POR UN
+/// FRONTEND se apaga solo.
+///
+/// Un daemon que lanza `norte daemon run` a mano vive lo que su
+/// `--idle-timeout` (cinco minutos): alguien lo pidió por sí mismo. Uno que
+/// arrancó una ventana o un `ntc --daemon` porque no había ninguno existe
+/// PARA ese cliente, y quedarse cinco minutos después de que el último se
+/// vaya es un proceso que nadie ve y nadie pidió. Dos segundos es lo que
+/// tarda una reconexión o un relevo: el cliente que vuelve en ese margen
+/// encuentra el mismo daemon; el que no, arranca otro (~medio segundo).
+/// Como cuenta clientes, cerrar una ventana con un `ntc --daemon` abierto no
+/// apaga nada.
+pub const SPAWNED_DAEMON_IDLE_SECS: u64 = 2;
+
+/// El argv con el que un frontend arranca el daemon que no encontró: `norte
+/// daemon run --socket <socket> --idle-timeout 2`.
+///
+/// UNA sola definición, aquí, en el crate que ven la ventana, el terminal y
+/// la CLI: hasta ahora cada uno montaba el suyo, y una decisión escrita
+/// cuatro veces —cuánto vive lo que arrancaste— es exactamente la que
+/// diverge sin que nada se ponga rojo.
+///
+/// ```
+/// use std::path::Path;
+/// let argv = norte_client::daemon_run_argv("norte", Path::new("/run/u/1/norte/daemon.sock"));
+/// let plano: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+/// assert_eq!(
+///     plano,
+///     ["norte", "daemon", "run", "--socket", "/run/u/1/norte/daemon.sock", "--idle-timeout", "2"]
+/// );
+/// ```
+#[must_use]
+pub fn daemon_run_argv(
+    program: impl Into<std::ffi::OsString>,
+    socket: &std::path::Path,
+) -> Vec<std::ffi::OsString> {
+    vec![
+        program.into(),
+        "daemon".into(),
+        "run".into(),
+        "--socket".into(),
+        socket.as_os_str().to_owned(),
+        "--idle-timeout".into(),
+        SPAWNED_DAEMON_IDLE_SECS.to_string().into(),
+    ]
+}
+
 /// `uid_hint` solo se usa para el fallback de /tmp (el server lo deriva de
 /// su propio socket; los clientes, del dir que encuentran).
 #[must_use]

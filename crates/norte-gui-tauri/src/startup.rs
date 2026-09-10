@@ -102,13 +102,12 @@ async fn comando_de_daemon(socket: &std::path::Path) -> Option<Vec<std::ffi::OsS
         let junto_a = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
-        Some(vec![
+        // El argv es el compartido: lo que arranca esta ventana se apaga
+        // solo cuando su último cliente se va.
+        Some(norte_client::daemon_run_argv(
             programa_del_daemon(junto_a.as_deref()),
-            "daemon".into(),
-            "run".into(),
-            "--socket".into(),
-            socket.into(),
-        ])
+            &socket,
+        ))
     })
     .await
     .ok()

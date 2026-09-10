@@ -1974,13 +1974,7 @@ async fn socket_and_spawn(
     .await
     .context("resolución del socket/exe")?;
     let exe = exe.context("current_exe")?;
-    let spawn_cmd: Vec<std::ffi::OsString> = vec![
-        exe.into(),
-        "daemon".into(),
-        "run".into(),
-        "--socket".into(),
-        socket.clone().into(),
-    ];
+    let spawn_cmd = norte_core::daemon::daemon_run_argv(exe, &socket);
     Ok((socket, spawn_cmd))
 }
 
@@ -2166,11 +2160,9 @@ async fn make_backend(
         .await
         .context("resolución del socket/exe")?;
         let exe = exe.context("current_exe")?;
-        // Autoarranque: este MISMO binario sabe ser daemon.
-        let mut spawn_cmd: Vec<std::ffi::OsString> =
-            vec![exe.into(), "daemon".into(), "run".into()];
-        spawn_cmd.push("--socket".into());
-        spawn_cmd.push(socket.clone().into());
+        // Autoarranque: este MISMO binario sabe ser daemon, con el argv
+        // compartido — lo que arranca una orden suelta se apaga solo.
+        let spawn_cmd = norte_core::daemon::daemon_run_argv(exe, &socket);
         let remote = RemoteBackend::connect(
             socket,
             Some(spawn_cmd),
