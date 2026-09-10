@@ -95,7 +95,7 @@ impl Palette {
     pub fn is_recent(&self, i: usize) -> bool {
         self.rows
             .get(i)
-            .is_some_and(|r| self.recent.iter().any(|k| *k == r.key))
+            .is_some_and(|r| self.recent.contains(&r.key))
     }
 
     /// Añade filas a una palette YA abierta, conservando lo tecleado.
