@@ -27,7 +27,7 @@ const LANGS: [Lang; 2] = [Lang::En, Lang::Es];
 /// the corpus so that DELETING a topic file is a test failure too: a check
 /// that reads the corpus to decide what the corpus should contain cannot see
 /// an absence.
-const EXPECTED: [&str; 18] = [
+const EXPECTED: [&str; 19] = [
     "index",
     "panes",
     "tabs",
@@ -36,6 +36,7 @@ const EXPECTED: [&str; 18] = [
     "help",
     "dialogs",
     "settings",
+    "appearance",
     "copying",
     "finding",
     "columns",

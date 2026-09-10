@@ -2,7 +2,7 @@
 id = "settings"
 title = "Settings and themes"
 tags = ["basics"]
-see_also = ["dialogs", "mouse", "help"]
+see_also = ["appearance", "dialogs", "mouse", "help"]
 commands = ["app.settings", "app.theme"]
 +++
 {{cmd:app.settings}} opens the settings screen: every option norte has, with

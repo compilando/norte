@@ -2,7 +2,7 @@
 id = "settings"
 title = "Ajustes y temas"
 tags = ["basics"]
-see_also = ["dialogs", "mouse", "help"]
+see_also = ["appearance", "dialogs", "mouse", "help"]
 commands = ["app.settings", "app.theme"]
 +++
 {{cmd:app.settings}} abre la pantalla de ajustes: todas las opciones de norte,

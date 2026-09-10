@@ -2,7 +2,7 @@
 id = "index"
 title = "Esto es norte"
 tags = ["basics"]
-see_also = ["panes", "selection", "mouse", "help", "dialogs", "settings", "copying", "finding", "columns", "viewer", "ai", "shell", "remote", "archives", "agents", "plugins"]
+see_also = ["panes", "selection", "mouse", "help", "dialogs", "settings", "appearance", "copying", "finding", "columns", "viewer", "ai", "shell", "remote", "archives", "agents", "plugins"]
 +++
 norte es un gestor de ficheros ortodoxo. Dos paneles, el teclado por delante y
 los mismos comandos tanto si los ficheros están en esta máquina como si viven
@@ -22,6 +22,7 @@ directorios locales.
 - [[help]] — moverse por estas páginas y de dónde salen sus teclas
 - [[dialogs]] — los seis verbos que hablan todos los overlays, y la regla de los defaults
 - [[settings]] — dónde vive `norte.toml`, y elegir tema
+- [[appearance]] — la barra de teclas, la de paneles, el pie del panel, las fechas, los avisos y el primer arranque
 - [[copying]] — copiar, mover, borrar y cancelar sin perder datos
 - [[viewer]] — leer un fichero sin salir, y dárselo a otro programa
 - [[ai]] — un plan de renombrado que apruebas, y buscar por significado

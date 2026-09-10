@@ -17,6 +17,29 @@ final de los ítems que lo tocan (T7: `KeyBarView`, `footer`, `notices_unread`,
 **Rama:** `feat/usabilidad-y-apariencia`. Gate: `just t <crate>` en el
 bucle; `just ci-fast` tras T4 y T8; `just ci` al cerrar.
 
+**Estado: ejecutado el 2026-09-10** (ADR 0106). Lo que salió distinto del
+plan:
+
+- **T8, mitad de la ventana (`DialogLine.kind`) descartada**: la ventana ya
+  tiene `DialogChoice` y los campos estructurales; el papel de línea tocaba
+  doce inicializadores por un dato que nada pintaría distinto.
+- **T2: `iso` sigue UTC**; lo fijan modales, metadata y sync como libre de
+  locale. `smart` es el local. El defecto de `ColumnsSettings` en tests queda
+  `relative` (la hora local depende de la máquina); los frontends encadenan
+  `with_date_format`.
+- **T7: el puente subió en T4**, no aquí: el guarda de forma del corpus lo
+  exige con el primer campo nuevo. Un solo bump (63) para toda la ola.
+- **T8: la regla de botones no es «igual a lo generado» sino «la ÚLTIMA
+  línea del cuerpo que parsea como `[tecla] verbo`»**: el piloto enseñó que
+  el modal de copia de un fichero lleva su línea de teclas en prosa Fluent.
+- **T11: `first_run` viaja en el catálogo de la ventana + acción
+  `wizard_open` del renderer**, no en `UiHostOptions` (33 inicializadores de
+  test). La `Cli` de la ventana no tiene `--setup`.
+- **Fuera**: barra de teclas sensible a modificadores (un terminal no
+  informa de Shift solo).
+- Tres arreglos que solo vio el piloto de tmux: corte por la cola en la
+  barra de teclas, pie por prioridad de tramos, botones en pistas de prosa.
+
 ## Global Constraints
 
 - Cada clave `[ui]` nueva: `schema.rs::UiSection` → `load.rs::CommonConfig`
