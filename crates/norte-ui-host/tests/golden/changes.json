@@ -459,6 +459,24 @@
       "topic_id": "copying"
     }
   },
+  "key_bar": {
+    "change": "key_bar",
+    "key_bar": {
+      "bar": true,
+      "cells": [
+        {
+          "command": "app.help",
+          "key": 1,
+          "label": "Ayuda"
+        },
+        {
+          "command": null,
+          "key": 2,
+          "label": ""
+        }
+      ]
+    }
+  },
   "layout": {
     "cells": [
       120,

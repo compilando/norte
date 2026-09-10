@@ -147,6 +147,8 @@ pub async fn reload_config(
                 // efectivo `dialog` VIGENTE, ANTES de que se mueva al
                 // resolver de abajo — mismo criterio que help_lines.
                 app.dialog_hints = DialogHints::build(&dialog);
+                // Y la barra de teclas, de los tres (spec 2026-09-10).
+                app.key_bars = crate::app::KeyBars::build(&browse, &viewer, &dialog);
                 // #142: el acorde de vuelta del subshell, del efectivo
                 // `browse` VIGENTE y antes de que se mude al resolver —
                 // mismo criterio. Un rebind que no llegara aquí dejaría al

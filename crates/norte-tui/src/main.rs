@@ -269,6 +269,9 @@ async fn main() -> Result<()> {
     // efectivo `dialog` ANTES de que se mueva al `Resolver` de abajo — igual
     // que `help_lines`, se reconstruyen en cada hot-reload OK.
     app.dialog_hints = DialogHints::build(&dialog_eff);
+    // La barra de teclas (spec 2026-09-10): de los TRES efectivos, aquí y en
+    // cada hot-reload OK, por lo mismo que los hints.
+    app.key_bars = norte_tui::app::KeyBars::build(&browse_eff, &viewer_eff, &dialog_eff);
     // #142: el acorde que devuelve los paneles, del MISMO efectivo y en el
     // mismo momento que lo de arriba. Si un rebind no llegara aquí, la tecla
     // que abre el subshell y la que lo cierra serían distintas.

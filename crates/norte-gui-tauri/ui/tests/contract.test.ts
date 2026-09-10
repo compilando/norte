@@ -139,6 +139,7 @@ describe("el contrato con el host", () => {
       "dialogs",
       "extensions",
       "help",
+      "key_bar",
       "layout",
       "layouts",
       "menu",

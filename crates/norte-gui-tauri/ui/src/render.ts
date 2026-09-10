@@ -85,6 +85,8 @@ export class Screen {
   menuBarHeight: string | null = null;
   /** Lo mismo para la barra de paneles (#324). */
   panelBarHeight: string | null = null;
+  /** La reserva de la barra de teclas, por lo mismo. */
+  keyBarHeight: string | null = null;
   /** La última foto pintada: lo que se repinta cuando cambia algo local. */
   ultimaVista: ViewSnapshot | null = null;
   /** Aviso local de una orden rechazada en la frontera (`rejected`). */
@@ -219,6 +221,7 @@ export class Screen {
     }
     this.paintMenu(view.menu);
     this.paintPanelBar(view.panel_bar);
+    this.paintKeyBar(view.key_bar ?? null);
     this.paintPalette(view.palette);
     this.paintWhichKey(view.whichkey);
     this.paintHelp(view.help);
@@ -242,6 +245,7 @@ export class Screen {
 
   /** En `render/menus.ts`. */
   readonly paintPanelBar = menus.paintPanelBar;
+  readonly paintKeyBar = menus.paintKeyBar;
 
   /** En `render/menus.ts`. */
   readonly paintMenu = menus.paintMenu;

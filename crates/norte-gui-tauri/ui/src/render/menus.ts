@@ -5,6 +5,7 @@ import type { Screen } from "../render";
 import type {
   BrowserSlotView,
   MenuView,
+  KeyBarView,
   PanelBarView,
   PaletteView,
   TabGroupView,
@@ -77,6 +78,63 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
     fila.append(boton);
   }
   this.panelBarRoot.replaceChildren(fila);
+}
+
+/**
+ * La barra de teclas de función (puente 63): diez celdas con lo que cada
+ * `F` hace en la pantalla que tiene el teclado. El host la deriva del
+ * keymap; aquí solo se pinta, y un click devuelve la TECLA, que el host
+ * sintetiza — no hay un segundo despacho que pueda divergir.
+ *
+ * Su raíz se busca por id y, si el documento no la trae (un test, una
+ * página anterior), se crea al final del cuerpo: es una fila `fixed` abajo,
+ * y el orden del documento no le importa.
+ */
+export function paintKeyBar(this: Screen, bar: KeyBarView | null): void {
+  const doc = this.root.ownerDocument;
+  let raiz = doc.getElementById("keybar");
+  if (raiz === null) {
+    raiz = doc.createElement("div");
+    raiz.id = "keybar";
+    doc.body.append(raiz);
+  }
+  const visible = bar !== null && bar.bar;
+  const alto = visible ? "var(--cell-h)" : "0px";
+  if (this.keyBarHeight !== alto) {
+    doc.documentElement.style.setProperty("--keybar-h", alto);
+    this.keyBarHeight = alto;
+    this.viewportSucio = true;
+  }
+  if (!visible) {
+    raiz.replaceChildren();
+    return;
+  }
+  const fila = doc.createElement("nav");
+  fila.className = "keybar";
+  fila.setAttribute("role", "toolbar");
+  fila.setAttribute("aria-label", this.t("keybar-label"));
+  for (const c of bar.cells) {
+    const boton = doc.createElement("button");
+    boton.type = "button";
+    boton.className = "keybar-cell";
+    boton.dataset["bound"] = String(c.command !== null);
+    boton.disabled = c.command === null;
+    if (c.command !== null) {
+      boton.title = `F${String(c.key)} · ${c.command}`;
+    }
+    const num = doc.createElement("span");
+    num.className = "keybar-num";
+    num.textContent = String(c.key);
+    const etiqueta = doc.createElement("span");
+    etiqueta.className = "keybar-label";
+    etiqueta.textContent = c.label;
+    boton.append(num, etiqueta);
+    boton.addEventListener("click", () => {
+      this.send({ action: "key_bar_activate", key: c.key });
+    });
+    fila.append(boton);
+  }
+  raiz.replaceChildren(fila);
 }
 
 /**

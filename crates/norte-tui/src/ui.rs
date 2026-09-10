@@ -29,7 +29,8 @@ mod text;
 // `tests/`, `mouse.rs` y `event_loop.rs` nombran todo esto por `ui::..`, asi
 // que es la API de este modulo y no baja a `pub(crate)`.
 pub use chrome::{
-    MenuHit, MenuZone, PanelZone, TabAction, TabZone, menu_zones, panel_zones, tab_zones,
+    KeyZone, MenuHit, MenuZone, PanelZone, TabAction, TabZone, key_zones, menu_zones, panel_zones,
+    tab_zones,
 };
 pub use compare::draw_compare;
 pub use geometry::{
@@ -55,7 +56,7 @@ pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
 // él— es exactamente lo que se desincronizaba.
 #[cfg(test)]
 pub(crate) use chrome::panel_buttons;
-use chrome::{draw_menu, draw_panel_bar};
+use chrome::{draw_key_bar, draw_menu, draw_panel_bar};
 pub(crate) use geometry::{
     body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_rect,
 };
@@ -161,9 +162,11 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
         width: body.width,
         height: 0,
     });
+    // El respaldo sin hueco de estado va al final del CUERPO, no del frame:
+    // la barra de teclas se reserva la última fila (spec 2026-09-10).
     let status_area = slot_rect(&res, crate::panel::SLOT_STATUS).unwrap_or(Rect {
         x: body.x,
-        y: frame.area().height.saturating_sub(1),
+        y: body.y.saturating_add(body.height).saturating_sub(1),
         width: body.width,
         height: 1,
     });
@@ -472,6 +475,10 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             inert.as_ref().unwrap_or(&app.dialog_hints),
         );
     }
+    // La barra de teclas (spec 2026-09-10) va la ÚLTIMA: su fila está fuera
+    // del cuerpo, así que ningún overlay la tapa, y con un modal delante
+    // enseña las teclas del diálogo, que es cuando más falta hace.
+    draw_key_bar(frame, app);
 }
 
 /// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto

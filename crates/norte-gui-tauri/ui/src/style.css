@@ -59,8 +59,66 @@ body {
      documento para pintar por encima de los paneles— y por tanto no ocupa
      sitio en el flujo. Con `[ui] menu_bar` apagada la variable es cero y no
      se pierde nada. */
-  height: calc(100vh - var(--menubar-h, 0px) - var(--panelbar-h, 0px));
+  height: calc(
+    100vh - var(--menubar-h, 0px) - var(--panelbar-h, 0px) - var(--keybar-h, 0px)
+  );
   margin-top: calc(var(--menubar-h, 0px) + var(--panelbar-h, 0px));
+}
+
+/* La barra de teclas (spec 2026-09-10): la ÚLTIMA fila, fija abajo y
+   reservada como las dos de arriba (`--keybar-h`). Diez celdas a partes
+   iguales; una tecla que no ata nada se queda con el fondo base. */
+.keybar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  height: var(--cell-h);
+  background: var(--panel-bg);
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.keybar-cell {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  cursor: pointer;
+  unicode-bidi: isolate;
+}
+
+.keybar-cell:disabled {
+  cursor: default;
+}
+
+.keybar-num {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  color: var(--fg);
+}
+
+.keybar-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 4px;
+  background: var(--status-bg);
+  color: var(--status-fg, inherit);
+}
+
+.keybar-cell[data-bound="false"] .keybar-label {
+  background: none;
 }
 
 /* La barra de paneles (#324): una fila fija bajo la de menús, reservada

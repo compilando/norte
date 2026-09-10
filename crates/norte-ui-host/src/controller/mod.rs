@@ -2887,6 +2887,8 @@ struct Estado {
     /// con la de ahora y manda la nueva si difiere: es lo que hace que la
     /// barra se actualice por cualquier camino sin que cada camino lo sepa.
     ultima_barra: Option<crate::dto::PanelBarView>,
+    /// La última barra de TECLAS que cruzó, por lo mismo (spec 2026-09-10).
+    ultima_teclas: Option<crate::dto::KeyBarView>,
     /// El reparto del ÚLTIMO tamaño conocido: quién se pinta, quién no, y en
     /// qué orden se tabula. Vive y muere con el tamaño, no con el árbol.
     reparto: Resolved,
@@ -3280,6 +3282,7 @@ impl Estado {
             arbol,
             kinds,
             ultima_barra: None,
+            ultima_teclas: None,
             reparto,
             viewport,
             roles,
@@ -3777,6 +3780,21 @@ impl Estado {
             UiAction::MenuClose => self.cerrar_menu(),
             UiAction::PanelBarActivate { button } => {
                 self.pulsar_barra_de_paneles(*button, backend, buzon)
+            }
+            // Una celda de la barra de teclas ES la tecla: se sintetiza y va
+            // por `tecla`, contra la pantalla que tenga el teclado.
+            UiAction::KeyBarActivate { key } => {
+                if !(1..=u32::from(norte_frontend::keybar::CELLS)).contains(key) {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                }
+                let k = crate::keys::KeyInput {
+                    key: format!("F{key}"),
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    meta: false,
+                };
+                self.tecla(&k, backend, buzon)
             }
             UiAction::ResizeSlot { slot_id, cells } => {
                 self.arrastrar_borde(*slot_id, *cells, backend, buzon)

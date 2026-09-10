@@ -253,7 +253,10 @@ use serde::{Deserialize, Serialize};
 ///   botones enseñan su nombre (`[ui] panel_bar_style`) o solo la letra.
 ///   `BrowserSlotView.footer` y `BrowserHeader.footer`: el pie del listado
 ///   (cuentas, marcado, espacio libre), ya redactado; vacío con
-///   `[ui] pane_footer` apagado.
+///   `[ui] pane_footer` apagado. `ViewSnapshot.key_bar` y el cambio
+///   `key_bar`: la barra de teclas de función, derivada del keymap de la
+///   pantalla que tiene el teclado; `key_bar_activate` la pulsa y el host
+///   sintetiza la tecla.
 pub const BRIDGE_VERSION: u32 = 63;
 
 /// Tope de una cadena que cruza al renderer, en bytes.

@@ -631,6 +631,23 @@ export interface PanelButtonView {
 }
 
 /** La barra de paneles (#324, puente 51): qué paneles hay y cómo están. */
+/** La barra de teclas de función (puente 63): diez celdas con lo que cada
+ *  `F` hace en la pantalla que tiene el teclado. Un click vuelve como la
+ *  TECLA, y el host la sintetiza. */
+export interface KeyBarView {
+  /** `[ui] key_bar`: si la barra se pinta. */
+  bar: boolean;
+  /** `F1`..`F10`, en orden. */
+  cells: KeyCellView[];
+}
+
+export interface KeyCellView {
+  key: number;
+  /** Vacía = la tecla no ata nada aquí, y la celda no se pulsa. */
+  label: string;
+  command: string | null;
+}
+
 export interface PanelBarView {
   /** `[ui] panel_bar`: si la barra se pinta. */
   bar: boolean;
@@ -1122,6 +1139,8 @@ export interface ViewSnapshot {
   tasks: TaskView[];
   menu: MenuView;
   panel_bar: PanelBarView;
+  /** Opcional: un host anterior al puente 63 no la manda. */
+  key_bar?: KeyBarView;
   profiles: ProfilePickerView | null;
   palette: PaletteView | null;
   whichkey: WhichKeyView | null;
@@ -1189,6 +1208,7 @@ export type ViewChange =
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "menu"; menu: MenuView }
   | { change: "panel_bar"; panel_bar: PanelBarView }
+  | { change: "key_bar"; key_bar: KeyBarView }
   | { change: "profiles"; profiles: ProfilePickerView | null }
   | { change: "palette"; palette: PaletteView | null }
   | { change: "help"; help: HelpView | null }
@@ -1313,6 +1333,7 @@ export type UiAction =
   | { action: "menu_activate_row"; row: number }
   | { action: "menu_close" }
   | { action: "panel_bar_activate"; button: number }
+  | { action: "key_bar_activate"; key: number }
   | { action: "resize_slot"; slot_id: number; cells: number }
   | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };

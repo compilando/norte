@@ -684,6 +684,8 @@ menu-bar-label = Menu bar
 # The same for the panel bar (#324), which in the window is a row of buttons
 # with a landmark of its own.
 panelbar-label = Panel bar
+# And for the key bar (spec 2026-09-10), the row of function keys.
+keybar-label = Key bar
 # A bar button's attention mark, for a screen reader.
 panelbar-attention = Something new
 # H3c, and a SEPARATE key on purpose: `palette-hint` is painted by both

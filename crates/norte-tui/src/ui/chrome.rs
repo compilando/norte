@@ -215,6 +215,78 @@ pub struct PanelZone {
     pub command: String,
 }
 
+/// Una celda pulsable de la barra de teclas (spec 2026-09-10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyZone {
+    /// Fila.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+    /// La tecla de función, `1`..=`10`.
+    pub key: u8,
+}
+
+/// Las celdas pulsables de la barra de teclas: el MISMO reparto que el
+/// pintado (`keybar::layout`), así que miden lo mismo. Una celda vacía —una
+/// tecla que no ata nada en esta pantalla— no es una zona: pulsarla no
+/// haría nada, y una zona que no hace nada confunde.
+#[must_use]
+pub fn key_zones(app: &App, area: Rect) -> Vec<KeyZone> {
+    let Some(bar) = crate::ui::geometry::key_bar_area(app, area) else {
+        return Vec::new();
+    };
+    let cells = app.key_bar_cells();
+    norte_frontend::keybar::layout(usize::from(bar.width))
+        .into_iter()
+        .zip(cells)
+        .filter(|(_, c)| c.command.is_some())
+        .map(|((x0, w), c)| KeyZone {
+            row: bar.y,
+            x0: bar.x.saturating_add(u16::try_from(x0).unwrap_or(u16::MAX)),
+            x1: bar
+                .x
+                .saturating_add(u16::try_from(x0 + w).unwrap_or(u16::MAX))
+                .saturating_sub(1),
+            key: c.key,
+        })
+        .collect()
+}
+
+/// Pinta la barra de teclas: diez celdas con el número y lo que hace cada
+/// tecla en la pantalla que tiene el teclado. El número lleva el estilo de
+/// la barra de estado y la etiqueta el de selección invertido, como en mc:
+/// dos tonos para que se lean como diez botones y no como una frase.
+pub(crate) fn draw_key_bar(frame: &mut Frame<'_>, app: &App) {
+    let Some(bar) = crate::ui::geometry::key_bar_area(app, frame.area()) else {
+        return;
+    };
+    clear_themed(frame, bar, &app.theme);
+    let cells = app.key_bar_cells();
+    let numero = app.theme.role(Role::Regular);
+    let etiqueta = app.theme.role(Role::StatusBar);
+    let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
+    for ((_, w), c) in norte_frontend::keybar::layout(usize::from(bar.width))
+        .into_iter()
+        .zip(cells)
+    {
+        let text = norte_frontend::keybar::cell_text(c, w);
+        let n = c.key.to_string().len();
+        let (num, label) = text.split_at(n);
+        spans.push(ratatui::text::Span::styled(num.to_owned(), numero));
+        // Una celda vacía se queda con el fondo base: una tecla que no hace
+        // nada no se pinta como un botón.
+        let estilo = if c.command.is_some() {
+            etiqueta
+        } else {
+            numero
+        };
+        spans.push(ratatui::text::Span::styled(label.to_owned(), estilo));
+    }
+    frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
+}
+
 /// ¿Se pintan los NOMBRES de los paneles? `[ui] panel_bar_style = "names"`
 /// y que quepan todos en la fila; si no, letras (spec 2026-09-10). Una sola
 /// respuesta para el pintado y para las zonas del ratón, que así miden lo

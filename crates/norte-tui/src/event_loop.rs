@@ -942,6 +942,31 @@ pub async fn run(
                         me,
                     )
                     .await;
+                    // Un clic en la barra de teclas dejó una tecla que
+                    // sintetizar (spec 2026-09-10): va por `on_key`, el
+                    // MISMO camino que la tecla de verdad, con los tres
+                    // resolvers. No hay segundo despacho que pueda divergir.
+                    if let Some(key) = app.pending_key.take() {
+                        on_key(
+                            app,
+                            backend,
+                            capture,
+                            &mut Console::new(&mut events, terminal),
+                            resolver,
+                            viewer_resolver,
+                            dialog_resolver,
+                            help_lines,
+                            lang,
+                            quick_mode,
+                            confirm_quit,
+                            &cfg,
+                            cli_preset.as_deref(),
+                            lua_host.as_ref(),
+                            &mut work,
+                            key,
+                        )
+                        .await;
+                    }
                 } else if let Event::Key(key) = event
                     && key.kind == crossterm::event::KeyEventKind::Press
                 {

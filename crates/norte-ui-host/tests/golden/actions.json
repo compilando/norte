@@ -96,6 +96,10 @@
     "meta": false,
     "shift": false
   },
+  "key_bar_activate": {
+    "action": "key_bar_activate",
+    "key": 5
+  },
   "layout_activate_row": {
     "action": "layout_activate_row",
     "row": 0

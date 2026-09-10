@@ -128,6 +128,81 @@ fn el_pie_del_panel_cuenta_y_dice_el_espacio_libre() {
     );
 }
 
+/// La barra de teclas (spec 2026-09-10): con `[ui] key_bar` encendido ocupa
+/// la ÚLTIMA fila con el número y la etiqueta de cada tecla atada, la barra
+/// de estado sube una fila, una celda vacía no es zona, y un clic en una
+/// celda deja la tecla sintetizada para que el bucle la despache por
+/// `on_key`. Apagada, la última fila vuelve a ser la de estado.
+#[test]
+fn la_barra_de_teclas_pinta_lo_atado_y_un_clic_es_la_tecla() {
+    use norte_frontend::keybar::KeyCell;
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.chrome.key_bar = Some(true);
+    app.key_bars.browse = vec![
+        KeyCell {
+            key: 1,
+            label: String::new(),
+            command: None,
+        },
+        KeyCell {
+            key: 2,
+            label: "Copiar".to_owned(),
+            command: Some("pane.copy".to_owned()),
+        },
+    ];
+    let area = ratatui::layout::Rect::new(0, 0, 80, 16);
+    let fila = |app: &App, y: u16| -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, app)).expect("draw");
+        (0..80)
+            .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+            .collect()
+    };
+    let ultima = fila(&app, 15);
+    assert!(ultima.contains("2Copiar"), "la celda atada: {ultima:?}");
+    assert!(
+        ultima.starts_with('1'),
+        "la vacía solo lleva el número: {ultima:?}"
+    );
+    assert!(
+        fila(&app, 14).contains("/casa"),
+        "la barra de estado sube una fila"
+    );
+
+    let zonas = ui::key_zones(&app, area);
+    assert_eq!(zonas.len(), 1, "una celda vacía no es zona: {zonas:?}");
+    assert_eq!((zonas[0].key, zonas[0].row), (2, 15));
+    norte_tui::mouse::after_frame(
+        &mut app,
+        None,
+        norte_tui::mouse::FrameZones {
+            keys: zonas.clone(),
+            ..Default::default()
+        },
+    );
+    let clic = crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: zonas[0].x0,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    assert_eq!(
+        norte_tui::mouse::handle(&mut app, clic),
+        norte_tui::mouse::After::KeyBar
+    );
+    assert_eq!(
+        app.pending_key.map(|k| k.code),
+        Some(crossterm::event::KeyCode::F(2)),
+        "el clic deja la tecla para `on_key`"
+    );
+
+    app.chrome.key_bar = Some(false);
+    assert!(
+        fila(&app, 15).contains("/casa"),
+        "apagada, la última fila es la de estado"
+    );
+}
+
 /// Un panel CERRADO no se pinta como un bloque encendido.
 ///
 /// La barra estilaba `Closed` con `Role::StatusBar`, que es el estilo de la

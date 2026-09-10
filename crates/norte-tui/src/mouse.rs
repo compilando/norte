@@ -236,6 +236,9 @@ pub struct MouseState {
     /// Las zonas pulsables de la barra de menús del último frame.
     menu_zones: Vec<crate::ui::MenuZone>,
     panel_zones: Vec<crate::ui::PanelZone>,
+    /// Las celdas pulsables de la barra de teclas del último frame (spec
+    /// 2026-09-10). Vacío = barra apagada, o sin fila donde pintarla.
+    key_zones: Vec<crate::ui::KeyZone>,
     /// Las zonas pulsables de las barras de pestañas del último frame.
     ///
     /// Vacío = ningún panel tiene pestañas, que es el caso de siempre.
@@ -337,6 +340,8 @@ pub struct FrameZones {
     pub menus: Vec<crate::ui::MenuZone>,
     /// Las casillas de la barra de paneles (#324).
     pub panels: Vec<crate::ui::PanelZone>,
+    /// Las celdas de la barra de teclas (spec 2026-09-10).
+    pub keys: Vec<crate::ui::KeyZone>,
     /// Las filas del sidebar de sitios (#226).
     pub places: Vec<crate::ui::PlaceZone>,
     /// Las filas del árbol (#136).
@@ -372,6 +377,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
         tabs: tab_zones,
         menus: menu_zones,
         panels: panel_zones,
+        keys: key_zones,
         places: places_zones,
         tree: tree_zones,
         extensions: extension_zones,
@@ -397,6 +403,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     app.mouse.tab_zones = tab_zones;
     app.mouse.menu_zones = menu_zones;
     app.mouse.panel_zones = panel_zones;
+    app.mouse.key_zones = key_zones;
     app.mouse.places_zones = places_zones;
     app.mouse.tree_zones = tree_zones;
     app.mouse.extension_zones = extension_zones;
@@ -463,6 +470,12 @@ pub enum After {
     /// que su tecla (`on_extensions_click`). Aquí no se puede: encender,
     /// aprobar o desinstalar hablan con el backend.
     Extension(&'static str),
+    /// Se pulsó una celda de la barra de teclas (spec 2026-09-10): la tecla
+    /// queda en `App::pending_key` y el run loop la despacha por `on_key`,
+    /// que es el ÚNICO camino con los tres resolvers a mano. Un clic en la
+    /// barra ES pulsar la tecla; no hay un segundo despacho que pueda
+    /// divergir.
+    KeyBar,
 }
 
 /// El índice ABSOLUTO en `entries` de una posición PINTADA del pane.
@@ -787,6 +800,26 @@ fn por_encima_de_los_paneles(app: &mut App, ev: MouseEvent) -> Option<After> {
     // devuelve `None` para ella, y no pasaba nada.
     if app.menu_bar && ev.row == 0 && clic {
         return Some(menu_click(app, ev.column, ev.row));
+    }
+    // La barra de teclas (spec 2026-09-10): una celda pulsada es la tecla
+    // pulsada, y se despacha como tal. ANTES del cerrojo de los overlays:
+    // con un modal delante la barra enseña las teclas del diálogo, y pulsar
+    // `[Enter] Confirm` tiene que confirmar. Su fila no es de ningún panel.
+    if clic
+        && let Some(key) = app
+            .mouse
+            .key_zones
+            .iter()
+            .find(|z| z.row == ev.row && ev.column >= z.x0 && ev.column <= z.x1)
+            .map(|z| z.key)
+    {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.pending_key = Some(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::F(key),
+            KeyModifiers::NONE,
+        ));
+        return Some(After::KeyBar);
     }
     if rueda_en_el_visor(app, ev) {
         return Some(After::Nothing);
@@ -1435,6 +1468,9 @@ pub async fn on_mouse(
         self::After::Extension(cmd) => {
             crate::screens::on_extensions_click(app, backend, lang, help_lines, cmd).await;
         }
+        // La tecla sintetizada la despacha el bucle por `on_key`, justo
+        // después de este gesto: aquí no están los tres resolvers.
+        self::After::KeyBar => {}
         // #324: un botón de la barra de paneles va por el MISMO despacho que
         // su atajo. Dos caminos para abrir el mismo panel divergen en cuanto
         // uno de los dos crece un detalle — es la lección de ADR 0077 aplicada

@@ -235,6 +235,52 @@ pub enum KeyOwner {
     Log,
 }
 
+/// Las celdas de la barra de teclas de las tres pantallas (spec
+/// 2026-09-10), en el idioma vigente al construirlas.
+#[derive(Debug, Clone, Default)]
+pub struct KeyBars {
+    /// Con los listados o un panel lateral: el efectivo `browse`.
+    pub browse: Vec<norte_frontend::keybar::KeyCell>,
+    /// Con el visor a pantalla completa.
+    pub viewer: Vec<norte_frontend::keybar::KeyCell>,
+    /// Con un modal o un overlay delante.
+    pub dialog: Vec<norte_frontend::keybar::KeyCell>,
+}
+
+impl KeyBars {
+    /// De los tres efectivos, en el idioma activo.
+    #[must_use]
+    pub fn build(
+        browse: &norte_frontend::keymap::Effective,
+        viewer: &norte_frontend::keymap::Effective,
+        dialog: &norte_frontend::keymap::Effective,
+    ) -> Self {
+        let lang = norte_i18n::active();
+        Self {
+            browse: norte_frontend::keybar::cells_in(browse, lang),
+            viewer: norte_frontend::keybar::cells_in(viewer, lang),
+            dialog: norte_frontend::keybar::cells_in(dialog, lang),
+        }
+    }
+}
+
+impl App {
+    /// Las celdas de la pantalla que tiene las teclas AHORA: un modal o un
+    /// overlay delante, las del diálogo; el visor a pantalla completa, las
+    /// suyas; si no, las de los listados. El mismo orden que `on_key` usa
+    /// para elegir resolver, y por eso la barra dice la verdad.
+    #[must_use]
+    pub fn key_bar_cells(&self) -> &[norte_frontend::keybar::KeyCell] {
+        if self.modal.is_some() || crate::mouse::overlay_open(self) {
+            &self.key_bars.dialog
+        } else if self.viewer.is_some() {
+            &self.key_bars.viewer
+        } else {
+            &self.key_bars.browse
+        }
+    }
+}
+
 /// Lo que hace un click sobre una fila del sidebar de sitios (#226).
 ///
 /// Lo que el modelo podía hacer ya está hecho al volver; esto es lo que
@@ -853,6 +899,16 @@ pub struct App {
     /// efectivo se mueva al `Resolver` compartido. `ui::draw_*` los lee en
     /// vez de una clave Fluent estática.
     pub dialog_hints: crate::hints::DialogHints,
+    /// Las celdas de la barra de teclas por pantalla (spec 2026-09-10),
+    /// PRECOMPUTADAS de los tres efectivos como `dialog_hints`: en el
+    /// arranque y en cada hot-reload OK, antes de que se muden al
+    /// `Resolver`. Cada frame elige cuál pintar según qué pantalla tiene
+    /// las teclas.
+    pub key_bars: KeyBars,
+    /// Una tecla que el ratón pidió sintetizar: un clic en la barra de
+    /// teclas ES pulsar la tecla, y el bucle la despacha por `on_key`, que
+    /// es el único camino con los tres resolvers a mano.
+    pub pending_key: Option<crossterm::event::KeyEvent>,
     /// Versión y revisión del binario (`norte_frontend::version::VERSION_LINE`),
     /// pintadas en el marco de la ayuda. Vacía = no se pinta: es lo que
     /// reciben los tests, cuyos snapshots no pueden depender del commit.
@@ -1041,6 +1097,8 @@ impl App {
             subshell_chord: None,
             pending_osc52: None,
             dialog_hints: crate::hints::DialogHints::default(),
+            key_bars: KeyBars::default(),
+            pending_key: None,
             version_line: "",
             help_chords: default_help_chords(),
             palette: None,

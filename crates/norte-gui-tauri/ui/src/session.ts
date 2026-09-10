@@ -204,6 +204,9 @@ export class Session {
       case "panel_bar":
         s.panel_bar = c.panel_bar;
         return true;
+      case "key_bar":
+        s.key_bar = c.key_bar;
+        return true;
       case "profiles":
         s.profiles = c.profiles;
         return true;

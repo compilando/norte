@@ -125,6 +125,7 @@ impl Estado {
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
             panel_bar: self.vista_barra_de_paneles(),
+            key_bar: self.vista_barra_de_teclas(),
             profiles: self.vista_perfiles(),
             palette: self.vista_paleta(),
             whichkey: self.vista_whichkey(),
@@ -321,6 +322,32 @@ impl Estado {
     /// o descartado por falta de sitio no está abierto, #329/#331), quién
     /// tiene el teclado, y qué tiene algo que contar sin estar a la vista.
     /// El QUÉ y el ORDEN son de `norte_frontend::panelbar`, compartidos.
+    /// La barra de teclas (spec 2026-09-10): las diez celdas del keymap de
+    /// la pantalla que tiene el teclado AHORA — el diálogo si hay uno, el
+    /// visor a pantalla completa si está, los listados si no. El mismo orden
+    /// que `tecla` usa para elegir resolver, y por eso la barra dice la
+    /// verdad.
+    pub(super) fn vista_barra_de_teclas(&self) -> crate::dto::KeyBarView {
+        let eff = if !self.dialogos.is_empty() {
+            self.resolver_dialogo.effective()
+        } else if self.visor.is_some() {
+            &self.efectivo_visor
+        } else {
+            self.resolver.effective()
+        };
+        crate::dto::KeyBarView {
+            bar: self.config.common.ui_chrome.key_bar(),
+            cells: norte_frontend::keybar::cells_in(eff, self.lang)
+                .into_iter()
+                .map(|c| crate::dto::KeyCellView {
+                    key: u32::from(c.key),
+                    label: clamp_display(c.label),
+                    command: c.command.map(clamp_display),
+                })
+                .collect(),
+        }
+    }
+
     pub(super) fn vista_barra_de_paneles(&self) -> crate::dto::PanelBarView {
         let botones = self.botones_de_paneles();
         crate::dto::PanelBarView {
