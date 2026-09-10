@@ -204,6 +204,67 @@ async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
     }
 }
 
+/// ADR 0105: el icono llega a la fila en su propio campo, la insignia en el
+/// suyo —los dos huecos coexisten—, y el lote que se pide decorar lleva la
+/// CLASE de cada ruta, sin la que un decorador de iconos no sabe qué es
+/// carpeta.
+#[tokio::test]
+async fn el_icono_de_un_plugin_llega_a_la_fila_y_la_clase_viaja() {
+    let mut f = Falso::default();
+    f.arbol.insert(
+        "mem:///casa".to_owned(),
+        vec![(b"src".to_vec(), true), (b"a.rs".to_vec(), false)],
+    );
+    f.iconos
+        .insert("mem:///casa/src".to_owned(), "📁".to_owned());
+    f.iconos
+        .insert("mem:///casa/a.rs".to_owned(), "🦀".to_owned());
+    f.decoraciones
+        .insert("mem:///casa/a.rs".to_owned(), "M".to_owned());
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::SetVisibleRange {
+        slot_id: 1,
+        first: 0,
+        count: 10,
+    })
+    .await
+    .expect("host vivo");
+
+    let mut filas = None;
+    for _ in 0..30 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let b = listado(&foto);
+        if b.rows.iter().any(|r| !r.icon.is_empty()) {
+            filas = Some(b.rows.clone());
+            break;
+        }
+    }
+    let filas = filas.expect("el icono llega a la fila");
+    let src = filas.iter().find(|r| r.display_name == "src").expect("src");
+    assert_eq!(src.icon, "📁");
+    assert!(src.badge.is_empty());
+    let a = filas
+        .iter()
+        .find(|r| r.display_name == "a.rs")
+        .expect("a.rs");
+    assert_eq!(a.icon, "🦀", "el icono, en su hueco");
+    assert_eq!(a.badge, "M", "y la insignia, en el suyo: no se tapan");
+    assert_eq!(a.badge_role, "warning");
+    // Y la clase viajó con el lote, posicional: `src` es una carpeta.
+    let clases = backend.clases_decoradas.lock().expect("clases");
+    let lotes = backend.decorados.lock().expect("decorados");
+    let (paths, kinds) = (&lotes[0], &clases[0]);
+    assert_eq!(paths.len(), kinds.len(), "una clase por ruta");
+    let de_src = paths
+        .iter()
+        .position(|p| p.to_wire() == "mem:///casa/src")
+        .expect("src en el lote");
+    assert_eq!(kinds[de_src], norte_proto::EntryKind::Dir);
+}
+
 /// La insignia y el valor de columna llegan a la fila, marcados como lo que
 /// son: texto de un TERCERO.
 #[tokio::test]

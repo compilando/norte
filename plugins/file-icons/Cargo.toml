@@ -22,6 +22,12 @@ crate-type = ["cdylib", "rlib"]
 # to `crates/norte-plugin-host/wit`).
 wit-bindgen = "0.46"
 
+[dev-dependencies]
+# The table's tests pin every emoji glyph to TWO cells with the same measure
+# the terminal frontend uses; a glyph that measures one and paints two breaks
+# the icon column on exactly its rows. Host-side only.
+unicode-width = "0.2"
+
 [profile.release]
 panic = "abort"
 opt-level = "s"

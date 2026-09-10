@@ -107,6 +107,7 @@ export class Session {
         slot.generation = c.generation;
         slot.first_visible = c.first_visible;
         slot.rows = c.rows;
+        slot.icon_column = c.icon_column;
         // El TOTAL, que es la altura del desplazamiento. Sin esto el listado
         // se quedaba con el de la primera página (100) durante todo el
         // drenaje —también después, porque el último lote también es un

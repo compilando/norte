@@ -21,6 +21,34 @@ use crate::theme::TuiTheme;
 use norte_frontend::middle_ellipsis;
 use norte_i18n::t;
 
+/// Celdas de la columna de iconos (ADR 0105): dos para el glifo —un emoji
+/// mide dos— y una de separación. Se abre en todas las filas de un listado
+/// en cuanto una tiene icono, y la cabecera se corre lo mismo.
+pub(crate) const ICON_GUTTER: usize = 3;
+
+/// La celda de la columna de iconos de UNA fila (ADR 0105): dos celdas y un
+/// espacio, ANTES del nombre. Un icono de una celda (`$`) se rellena a dos;
+/// uno que no cabe en dos (un emoji con modificador) se recorta, porque la
+/// columna es lo que alinea los nombres y un icono ancho la rompería. Sin
+/// icono en esta fila, el hueco vacío: la fila sigue alineada.
+///
+/// Se pinta con el color de la entrada: dice qué es, no en qué estado está,
+/// y ese color ya lo tiene el nombre.
+fn icon_span<'a>(
+    decoration: Option<&norte_frontend::Decoration>,
+    theme: &TuiTheme,
+    name: &[u8],
+    kind: EntryKind,
+) -> Span<'a> {
+    let glifo = decoration.and_then(|d| d.icon.as_deref()).unwrap_or("");
+    let glifo = take_width(glifo, ICON_GUTTER - 1);
+    let relleno = (ICON_GUTTER - 1).saturating_sub(glifo.width());
+    Span::styled(
+        format!("{glifo}{} ", " ".repeat(relleno)),
+        theme.entry(name, kind),
+    )
+}
+
 /// Cuántos items pinta un pane y cuál va resaltado, EN COORDENADAS DE LO
 /// PINTADO (posición dentro del filtro cuando hay quick search en modo
 /// filtro, índice absoluto si no). Lo comparten `draw_pane` y
@@ -53,6 +81,10 @@ pub(crate) fn column_header_line(
     )],
     sort: norte_frontend::SortSpec,
     catalog: Option<&norte_proto::AttrCatalog>,
+    // Las celdas que la columna de iconos (ADR 0105) le quita al bloque del
+    // nombre: 0 sin iconos, [`ICON_GUTTER`] con ellos. La cabecera «Nombre»
+    // se corre lo mismo que los nombres, o deja de estar encima de ellos.
+    icon_gutter: usize,
 ) -> String {
     use norte_frontend::SortDir;
     use norte_frontend::columns::Align;
@@ -75,12 +107,18 @@ pub(crate) fn column_header_line(
             // de dirección sobrevive a cualquier locale; recorte por ANCHO
             // (take_width), jamás por chars. El layout del nombre no lo
             // toca ningún `align` (#108 7b): su bloque manda.
+            // El canalón nunca desborda la columna: en una de una o dos
+            // celdas —lo que deja `full` en un terminal de 40— se pinta lo
+            // que cabe y el resto de cabeceras se queda en su sitio.
+            let icon_gutter = icon_gutter.min(w);
+            let w = w - icon_gutter;
             let budget = if active { w.saturating_sub(1) } else { w };
             let mut cab = take_width(&label, budget);
             if active {
                 cab.push(arrow);
             }
             let pad = w.saturating_sub(cab.width());
+            out.push_str(&" ".repeat(icon_gutter));
             out.push_str(&cab);
             out.push_str(&" ".repeat(pad));
         } else {
@@ -300,6 +338,9 @@ pub(crate) fn draw_pane(
     // deriva de ella, y dos cálculos distintos harían que un click cayera
     // en la fila de al lado.
     let (painted_len, selected) = painted_len_and_selection(pane);
+    // La columna de iconos la decide el LISTADO, una vez: si alguna fila
+    // tiene icono, todas llevan el hueco.
+    let icons = pane.any_icon();
     let items: Vec<ListItem<'_>> = match pane.quick_visible() {
         Some(vis) => vis
             .iter()
@@ -315,6 +356,7 @@ pub(crate) fn draw_pane(
                     Some(pane),
                     now_ms,
                     pane.is_parent_row(i),
+                    icons,
                 )
             })
             .collect(),
@@ -333,6 +375,7 @@ pub(crate) fn draw_pane(
                     Some(pane),
                     now_ms,
                     pane.is_parent_row(i),
+                    icons,
                 )
             })
             .collect(),
@@ -346,8 +389,13 @@ pub(crate) fn draw_pane(
     }
     let (header_area, list_area) = draw_tab_strip(frame, inner, tabs, theme);
     frame.render_widget(
-        Paragraph::new(column_header_line(cols, pane.sort(), catalog))
-            .style(ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)),
+        Paragraph::new(column_header_line(
+            cols,
+            pane.sort(),
+            catalog,
+            if icons { ICON_GUTTER } else { 0 },
+        ))
+        .style(ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)),
         header_area,
     );
     let list = List::new(items).highlight_style(theme.role(Role::Selection));
@@ -391,6 +439,10 @@ pub(crate) fn entry_item<'a>(
     // en la primera fila se lee como «hay aquí un directorio que se llama
     // así», que es justo lo que no hay.
     parent_row: bool,
+    // La columna de iconos (ADR 0105) está abierta en este listado: ALGUNA
+    // fila tiene icono, así que todas llevan el hueco, con o sin él, para
+    // que los nombres sigan alineados. La decide el pane, no la fila.
+    icons: bool,
 ) -> ListItem<'a> {
     let name = entry.path.file_name().map_or(&[][..], |n| n.as_bytes());
     // #57: con reinterpretación activa, los nombres no-UTF8 se decodifican
@@ -429,7 +481,11 @@ pub(crate) fn entry_item<'a>(
     } else {
         Span::raw(" ")
     };
-    let mut spans = vec![gutter, badge, body];
+    let mut spans = vec![gutter, badge];
+    spans.extend(icons.then(|| icon_span(decoration, theme, name, entry.kind)));
+    spans.push(body);
+    // Lo que va delante del nombre y no se recorta: canalón, badge, iconos.
+    let fijos = spans.len() - 1;
     // G3b (ADR 0037): badge de decorator, TRAS el hueco del badge hostil —
     // ya SANEADO y acotado (`norte_frontend::sanitize_decoration`, aplicado
     // antes de llegar aquí). Sin decoración para esta entrada, ningún span
@@ -459,27 +515,30 @@ pub(crate) fn entry_item<'a>(
         // del nombre — un badge CJK (8 chars = 16 celdas) desplazaba todas
         // las celdas de la fila. Si no cabe dejando ≥3 celdas de nombre,
         // fuera la decoración entera (separador incluido): el nombre manda.
-        if spans.len() > 3 {
-            let deco: usize = spans[3..].iter().map(|sp| sp.content.width()).sum();
-            let fixed: usize = spans[..2].iter().map(|sp| sp.content.width()).sum();
+        if spans.len() > fijos + 1 {
+            let deco: usize = spans[fijos + 1..].iter().map(|sp| sp.content.width()).sum();
+            let fixed: usize = spans[..fijos].iter().map(|sp| sp.content.width()).sum();
             if fixed + deco + 3 > name_w {
-                spans.truncate(3);
+                spans.truncate(fijos + 1);
             }
         }
         let used: usize = spans.iter().map(|sp| sp.content.width()).sum();
         if used > name_w {
-            // Recorta el TEXTO del nombre (el span del body, índice 2) con
-            // elipsis central a lo que quede tras los demás spans — los
-            // fijos (canalón/badge) y la decoración se quedan.
+            // Recorta el TEXTO del nombre (el span del body, índice `fijos`:
+            // tras el canalón, el badge y —si la hay— la columna de iconos)
+            // con elipsis central a lo que quede tras los demás spans — los
+            // fijos y la decoración se quedan. Con un índice literal aquí,
+            // la columna de iconos corría el nombre un sitio y el recorte se
+            // comía el ICONO de cada fila larga en vez del nombre.
             let others: usize = spans
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| *i != 2)
+                .filter(|(i, _)| *i != fijos)
                 .map(|(_, sp)| sp.content.width())
                 .sum();
             let body_w = name_w.saturating_sub(others);
-            let truncated = middle_ellipsis(&spans[2].content, body_w);
-            spans[2] = Span::styled(truncated, spans[2].style);
+            let truncated = middle_ellipsis(&spans[fijos].content, body_w);
+            spans[fijos] = Span::styled(truncated, spans[fijos].style);
         }
         let used: usize = spans.iter().map(|sp| sp.content.width()).sum();
         // Ni con el nombre recortado a cero cabe siempre: en una columna de
@@ -565,8 +624,7 @@ mod entry_item_columns_tests {
         };
         let deco = norte_frontend::Decoration {
             badge: Some("全全全全全全全全".to_owned()),
-            badge_hostile: false,
-            role: None,
+            ..Default::default()
         };
         let theme = TuiTheme::default();
         let widths = [
@@ -596,6 +654,7 @@ mod entry_item_columns_tests {
             None,
             0,
             false,
+            false,
         );
         // Renderiza a un buffer del ancho EXACTO del presupuesto: si la
         // fila desbordara, la celda de tamaño perdería su cola.
@@ -604,6 +663,61 @@ mod entry_item_columns_tests {
         List::new(vec![item]).render(area, &mut buf);
         let row: String = (0..21).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         assert_eq!(row, "   f.txt          7 B", "{row:?}");
+    }
+
+    /// ADR 0105: con la columna de iconos abierta, un nombre que no cabe se
+    /// recorta a ÉL —con su elipsis central, que es lo que salva la
+    /// extensión—, y el icono se queda. Con un índice literal, el recorte
+    /// se comía el icono de cada fila larga.
+    #[test]
+    fn con_iconos_el_recorte_va_al_nombre_y_el_icono_se_queda() {
+        use norte_frontend::columns::{Builtin, ColumnId, ColumnStyle};
+        let entry = norte_proto::Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: VPath::parse("mem:///un_nombre_bastante_largo.png").unwrap(),
+            kind: EntryKind::File,
+            size: Some(7),
+            mtime_ms: None,
+        };
+        let deco = norte_frontend::Decoration {
+            icon: Some("🦀".to_owned()),
+            ..Default::default()
+        };
+        let theme = TuiTheme::default();
+        let widths = [
+            (
+                ColumnId::Builtin(Builtin::Name),
+                18u16,
+                ColumnStyle::default_for(Builtin::Name),
+            ),
+            (
+                ColumnId::Builtin(Builtin::Size),
+                6u16,
+                ColumnStyle::default_for(Builtin::Size),
+            ),
+        ];
+        let item = entry_item(
+            &entry,
+            &theme,
+            None,
+            Some(&deco),
+            false,
+            &widths,
+            None,
+            0,
+            false,
+            true,
+        );
+        let area = Rect::new(0, 0, 24, 1);
+        let mut buf = Buffer::empty(area);
+        List::new(vec![item]).render(area, &mut buf);
+        let row: String = (0..24).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert!(row.starts_with("  🦀 "), "el icono se queda: {row:?}");
+        assert!(row.contains('…'), "y el nombre lleva la elipsis: {row:?}");
+        assert!(
+            row.ends_with("7 B"),
+            "y la celda de tamaño está en su sitio: {row:?}"
+        );
     }
 }
 
@@ -1018,8 +1132,19 @@ mod entry_item_tests {
     fn a_marked_row_starts_with_the_mark_gutter() {
         let entry = e("mem:///a", EntryKind::File);
         let theme = TuiTheme::default();
-        let marked = entry_item(&entry, &theme, None, None, true, &[], None, 0, false);
-        let plain = entry_item(&entry, &theme, None, None, false, &[], None, 0, false);
+        let marked = entry_item(&entry, &theme, None, None, true, &[], None, 0, false, false);
+        let plain = entry_item(
+            &entry,
+            &theme,
+            None,
+            None,
+            false,
+            &[],
+            None,
+            0,
+            false,
+            false,
+        );
         assert_eq!(first_span_text(&marked), "*");
         assert_eq!(first_span_text(&plain), " ");
     }
@@ -1030,7 +1155,7 @@ mod entry_item_tests {
     fn the_gutter_precedes_the_hostile_badge() {
         let entry = e_hostile();
         let theme = TuiTheme::default();
-        let item = entry_item(&entry, &theme, None, None, true, &[], None, 0, false);
+        let item = entry_item(&entry, &theme, None, None, true, &[], None, 0, false, false);
         let texts = span_texts(&item);
         assert_eq!(texts[0], "*");
         assert_eq!(texts[1], HOSTILE_BADGE);
@@ -1075,7 +1200,7 @@ mod column_header_line_tests {
                 estilo(Builtin::Size, Align::Left, "S"),
             ),
         ];
-        let line = column_header_line(&cols, sort, None);
+        let line = column_header_line(&cols, sort, None, 0);
         assert_eq!(line.width(), 7, "exactamente la suma de anchos: {line:?}");
         assert_eq!(line, "N      ");
         let cols = [
@@ -1090,8 +1215,53 @@ mod column_header_line_tests {
                 estilo(Builtin::Size, Align::Left, "S"),
             ),
         ];
-        let line = column_header_line(&cols, sort, None);
+        let line = column_header_line(&cols, sort, None, 0);
         assert_eq!(line.width(), 8, "{line:?}");
         assert_eq!(line, "N      ▲");
+    }
+
+    /// ADR 0105: la cabecera se corre lo mismo que los nombres cuando la
+    /// columna de iconos está abierta, y NUNCA desborda su columna — ni
+    /// cuando el nombre tiene menos celdas que el canalón.
+    #[test]
+    fn la_cabecera_se_corre_con_los_iconos_y_no_desborda() {
+        let sort = SortSpec {
+            column: SortColumn::Size,
+            dir: SortDir::Asc,
+            dirs_first: true,
+        };
+        let cols = [
+            (
+                ColumnId::Builtin(Builtin::Name),
+                8,
+                estilo(Builtin::Name, Align::Left, "Nombre"),
+            ),
+            (
+                ColumnId::Builtin(Builtin::Size),
+                4,
+                estilo(Builtin::Size, Align::Left, "S"),
+            ),
+        ];
+        let line = column_header_line(&cols, sort, None, 3);
+        assert_eq!(line.width(), 12, "{line:?}");
+        assert!(line.starts_with("   Nombr"), "{line:?}");
+        let cols = [
+            (
+                ColumnId::Builtin(Builtin::Name),
+                2,
+                estilo(Builtin::Name, Align::Left, "N"),
+            ),
+            (
+                ColumnId::Builtin(Builtin::Size),
+                4,
+                estilo(Builtin::Size, Align::Left, "S"),
+            ),
+        ];
+        let line = column_header_line(&cols, sort, None, 3);
+        assert_eq!(
+            line.width(),
+            6,
+            "un nombre más estrecho que el canalón: {line:?}"
+        );
     }
 }

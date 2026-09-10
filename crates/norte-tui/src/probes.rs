@@ -274,6 +274,9 @@ pub fn spawn_decorate_fetch(
     slot: SlotId,
     dir: VPath,
     paths: Vec<VPath>,
+    // La clase de cada path, posicional (ADR 0105): un decorador de iconos
+    // la necesita para la carpeta.
+    kinds: Vec<norte_proto::EntryKind>,
     plugin_cols: Vec<(String, String)>,
 ) -> Option<DecorateFetch> {
     if paths.is_empty() {
@@ -282,7 +285,7 @@ pub fn spawn_decorate_fetch(
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
     tokio::spawn(async move {
-        let plugins = b.plugin_decorate(&paths).await.unwrap_or_default();
+        let plugins = b.plugin_decorate(&paths, &kinds).await.unwrap_or_default();
         let merged = norte_frontend::merge_decorations(&paths, &plugins);
         // Review MINOR-1 (regla 3 en espíritu): un fetch SUPERADO (el run
         // loop pisó el slot → rx dropeado) corta antes de cada RPC restante

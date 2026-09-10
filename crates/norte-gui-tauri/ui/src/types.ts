@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 61;
+export const BRIDGE_VERSION = 62;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -93,6 +93,15 @@ export interface RowView {
    * ninguno. Es un vocabulario CERRADO: un plugin no elige su propio color.
    */
   badge_role: string;
+  /**
+   * El ICONO de la fila (puente 62): lo que un decorador de hueco `icon`
+   * puso, ya enmascarado. Vacío = ninguno. Va a la IZQUIERDA del nombre, en
+   * una columna que se abre en todas las filas del hueco en cuanto una lo
+   * tiene.
+   */
+  icon: string;
+  /** El icono se pinta distinto de lo que es: lo escribe un plugin. */
+  icon_hostile: boolean;
 }
 
 export type SlotState =
@@ -135,6 +144,13 @@ export interface BrowserSlotView {
   total_rows: number | null;
   first_visible: number;
   rows: RowView[];
+  /**
+   * La columna de iconos está abierta en este listado (puente 62): alguna
+   * entrada —visible o no— tiene icono, así que todas las filas llevan la
+   * celda. Lo decide el host desde el listado entero, no esta ventana desde
+   * las filas que ve.
+   */
+  icon_column: boolean;
   cursor: RowKey | null;
   marks: number;
   /**
@@ -1126,6 +1142,8 @@ export type ViewChange =
       generation: number;
       first_visible: number;
       rows: RowView[];
+      /** La columna de iconos, CON las filas: es así como aterrizan los iconos. */
+      icon_column: boolean;
       /**
        * Cuántas filas tiene el listado ENTERO. Es la altura del
        * desplazamiento, y el drenaje paginado solo manda parches de filas.

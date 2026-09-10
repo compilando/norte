@@ -496,6 +496,7 @@ impl Estado {
             total_rows: Some(hueco.pane.entries().len() as u64),
             first_visible: hueco.primera_visible,
             rows: self.filas_de(hueco),
+            icon_column: hueco.pane.any_icon(),
             cursor: (!hueco.pane.entries().is_empty())
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
             marks,

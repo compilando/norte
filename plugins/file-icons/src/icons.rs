@@ -19,13 +19,27 @@ pub enum Style {
     Ascii,
 }
 
-/// A kind of file, as far as a name can tell.
+/// What the host says an entry is. A name cannot tell a folder from a
+/// file, so this comes from the listing, not from the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Class {
+    File,
+    Dir,
+    Symlink,
+}
+
+/// A kind of file, as far as a name can tell — plus the two the host tells
+/// us about, `Folder` and `Link`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    Folder,
+    Link,
     Rust,
     Code,
     Script,
     Doc,
+    Sheet,
+    Slides,
     Readme,
     Image,
     Audio,
@@ -44,6 +58,16 @@ impl Kind {
     /// badge is painted next to a file name, where short is the point.
     pub const fn glyph(self, style: Style) -> &'static str {
         match (self, style) {
+            (Kind::Folder, Style::Emoji) => "📁",
+            (Kind::Folder, Style::Ascii) => "/",
+            (Kind::Link, Style::Emoji) => "🔗",
+            (Kind::Link, Style::Ascii) => "@",
+            (Kind::Sheet, Style::Emoji) => "📊",
+            // Los tres con VS16 (U+FE0F): sin él son de presentación de
+            // TEXTO, `unicode-width` los mide a UNA celda y el terminal los
+            // pinta a dos, y la columna se rompe justo en esas filas.
+            (Kind::Slides, Style::Emoji) => "📽\u{FE0F}",
+            (Kind::Sheet | Kind::Slides, Style::Ascii) => "''",
             (Kind::Rust, Style::Emoji) => "🦀",
             (Kind::Code, Style::Emoji) => "💻",
             (Kind::Rust | Kind::Code, Style::Ascii) => "{}",
@@ -53,7 +77,7 @@ impl Kind {
             (Kind::Readme, Style::Emoji) => "📖",
             (Kind::Licence, Style::Emoji) => "📜",
             (Kind::Doc | Kind::Readme | Kind::Licence, Style::Ascii) => "''",
-            (Kind::Image, Style::Emoji) => "🖼",
+            (Kind::Image, Style::Emoji) => "🖼\u{FE0F}",
             (Kind::Image, Style::Ascii) => "%",
             (Kind::Audio, Style::Emoji) => "🎵",
             (Kind::Audio, Style::Ascii) => "~",
@@ -61,7 +85,7 @@ impl Kind {
             (Kind::Video, Style::Ascii) => ">",
             (Kind::Archive, Style::Emoji) => "📦",
             (Kind::Archive, Style::Ascii) => "[]",
-            (Kind::Config, Style::Emoji) => "⚙",
+            (Kind::Config, Style::Emoji) => "⚙\u{FE0F}",
             (Kind::Build, Style::Emoji) => "🔧",
             (Kind::Git, Style::Emoji) => "🐙",
             (Kind::Container, Style::Emoji) => "🐳",
@@ -71,10 +95,14 @@ impl Kind {
 
     /// Every kind, for tests that sweep the table.
     pub const ALL: &'static [Kind] = &[
+        Kind::Folder,
+        Kind::Link,
         Kind::Rust,
         Kind::Code,
         Kind::Script,
         Kind::Doc,
+        Kind::Sheet,
+        Kind::Slides,
         Kind::Readme,
         Kind::Image,
         Kind::Audio,
@@ -142,6 +170,15 @@ const BY_EXTENSION: &[(&[u8], Kind)] = &[
     (b"md", Kind::Doc),
     (b"markdown", Kind::Doc),
     (b"txt", Kind::Doc),
+    (b"rtf", Kind::Doc),
+    (b"xlsx", Kind::Sheet),
+    (b"xls", Kind::Sheet),
+    (b"ods", Kind::Sheet),
+    (b"csv", Kind::Sheet),
+    (b"tsv", Kind::Sheet),
+    (b"pptx", Kind::Slides),
+    (b"ppt", Kind::Slides),
+    (b"odp", Kind::Slides),
     (b"rst", Kind::Doc),
     (b"pdf", Kind::Doc),
     (b"doc", Kind::Doc),
@@ -224,10 +261,29 @@ pub fn kind_of(name: &[u8]) -> Option<Kind> {
         .map(|(_, k)| *k)
 }
 
-/// The badge for a name in a style, or `None`: the whole plugin, as a pure
-/// function.
+/// The badge for a name in a style, or `None`: what a name alone says.
 pub fn badge_for(name: &[u8], style: Style) -> Option<&'static str> {
     kind_of(name).map(|k| k.glyph(style))
+}
+
+/// The icon for an entry: the whole plugin, as a pure function.
+///
+/// A folder is a folder before its name says anything — except the few
+/// names that mean more (`.git` is the git icon, not a plain folder) — and
+/// a link is a link whatever it points at: the listing shows the link, not
+/// the target, and the icon says what the row IS.
+pub fn icon_for(name: &[u8], class: Class, style: Style) -> Option<&'static str> {
+    match class {
+        Class::Dir => Some(
+            SPECIAL
+                .iter()
+                .find(|(n, _)| eq_ignore_ascii_case(n, name))
+                .map_or(Kind::Folder, |(_, k)| *k)
+                .glyph(style),
+        ),
+        Class::Symlink => Some(Kind::Link.glyph(style)),
+        Class::File => badge_for(name, style),
+    }
 }
 
 #[cfg(test)]
@@ -240,6 +296,38 @@ mod tests {
         assert_eq!(extension_of(b".bashrc"), None);
         assert_eq!(extension_of(b"x"), None);
         assert_eq!(extension_of(b"a."), Some(&b""[..]));
+    }
+
+    #[test]
+    fn a_folder_is_a_folder_before_its_name_and_a_link_is_a_link() {
+        assert_eq!(icon_for(b"src", Class::Dir, Style::Emoji), Some("📁"));
+        assert_eq!(
+            icon_for(b"main.rs", Class::Dir, Style::Emoji),
+            Some("📁"),
+            "a folder called main.rs is still a folder"
+        );
+        assert_eq!(
+            icon_for(b".git", Class::Dir, Style::Emoji),
+            Some("🐙"),
+            "the few names that mean more than «folder»"
+        );
+        assert_eq!(icon_for(b"link", Class::Symlink, Style::Emoji), Some("🔗"));
+        assert_eq!(
+            icon_for(b"main.rs", Class::File, Style::Emoji),
+            Some("🦀"),
+            "a file goes by its name"
+        );
+        assert_eq!(icon_for(b"x", Class::File, Style::Emoji), None);
+        assert_eq!(icon_for(b"src", Class::Dir, Style::Ascii), Some("/"));
+        assert_eq!(icon_for(b"l", Class::Symlink, Style::Ascii), Some("@"));
+    }
+
+    #[test]
+    fn office_files_have_their_own_icons() {
+        assert_eq!(badge_for(b"cuentas.xlsx", Style::Emoji), Some("📊"));
+        assert_eq!(badge_for(b"datos.csv", Style::Emoji), Some("📊"));
+        assert_eq!(badge_for(b"charla.pptx", Style::Emoji), Some("📽"));
+        assert_eq!(badge_for(b"informe.docx", Style::Emoji), Some("📄"));
     }
 
     #[test]
@@ -295,5 +383,33 @@ mod tests {
                 assert!(!g.chars().any(char::is_control), "{g:?}");
             }
         }
+    }
+
+    /// Every emoji glyph measures TWO cells with the measure the terminal
+    /// frontend uses (`unicode-width`): a glyph that measures one and paints
+    /// two — a text-presentation emoji without VS16 — breaks the icon column
+    /// on exactly its rows. The ASCII ones may be one or two.
+    #[test]
+    fn every_emoji_glyph_measures_two_cells() {
+        use unicode_width::UnicodeWidthStr;
+        for k in Kind::ALL {
+            assert_eq!(k.glyph(Style::Emoji).width(), 2, "{k:?}");
+            let w = k.glyph(Style::Ascii).width();
+            assert!(w == 1 || w == 2, "{k:?}: {w}");
+        }
+    }
+
+    #[test]
+    fn the_tables_have_no_repeated_key() {
+        let mut ext: Vec<&[u8]> = BY_EXTENSION.iter().map(|(e, _)| *e).collect();
+        let n = ext.len();
+        ext.sort_unstable();
+        ext.dedup();
+        assert_eq!(ext.len(), n, "an extension listed twice");
+        let mut names: Vec<&[u8]> = SPECIAL.iter().map(|(e, _)| *e).collect();
+        let n = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), n, "a special name listed twice");
     }
 }

@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use norte_proto::VPath;
-use norte_proto::methods::{DecorationWire, PluginDecorations};
+use norte_proto::methods::{DecorationSlot, DecorationWire, PluginDecorations};
 
 /// Tope de un badge TRAS enmascarar (ADR 0037 tabla de decisión 1), en
 /// CARACTERES (no bytes: coherente con el resto de topes de display —
@@ -38,6 +38,22 @@ pub struct Decoration {
     pub badge_hostile: bool,
     /// Rol semántico ya validado, o `None` = sin rol reconocido.
     pub role: Option<norte_theme::Role>,
+    /// El ICONO de la fila (ADR 0105): lo que devolvió el primer decorador
+    /// de hueco `icon`, ya enmascarado y acotado. Se pinta a la IZQUIERDA
+    /// del nombre, en una columna de ancho fijo; la insignia de arriba, a la
+    /// derecha. Los dos coexisten: vienen de plugins distintos.
+    pub icon: Option<String>,
+    /// El icono se pinta distinto de lo que es. Misma razón que
+    /// `badge_hostile`.
+    pub icon_hostile: bool,
+}
+
+impl Decoration {
+    /// Sin nada que pintar: ni icono ni insignia.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.badge.is_none() && self.icon.is_none()
+    }
 }
 
 /// Sanea UNA [`DecorationWire`] cruda del wire: enmascara `badge`
@@ -64,19 +80,38 @@ pub fn sanitize_decoration(w: &DecorationWire) -> Decoration {
         badge,
         badge_hostile,
         role,
+        icon: None,
+        icon_hostile: false,
+    }
+}
+
+/// Lo mismo que [`sanitize_decoration`] para un decorador de ICONOS (ADR
+/// 0105): el texto va al hueco del icono, con el mismo enmascarado y el
+/// mismo tope. El rol no aplica: un icono se pinta con el color de la
+/// entrada, no con el del tema del estado.
+#[must_use]
+pub fn sanitize_icon(w: &DecorationWire) -> Decoration {
+    let s = sanitize_decoration(w);
+    Decoration {
+        badge: None,
+        badge_hostile: false,
+        role: None,
+        icon: s.badge,
+        icon_hostile: s.badge_hostile,
     }
 }
 
 /// Aplana la SUPERPOSICIÓN de decoradores del wire
 /// (`PluginDecorateResult::plugins`, un elemento por plugin `decorator`
-/// consentido) a UNA [`Decoration`] por ruta, indexada por [`VPath`]: el
-/// PRIMER plugin (en el orden en que `plugins` llega — el orden del
-/// catálogo, ver `PluginRegistry::resolve_decorators`) cuyo `badge` no es
-/// `None` para esa posición GANA. Decisión de alcance MVP (G3b, judgment
-/// call documentado): pintar la superposición COMPLETA (una fila de N
-/// badges por entrada cuando N decoradores consienten sobre la misma
-/// entrada) queda fuera de esta primera pasada — un solo badge por entrada
-/// es la superficie de render que TUI/GUI implementan hoy.
+/// consentido) a UNA [`Decoration`] por ruta, indexada por [`VPath`], con
+/// DOS huecos (ADR 0105): el icono, a la izquierda del nombre, y la
+/// insignia, a la derecha. Cada hueco lo llena el PRIMER plugin de ese
+/// hueco (en el orden en que `plugins` llega — el del catálogo, ver
+/// `PluginRegistry::resolve_decorators`) cuyo texto no es `None` NI se
+/// enmascara a nada: una insignia que se queda vacía tras enmascarar no es
+/// una insignia, y no bloquea a la siguiente. Un icono no tapa una insignia
+/// ni al revés; dos iconos sí se tapan, y manda el orden. Una ruta que se
+/// queda sin nada en ninguno de los dos huecos no entra en el mapa.
 ///
 /// `paths` y `pd.decorations` se recorren POSICIONALMENTE (`zip`, se
 /// detiene en el más corto): defensa en profundidad si un daemon remoto no
@@ -90,12 +125,32 @@ pub fn merge_decorations(
     let mut out: HashMap<VPath, Decoration> = HashMap::new();
     for pd in plugins {
         for (path, wire) in paths.iter().zip(pd.decorations.iter()) {
-            if wire.badge.is_none() || out.contains_key(path) {
+            if wire.badge.is_none() {
                 continue;
             }
-            out.insert(path.clone(), sanitize_decoration(wire));
+            // Un hueco por plugin y el PRIMERO de cada hueco gana (ADR
+            // 0105): un icono no tapa una insignia ni al revés, porque son
+            // dos sitios de la fila; dos iconos sí se tapan, y manda el
+            // orden del catálogo.
+            let d = out.entry(path.clone()).or_default();
+            match pd.slot {
+                DecorationSlot::Icon if d.icon.is_none() => {
+                    let s = sanitize_icon(wire);
+                    d.icon = s.icon;
+                    d.icon_hostile = s.icon_hostile;
+                }
+                DecorationSlot::Badge if d.badge.is_none() => {
+                    let s = sanitize_decoration(wire);
+                    d.badge = s.badge;
+                    d.badge_hostile = s.badge_hostile;
+                    d.role = s.role;
+                }
+                DecorationSlot::Icon | DecorationSlot::Badge => {}
+            }
         }
     }
+    // Una entrada que se enmascaró entera a nada no es una decoración.
+    out.retain(|_, d| !d.is_empty());
     out
 }
 
@@ -157,6 +212,7 @@ mod tests {
         let plugins = vec![
             PluginDecorations {
                 plugin_id: "p1".into(),
+                slot: DecorationSlot::Badge,
                 decorations: vec![
                     DecorationWire {
                         badge: None,
@@ -170,6 +226,7 @@ mod tests {
             },
             PluginDecorations {
                 plugin_id: "p2".into(),
+                slot: DecorationSlot::Badge,
                 decorations: vec![
                     DecorationWire {
                         badge: Some("X".into()),
@@ -200,6 +257,7 @@ mod tests {
         let paths = vec![vp("mem:///a.rs")];
         let plugins = vec![PluginDecorations {
             plugin_id: "p1".into(),
+            slot: DecorationSlot::Badge,
             decorations: vec![DecorationWire {
                 badge: None,
                 role: None,
@@ -207,5 +265,75 @@ mod tests {
         }];
         let merged = merge_decorations(&paths, &plugins);
         assert!(merged.is_empty());
+    }
+
+    /// ADR 0105: un icono y una insignia son dos HUECOS de la fila y no se
+    /// tapan; dos iconos sí, y gana el primero. Un icono con rol lo pierde:
+    /// se pinta con el color de la entrada.
+    #[test]
+    fn merge_decorations_icono_e_insignia_coexisten_y_dos_iconos_no() {
+        let paths = vec![vp("mem:///a.rs")];
+        let deco = |b: &str, r: Option<&str>| DecorationWire {
+            badge: Some(b.into()),
+            role: r.map(str::to_owned),
+        };
+        let plugins = vec![
+            PluginDecorations {
+                plugin_id: "icons".into(),
+                slot: DecorationSlot::Icon,
+                decorations: vec![deco("🦀", Some("warning"))],
+            },
+            PluginDecorations {
+                plugin_id: "git".into(),
+                slot: DecorationSlot::Badge,
+                decorations: vec![deco("M", Some("warning"))],
+            },
+            PluginDecorations {
+                plugin_id: "otros-iconos".into(),
+                slot: DecorationSlot::Icon,
+                decorations: vec![deco("X", None)],
+            },
+        ];
+        let merged = merge_decorations(&paths, &plugins);
+        let d = &merged[&paths[0]];
+        assert_eq!(d.icon.as_deref(), Some("🦀"), "el primer icono");
+        assert_eq!(d.badge.as_deref(), Some("M"), "y la insignia, aparte");
+        assert_eq!(d.role, norte_theme::Role::from_kebab("warning"));
+        assert!(!d.icon_hostile);
+    }
+
+    /// Una insignia que se queda en NADA —`Some("")`, que el saneado deja en
+    /// `None`— no es una insignia: no bloquea a la del siguiente plugin.
+    /// Antes el primer plugin con `Some(..)` se quedaba la ruta aunque su
+    /// texto quedara vacío, y el mapa guardaba una decoración sin nada que
+    /// pintar.
+    #[test]
+    fn merge_decorations_una_insignia_enmascarada_a_nada_no_bloquea_la_siguiente() {
+        let paths = vec![vp("mem:///a.rs")];
+        let deco = |b: &str| DecorationWire {
+            badge: Some(b.into()),
+            role: None,
+        };
+        let plugins = vec![
+            PluginDecorations {
+                plugin_id: "p1".into(),
+                slot: DecorationSlot::Badge,
+                decorations: vec![deco("")],
+            },
+            PluginDecorations {
+                plugin_id: "p2".into(),
+                slot: DecorationSlot::Badge,
+                decorations: vec![deco("M")],
+            },
+        ];
+        let merged = merge_decorations(&paths, &plugins);
+        assert_eq!(merged[&paths[0]].badge.as_deref(), Some("M"));
+        // Y con solo la vacía, la ruta no entra en el mapa.
+        let sola = vec![PluginDecorations {
+            plugin_id: "p1".into(),
+            slot: DecorationSlot::Badge,
+            decorations: vec![deco("")],
+        }];
+        assert!(merge_decorations(&paths, &sola).is_empty());
     }
 }

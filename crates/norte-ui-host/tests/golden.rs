@@ -102,18 +102,23 @@ fn fila(key: u64, nombre: &str, hostile: bool) -> RowView {
         badge: String::new(),
         badge_hostile: false,
         badge_role: String::new(),
+        icon: String::new(),
+        icon_hostile: false,
     }
 }
 
-/// La misma fila, con la insignia que le puso un plugin.
+/// La misma fila, con la insignia que le puso un plugin, y el icono que le
+/// puso otro (puente 62): los dos huecos en una fila.
 ///
-/// La insignia y su rol cruzan JSON aquí y en ningún otro sitio: son lo que
-/// un TERCERO pinta pegado a un nombre de fichero.
+/// La insignia, su rol y el icono cruzan JSON aquí y en ningún otro sitio:
+/// son lo que un TERCERO pinta pegado a un nombre de fichero.
 fn fila_adornada(key: u64, nombre: &str) -> RowView {
     RowView {
         badge: "M".to_owned(),
         badge_hostile: false,
         badge_role: "warning".to_owned(),
+        icon: "🦀".to_owned(),
+        icon_hostile: false,
         ..fila(key, nombre, false)
     }
 }
@@ -893,6 +898,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
                 fila(2, "caf\u{FFFD}.txt", true),
                 fila_adornada(3, "cambiado.rs"),
             ],
+            icon_column: true,
             cursor: Some(RowKey(1)),
             // DOS, como dice `marked_note`: el número y la frase son dos
             // vistas de un mismo hecho, y una referencia que las contradice
@@ -1887,6 +1893,7 @@ fn actualizaciones() {
                             generation: 5,
                             first_visible: 40,
                             rows: vec![fila(41, "otro.txt", false)],
+                            icon_column: false,
                             total_rows: Some(120),
                         },
                         ViewChange::SlotState {
@@ -2113,6 +2120,9 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
                 generation: 5,
                 first_visible: 40,
                 rows: vec![fila(41, "otro.txt", false)],
+                // Con la columna ABIERTA, que es como aterrizan los iconos:
+                // un parche de filas es lo que la abre en el renderer.
+                icon_column: true,
                 total_rows: Some(120),
             },
         ),
@@ -2325,7 +2335,8 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    const FORMA: u64 = 14_956_904_933_279_647_300;
+    // Puente 62: `RowView.icon` e `icon_hostile` (ADR 0105).
+    const FORMA: u64 = 17_848_094_378_618_174_567;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

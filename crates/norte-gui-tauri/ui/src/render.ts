@@ -898,11 +898,15 @@ export class Screen {
     }
 
     const wanted = new Set<number>();
+    // La columna de iconos la abre el HOST para el listado entero (puente
+    // 62): con o sin icono, todas las filas llevan la celda. Deducirlo aquí
+    // de las filas visibles la cerraría al desplazarse a una página sin
+    // iconos, y correría todos los nombres.
     for (const [i, row] of slot.rows.entries()) {
       const index = slot.first_visible + i;
       wanted.add(row.key);
       const el = dom.rows.get(row.key) ?? newRow(dom, slot.slot_id, row.key);
-      updateRow(el, row, index, cell.h);
+      updateRow(el, row, index, cell.h, slot.icon_column);
     }
     for (const [key, el] of dom.rows) {
       if (!wanted.has(key)) {

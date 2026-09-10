@@ -45,6 +45,7 @@ describe("Session", () => {
             generation: 4,
             first_visible: 0,
             rows: [],
+            icon_column: false,
             total_rows: 5000,
           },
         ],

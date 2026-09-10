@@ -16,15 +16,17 @@ mod guest {
         generate_all,
     });
 
-    use exports::norte::plugin::decorator::{Decoration, Guest as DecoratorGuest};
+    use exports::norte::plugin::decorator::{
+        Decoration, Entry, EntryKind, Guest as DecoratorGuest,
+    };
     use norte::host::host_config;
 
-    use crate::icons::{badge_for, Style};
+    use crate::icons::{Class, Style, icon_for};
 
     struct FileIcons;
 
     impl DecoratorGuest for FileIcons {
-        fn decorate(entries: Vec<Vec<u8>>) -> Vec<Decoration> {
+        fn decorate(entries: Vec<Entry>) -> Vec<Decoration> {
             // The host resolves `[config]` defaults before it calls us, so an
             // absent key would mean the manifest changed under us; `emoji` is
             // then the least surprising answer, not a second default.
@@ -34,9 +36,16 @@ mod guest {
             };
             entries
                 .iter()
-                .map(|name| Decoration {
-                    badge: badge_for(name, style).map(str::to_owned),
-                    role: None,
+                .map(|e| {
+                    let class = match e.kind {
+                        EntryKind::Dir => Class::Dir,
+                        EntryKind::Symlink => Class::Symlink,
+                        EntryKind::File | EntryKind::Other => Class::File,
+                    };
+                    Decoration {
+                        badge: icon_for(&e.name, class, style).map(str::to_owned),
+                        role: None,
+                    }
                 })
                 .collect()
         }

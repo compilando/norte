@@ -767,6 +767,15 @@ impl PaneState {
         self.decorations.get(path)
     }
 
+    /// Si ALGUNA entrada del listado tiene icono (ADR 0105): entonces la
+    /// columna de iconos se pinta en TODAS las filas, con hueco en las que
+    /// no lo tienen, para que los nombres sigan alineados. Sin ningún icono
+    /// no hay columna, y el listado se ve como antes de que existiera.
+    #[must_use]
+    pub fn any_icon(&self) -> bool {
+        self.decorations.values().any(|d| d.icon.is_some())
+    }
+
     /// Instala el LOTE de decoraciones ya resuelto y saneado (G3b): el
     /// caller lo llama tras un `Backend::plugin_decorate` que responde para
     /// EL MISMO listado que sigue activo (ver [`crate::merge_decorations`]

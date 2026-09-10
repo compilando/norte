@@ -240,7 +240,14 @@ use serde::{Deserialize, Serialize};
 ///   verbo del teclado, preguntas incluidas— y `extension_help`, la página
 ///   de ayuda de una extensión. Ningún DTO cambia: lo que la ventana pinta
 ///   con botones ya viajaba.
-pub const BRIDGE_VERSION: u32 = 61;
+/// - **62**: la columna de iconos (ADR 0105). `RowView` gana `icon` e
+///   `icon_hostile`: lo que un decorador de hueco `icon` puso, a la
+///   IZQUIERDA del nombre; la insignia sigue a la derecha, y los dos
+///   coexisten. `BrowserSlotView` y el parche `rows` ganan `icon_column`:
+///   si la columna está abierta lo decide el host desde el listado entero,
+///   no el renderer desde las filas que ve, o desplazarse a una página sin
+///   iconos la cerraría y correría todos los nombres.
+pub const BRIDGE_VERSION: u32 = 62;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///
