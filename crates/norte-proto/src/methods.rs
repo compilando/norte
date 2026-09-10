@@ -1140,7 +1140,24 @@ use crate::{
 /// La pérdida, para un **cliente 0.70 contra un daemon 0.71**: ninguna — no
 /// sabe pedirlo y no lo pide. Un cliente 0.71 contra un daemon 0.70 no
 /// negocia.
-pub const PROTOCOL_VERSION: &str = "0.71.0";
+///
+/// # 0.72.0 — la columna de iconos (ADR 0105)
+///
+/// Dos campos opcionales: [`PluginDecorateParams::kinds`], la clase de cada
+/// ruta que se decora (un decorador de iconos necesita saber qué es carpeta),
+/// y [`PluginDecorations::slot`], en qué hueco de la fila se pinta lo que un
+/// decorador devuelve —`icon` a la izquierda del nombre, `badge` a la
+/// derecha—, que viene del manifiesto. Con el mismo bump, `norte:plugin`
+/// sube a 0.10.0: `decorate` recibe nombre y clase.
+///
+/// Ventana N=0.72.x / N-1=0.71.x. Aditivo: ningún mensaje que existía
+/// cambia de forma, y un decorador de insignias viaja byte a byte igual. La
+/// pérdida, para un **cliente 0.71 contra un daemon 0.72**: no manda
+/// `kinds`, así que un decorador de iconos ve todo como `other` y las
+/// carpetas van sin icono; y no lee `slot`, así que pinta el icono a la
+/// derecha, como una insignia, y el primer plugin que conteste tapa al otro.
+/// Un cliente 0.72 contra un daemon 0.71 no negocia.
+pub const PROTOCOL_VERSION: &str = "0.72.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -7848,6 +7865,67 @@ pub struct DecorationWire {
 pub struct PluginDecorateParams {
     /// Rutas a decorar, en el orden en que se listan.
     pub paths: Vec<VPath>,
+    /// La clase de cada ruta, POSICIONAL con `paths` (0.72.0, ADR 0105).
+    /// Un decorador de iconos la necesita: un nombre no dice si es carpeta.
+    /// Vacío (un cliente 0.71) o corto = `other` para lo que falte, nunca
+    /// un error: la clase es cosmética para el icono, no condición del lote.
+    /// MÁS largo que `paths` sí es `INVALID_PARAMS`: ningún cliente correcto
+    /// lo produce, y truncarlo en silencio escondería el error para siempre.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<EntryKind>,
+}
+
+/// En qué HUECO de la fila se pinta lo que un decorador devuelve (0.72.0,
+/// ADR 0105). Lo declara el manifiesto, lo transporta
+/// [`PluginDecorations::slot`], y lo aplica el frontend: los dos huecos
+/// coexisten en una fila, cada uno lo llena el PRIMER plugin de su hueco.
+///
+/// Un hueco que este build no conoce cae a `badge`, que es lo que un peer
+/// más nuevo puede esperar de uno más viejo — y sin esto un `slot` nuevo
+/// tiraría la respuesta ENTERA de `plugin.decorate`, con todas las
+/// decoraciones de la página:
+///
+/// ```
+/// use norte_proto::methods::DecorationSlot;
+/// let s: DecorationSlot = serde_json::from_str("\"hueco_del_futuro\"").unwrap();
+/// assert_eq!(s, DecorationSlot::Badge);
+/// let s: DecorationSlot = serde_json::from_str("\"icon\"").unwrap();
+/// assert_eq!(s, DecorationSlot::Icon);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DecorationSlot {
+    /// A la izquierda del nombre, en una columna de ancho fijo.
+    Icon,
+    /// A la derecha del nombre: `M`, `++`. El hueco de siempre, y el que un
+    /// cliente 0.71 asume al no ver el campo. `other` (que serde exige en la
+    /// ÚLTIMA variante) para que un hueco que este build no conoce caiga
+    /// aquí y no rompa el lote.
+    #[default]
+    #[serde(other)]
+    Badge,
+}
+
+impl DecorationSlot {
+    /// Para `skip_serializing_if`: el hueco de siempre no viaja, y así el
+    /// wire de un decorador de insignias es byte a byte el de 0.71.
+    ///
+    /// ```
+    /// use norte_proto::methods::{DecorationSlot, PluginDecorations};
+    /// let mut d = PluginDecorations {
+    ///     plugin_id: "org.norte.git".into(),
+    ///     slot: DecorationSlot::Badge,
+    ///     decorations: Vec::new(),
+    /// };
+    /// assert!(!serde_json::to_string(&d).unwrap().contains("slot"));
+    /// d.slot = DecorationSlot::Icon;
+    /// assert!(serde_json::to_string(&d).unwrap().contains("\"slot\":\"icon\""));
+    /// ```
+    #[must_use]
+    pub fn is_badge(&self) -> bool {
+        *self == Self::Badge
+    }
 }
 
 /// Las decoraciones de UN plugin `decorator` (elemento de
@@ -7863,6 +7941,9 @@ pub struct PluginDecorateParams {
 pub struct PluginDecorations {
     /// Id del plugin `decorator` que produjo estas decoraciones.
     pub plugin_id: String,
+    /// El hueco de la fila que llenan (0.72.0, ADR 0105). Ausente = `badge`.
+    #[serde(default, skip_serializing_if = "DecorationSlot::is_badge")]
+    pub slot: DecorationSlot,
     /// Decoraciones, UNA por elemento de `paths` en el mismo orden (una
     /// entrada sin decoración de este plugin lleva
     /// `DecorationWire{badge:None,role:None}`, nunca se omite — el índice es

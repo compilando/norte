@@ -57,6 +57,7 @@ struct ProtocolSchema {
     daemon_going_away: DaemonGoingAway,
     daemon_shutdown_params: DaemonShutdownParams,
     daemon_shutdown_result: DaemonShutdownResult,
+    decoration_slot: DecorationSlot,
     decoration_wire: DecorationWire,
     delete_mode: DeleteMode,
     descend_side: DescendSide,

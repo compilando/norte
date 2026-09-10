@@ -2226,11 +2226,19 @@ impl RemoteBackend {
     /// Cualquier OTRO error se propaga. `paths` vacío no llama al wire (nada
     /// que decorar).
     ///
+    /// `kinds` es la clase de cada ruta, POSICIONAL con `paths` (0.72.0, ADR
+    /// 0105): construir las dos listas de iteradores distintos —una filtrada,
+    /// la otra no— da iconos equivocados sin ningún error. Vacío es legal y
+    /// significa «no lo sé»: todo se trata como `other`, y las carpetas van
+    /// sin icono; más corto que `paths` degrada igual lo que falte, y el
+    /// daemon lo anota; más largo es `INVALID_PARAMS`.
+    ///
     /// # Errors
     /// Lo que responda el daemon.
     pub async fn plugin_decorate(
         &self,
         paths: &[VPath],
+        kinds: &[norte_proto::EntryKind],
     ) -> Result<Vec<methods::PluginDecorations>, Error> {
         if paths.is_empty() {
             return Ok(Vec::new());
@@ -2238,6 +2246,7 @@ impl RemoteBackend {
         let client = self.client().await?;
         let params = methods::PluginDecorateParams {
             paths: paths.to_vec(),
+            kinds: kinds.to_vec(),
         };
         let call =
             client.call::<_, methods::PluginDecorateResult>(methods::PLUGIN_DECORATE, &params);

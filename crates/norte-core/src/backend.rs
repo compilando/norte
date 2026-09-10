@@ -2733,6 +2733,7 @@ impl Backend {
     pub async fn plugin_decorate(
         &self,
         paths: &[VPath],
+        kinds: &[norte_proto::EntryKind],
     ) -> Result<Vec<norte_proto::methods::PluginDecorations>, Error> {
         if paths.is_empty() {
             return Ok(Vec::new());
@@ -2740,7 +2741,7 @@ impl Backend {
         match self {
             Self::Embedded(_) => {
                 let dir = crate::connect::config_dir();
-                let entries = crate::plugins::paths_to_basenames(paths);
+                let entries = crate::plugins::paths_to_entries(paths, kinds);
                 let expected_len = paths.len();
                 let plugins = tokio::task::spawn_blocking(
                     move || -> Result<Vec<norte_proto::methods::PluginDecorations>, Error> {
@@ -2749,7 +2750,7 @@ impl Backend {
                         let runtime = norte_plugin_host::PluginRuntime::new()
                             .map_err(|_| Error::Internal { panic: false })?;
                         let mut out = Vec::new();
-                        for (id, _name, wasm, caps, settings) in reg.resolve_decorators() {
+                        for ((id, _name, wasm, caps, settings), slot) in reg.resolve_decorators() {
                             let Ok(mut inst) = runtime.instantiate_decorator(&wasm, caps) else {
                                 tracing::warn!(
                                     plugin = %id,
@@ -2776,6 +2777,7 @@ impl Backend {
                             };
                             out.push(norte_proto::methods::PluginDecorations {
                                 plugin_id: id,
+                                slot: crate::plugins::slot_to_wire(slot),
                                 decorations,
                             });
                         }
@@ -2787,7 +2789,7 @@ impl Backend {
                 Ok(plugins)
             }
             #[cfg(unix)]
-            Self::Remote(r) => r.plugin_decorate(paths).await,
+            Self::Remote(r) => r.plugin_decorate(paths, kinds).await,
         }
     }
 

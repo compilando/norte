@@ -185,7 +185,7 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
 
     // SIN aprobar todavía: fail-closed — ni decoraciones ni columna.
     let none_yet = backend
-        .plugin_decorate(&paths)
+        .plugin_decorate(&paths, &[])
         .await
         .expect("plugin.decorate no es error sin aprobar");
     assert!(
@@ -221,7 +221,7 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
 
     // --- plugin.decorate ---
     let plugins = backend
-        .plugin_decorate(&paths)
+        .plugin_decorate(&paths, &[])
         .await
         .expect("plugin.decorate no es error");
     assert_eq!(
@@ -273,7 +273,7 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
     // Un lote vacío no debe llamar al wire (ver rustdoc de `Backend::
     // plugin_decorate`/`plugin_column_values`): el resultado es vacío igual.
     let empty = backend
-        .plugin_decorate(&[])
+        .plugin_decorate(&[], &[])
         .await
         .expect("lote vacío no es error");
     assert!(empty.is_empty());

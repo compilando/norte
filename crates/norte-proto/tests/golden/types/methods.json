@@ -839,6 +839,16 @@
       "file:///repo/informe%FF%FE.dat"
     ]
   },
+  "plugin_decorate_params_with_kinds": {
+    "kinds": [
+      "file",
+      "dir"
+    ],
+    "paths": [
+      "file:///repo/a.rs",
+      "file:///repo/src"
+    ]
+  },
   "plugin_decorate_result": {
     "plugins": [
       {
@@ -855,6 +865,19 @@
   },
   "plugin_decorate_result_empty": {
     "plugins": []
+  },
+  "plugin_decorate_result_icon": {
+    "plugins": [
+      {
+        "decorations": [
+          {
+            "badge": "📁"
+          }
+        ],
+        "plugin_id": "org.norte.file-icons",
+        "slot": "icon"
+      }
+    ]
   },
   "plugin_get_config_params": {
     "id": "org.norte.demo"

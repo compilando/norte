@@ -118,7 +118,16 @@
 // WIT no tienen campos opcionales, así que es RUPTURA para todo previewer y
 // command compilado contra 0.8.0 (syntect, la plantilla, markdown, los demos):
 // se recompilan aquí, y los de fuera se listan como desfasados (ADR 0094).
-package norte:plugin@0.9.0;
+//
+// 0.9.0 → 0.10.0 (2026-09-10, ADR 0105): `decorator::decorate` recibe
+// `list<entry>` —nombre Y clase— en vez de `list<list<u8>>`. Lo pide la
+// columna de iconos: un nombre no dice si es carpeta. Cambia la firma de un
+// export de la interfaz `decorator`, así que es RUPTURA para todo decorador
+// compilado contra 0.9.0 (file-icons, el demo) y, por el nombre versionado,
+// para todo previewer/command/provider del paquete: los siete de este árbol
+// se recompilan con `just plugins force` y se reaprueban. Los de fuera se
+// listan como desfasados con las dos versiones (ADR 0094).
+package norte:plugin@0.10.0;
 
 /// Genera una previsualización de UN recurso que el HOST ya leyó y le pasa
 /// (regla 9: el guest jamás toca el FS; recibe los bytes). Devuelve texto
@@ -185,21 +194,43 @@ interface command {
 /// (`norte-decorator`), NO plegado en `norte-plugin` — mismo patrón que
 /// `provider`.
 interface decorator {
+    /// Qué clase de entrada es, tal como el host la listó (0.10.0, ADR
+    /// 0105). Un decorador de ICONOS lo necesita: un nombre no dice si es
+    /// una carpeta, y `/bcds` sin icono al lado de `main.rs` con el suyo era
+    /// la queja. `other` = dispositivo, socket, o una clase de protocolo
+    /// futuro: el guest la trata como fichero.
+    enum entry-kind {
+        file,
+        dir,
+        symlink,
+        other,
+    }
+
+    /// Una entrada de la página: su nombre crudo (regla 1: bytes, jamás
+    /// `string`) y su clase.
+    record entry {
+        name: list<u8>,
+        kind: entry-kind,
+    }
+
     /// `badge` = texto corto (el HOST lo acota a 8 chars TRAS enmascarar,
     /// ADR 0037 tabla de decisión 1; este WIT no impone esa longitud) o
     /// `none` = sin badge para esa entrada. `role` = nombre semántico
-    /// (validado host-side, igual que `span::role`).
+    /// (validado host-side, igual que `span::role`). En qué HUECO de la
+    /// fila se pinta —icono a la izquierda del nombre, o insignia a la
+    /// derecha— lo dice el manifiesto (`[[contributions.decorator]] slot`),
+    /// no el guest: es una decisión de pantalla, no de dato.
     record decoration {
         badge: option<string>,
         role: option<string>,
     }
 
-    /// `entries` = los nombres/paths crudos (regla 1: bytes, jamás `string`)
-    /// de la página VISIBLE actual, en el orden en que el host la lista. El
-    /// resultado es POSICIONAL 1:1 con `entries` — el host jamás reordena ni
-    /// dispersa (ADR 0037 tabla de decisión 1): `result[i]` decora
-    /// `entries[i]`. Llamado en lote por página, nunca por entrada.
-    decorate: func(entries: list<list<u8>>) -> list<decoration>;
+    /// `entries` = las entradas de la página VISIBLE actual, en el orden en
+    /// que el host la lista. El resultado es POSICIONAL 1:1 con `entries` —
+    /// el host jamás reordena ni dispersa (ADR 0037 tabla de decisión 1):
+    /// `result[i]` decora `entries[i]`. Llamado en lote por página, nunca
+    /// por entrada.
+    decorate: func(entries: list<entry>) -> list<decoration>;
 }
 
 /// Aporta valores computados para UNA columna del listado (ADR 0037 decisión

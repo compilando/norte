@@ -1451,6 +1451,63 @@ fn decorator_presente_mueve_el_approval_digest() {
     );
 }
 
+/// ADR 0105: `slot = "badge"` escrito digesta IGUAL que sin `slot` (ningún
+/// decorador anterior cambia de ancla); `slot = "icon"` mueve el digest,
+/// porque cambia dónde se pinta el plugin; y el hueco va CON su posición,
+/// porque el core lee el de la primera contribución y reordenar dos bloques
+/// no puede mover un plugin aprobado de un hueco al otro en silencio.
+#[test]
+fn el_hueco_de_un_decorador_digesta_solo_cuando_es_icono_y_con_su_posicion() {
+    let con = |contribs: &str| {
+        Manifest::from_toml(&format!(
+            r#"
+            [plugin]
+            id = "org.norte.x"
+            name = "X"
+            publisher = "norte"
+            version = "0.1.0"
+            category = "decorator"
+            {contribs}
+        "#
+        ))
+        .unwrap()
+        .approval_digest()
+    };
+    let sin_slot = con("[[contributions.decorator]]");
+    let badge = con("[[contributions.decorator]]\nslot = \"badge\"");
+    let icon = con("[[contributions.decorator]]\nslot = \"icon\"");
+    assert_eq!(sin_slot, badge, "el hueco de siempre no mueve el ancla");
+    assert_ne!(sin_slot, icon, "pasar a la columna de iconos sí");
+    let icono_primero = con(
+        "[[contributions.decorator]]\nslot = \"icon\"\n[[contributions.decorator]]\nslot = \"badge\"",
+    );
+    let icono_segundo = con(
+        "[[contributions.decorator]]\nslot = \"badge\"\n[[contributions.decorator]]\nslot = \"icon\"",
+    );
+    assert_ne!(
+        icono_primero, icono_segundo,
+        "reordenar los bloques cambia qué hueco lee el core, y el digest lo nota"
+    );
+    // Y un hueco que este build no conoce RECHAZA el manifiesto: en el
+    // manifiesto se es estricto con lo que escribió un humano; en el wire,
+    // tolerante con lo que manda un peer (ahí cae a `badge`).
+    assert!(
+        Manifest::from_toml(
+            r#"
+            [plugin]
+            id = "org.norte.x"
+            name = "X"
+            publisher = "norte"
+            version = "0.1.0"
+            category = "decorator"
+            [[contributions.decorator]]
+            slot = "esquina"
+        "#
+        )
+        .is_err()
+    );
+}
+
 #[test]
 fn category_decorator_mueve_el_approval_digest_frente_a_otra_categoria() {
     // Mismo criterio que `approval_digest_incluye_category_y_contributions_
@@ -1594,9 +1651,9 @@ fn un_provider_no_puede_reclamar_un_scheme_del_core() {
 
 /// Un guest compilado contra otra versión del WIT no se carga: se lista en
 /// `errors` con las DOS versiones (ADR 0094). Con el binario intacto entra
-/// en `plugins`. Se fabrica el viejo reescribiendo `@0.9.0` por `@0.7.0` en
-/// los bytes del guest real (una versión que el host no sirve para ningún
-/// paquete).
+/// en `plugins`. Se fabrica el viejo reescribiendo `@0.10.0` por `@0.70.0`
+/// en los bytes del guest real (una versión que el host no sirve para ningún
+/// paquete; misma longitud, así que las secciones siguen siendo válidas).
 #[test]
 fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
@@ -1612,7 +1669,7 @@ fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
     assert!(cat.errors.is_empty(), "{:?}", cat.errors);
     assert_eq!(cat.plugins.len(), 1, "el guest actual carga");
 
-    let viejo = support::rewrite_bytes(&bytes, b"@0.9.0", b"@0.7.0");
+    let viejo = support::rewrite_bytes(&bytes, b"@0.10.0", b"@0.70.0");
     std::fs::write(&wasm_path, viejo).unwrap();
     let cat = Catalog::load_dir(root.path());
     assert!(cat.plugins.is_empty(), "no se carga");
@@ -1624,8 +1681,8 @@ fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
             served,
         } => {
             assert_eq!(package, "norte:plugin");
-            assert_eq!(built_against, "0.7.0");
-            assert_eq!(served, "0.9.0");
+            assert_eq!(built_against, "0.70.0");
+            assert_eq!(served, "0.10.0");
         }
         otro => panic!("se esperaba WitMismatch, salió {otro:?}"),
     }
