@@ -330,6 +330,51 @@ pub struct UiSection {
     /// a graphical differ (Meld, Kompare) hands control straight back.
     #[serde(default)]
     pub diff_detached: Option<bool>,
+    /// Whether the row of function keys (F1–F10 with what each one does on
+    /// the current screen) stays pinned at the bottom. Absent = `true`.
+    ///
+    /// Derived from the effective keymap, never drawn by hand: rebinding F5
+    /// changes the label, and a screen that binds nothing to F7 shows an
+    /// empty cell there. Clicking a cell runs the command.
+    #[serde(default)]
+    pub key_bar: Option<bool>,
+    /// How the panel bar names its buttons: `"names"` (default) paints the
+    /// localized panel name with its access letter underlined; `"letters"`
+    /// paints only the letter, the row's original form. Below 60 usable
+    /// cells `names` falls back to letters on its own.
+    ///
+    /// [`crate::load::load`] rejects other values (same pattern as
+    /// `quick_search`) so its diagnostic can include the source path.
+    #[serde(default)]
+    pub panel_bar_style: Option<String>,
+    /// Whether every listing carries a footer with its counts (directories,
+    /// files, bytes), what is marked, and the free space of the volume the
+    /// directory lives on. Absent = `true`.
+    #[serde(default)]
+    pub pane_footer: Option<bool>,
+    /// Default format of the `mtime` column when `[ui.columns]` does not fix
+    /// one: `"smart"` (default — the time today, day and time this year,
+    /// the date before that), `"relative"` (`11h ago`) or `"iso"`
+    /// (`2026-09-10 14:02`). All three print LOCAL time.
+    ///
+    /// [`crate::load::load`] rejects other values (same pattern as
+    /// `quick_search`) so its diagnostic can include the source path.
+    #[serde(default)]
+    pub date_format: Option<String>,
+    /// Seconds a transient notice stays on the status line before it moves
+    /// to the notice ring and only a badge remains. Absent = `8`; `0` keeps
+    /// the notice until the next key, the behaviour before this key
+    /// existed. Persistent banners (a degraded connection, a journal that
+    /// cannot open) are state, not notices, and never expire.
+    ///
+    /// [`crate::load::load`] rejects values above 600.
+    #[serde(default)]
+    pub notice_seconds: Option<u32>,
+    /// Whether a modal's key line is painted as buttons (`[ Enter  Confirm ]
+    /// [ Esc  Cancel ]`, each clickable) instead of the plain
+    /// `[enter] confirm · [esc] cancel` line. Absent = `true`.
+    #[serde(default)]
+    pub dialog_buttons: Option<bool>,
     /// `[ui.columns]` (#108 block 4): column selection and sort order.
     #[serde(default)]
     pub columns: Option<UiColumnsSection>,

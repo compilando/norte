@@ -521,6 +521,13 @@ pub struct App {
     /// se elige — pero por defecto va puesta, porque el que no sabe que el
     /// panel existe tampoco sabe que existe la opción de enseñarlo.
     pub panel_bar: bool,
+    /// El cromo configurable (spec 2026-09-10): barra de teclas, estilo de
+    /// la barra de paneles, pie del panel, formato de fecha, caducidad de
+    /// los avisos y botones de diálogo. Cada frame lo lee; `reload_config`
+    /// lo vuelve a copiar. Un `App` de test arranca con la barra de teclas
+    /// y el pie APAGADOS por lo mismo que la barra de paneles: una fila que
+    /// aparece sola cambiaría los índices de ochenta tests que no van de esto.
+    pub chrome: norte_config::UiChrome,
     /// La fila `..` está encendida (`[ui] parent_entry`).
     ///
     /// Se guarda aquí además de en cada pane porque un pane NUEVO —una
@@ -970,6 +977,11 @@ impl App {
             profile_picker: None,
             menu_bar: true,
             panel_bar: true,
+            chrome: norte_config::UiChrome {
+                key_bar: Some(false),
+                pane_footer: Some(false),
+                ..Default::default()
+            },
             pending_panel_command: None,
             // Apagada hasta que el arranque diga: un `App` de test no lee
             // configuración, y una fila que aparece sola cambiaría los
