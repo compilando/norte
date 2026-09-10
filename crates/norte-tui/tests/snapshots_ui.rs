@@ -402,6 +402,41 @@ fn snapshot_decoracion_de_plugin_badge_hostil_enmascarado() {
     insta::assert_snapshot!(render(&app));
 }
 
+/// ADR 0105: la columna de ICONOS, a la izquierda del nombre. `src` lleva
+/// icono; `docs` lleva icono Y una insignia —los dos huecos en una fila—;
+/// `notas.txt` no lleva icono, y aun así lleva el HUECO, para que su nombre
+/// siga alineado con los demás. La cabecera «Nombre» se corre lo mismo.
+#[test]
+fn snapshot_columna_de_iconos_a_la_izquierda_del_nombre() {
+    let mut app = app_base();
+    let pane = app.focused_mut();
+    let by_name = |entries: &[Entry], name: &[u8]| -> VPath {
+        entries
+            .iter()
+            .find(|e| e.path.file_name().is_some_and(|n| n.as_bytes() == name))
+            .expect("entrada del fixture")
+            .path
+            .clone()
+    };
+    let entries = pane.entries().to_vec();
+    let mut decorations = std::collections::HashMap::new();
+    decorations.insert(
+        by_name(&entries, b"src"),
+        norte_frontend::sanitize_icon(&norte_proto::methods::DecorationWire {
+            badge: Some("📁".to_string()),
+            role: None,
+        }),
+    );
+    let mut docs = norte_frontend::sanitize_decoration(&norte_proto::methods::DecorationWire {
+        badge: Some("M".to_string()),
+        role: Some("warning".to_string()),
+    });
+    docs.icon = Some("📁".to_string());
+    decorations.insert(by_name(&entries, b"docs"), docs);
+    pane.set_decorations(decorations);
+    insta::assert_snapshot!(render(&app));
+}
+
 /// Quick search en modo filtro (spec 2026-07-18): el pane izquierdo lista
 /// SOLO los matches, con la línea de input `/{query} n/m` al pie y el
 /// cursor sobre la selección filtrada; el derecho sigue intacto.

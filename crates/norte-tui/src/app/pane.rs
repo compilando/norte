@@ -451,6 +451,14 @@ impl Pane {
         self.state.decoration_for(path)
     }
 
+    /// Si alguna entrada tiene icono (ADR 0105): entonces el render abre la
+    /// columna de iconos en todas las filas. Delegado puro a
+    /// [`norte_frontend::PaneState::any_icon`].
+    #[must_use]
+    pub fn any_icon(&self) -> bool {
+        self.state.any_icon()
+    }
+
     /// ¿Está marcada esta entrada? (#103) — delegado puro a
     /// [`norte_frontend::PaneState::is_marked`]. El render pinta un canalón
     /// textual (`*`) al inicio de la fila.

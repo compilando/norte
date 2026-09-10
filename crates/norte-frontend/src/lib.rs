@@ -87,7 +87,9 @@ pub mod viewport;
 pub mod watch;
 pub mod whichkey;
 
-pub use decoration::{BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration};
+pub use decoration::{
+    BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration, sanitize_icon,
+};
 pub use display::{
     cells, display_name, display_name_with, display_os_name, ellipsis_at_bytes, middle_ellipsis,
     path_display, path_display_with, skip_cells,

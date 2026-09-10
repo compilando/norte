@@ -362,6 +362,18 @@ body {
   opacity: 0.6;
 }
 
+/* La columna de iconos (puente 62): ancho fijo de dos celdas y un espacio,
+   ANTES del nombre, en todas las filas del hueco en cuanto una tiene icono.
+   Aislada porque es texto de un plugin pegado a un nombre de fichero. El
+   color es el de la entrada: un icono dice qué es, no en qué estado está. */
+.cell-icon {
+  flex: 0 0 auto;
+  width: calc(var(--cell-w) * 3);
+  overflow: hidden;
+  white-space: nowrap;
+  unicode-bidi: isolate;
+}
+
 .empty,
 .loading,
 .error {

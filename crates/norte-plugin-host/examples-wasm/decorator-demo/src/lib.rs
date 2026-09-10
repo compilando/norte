@@ -27,18 +27,18 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use exports::norte::plugin::decorator::{Decoration, Guest as DecoratorGuest};
+use exports::norte::plugin::decorator::{Decoration, Entry, Guest as DecoratorGuest};
 use norte::host::host_log;
 
 struct DecoratorDemo;
 
 impl DecoratorGuest for DecoratorDemo {
-    fn decorate(entries: Vec<Vec<u8>>) -> Vec<Decoration> {
+    fn decorate(entries: Vec<Entry>) -> Vec<Decoration> {
         host_log::log(&format!("decorator-demo: {} entradas", entries.len()));
         entries
             .iter()
-            .map(|raw| {
-                let name = String::from_utf8_lossy(raw);
+            .map(|e| {
+                let name = String::from_utf8_lossy(&e.name);
                 if name.contains("mod") {
                     Decoration {
                         badge: Some("M".to_string()),

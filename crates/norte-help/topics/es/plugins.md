@@ -28,7 +28,7 @@ Lo que un manifiesto puede declarar, y por tanto lo que concede aprobarlo:
 | provider    | un backend, direccionado por su propio scheme de URL   |
 | previewer   | una forma de pintar un fichero en el visor             |
 | command     | un verbo en la paleta                                  |
-| decorator   | un badge en las filas de un listado                    |
+| decorator   | un icono a la izquierda del nombre, o un badge a la derecha, en cada fila |
 | columns     | un valor por entrada en el listado                     |
 
 # Sus páginas, y cómo leerlas

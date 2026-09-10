@@ -179,6 +179,10 @@ export function updateRow(
   row: RowView,
   index: number,
   rowH: number,
+  // La columna de iconos está abierta en este hueco (puente 62): ALGUNA
+  // fila tiene icono, así que todas llevan la celda, vacía o no, para que
+  // los nombres sigan alineados. Lo decide quien pinta el hueco, no la fila.
+  iconColumn = false,
 ): void {
   el.style.setProperty("top", `${index * rowH}px`);
   el.setAttribute("aria-rowindex", String(index + 1));
@@ -196,6 +200,19 @@ export function updateRow(
   // el nombre no cabe.
   const bloque = document.createElement("span");
   bloque.className = "name-block";
+  if (iconColumn) {
+    // El icono, ANTES del nombre y en su propio nodo de ancho fijo: es
+    // texto de un plugin, y la celda existe aunque esta fila no tenga
+    // icono, que es lo que mantiene la columna.
+    const icono = document.createElement("span");
+    icono.className = "cell-icon";
+    icono.dataset["hostile"] = String(row.icon_hostile);
+    icono.textContent = row.icon;
+    if (row.icon_hostile) {
+      icono.append(badge("△"));
+    }
+    bloque.append(icono);
+  }
   bloque.append(name);
   const nodes: Node[] = [bloque];
   if (row.hostile) {

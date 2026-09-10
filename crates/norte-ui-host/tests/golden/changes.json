@@ -747,6 +747,7 @@
     "change": "rows",
     "first_visible": 40,
     "generation": 5,
+    "icon_column": true,
     "rows": [
       {
         "badge": "",
@@ -760,6 +761,8 @@
         ],
         "display_name": "otro.txt",
         "hostile": false,
+        "icon": "",
+        "icon_hostile": false,
         "key": 41,
         "kind": "file",
         "marked": false,

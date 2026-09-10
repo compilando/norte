@@ -1312,10 +1312,13 @@ fn version_ventana_actual() {
     // y no se entera de que su policy está impidiendo que un plugin escriba.
     // 0.71.0 (ADR 0104): un cliente 0.70 no sabe pedir `plugin.uninstall` y
     // no lo pide; desinstala por la CLI como hasta ahora. Nada se pierde.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.71.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.70.0"), "N-1");
+    // 0.72.0 (ADR 0105): un cliente 0.71 no manda `kinds` ni lee `slot`: las
+    // carpetas van sin icono y el icono se pinta como una insignia. Feo, no
+    // roto.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.72.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.71.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.69.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.70.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -1647,8 +1650,8 @@ fn span_wire_and_decoration_wire_optionals_are_independent_and_omitted() {
 #[test]
 fn plugin_decorate_and_column_values_are_positional() {
     use norte_proto::methods::{
-        DecorationWire, PluginColumnValuesParams, PluginColumnValuesResult, PluginDecorateParams,
-        PluginDecorateResult, PluginDecorations,
+        DecorationSlot, DecorationWire, PluginColumnValuesParams, PluginColumnValuesResult,
+        PluginDecorateParams, PluginDecorateResult, PluginDecorations,
     };
     let paths = vec![
         vpath("file:///repo/a.rs"),
@@ -1656,6 +1659,7 @@ fn plugin_decorate_and_column_values_are_positional() {
     ];
     let dp = PluginDecorateParams {
         paths: paths.clone(),
+        kinds: Vec::new(),
     };
     let back: PluginDecorateParams =
         serde_json::from_str(&serde_json::to_string(&dp).unwrap()).unwrap();
@@ -1664,6 +1668,7 @@ fn plugin_decorate_and_column_values_are_positional() {
     let dr = PluginDecorateResult {
         plugins: vec![PluginDecorations {
             plugin_id: "org.norte.git".into(),
+            slot: DecorationSlot::default(),
             decorations: vec![
                 DecorationWire {
                     badge: Some("M".into()),

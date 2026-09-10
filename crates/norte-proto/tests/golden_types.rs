@@ -1195,7 +1195,10 @@ fn golden_methods() {
     // forma en el wire no la congelaba nada.
     // 205 → 207 en 0.71.0 (ADR 0104): + `plugin_uninstall_params` y
     // `plugin_uninstall_result`.
-    assert_eq!(fixtures.len(), 207, "[methods.json] fixtures sin caso Rust");
+    // 207 → 209 en 0.72.0 (ADR 0105): + `plugin_decorate_params_with_kinds`
+    // y `plugin_decorate_result_icon` — los nombres de wire de la clase y
+    // del hueco, que sin fixtura no congelaba nada.
+    assert_eq!(fixtures.len(), 209, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -2653,10 +2656,14 @@ fn check_methods_plugin_preview_styled(fixtures: &BTreeMap<String, Value>) {
 /// 1:1 con `params.paths`. `plugin_decorate_params` incluye un nombre HOSTIL
 /// (no-UTF8); el segundo elemento de `plugin_decorate_result` es `{}` (sin
 /// badge/role de ESE plugin para ESA entrada), no un elemento omitido.
+#[expect(
+    clippy::too_many_lines,
+    reason = "una fixtura por forma del wire: la lista es literal a propósito"
+)]
 fn check_methods_plugin_decorate_and_columns(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        DecorationWire, PluginColumnValuesParams, PluginColumnValuesResult, PluginDecorateParams,
-        PluginDecorateResult, PluginDecorations,
+        DecorationSlot, DecorationWire, PluginColumnValuesParams, PluginColumnValuesResult,
+        PluginDecorateParams, PluginDecorateResult, PluginDecorations,
     };
     check_one(
         fixtures,
@@ -2666,6 +2673,17 @@ fn check_methods_plugin_decorate_and_columns(fixtures: &BTreeMap<String, Value>)
                 vpath("file:///repo/a.rs"),
                 vpath("file:///repo/informe%FF%FE.dat"),
             ],
+            kinds: Vec::new(),
+        },
+    );
+    // 0.72.0 (ADR 0105): con la clase de cada ruta, posicional. Congela los
+    // nombres de wire de `EntryKind` en ESTE campo.
+    check_one(
+        fixtures,
+        "plugin_decorate_params_with_kinds",
+        &PluginDecorateParams {
+            paths: vec![vpath("file:///repo/a.rs"), vpath("file:///repo/src")],
+            kinds: vec![EntryKind::File, EntryKind::Dir],
         },
     );
     check_one(
@@ -2690,6 +2708,7 @@ fn check_methods_plugin_decorate_and_columns(fixtures: &BTreeMap<String, Value>)
         &PluginDecorateResult {
             plugins: vec![PluginDecorations {
                 plugin_id: "org.norte.git".into(),
+                slot: DecorationSlot::Badge,
                 decorations: vec![
                     DecorationWire {
                         badge: Some("M".into()),
@@ -2710,6 +2729,23 @@ fn check_methods_plugin_decorate_and_columns(fixtures: &BTreeMap<String, Value>)
         fixtures,
         "plugin_decorate_result_empty",
         &PluginDecorateResult { plugins: vec![] },
+    );
+    // 0.72.0 (ADR 0105): un decorador de ICONOS dice su hueco; el de
+    // insignias no lo dice y viaja byte a byte como en 0.71 (la fixtura de
+    // arriba lo pinea: `slot` ausente).
+    check_one(
+        fixtures,
+        "plugin_decorate_result_icon",
+        &PluginDecorateResult {
+            plugins: vec![PluginDecorations {
+                plugin_id: "org.norte.file-icons".into(),
+                slot: DecorationSlot::Icon,
+                decorations: vec![DecorationWire {
+                    badge: Some("📁".into()),
+                    role: None,
+                }],
+            }],
+        },
     );
     // `paths` lleva DOS entradas para que `values` pueda pinnear ambos casos
     // posicionales: una celda real y una `None` (la columna no aplica a esa
@@ -4413,7 +4449,9 @@ fn method_names_frozen() {
     // 0.71.0 (ADR 0104): `plugin.uninstall`, el gestor de extensiones
     // desinstala sin pasar por la CLI. Solo humanos, como sus hermanos.
     assert_eq!(methods::PLUGIN_UNINSTALL, "plugin.uninstall");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.71.0");
+    // 0.72.0 (ADR 0105): ningún método nuevo — `kinds` en los params de
+    // `plugin.decorate` y `slot` en cada bloque de decoraciones.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.72.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

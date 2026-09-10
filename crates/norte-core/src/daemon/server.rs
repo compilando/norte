@@ -4143,8 +4143,16 @@ async fn handle_plugin_decorate(
             plugins: Vec::new(),
         });
     }
+    // Corto o vacío es un cliente 0.71 y vale; MÁS largo es un cliente roto,
+    // y truncarlo en silencio escondería el error para siempre.
+    if p.kinds.len() > p.paths.len() {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "kinds is longer than paths",
+        ));
+    }
     let expected_len = p.paths.len();
-    let entries = crate::plugins::paths_to_basenames(&p.paths);
+    let entries = crate::plugins::paths_to_entries(&p.paths, &p.kinds);
     let resolved = {
         let reg = shared.plugins.lock().expect("plugins lock sano");
         reg.resolve_decorators()
@@ -4152,7 +4160,7 @@ async fn handle_plugin_decorate(
     let runtime = Arc::clone(&shared.plugin_runtime);
     let plugins = tokio::task::spawn_blocking(move || {
         let mut out = Vec::new();
-        for (id, _name, wasm, caps, settings) in resolved {
+        for ((id, _name, wasm, caps, settings), slot) in resolved {
             let Ok(mut inst) = runtime.instantiate_decorator(&wasm, caps) else {
                 tracing::warn!(plugin = %id, "decorator: fallo al instanciar, se omite del lote");
                 continue;
@@ -4172,6 +4180,7 @@ async fn handle_plugin_decorate(
             };
             out.push(methods::PluginDecorations {
                 plugin_id: id,
+                slot: crate::plugins::slot_to_wire(slot),
                 decorations,
             });
         }

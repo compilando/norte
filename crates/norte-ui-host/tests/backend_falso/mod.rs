@@ -225,6 +225,13 @@ pub struct Falso {
     /// La insignia que un decorador pone en cada ruta, por wire. Vacío =
     /// NINGÚN decorador consentido, que es lo que contesta el daemon.
     pub decoraciones: HashMap<String, String>,
+    /// El ICONO que un segundo decorador, de hueco `icon` (ADR 0105), pone
+    /// en cada ruta, por wire. Vacío = ningún decorador de iconos.
+    pub iconos: HashMap<String, String>,
+    /// Las clases que llegaron con cada lote decorado, en orden: lo que
+    /// permite comprobar que la ventana MANDA la clase, sin la que un
+    /// decorador de iconos no sabe qué es carpeta.
+    pub clases_decoradas: std::sync::Mutex<Vec<Vec<norte_proto::EntryKind>>>,
     /// Los lotes que se pidieron decorar, en orden. Es lo que permite
     /// comprobar que solo se pide la VENTANA.
     pub decorados: std::sync::Mutex<Vec<Vec<VPath>>>,
@@ -976,32 +983,53 @@ impl HostBackend for Falso {
     fn plugin_decorate(
         &self,
         paths: Vec<VPath>,
+        kinds: Vec<norte_proto::EntryKind>,
     ) -> BoxFuture<'static, Result<Vec<norte_proto::methods::PluginDecorations>, Error>> {
         self.decorados
             .lock()
             .expect("mutex de decorados")
             .push(paths.clone());
+        self.clases_decoradas
+            .lock()
+            .expect("mutex de clases")
+            .push(kinds);
         self.latido();
         let tabla = self.decoraciones.clone();
+        let iconos = self.iconos.clone();
         Box::pin(async move {
-            if tabla.is_empty() {
-                // Sin decoradores consentidos: «ninguna», que es lo que
-                // contesta el daemon de verdad. NO una lista de vacíos.
-                return Ok(Vec::new());
+            let mut out = Vec::new();
+            // Sin decoradores consentidos: «ninguna», que es lo que
+            // contesta el daemon de verdad. NO una lista de vacíos.
+            if !tabla.is_empty() {
+                out.push(norte_proto::methods::PluginDecorations {
+                    plugin_id: "acme.git".to_owned(),
+                    slot: norte_proto::methods::DecorationSlot::Badge,
+                    decorations: paths
+                        .iter()
+                        .map(|p| {
+                            let d = tabla.get(&p.to_wire()).cloned();
+                            norte_proto::methods::DecorationWire {
+                                badge: d.clone(),
+                                role: d.map(|_| "warning".to_owned()),
+                            }
+                        })
+                        .collect(),
+                });
             }
-            Ok(vec![norte_proto::methods::PluginDecorations {
-                plugin_id: "acme.git".to_owned(),
-                decorations: paths
-                    .iter()
-                    .map(|p| {
-                        let d = tabla.get(&p.to_wire()).cloned();
-                        norte_proto::methods::DecorationWire {
-                            badge: d.clone(),
-                            role: d.map(|_| "warning".to_owned()),
-                        }
-                    })
-                    .collect(),
-            }])
+            if !iconos.is_empty() {
+                out.push(norte_proto::methods::PluginDecorations {
+                    plugin_id: "acme.icons".to_owned(),
+                    slot: norte_proto::methods::DecorationSlot::Icon,
+                    decorations: paths
+                        .iter()
+                        .map(|p| norte_proto::methods::DecorationWire {
+                            badge: iconos.get(&p.to_wire()).cloned(),
+                            role: None,
+                        })
+                        .collect(),
+                });
+            }
+            Ok(out)
         })
     }
 

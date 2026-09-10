@@ -612,6 +612,7 @@ pub trait HostBackend: Send + Sync + 'static {
     fn plugin_decorate(
         &self,
         paths: Vec<VPath>,
+        kinds: Vec<norte_proto::EntryKind>,
     ) -> BoxFuture<'static, Result<Vec<methods::PluginDecorations>, Error>>;
 
     /// Los valores de UNA columna aportada por un plugin, para un lote.
@@ -1007,9 +1008,10 @@ impl HostBackend for norte_client::RemoteBackend {
     fn plugin_decorate(
         &self,
         paths: Vec<VPath>,
+        kinds: Vec<norte_proto::EntryKind>,
     ) -> BoxFuture<'static, Result<Vec<methods::PluginDecorations>, Error>> {
         let backend = self.clone();
-        Box::pin(async move { backend.plugin_decorate(&paths).await })
+        Box::pin(async move { backend.plugin_decorate(&paths, &kinds).await })
     }
 
     fn semantic_search(

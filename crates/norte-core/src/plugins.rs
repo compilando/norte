@@ -265,6 +265,50 @@ pub(crate) fn paths_to_basenames(paths: &[norte_proto::VPath]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// Las entradas que ve un guest DECORATOR (ADR 0105): el nombre de cada
+/// ruta y su clase, POSICIONALES con `paths`. `kinds` es lo que el frontend
+/// listó; puede venir vacío (un cliente 0.71) o corto, y entonces lo que
+/// falta es `other` —la clase que un guest trata como fichero—, nunca un
+/// error: la clase es cosmética para el icono, no una condición del lote.
+pub(crate) fn paths_to_entries(
+    paths: &[norte_proto::VPath],
+    kinds: &[norte_proto::EntryKind],
+) -> Vec<norte_plugin_host::decorator_iface::Entry> {
+    use norte_plugin_host::decorator_iface::EntryKind as Wit;
+    if !kinds.is_empty() && kinds.len() != paths.len() {
+        // Vacío es un cliente 0.71; corto es un cliente 0.72 con un error,
+        // y degradar en silencio lo escondería para siempre.
+        tracing::warn!(
+            paths = paths.len(),
+            kinds = kinds.len(),
+            "decorate: kinds no casa paths, lo que falta se trata como other"
+        );
+    }
+    paths_to_basenames(paths)
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| norte_plugin_host::decorator_iface::Entry {
+            name,
+            kind: match kinds.get(i) {
+                Some(norte_proto::EntryKind::File) => Wit::File,
+                Some(norte_proto::EntryKind::Dir) => Wit::Dir,
+                Some(norte_proto::EntryKind::Symlink) => Wit::Symlink,
+                Some(norte_proto::EntryKind::Other) | None => Wit::Other,
+            },
+        })
+        .collect()
+}
+
+/// El hueco de un decorador, del manifiesto al wire (ADR 0105).
+pub(crate) fn slot_to_wire(
+    slot: norte_plugin_host::DecoratorSlot,
+) -> norte_proto::methods::DecorationSlot {
+    match slot {
+        norte_plugin_host::DecoratorSlot::Badge => norte_proto::methods::DecorationSlot::Badge,
+        norte_plugin_host::DecoratorSlot::Icon => norte_proto::methods::DecorationSlot::Icon,
+    }
+}
+
 /// Convierte el LOTE bruto que devuelve un guest DECORATOR
 /// (`DecoratorInstance::decorate`) al tipo de wire
 /// (`Vec<norte_proto::methods::DecorationWire>`), VALIDANDO el contrato
@@ -402,7 +446,9 @@ pub type ResolvedPreviewer = (
 /// Resultado de un elemento de [`PluginRegistry::resolve_decorators`] o de
 /// [`PluginRegistry::resolve_columns`]: misma forma `(id, name, wasm_path,
 /// capabilities, settings)` que [`ResolvedPreviewer`] — mismo alias en vez de
-/// repetir el tuple de 5 elementos (clippy `type_complexity`).
+/// repetir el tuple de 5 elementos (clippy `type_complexity`). Un decorador
+/// viene además con su HUECO (ADR 0105), aparte, como los hooks vienen con
+/// sus eventos.
 pub type ResolvedDecorator = ResolvedPreviewer;
 
 /// Resultado de [`PluginRegistry::resolve_provider`]: el provider plugin
@@ -1161,7 +1207,7 @@ impl PluginRegistry {
     /// binario lo implementa debe entrar aquí). Orden: el del catálogo
     /// (`category, id` — determinista, ver [`Catalog::load_dir`]).
     #[must_use]
-    pub fn resolve_decorators(&self) -> Vec<ResolvedDecorator> {
+    pub fn resolve_decorators(&self) -> Vec<(ResolvedDecorator, norte_plugin_host::DecoratorSlot)> {
         self.catalog
             .plugins
             .iter()
@@ -1174,12 +1220,24 @@ impl PluginRegistry {
                     return None;
                 }
                 let wasm = Self::verified_wasm(&e.dir)?;
+                // El hueco lo dice la PRIMERA contribución: un decorador
+                // declara una, y si declarase dos con huecos distintos no
+                // habría forma de saber cuál de sus respuestas va a cuál.
+                let slot = e
+                    .manifest
+                    .contributions
+                    .decorator
+                    .first()
+                    .map_or(norte_plugin_host::DecoratorSlot::Badge, |d| d.slot);
                 Some((
-                    e.manifest.id.clone(),
-                    e.manifest.name.clone(),
-                    wasm,
-                    e.manifest.capabilities.clone(),
-                    e.settings.clone(),
+                    (
+                        e.manifest.id.clone(),
+                        e.manifest.name.clone(),
+                        wasm,
+                        e.manifest.capabilities.clone(),
+                        e.settings.clone(),
+                    ),
+                    slot,
                 ))
             })
             .collect()
@@ -2635,9 +2693,57 @@ header = "Size"
             2,
             "AMBOS decorators consentidos: {resolved:?}"
         );
-        let ids: Vec<&str> = resolved.iter().map(|(id, ..)| id.as_str()).collect();
+        let ids: Vec<&str> = resolved.iter().map(|((id, ..), _)| id.as_str()).collect();
         assert!(ids.contains(&"org.norte.decor"));
         assert!(ids.contains(&"org.norte.decor2"));
+    }
+
+    /// ADR 0105: el hueco viene del manifiesto —`icon` cuando lo declara,
+    /// `badge` si no—, y de la PRIMERA contribución.
+    #[test]
+    fn resolve_decorators_lee_el_hueco_del_manifiesto() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.decor", DECOR_MANIFEST);
+        write_plugin(
+            tmp.path(),
+            "org.norte.iconos",
+            r#"
+            [plugin]
+            id = "org.norte.iconos"
+            name = "Iconos"
+            publisher = "norte"
+            version = "0.1.0"
+            category = "decorator"
+            [[contributions.decorator]]
+            slot = "icon"
+            [capabilities]
+        "#,
+        );
+        for id in ["org.norte.decor", "org.norte.iconos"] {
+            std::fs::write(tmp.path().join("plugins").join(id).join("plugin.wasm"), b"").unwrap();
+        }
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        for id in ["org.norte.decor", "org.norte.iconos"] {
+            assert!(reg.set_approval_in_memory(id, true));
+            assert!(reg.set_enabled_in_memory(id, true));
+        }
+        let huecos: std::collections::HashMap<String, norte_plugin_host::DecoratorSlot> = reg
+            .resolve_decorators()
+            .into_iter()
+            .map(|((id, ..), slot)| (id, slot))
+            .collect();
+        assert_eq!(
+            huecos["org.norte.decor"],
+            norte_plugin_host::DecoratorSlot::Badge
+        );
+        assert_eq!(
+            huecos["org.norte.iconos"],
+            norte_plugin_host::DecoratorSlot::Icon
+        );
+        assert_eq!(
+            slot_to_wire(huecos["org.norte.iconos"]),
+            norte_proto::methods::DecorationSlot::Icon
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@
 //!
 //! SKIP si el target `wasm32-wasip2` no está instalado.
 
+use norte_plugin_host::decorator_iface::{Entry, EntryKind};
 use norte_plugin_host::{Capabilities, PluginRuntime};
 
 mod support;
@@ -23,11 +24,13 @@ fn decorator_wit_e2e_positional_roundtrip_wasm_real() {
         .instantiate_decorator(&wasm, Capabilities::default())
         .expect("instanciar el decorator");
 
-    let entries: Vec<Vec<u8>> = vec![
-        b"module.rs".to_vec(),
-        b"README.md".to_vec(),
-        b"my_mod_2.rs".to_vec(),
-    ];
+    let entries: Vec<Entry> = [&b"module.rs"[..], b"README.md", b"my_mod_2.rs"]
+        .into_iter()
+        .map(|n| Entry {
+            name: n.to_vec(),
+            kind: EntryKind::File,
+        })
+        .collect();
     let out = inst.decorate(&entries).expect("decorate sin trap");
 
     assert_eq!(out.len(), entries.len(), "positional 1:1, nunca disperso");

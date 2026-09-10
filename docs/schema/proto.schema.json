@@ -1150,6 +1150,21 @@
       "description": "Result de [`DAEMON_SHUTDOWN`]: objeto vacío, reservado para extensión.",
       "type": "object"
     },
+    "DecorationSlot": {
+      "description": "En qué HUECO de la fila se pinta lo que un decorador devuelve (0.72.0,\nADR 0105). Lo declara el manifiesto, lo transporta\n[`PluginDecorations::slot`], y lo aplica el frontend: los dos huecos\ncoexisten en una fila, cada uno lo llena el PRIMER plugin de su hueco.\n\nUn hueco que este build no conoce cae a `badge`, que es lo que un peer\nmás nuevo puede esperar de uno más viejo — y sin esto un `slot` nuevo\ntiraría la respuesta ENTERA de `plugin.decorate`, con todas las\ndecoraciones de la página:\n\n```\nuse norte_proto::methods::DecorationSlot;\nlet s: DecorationSlot = serde_json::from_str(\"\\\"hueco_del_futuro\\\"\").unwrap();\nassert_eq!(s, DecorationSlot::Badge);\nlet s: DecorationSlot = serde_json::from_str(\"\\\"icon\\\"\").unwrap();\nassert_eq!(s, DecorationSlot::Icon);\n```",
+      "oneOf": [
+        {
+          "const": "icon",
+          "description": "A la izquierda del nombre, en una columna de ancho fijo.",
+          "type": "string"
+        },
+        {
+          "const": "badge",
+          "description": "A la derecha del nombre: `M`, `++`. El hueco de siempre, y el que un\ncliente 0.71 asume al no ver el campo. `other` (que serde exige en la\nÚLTIMA variante) para que un hueco que este build no conoce caiga\naquí y no rompa el lote.",
+          "type": "string"
+        }
+      ]
+    },
     "DecorationWire": {
       "description": "Una decoración tipo git-status de UNA entrada (elemento de\n[`PluginDecorations::decorations`], 0.27.0, G3, ADR 0037). `badge` es\ntexto del plugin — NO confiable, ≤8 chars TRAS enmascarar (tope del\nwire, ADR 0037); un frontend debe enmascarar (y truncar de nuevo) antes\nde confiar en el tope ya aplicado por el server — defensa en\nprofundidad. `role` sigue la misma validación host-side que\n[`SpanWire::role`].",
       "properties": {
@@ -3225,6 +3240,13 @@
     "PluginDecorateParams": {
       "description": "Params de [`PLUGIN_DECORATE`]: las entradas VISIBLES de la página actual\n(batched — el frontend no pide decoraciones entrada por entrada).",
       "properties": {
+        "kinds": {
+          "description": "La clase de cada ruta, POSICIONAL con `paths` (0.72.0, ADR 0105).\nUn decorador de iconos la necesita: un nombre no dice si es carpeta.\nVacío (un cliente 0.71) o corto = `other` para lo que falte, nunca\nun error: la clase es cosmética para el icono, no condición del lote.\nMÁS largo que `paths` sí es `INVALID_PARAMS`: ningún cliente correcto\nlo produce, y truncarlo en silencio escondería el error para siempre.",
+          "items": {
+            "$ref": "#/$defs/EntryKind"
+          },
+          "type": "array"
+        },
         "paths": {
           "description": "Rutas a decorar, en el orden en que se listan.",
           "items": {
@@ -3267,6 +3289,10 @@
         "plugin_id": {
           "description": "Id del plugin `decorator` que produjo estas decoraciones.",
           "type": "string"
+        },
+        "slot": {
+          "$ref": "#/$defs/DecorationSlot",
+          "description": "El hueco de la fila que llenan (0.72.0, ADR 0105). Ausente = `badge`."
         }
       },
       "required": [
@@ -5788,6 +5814,9 @@
     "daemon_shutdown_result": {
       "$ref": "#/$defs/DaemonShutdownResult"
     },
+    "decoration_slot": {
+      "$ref": "#/$defs/DecorationSlot"
+    },
     "decoration_wire": {
       "$ref": "#/$defs/DecorationWire"
     },
@@ -6282,6 +6311,7 @@
     "daemon_going_away",
     "daemon_shutdown_params",
     "daemon_shutdown_result",
+    "decoration_slot",
     "decoration_wire",
     "delete_mode",
     "descend_side",

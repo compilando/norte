@@ -210,7 +210,28 @@ pub const HOOK_EVENTS: &[&str] = &[
 /// desconocido rechace el manifiesto en vez de ignorarse en silencio.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DecoratorContrib {}
+pub struct DecoratorContrib {
+    /// En qué HUECO de la fila se pinta lo que este decorador devuelve
+    /// (ADR 0105): `badge` (por defecto) a la derecha del nombre, como un
+    /// estado de git; `icon` a la izquierda, en una columna de ancho fijo.
+    /// Los dos huecos coexisten: un icono y una insignia en la misma fila
+    /// vienen de dos plugins distintos. Entra en el digest solo cuando no es
+    /// el valor por defecto, para que ningún manifiesto anterior cambie de
+    /// ancla.
+    #[serde(default)]
+    pub slot: DecoratorSlot,
+}
+
+/// El hueco de la fila que llena un decorador (ADR 0105).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DecoratorSlot {
+    /// A la derecha del nombre, texto corto: `M`, `++`.
+    #[default]
+    Badge,
+    /// A la izquierda del nombre, un glifo por fila.
+    Icon,
+}
 
 /// Lo que el plugin APORTA, por interfaz. Todo opcional: un plugin de una sola
 /// interfaz solo rellena la suya.
@@ -595,8 +616,18 @@ fn update_decorator_digest(decorator: &[DecoratorContrib], h: &mut sha2::Sha256)
     // Domain separator FIJO, igual criterio que `update_config_digest`.
     h.update(b"decorator:\n");
     h.update((decorator.len() as u64).to_le_bytes());
-    // `DecoratorContrib` es `{}` hoy: nada más que digestar por entrada más
-    // allá del recuento — un futuro campo se añadiría aquí.
+    // El hueco (ADR 0105) SOLO cuando no es el de siempre: un manifiesto
+    // anterior a la columna de iconos digesta byte a byte igual que antes, y
+    // pasar a `icon` mueve el ancla porque cambia dónde se pinta el plugin.
+    // CON su posición: el core lee el hueco de la PRIMERA contribución, y
+    // sin el índice reordenar dos bloques movería un plugin aprobado de la
+    // insignia a la columna de iconos sin que el digest se enterase.
+    for (i, d) in decorator.iter().enumerate() {
+        if d.slot == DecoratorSlot::Icon {
+            h.update(b"slot:icon@");
+            h.update((i as u64).to_le_bytes());
+        }
+    }
 }
 
 /// Bloque `[plugin]` del manifiesto.

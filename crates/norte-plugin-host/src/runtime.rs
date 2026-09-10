@@ -1469,9 +1469,9 @@ impl DecoratorInstance {
     }
 
     /// Decora un LOTE de entradas (batched per visible page, ADR 0037
-    /// decisión 2): `entries` son los nombres/paths crudos en el orden en
-    /// que el host los lista; el resultado es POSICIONAL 1:1 — nunca
-    /// reordenado, nunca disperso. Aplica el mismo tope agregado
+    /// decisión 2): `entries` son los nombres crudos con su clase (0.10.0,
+    /// ADR 0105) en el orden en que el host los lista; el resultado es
+    /// POSICIONAL 1:1 — nunca reordenado, nunca disperso. Aplica el mismo tope agregado
     /// `MAX_RETURN_BYTES` que cualquier otro valor de retorno del runtime
     /// (issue #68), sumando los bytes de `badge`+`role` de TODAS las
     /// decoraciones del lote.
@@ -1482,7 +1482,7 @@ impl DecoratorInstance {
     ///   agregado.
     pub fn decorate(
         &mut self,
-        entries: &[Vec<u8>],
+        entries: &[decorator_iface::Entry],
     ) -> Result<Vec<decorator_iface::Decoration>, RuntimeError> {
         self.rearm();
         let out = self

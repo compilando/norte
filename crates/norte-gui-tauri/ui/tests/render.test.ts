@@ -50,6 +50,8 @@ function fila(key: number, nombre: string, extra: Partial<RowView> = {}): RowVie
     badge: "",
     badge_hostile: false,
     badge_role: "",
+    icon: "",
+    icon_hostile: false,
     ...extra,
   };
 }
@@ -75,6 +77,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
         total_rows: 2,
         first_visible: 0,
         rows: [fila(0, "a.txt"), fila(1, "b.txt")],
+        icon_column: false,
         cursor: 0,
         marks: 0,
         skipped_note: "",
@@ -1429,6 +1432,57 @@ describe("la insignia de un plugin en una fila", () => {
     expect(marca?.getAttribute("data-role")).toBe("warning");
     // Y en su propio nodo: unirla al nombre deja que una reordene a la otra.
     expect(filas[1]?.querySelector(".cell-name")?.textContent).toBe("cambiado.rs");
+  });
+
+  it("el icono va a la IZQUIERDA del nombre, y la columna se abre para todas las filas", () => {
+    const { screen } = montar();
+    screen.paint(
+      vista({
+        rows: [
+          fila(1, "src", { kind: "dir", icon: "📁" }),
+          fila(2, "main.rs", { icon: "🦀", badge: "M", badge_role: "warning" }),
+          fila(3, "sin-icono"),
+        ],
+        icon_column: true,
+      }),
+    );
+    const filas = [...document.querySelectorAll(".row")];
+    // Las tres llevan la celda: la que no tiene icono, vacía, para que los
+    // nombres sigan alineados.
+    for (const f of filas) {
+      expect(f.querySelector(".cell-icon")).not.toBeNull();
+    }
+    expect(filas[0]?.querySelector(".cell-icon")?.textContent).toBe("📁");
+    expect(filas[2]?.querySelector(".cell-icon")?.textContent).toBe("");
+    // Antes del nombre; la insignia, detrás. Los dos huecos en una fila.
+    const bloque = filas[1]?.querySelector(".name-block");
+    const hijos = [...(bloque?.children ?? [])].map((c) => c.className);
+    expect(hijos).toEqual(["cell-icon", "cell-name", "cell-badge"]);
+  });
+
+  it("la columna la abre el HOST, no las filas visibles", () => {
+    const { screen } = montar();
+    // Sin iconos a la vista pero con la columna abierta —una página sin
+    // iconos de un listado que sí los tiene—: la celda sigue, para que los
+    // nombres no se corran al desplazarse.
+    screen.paint(vista({ rows: [fila(1, "a.rs"), fila(2, "b.rs")], icon_column: true }));
+    expect(document.querySelectorAll(".cell-icon")).toHaveLength(2);
+    // Y al revés: un icono en una fila con la columna cerrada no la abre.
+    screen.paint(vista({ rows: [fila(1, "a.rs", { icon: "🦀" })], icon_column: false }));
+    expect(document.querySelector(".cell-icon")).toBeNull();
+  });
+
+  it("un icono que se pinta distinto de lo que es lo DICE", () => {
+    const { screen } = montar();
+    screen.paint(
+      vista({
+        rows: [fila(1, "x", { icon: "�", icon_hostile: true })],
+        icon_column: true,
+      }),
+    );
+    const icono = document.querySelector(".cell-icon");
+    expect(icono?.getAttribute("data-hostile")).toBe("true");
+    expect(icono?.querySelector(".hostile-badge")).not.toBeNull();
   });
 
   it("una insignia que se pinta distinta de lo que es lo DICE", () => {

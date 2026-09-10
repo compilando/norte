@@ -30,7 +30,7 @@ What a manifest can declare, and what approving it therefore grants:
 | provider | a backend, addressed by its own URL scheme |
 | previewer | a rendering of a file in the viewer |
 | command | a verb in the palette |
-| decorator | a badge on the rows of a listing |
+| decorator | an icon left of the name, or a badge right of it, on each row |
 | column | a value per entry in the listing |
 
 # Their pages, and how to read them

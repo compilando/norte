@@ -1846,6 +1846,13 @@ pub struct BrowserSlotView {
     /// Las filas de la ventana visible (más el overscan que pida el
     /// renderer). NUNCA el directorio entero.
     pub rows: Vec<RowView>,
+    /// La columna de iconos está abierta en este listado (puente 62, ADR
+    /// 0105): ALGUNA de sus entradas —visible o no— tiene icono, así que
+    /// todas las filas llevan la celda, vacía o no, y los nombres siguen
+    /// alineados. Lo decide el host desde el pane entero; un renderer que lo
+    /// dedujera de las filas visibles cerraría la columna al desplazarse a
+    /// una página sin iconos y correría todos los nombres.
+    pub icon_column: bool,
     /// Fila bajo el cursor, si hay alguna.
     pub cursor: Option<RowKey>,
     /// Cuántas filas están marcadas en el hueco (no solo en la ventana).
@@ -2009,6 +2016,13 @@ pub struct RowView {
     /// renderer lo usa para elegir un color del tema, y una cadena libre ahí
     /// sería un plugin eligiendo su propio estilo.
     pub badge_role: String,
+    /// El ICONO de la fila (puente 62, ADR 0105): lo que un decorador de
+    /// hueco `icon` puso, ya enmascarado y acotado. Vacío = ninguno. Se
+    /// pinta a la IZQUIERDA del nombre en una columna de ancho fijo, que el
+    /// renderer abre en todas las filas del hueco en cuanto una lo tiene.
+    pub icon: String,
+    /// El icono se pinta distinto de lo que es. Misma razón que la insignia.
+    pub icon_hostile: bool,
 }
 
 /// La cabecera de UNA columna.
@@ -2708,6 +2722,11 @@ pub enum ViewChange {
         first_visible: u64,
         /// Las filas.
         rows: Vec<RowView>,
+        /// La columna de iconos está abierta (puente 62): va CON las filas
+        /// porque es con un parche de filas como aterrizan los iconos, y un
+        /// renderer que se quedara con el valor de la última foto pintaría
+        /// la primera página de iconos sin su columna.
+        icon_column: bool,
         /// Cuántas filas tiene el listado ENTERO, no cuántas viajan.
         ///
         /// Viaja en el parche y no solo en la foto porque es la ALTURA del

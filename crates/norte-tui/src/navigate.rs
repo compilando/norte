@@ -129,6 +129,8 @@ pub fn settle_cd(
             .iter()
             .map(|e| e.path.clone())
             .collect();
+        let kinds: Vec<norte_proto::EntryKind> =
+            app.panes[pane].entries().iter().map(|e| e.kind).collect();
         let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
         decorate_fetch.set(
             app.panes.slot_of(pane),
@@ -137,6 +139,7 @@ pub fn settle_cd(
                 app.panes.slot_of(pane),
                 dir,
                 paths,
+                kinds,
                 plugin_cols,
             ),
         );

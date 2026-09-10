@@ -146,15 +146,15 @@ impl Estado {
         }
         let primera = usize::try_from(hueco.primera_visible).unwrap_or(0);
         let cuantas = usize::try_from(hueco.visibles).unwrap_or(0);
-        let candidatos: Vec<VPath> = hueco
+        let (candidatos, clases): (Vec<VPath>, Vec<norte_proto::EntryKind>) = hueco
             .pane
             .entries()
             .iter()
             .skip(primera)
             .take(cuantas)
-            .map(|e| e.path.clone())
-            .filter(|p| !hueco.adornadas.contains(p))
-            .collect();
+            .filter(|e| !hueco.adornadas.contains(&e.path))
+            .map(|e| (e.path.clone(), e.kind))
+            .unzip();
         if candidatos.is_empty() {
             return;
         }
@@ -168,7 +168,7 @@ impl Estado {
         let buzon = buzon.clone();
         tokio::spawn(async move {
             let crudas = backend
-                .plugin_decorate(candidatos.clone())
+                .plugin_decorate(candidatos.clone(), clases)
                 .await
                 .unwrap_or_default();
             let adornos = norte_frontend::merge_decorations(&candidatos, &crudas);
@@ -365,20 +365,22 @@ impl Estado {
 
     /// Las filas visibles de UN hueco concreto, no del que tenga el foco.
     pub(super) fn parche_filas_de(&mut self, slot: u32) -> BridgeEnvelope<UiUpdate> {
-        let (generacion, primera, filas, total) = match self.huecos.get(&slot) {
+        let (generacion, primera, filas, total, iconos) = match self.huecos.get(&slot) {
             Some(h) => (
                 h.pane.listing_epoch(),
                 h.primera_visible,
                 self.filas_de(h),
                 Some(h.pane.entries().len() as u64),
+                h.pane.any_icon(),
             ),
-            None => (0, 0, Vec::new(), None),
+            None => (0, 0, Vec::new(), None, false),
         };
         let cambio = ViewChange::Rows {
             slot_id: slot,
             generation: generacion,
             first_visible: primera,
             rows: filas,
+            icon_column: iconos,
             // El total va CON las filas: es la altura del desplazamiento del
             // renderer, y el drenaje paginado no manda otra cosa —tampoco en
             // el último lote—.
@@ -403,6 +405,7 @@ impl Estado {
             generation: self.generacion(),
             first_visible: self.hueco().primera_visible,
             rows: self.filas_visibles(),
+            icon_column: self.hueco().pane.any_icon(),
             // Marcar u ocultar no cambia solo qué filas se ven: `toggle-hidden`
             // mueve entradas dentro y fuera del listado, o sea que el total y
             // la altura del desplazamiento se mueven con ellas.
@@ -455,6 +458,11 @@ impl Estado {
             badge_role: adorno
                 .and_then(|d| d.role)
                 .map_or_else(String::new, |r| r.as_kebab().to_owned()),
+            icon: adorno
+                .and_then(|d| d.icon.clone())
+                .map(clamp_display)
+                .unwrap_or_default(),
+            icon_hostile: adorno.is_some_and(|d| d.icon_hostile),
         }
     }
 

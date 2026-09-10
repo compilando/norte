@@ -25,7 +25,7 @@ use wasmparser::{Parser, Payload};
 /// listaría como rotos los guests recién compilados.
 pub const SERVED_WIT: &[(&str, &str)] = &[
     ("norte:host", "0.1.0"),
-    ("norte:plugin", "0.9.0"),
+    ("norte:plugin", "0.10.0"),
     ("norte:provider", "0.1.0"),
     ("norte:location", "0.2.0"),
     ("norte:renamer", "0.1.0"),

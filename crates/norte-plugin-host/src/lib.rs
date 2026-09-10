@@ -47,9 +47,9 @@ pub use manifest::{
     COMMAND_ID_MAX_CHARS, COMMAND_MAX_COUNT, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
     CONFIG_ENUM_MAX_VALUES, CONFIG_KEY_MAX_CHARS, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS,
     CORE_SCHEMES, Category, ColumnContrib, CommandContrib, ConfigKeySpec, Contributions,
-    DecoratorContrib, HOOK_EVENTS, HookContrib, Manifest, ManifestError, PreviewerContrib,
-    ProviderContrib, RenamerContrib, SIDECAR_MAX_NAMES, is_valid_plugin_id, is_valid_sidecar_name,
-    scheme_claimable,
+    DecoratorContrib, DecoratorSlot, HOOK_EVENTS, HookContrib, Manifest, ManifestError,
+    PreviewerContrib, ProviderContrib, RenamerContrib, SIDECAR_MAX_NAMES, is_valid_plugin_id,
+    is_valid_sidecar_name, scheme_claimable,
 };
 pub use runtime::{
     ColumnsInstance, DecoratorInstance, HookInstance, LocationHost, MAX_ARTIFACT_BYTES,
