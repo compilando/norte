@@ -348,6 +348,9 @@ async fn commit_plugin_config_write(
                 "msg-plugin-config-saved",
                 &[("key", &write.key), ("value", &write.display)],
             ));
+            // Un ajuste puede cambiar lo que un decorador pinta —el estilo
+            // de los iconos—: los listados se vuelven a pedir.
+            app.redecorate = true;
         }
         Err(e) => app.message = Some(error_message(&e)),
     }
@@ -476,6 +479,9 @@ pub(crate) async fn conceder_aprobacion(
 /// daemon no confirmó es una pantalla que miente sobre quién puede leer tus
 /// ficheros» (#280).
 async fn relistar_extensiones(app: &mut App, backend: &Backend) {
+    // Lo que los plugins dijeron de cada listado lo dijeron con el catálogo
+    // de antes: el bucle lo olvida y lo vuelve a pedir.
+    app.redecorate = true;
     let cursor = app.extensions.as_ref().map_or(0, |m| m.cursor);
     match backend.plugins_list().await {
         Ok(list) => {

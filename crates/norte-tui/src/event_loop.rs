@@ -324,6 +324,19 @@ pub async fn run(
         if dir_watch.take_degraded_notice() {
             app.message = Some(t("status-watch-degraded"));
         }
+        // El gestor cambió el gobierno o los ajustes de un plugin: lo que
+        // los plugins dijeron de cada listado se olvida y se vuelve a pedir.
+        // `set` sobre el hueco tira la tanda en vuelo, así que una respuesta
+        // de antes del cambio no aterriza.
+        if std::mem::take(&mut app.redecorate) {
+            for pane in &mut app.panes {
+                pane.set_decorations(std::collections::HashMap::new());
+                pane.set_plugin_columns(std::collections::HashMap::new());
+            }
+            for pane in 0..app.panes.len() {
+                request_decorations(app, backend, &mut work.decorate, pane);
+            }
+        }
         turn::drain_pending(
             app,
             backend,

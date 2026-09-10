@@ -265,6 +265,84 @@ async fn el_icono_de_un_plugin_llega_a_la_fila_y_la_clase_viaja() {
     assert_eq!(kinds[de_src], norte_proto::EntryKind::Dir);
 }
 
+/// Apagar un decorador desde el gestor QUITA sus insignias de las filas ya
+/// pintadas: los listados abiertos olvidan lo que los plugins dijeron y lo
+/// vuelven a pedir. Antes se quedaban hasta el siguiente `cd`, y el lector
+/// concluía que apagar no apaga.
+#[tokio::test]
+async fn apagar_un_decorador_desde_el_gestor_quita_sus_insignias() {
+    let backend = arbol_grande_con_plugins(3);
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: columnas_de(&["name", "plugin:acme.git/status"]),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::SetVisibleRange {
+        slot_id: 1,
+        first: 0,
+        count: 10,
+    })
+    .await
+    .expect("host vivo");
+    let mut con_insignia = false;
+    for _ in 0..30 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        if listado(&foto).rows.iter().any(|r| !r.badge.is_empty()) {
+            con_insignia = true;
+            break;
+        }
+    }
+    assert!(con_insignia, "la insignia llega primero");
+    let tandas_antes = backend.decorados.lock().expect("decorados").len();
+
+    // F12, y `e` sobre la única extensión: se apaga.
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let v = extensiones_cargadas(&mut sub).await;
+    assert_eq!(v.rows[0].id, "acme.git");
+    h.dispatch(tecla("e")).await.expect("host vivo");
+
+    let mut sin_insignia = false;
+    for _ in 0..30 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let b = listado(&foto);
+        if b.rows.iter().all(|r| r.badge.is_empty())
+            && b.rows
+                .iter()
+                .all(|r| r.cells.iter().all(|c| c.text.is_none()))
+        {
+            sin_insignia = true;
+            break;
+        }
+    }
+    assert!(
+        sin_insignia,
+        "las filas se quedan sin la insignia del plugin apagado"
+    );
+    assert!(
+        backend.decorados.lock().expect("decorados").len() > tandas_antes,
+        "y se volvió a pedir la decoración, no se adivinó"
+    );
+}
+
 /// La insignia y el valor de columna llegan a la fila, marcados como lo que
 /// son: texto de un TERCERO.
 #[tokio::test]

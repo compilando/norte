@@ -151,7 +151,10 @@ impl Estado {
                 Vec::new()
             }
             Fondo::EventoDeSync(epoca, ev) => self.aplicar_evento_de_sync(epoca, *ev),
-            Fondo::Adornos(datos) => self.aplicar_adornos(*datos).into_iter().collect(),
+            Fondo::Adornos(datos) => self
+                .aplicar_adornos(*datos, backend, buzon)
+                .into_iter()
+                .collect(),
             Fondo::Imagen(token, leido) => self.aplicar_imagen(token, leido).into_iter().collect(),
             Fondo::BusquedaViva(epoca, id) => {
                 if let Some(b) = self.busqueda.as_mut()
@@ -537,7 +540,10 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Err(e) = res else {
-            return Vec::new();
+            // Un ajuste que cambió puede cambiar lo que un decorador pinta
+            // —el estilo de los iconos, sin ir más lejos—: los listados se
+            // vuelven a pedir.
+            return self.readornar_todo(backend, buzon);
         };
         let mut fuera = self.decir(norte_frontend::error::error_key(&e));
         if apertura != self.gen_extensiones {
@@ -1021,7 +1027,7 @@ impl Estado {
         // El desenlace se DICE aunque el gestor ya esté cerrado: una
         // concesión que falló y nadie contó es la ventana callándose sobre
         // quién puede leer tus ficheros.
-        let fuera = match res {
+        let mut fuera = match res {
             Ok(()) => self.decir("host-extension-updated"),
             Err(e) => self.decir(norte_frontend::error::error_key(e)),
         };
@@ -1033,6 +1039,40 @@ impl Estado {
         // preguntar.
         if self.extensiones.is_some() {
             self.repedir_catalogo(backend, buzon);
+        }
+        // Y los LISTADOS, por lo mismo: lo que un decorador o una columna de
+        // plugin dijeron de cada fila lo dijo con el catálogo de antes.
+        fuera.extend(self.readornar_todo(backend, buzon));
+        fuera
+    }
+
+    /// Olvida lo que los plugins dijeron de CADA listado abierto y lo vuelve
+    /// a pedir: es lo que sigue a cualquier cambio de gobierno o de ajustes
+    /// de un plugin. Apagar el decorador de iconos dejaba los iconos en las
+    /// filas hasta el siguiente `cd`, y el lector concluía que apagar no
+    /// apaga.
+    ///
+    /// Una tanda en vuelo no se espera: la generación de adornos sube, y
+    /// cuando aterrice se tira y se repide. El parche de filas va YA, con las
+    /// filas desnudas, para que la pantalla no siga enseñando lo que el
+    /// gestor acaba de decir que no está.
+    pub(super) fn readornar_todo(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let slots: Vec<u32> = self.huecos.keys().copied().collect();
+        let mut fuera = Vec::new();
+        for slot in slots {
+            if let Some(hueco) = self.huecos.get_mut(&slot) {
+                hueco.olvidar_adornos();
+                hueco.pane.set_decorations(std::collections::HashMap::new());
+                hueco
+                    .pane
+                    .set_plugin_columns(std::collections::HashMap::new());
+            }
+            self.adornar(slot, backend, buzon);
+            fuera.push(self.parche_filas_de(slot));
         }
         fuera
     }

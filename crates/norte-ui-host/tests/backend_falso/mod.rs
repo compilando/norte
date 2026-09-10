@@ -996,11 +996,21 @@ impl HostBackend for Falso {
         self.latido();
         let tabla = self.decoraciones.clone();
         let iconos = self.iconos.clone();
+        // Si el catálogo conoce a `acme.git` y está APAGADO, no decora: es lo
+        // que hace el daemon de verdad, y lo que permite comprobar que apagar
+        // un plugin desde el gestor quita sus insignias de las filas. Un
+        // catálogo que no lo nombra decora como siempre.
+        let git_apagado = self
+            .plugins
+            .lock()
+            .expect("plugins")
+            .iter()
+            .any(|p| p.id == "acme.git" && !p.enabled);
         Box::pin(async move {
             let mut out = Vec::new();
             // Sin decoradores consentidos: «ninguna», que es lo que
             // contesta el daemon de verdad. NO una lista de vacíos.
-            if !tabla.is_empty() {
+            if !tabla.is_empty() && !git_apagado {
                 out.push(norte_proto::methods::PluginDecorations {
                     plugin_id: "acme.git".to_owned(),
                     slot: norte_proto::methods::DecorationSlot::Badge,

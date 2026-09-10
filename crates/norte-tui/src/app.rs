@@ -775,6 +775,13 @@ pub struct App {
     /// referencia ofrecería `Ctrl+Y` y el core lo rechazaría en cerrado —una
     /// tecla muerta documentada, que es lo que #159 acaba de costar una vez.
     pub backend_journalled: bool,
+    /// Los listados tienen que OLVIDAR lo que los plugins dijeron y volver a
+    /// pedirlo: lo levanta cualquier cambio de gobierno o de ajustes de una
+    /// extensión (apagar el decorador de iconos dejaba los iconos hasta el
+    /// siguiente `cd`), y lo drena el bucle de eventos, que es quien tiene
+    /// las tandas en vuelo. Una bandera y no una llamada porque el gestor no
+    /// ve el bucle, igual que la barra lateral con lo que necesita backend.
+    pub redecorate: bool,
     /// Openers declarativos fusionados (#28): clonados en arranque y en cada
     /// hot-reload OK. Fuente de `pane.open` (F4). Vacío = sin openers.
     pub openers: norte_frontend::openers::OpenersConfig,
@@ -999,6 +1006,7 @@ impl App {
             // sincronizar por defecto convertiría cada test en un permiso.
             // `main` lo enciende cuando el backend es remoto.
             backend_journalled: false,
+            redecorate: false,
             openers: norte_frontend::openers::OpenersConfig::empty(),
             editor: None,
             diff: None,
