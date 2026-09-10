@@ -168,9 +168,16 @@ body {
   position: fixed;
   top: var(--menubar-h, 0px);
   /* Colgando de SU título: un desplegable que se abre siempre a la izquierda
-     no dice de qué menú es. La cuenta es aproximada —los títulos no miden lo
-     mismo— y por eso se acota para que no se salga por la derecha. */
-  left: min(calc(var(--menu-open, 0) * 12ch), calc(100vw - 34ch));
+     no dice de qué menú es. La posición la MIDE el renderer sobre el título
+     pintado (`--menu-left`): la cuenta anterior, a `12ch` por título, era
+     aproximada —los títulos no miden lo mismo— y el error se sumaba hacia la
+     derecha, hasta que «Ayuda» abría su desplegable un título más allá. El
+     `calc` con el índice queda solo como fallback sin medida, y el `min`
+     acota para que no se salga por la derecha. */
+  left: min(
+    var(--menu-left, calc(var(--menu-open, 0) * 12ch)),
+    calc(100vw - 34ch)
+  );
   margin: 0;
   padding: 2px 0;
   list-style: none;

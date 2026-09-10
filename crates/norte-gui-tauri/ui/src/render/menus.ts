@@ -168,6 +168,19 @@ export function paintMenu(this: Screen, menu: MenuView): void {
     caja.prepend(velo);
   }
   this.menuRoot.replaceChildren(caja);
+  if (menu.open !== null) {
+    // El desplegable cuelga del título PINTADO, medido una vez montado: los
+    // títulos se pintan con relleno en píxeles y no miden lo mismo, así que
+    // una cuenta en celdas se desviaba más cuanto más a la derecha estaba el
+    // menú. Se mide después de `replaceChildren` porque antes no hay
+    // geometría; forzar un reparto aquí es barato, un menú se abre a mano.
+    const titulo = this.menuRoot.querySelector(`#menu-title-${String(menu.open)}`);
+    const lista = this.menuRoot.querySelector(".menu-items");
+    if (titulo instanceof HTMLElement && lista instanceof HTMLElement) {
+      const x = titulo.getBoundingClientRect().left;
+      lista.style.setProperty("--menu-left", `${String(Math.max(0, x))}px`);
+    }
+  }
 }
 
 /** La paleta de comandos. */

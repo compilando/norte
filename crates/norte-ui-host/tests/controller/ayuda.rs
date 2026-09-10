@@ -114,16 +114,25 @@ async fn la_hoja_de_teclado_sale_del_keymap_efectivo() {
         filas.iter().all(|r| !r.label.starts_with("help-cmd-")),
         "ninguna fila pinta una clave Fluent"
     );
+    // Hubo filas apagadas mientras `app.quit` no era de la ventana: era el
+    // último comando que el preset ortodoxo ata y esta ventana no hacía.
+    // Ya no queda ninguno, así que lo que se fija es la REGLA: si alguna
+    // fila viene apagada, dice por qué — atenuar sin decirlo deja al lector
+    // adivinando si la app está rota.
     let apagadas: Vec<&&norte_ui_host::dto::HelpKeyRowView> =
         filas.iter().filter(|r| !r.enabled).collect();
     assert!(
-        !apagadas.is_empty(),
-        "el preset ata comandos que esta ventana no hace"
+        apagadas.iter().all(|r| !r.reason.is_empty()),
+        "cada fila apagada dice POR QUÉ"
     );
     assert!(
-        apagadas.iter().all(|r| !r.reason.is_empty()),
-        "y cada una dice POR QUÉ: atenuar sin decirlo deja al lector \
-         adivinando si la app está rota"
+        filas.iter().any(|r| r.chord == "F10" && r.enabled),
+        "y salir, que estuvo apagada en esta ventana, ya no lo está: {:?}",
+        filas
+            .iter()
+            .filter(|r| r.chord == "F10")
+            .map(|r| (&r.label, r.enabled))
+            .collect::<Vec<_>>()
     );
 }
 

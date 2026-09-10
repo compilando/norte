@@ -963,6 +963,23 @@ describe("el campo de texto de un diálogo", () => {
     }
   });
 
+  it("el campo conserva el FOCO a través del parche que provoca cada tecla", () => {
+    // Reusar el nodo no bastaba: la caja se rehace y el campo se mueve a la
+    // nueva, y mover un nodo lo saca del documento un instante — ahí perdía
+    // el foco. Borrar un número en «Tamaño de letra» dejaba el campo sin
+    // foco y la siguiente tecla se iba al host como un acorde.
+    const { screen } = montar();
+    screen.paint(conDialogo("10", false));
+    const campo = campoVivo();
+    campo.focus();
+    expect(document.activeElement).toBe(campo);
+    campo.value = "1";
+    campo.dispatchEvent(new Event("input", { bubbles: true }));
+    screen.paint(conDialogo("1", false));
+    expect(campoVivo()).toBe(campo);
+    expect(document.activeElement).toBe(campo);
+  });
+
   it("una contraseña se pinta como contraseña y no se resiembra con los puntos", () => {
     const { screen, enviadas } = montar();
     const v = conDialogo("", false);
@@ -1631,6 +1648,28 @@ describe("la barra de menús", () => {
     // Una entrada que esta ventana no ejecuta SIGUE saliendo: el menú es
     // donde se ve qué existe.
     expect(filas[1]?.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("el desplegable cuelga del título PINTADO, no de una cuenta en celdas", () => {
+    // Los títulos se pintan con relleno en píxeles y no miden lo mismo: una
+    // cuenta a `12ch` por título se desviaba más cuanto más a la derecha, y
+    // «Ayuda» abría su desplegable un título más allá. jsdom no maqueta, así
+    // que la geometría del título se finge: lo que se comprueba es que la
+    // medida del título es lo que coloca la lista.
+    const { screen } = montar();
+    const medida = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement): DOMRect {
+        const left = this.id === "menu-title-1" ? 123 : 0;
+        return new DOMRect(left, 0, 0, 0);
+      });
+    try {
+      screen.paint(conMenu(1));
+    } finally {
+      medida.mockRestore();
+    }
+    const lista = document.querySelector(".menu-items") as HTMLElement;
+    expect(lista.style.getPropertyValue("--menu-left")).toBe("123px");
   });
 
   it("el ratón despliega, señala, ejecuta y cierra", () => {
