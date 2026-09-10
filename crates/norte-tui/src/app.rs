@@ -1121,6 +1121,18 @@ impl App {
         self.menu = None;
     }
 
+    /// El comando resaltado en el menú, y el menú cerrado: lo que hacen
+    /// `Enter` y el clic sobre un elemento, por la misma puerta.
+    pub fn take_menu_choice(&mut self) -> Option<String> {
+        let chosen = self
+            .menu
+            .as_ref()
+            .and_then(norte_frontend::menu::MenuState::selected)
+            .map(str::to_string);
+        self.close_menu();
+        chosen
+    }
+
     /// Abre la barra de menús, o la cierra si ya estaba: la misma tecla hace
     /// las dos cosas, como el resto de los overlays.
     ///

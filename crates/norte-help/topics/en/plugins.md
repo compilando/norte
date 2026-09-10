@@ -53,6 +53,13 @@ that is what approving grants. The schemes norte serves itself — `file`,
 `sftp`, `ftp`, `s3` — cannot be claimed by an extension, so approving one never
 puts it in front of a built-in backend.
 
+The screen is the same in the terminal and in the window: the list on the
+left, the selected extension on the right with its state, its capabilities
+and a row of buttons — enable or disable, approve or revoke, settings,
+uninstall, help. Each button does exactly what its key does; the keys are in
+the footer. Clicking a row selects it, and clicking the selected row opens
+its settings, as `Enter` does.
+
 Extensions come in from the command line: `norte plugin install <dir>` brings
 one in unapproved, and `norte plugin list` shows the same two facts as this
 screen. They leave from either side. The remove key (and, in the window, the

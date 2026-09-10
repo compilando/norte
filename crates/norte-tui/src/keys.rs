@@ -108,13 +108,8 @@ pub async fn on_key(
                 // hacerlo por detrás de este dejaría el
                 // menú comiéndose las teclas del que
                 // acaba de abrirse.
-                let chosen = app
-                    .menu
-                    .as_ref()
-                    .and_then(norte_frontend::menu::MenuState::selected);
-                app.close_menu();
-                if let Some(id) = chosen
-                    && let Some(cmd) = Command::parse(id)
+                if let Some(id) = app.take_menu_choice()
+                    && let Some(cmd) = Command::parse(&id)
                 {
                     // MISMO camino que la palette y que
                     // el resolver: un comando elegido en

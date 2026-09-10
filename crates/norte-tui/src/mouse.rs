@@ -246,6 +246,9 @@ pub struct MouseState {
     /// Las filas pulsables del árbol del último frame, por lo mismo.
     /// Vacío = árbol cerrado, o sin sitio donde pintarlo.
     tree_zones: Vec<crate::ui::TreeZone>,
+    /// Las filas y los botones del gestor de extensiones del último frame.
+    /// Vacío = gestor cerrado.
+    extension_zones: Vec<crate::ui::ExtensionZone>,
     /// El indicador de sesión suelta de la barra de estado del último frame.
     /// `None` = la ventana es la dueña, o la barra estaba diciendo otra cosa.
     session_zone: Option<crate::ui::SessionZone>,
@@ -338,6 +341,8 @@ pub struct FrameZones {
     pub places: Vec<crate::ui::PlaceZone>,
     /// Las filas del árbol (#136).
     pub tree: Vec<crate::ui::TreeZone>,
+    /// Las filas y los botones del gestor de extensiones, si está abierto.
+    pub extensions: Vec<crate::ui::ExtensionZone>,
     /// El indicador de sesión suelta de la barra de estado, si se pintó.
     pub session: Option<crate::ui::SessionZone>,
     /// Los bordes arrastrables.
@@ -369,6 +374,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
         panels: panel_zones,
         places: places_zones,
         tree: tree_zones,
+        extensions: extension_zones,
         session: session_zone,
         borders,
         slots,
@@ -393,6 +399,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     app.mouse.panel_zones = panel_zones;
     app.mouse.places_zones = places_zones;
     app.mouse.tree_zones = tree_zones;
+    app.mouse.extension_zones = extension_zones;
     app.mouse.session_zone = session_zone;
     app.mouse.borders = borders;
     app.mouse.slots = slots;
@@ -451,6 +458,11 @@ pub enum After {
     /// loop abre la ayuda en la página que lo explica. Aquí no se puede: la
     /// ayuda se abre con la hoja de teclas y el idioma, que son del run loop.
     SessionHelp,
+    /// Se pulsó un botón de la ficha del gestor de extensiones, o la fila
+    /// ya elegida: el run loop despacha este comando por el MISMO camino
+    /// que su tecla (`on_extensions_click`). Aquí no se puede: encender,
+    /// aprobar o desinstalar hablan con el backend.
+    Extension(&'static str),
 }
 
 /// El índice ABSOLUTO en `entries` de una posición PINTADA del pane.
@@ -616,6 +628,57 @@ fn menu_click(app: &mut App, col: u16, row: u16) -> After {
     }
 }
 
+/// El ratón dentro del gestor de extensiones.
+///
+/// La rueda mueve el cursor de la lista. Un clic en una fila la elige; en la
+/// fila YA elegida abre sus ajustes, que es lo que su pie promete («pulsa
+/// Intro, o la fila»). Un clic en un botón de la ficha dispara el comando
+/// del botón — el MISMO que su tecla, nunca un segundo camino. Fuera de
+/// toda zona no pasa nada: el gestor es modal y un clic perdido no lo
+/// cierra, igual que una tecla que no está en su allowlist.
+///
+/// Elegir otra fila con los ajustes de la anterior abiertos los CIERRA:
+/// sin esto la ficha enseñaría un plugin y los ajustes de otro, y con la
+/// caja estrecha el panel de ajustes taparía la lista que se acaba de
+/// pulsar.
+fn extensions_mouse(app: &mut App, ev: MouseEvent) -> After {
+    let Some(mgr) = &mut app.extensions else {
+        return After::Nothing;
+    };
+    match ev.kind {
+        MouseEventKind::ScrollUp => mgr.up(),
+        MouseEventKind::ScrollDown => mgr.down(),
+        MouseEventKind::Down(MouseButton::Left) => {
+            let zona = app
+                .mouse
+                .extension_zones
+                .iter()
+                .find(|z| z.row == ev.row && ev.column >= z.x0 && ev.column <= z.x1)
+                .copied();
+            match zona.map(|z| z.hit) {
+                Some(crate::ui::ExtensionHit::Row(i)) if i == mgr.cursor => {
+                    return After::Extension("dialog.confirm");
+                }
+                Some(crate::ui::ExtensionHit::Row(i)) => {
+                    if i < mgr.plugins.len() {
+                        mgr.cursor = i;
+                        let otro = mgr.config.as_ref().is_some_and(|c| {
+                            mgr.plugins.get(i).is_none_or(|p| p.id != c.plugin_id)
+                        });
+                        if otro {
+                            mgr.config = None;
+                        }
+                    }
+                }
+                Some(crate::ui::ExtensionHit::Button(cmd)) => return After::Extension(cmd),
+                None => {}
+            }
+        }
+        _ => {}
+    }
+    After::Nothing
+}
+
 /// La zona de barra de pestañas bajo `(col, row)`, si hay alguna.
 fn tab_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::TabZone> {
     app.mouse
@@ -703,6 +766,40 @@ fn resize_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
     }
 }
 
+/// Lo que se atiende ANTES de los paneles: el menú, el visor, el gestor de
+/// extensiones y el cerrojo de los demás overlays. `Some` = el evento ya
+/// tiene dueño y los listados no lo ven.
+fn por_encima_de_los_paneles(app: &mut App, ev: MouseEvent) -> Option<After> {
+    let clic = matches!(ev.kind, MouseEventKind::Down(MouseButton::Left));
+    // La barra de menús se atiende ANTES de todo: es un overlay, así que
+    // mientras está abierta nada de detrás debe recibir un click, y sus propias
+    // zonas tienen que poder pulsarse.
+    if app.menu.is_some() {
+        return Some(if clic {
+            menu_click(app, ev.column, ev.row)
+        } else {
+            After::Nothing
+        });
+    }
+    // Con el menú CERRADO pero la barra fijada, un clic en la fila de la barra
+    // la abre. Va aquí y no más abajo porque esa fila no pertenece a ningún
+    // panel: sin este brazo el clic caía en el hit-test de los listados, que
+    // devuelve `None` para ella, y no pasaba nada.
+    if app.menu_bar && ev.row == 0 && clic {
+        return Some(menu_click(app, ev.column, ev.row));
+    }
+    if rueda_en_el_visor(app, ev) {
+        return Some(After::Nothing);
+    }
+    // El gestor de extensiones ANTES del cerrojo de los overlays: es un
+    // overlay, y hasta aquí eso significaba «el ratón no existe». Sus filas
+    // y sus botones se pintan; se pulsan.
+    if app.extensions.is_some() {
+        return Some(extensions_mouse(app, ev));
+    }
+    overlay_open(app).then_some(After::Nothing)
+}
+
 /// Un evento de ratón de crossterm, con el reloj real.
 pub fn handle(app: &mut App, ev: MouseEvent) -> After {
     handle_at(app, ev, Instant::now())
@@ -712,27 +809,8 @@ pub fn handle(app: &mut App, ev: MouseEvent) -> After {
 /// de tiempo, y un test que dependiera del reloj de la máquina sería un
 /// test que falla en CI un martes.
 pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
-    // La barra de menús se atiende ANTES de todo: es un overlay, así que
-    // mientras está abierta nada de detrás debe recibir un click, y sus propias
-    // zonas tienen que poder pulsarse.
-    if app.menu.is_some() {
-        if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
-            return menu_click(app, ev.column, ev.row);
-        }
-        return After::Nothing;
-    }
-    // Con el menú CERRADO pero la barra fijada, un clic en la fila de la barra
-    // la abre. Va aquí y no más abajo porque esa fila no pertenece a ningún
-    // panel: sin este brazo el clic caía en el hit-test de los listados, que
-    // devuelve `None` para ella, y no pasaba nada.
-    if app.menu_bar && ev.row == 0 && matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
-        return menu_click(app, ev.column, ev.row);
-    }
-    if rueda_en_el_visor(app, ev) {
-        return After::Nothing;
-    }
-    if overlay_open(app) {
-        return After::Nothing;
+    if let Some(after) = por_encima_de_los_paneles(app, ev) {
+        return after;
     }
     // #324: la barra de paneles, por el mismo motivo que la de menús — esa
     // fila no pertenece a ningún panel, así que sin este brazo el clic caía en
@@ -1351,6 +1429,12 @@ pub async fn on_mouse(
         self::After::SessionHelp => {
             crate::overlays::open_help_topic(app, lang, help_lines, SESSION_HELP_TOPIC);
         }
+        // Un botón del gestor de extensiones va por el MISMO despacho que su
+        // tecla: encender, aprobar, desinstalar y abrir los ajustes son
+        // decisiones del gestor, y el ratón solo las señala.
+        self::After::Extension(cmd) => {
+            crate::screens::on_extensions_click(app, backend, lang, help_lines, cmd).await;
+        }
         // #324: un botón de la barra de paneles va por el MISMO despacho que
         // su atajo. Dos caminos para abrir el mismo panel divergen en cuanto
         // uno de los dos crece un detalle — es la lección de ADR 0077 aplicada
@@ -1380,13 +1464,7 @@ pub async fn on_mouse(
         // que es lo que hace que un menú y una tecla no
         // puedan divergir.
         self::After::MenuAccept => {
-            let chosen = app
-                .menu
-                .as_ref()
-                .and_then(norte_frontend::menu::MenuState::selected)
-                .map(str::to_string);
-            app.close_menu();
-            if let Some(id) = chosen {
+            if let Some(id) = app.take_menu_choice() {
                 despachar_clic(
                     app,
                     backend,

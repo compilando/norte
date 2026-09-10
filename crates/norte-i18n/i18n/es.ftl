@@ -773,6 +773,7 @@ ext-enable = Encender
 ext-disable = Apagar
 ext-uninstall = Desinstalar
 ext-help = Ayuda
+ext-settings = Ajustes
 ext-close = Cerrar
 ext-installed = instaladas
 ext-enabled = encendidas

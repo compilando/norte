@@ -7,6 +7,19 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The terminal's extension manager answers the mouse.** It was the one
+  overlay where a click did nothing: no row selected, and none of the
+  buttons the window has. The detail pane now opens with a row of buttons —
+  enable or disable, approve or revoke, settings, uninstall, and help when
+  the extension ships a page — each firing exactly the command its key
+  fires. Clicking a row selects it, clicking the selected row opens its
+  settings as Enter does, and the wheel moves the cursor. Choosing another
+  row with a plugin's settings open closes them, so the pane never shows one
+  extension and the settings of another. The keys were always there and
+  still work.
+
 ### Changed
 
 - **The menu bar has ten groups, by what the reader wants to do.** File
