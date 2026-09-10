@@ -27,7 +27,9 @@ pub mod types;
 pub use remote::RemoteBackend;
 pub use remote::calls::to_taxonomy;
 pub use rpc::{Client, ClientError, is_version_mismatch};
-pub use socket::{default_socket_path, process_uid_best_effort};
+pub use socket::{
+    SPAWNED_DAEMON_IDLE_SECS, daemon_run_argv, default_socket_path, process_uid_best_effort,
+};
 pub use task::{RemoteTask, RemoteTaskCanceller};
 pub use types::{
     AI_CALL_TIMEOUT, ConnEvent, EntryStream, SyncPlanEvent, Transfer, TransferOptions,

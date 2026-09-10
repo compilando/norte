@@ -762,10 +762,9 @@ async fn make_backend(
         // El binario del daemon es `norte` (la CLI), no `norte-tui`: junto
         // al ejecutable actual dentro del mismo directorio de instalación.
         let daemon_bin = exe.with_file_name("norte");
-        let mut spawn_cmd: Vec<std::ffi::OsString> =
-            vec![daemon_bin.into(), "daemon".into(), "run".into()];
-        spawn_cmd.push("--socket".into());
-        spawn_cmd.push(socket.clone().into());
+        // El argv es el compartido: lo que arranca este terminal se apaga
+        // solo cuando su último cliente se va.
+        let spawn_cmd = norte_core::daemon::daemon_run_argv(daemon_bin, &socket);
         let remote = RemoteBackend::connect(
             socket,
             Some(spawn_cmd),
