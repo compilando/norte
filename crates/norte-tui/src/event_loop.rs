@@ -337,6 +337,16 @@ pub async fn run(
                 request_decorations(app, backend, &mut work.decorate, pane);
             }
         }
+        // El espacio libre del pie de cada panel (spec 2026-09-10): se pide
+        // cuando un listado aterriza o se refresca, y solo si el pie está
+        // encendido — con él apagado la tabla de montaje no le hace falta a
+        // nadie. Un fallo deja la cache como estaba: el pie calla el espacio
+        // antes que inventarlo.
+        if app.chrome.pane_footer() && std::mem::take(&mut app.volumes_stale) {
+            if let Ok(vols) = backend.volumes(false).await {
+                app.volumes = vols;
+            }
+        }
         turn::drain_pending(
             app,
             backend,

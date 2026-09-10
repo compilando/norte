@@ -132,6 +132,8 @@ export interface SlotDom {
   header: HTMLElement;
   scroller: HTMLElement;
   canvas: HTMLElement;
+  /** El pie del listado (cuentas, marcado, espacio libre). Vacío = oculto. */
+  footer: HTMLElement;
   rows: Map<number, HTMLElement>;
   /**
    * El aviso de «esperando», ESTABLE. No se crea en cada pintada porque su

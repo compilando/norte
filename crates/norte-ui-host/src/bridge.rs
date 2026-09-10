@@ -251,6 +251,9 @@ use serde::{Deserialize, Serialize};
 ///   `PaletteRowView.recent`: la fila va arriba por ser de las últimas
 ///   lanzadas, solo con la consulta vacía. `PanelBarView.names`: si los
 ///   botones enseñan su nombre (`[ui] panel_bar_style`) o solo la letra.
+///   `BrowserSlotView.footer` y `BrowserHeader.footer`: el pie del listado
+///   (cuentas, marcado, espacio libre), ya redactado; vacío con
+///   `[ui] pane_footer` apagado.
 pub const BRIDGE_VERSION: u32 = 63;
 
 /// Tope de una cadena que cruza al renderer, en bytes.

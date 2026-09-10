@@ -919,6 +919,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
             filling_note: "cargando… (3)".to_owned(),
             pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
             marked_note: "2 marcadas, 4,0 kB".to_owned(),
+            footer: "1 dirs · 2 ficheros · 4,0 kB · 2 marcadas, 4,0 kB · 120 GiB libres".to_owned(),
             columns: vec![
                 ColumnHeader {
                     id: "name".to_owned(),
@@ -2143,6 +2144,8 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
                 filling_note: "cargando… (3)".to_owned(),
                 pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
                 marked_note: "2 marcadas, 4,0 kB".to_owned(),
+                footer: "1 dirs · 2 ficheros · 4,0 kB · 2 marcadas, 4,0 kB · 120 GiB libres"
+                    .to_owned(),
                 marks: 4,
             },
         ),
@@ -2339,7 +2342,7 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
     // Puente 63: la ola de usabilidad (spec 2026-09-10).
-    const FORMA: u64 = 13_267_140_221_554_411_039;
+    const FORMA: u64 = 4_363_106_741_023_432_113;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

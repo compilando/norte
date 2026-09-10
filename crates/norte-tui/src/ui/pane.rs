@@ -294,6 +294,9 @@ pub(crate) fn draw_pane(
     // La espera que afecta a ESTE panel, si alguna y si ya pasa del umbral.
     // El filtro lo hace el llamante, que es quien sabe qué índice es este.
     busy: Option<&norte_frontend::busy::Busy>,
+    // El pie del panel (spec 2026-09-10), ya redactado por el llamante, que
+    // es quien tiene los volúmenes y el ajuste. `None` = apagado.
+    footer: Option<&str>,
 ) {
     let border_style = if focused {
         theme.role(Role::BorderFocus)
@@ -323,6 +326,14 @@ pub(crate) fn draw_pane(
         }
         input.push(' ');
         block = block.title_bottom(Line::styled(input, theme.role(Role::Title)));
+    } else if let Some(footer) = footer {
+        // El pie (spec 2026-09-10) va en el mismo hueco que el buscador y
+        // manda el más específico: mientras se teclea, lo tecleado. Se
+        // recorta por celdas a lo que el borde deja, sin comerse las
+        // esquinas.
+        let room = usize::from(area.width.saturating_sub(4));
+        let text = format!(" {} ", middle_ellipsis(footer, room));
+        block = block.title_bottom(Line::styled(text, theme.role(Role::BorderUnfocused)));
     }
     // Filtro activo: SOLO los índices visibles, con el cursor visual en la
     // posición DENTRO del filtrado. En Jump (quick_visible = None) el
@@ -791,6 +802,7 @@ mod draw_pane_attr_tests {
                     None,
                     false,
                     None,
+                    None,
                 );
             })
             .expect("draw");
@@ -870,6 +882,7 @@ mod draw_pane_attr_tests {
                     None,
                     false,
                     None,
+                    None,
                 );
             })
             .expect("draw");
@@ -929,6 +942,7 @@ mod draw_pane_attr_tests {
                         None,
                         false,
                         busy,
+                        None,
                     );
                 })
                 .expect("draw");
@@ -1015,6 +1029,7 @@ mod draw_pane_attr_tests {
                     None,
                     false,
                     Some(&busy),
+                    None,
                 );
             })
             .expect("draw");
@@ -1062,6 +1077,7 @@ mod draw_pane_attr_tests {
                     None,
                     false,
                     Some(&busy),
+                    None,
                 );
             })
             .expect("draw");

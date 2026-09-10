@@ -43,6 +43,7 @@ mod decoration;
 pub mod diffpair;
 pub mod display;
 pub mod error;
+pub mod footer;
 pub mod format;
 pub mod help;
 pub mod help_badge;

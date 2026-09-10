@@ -528,6 +528,13 @@ pub struct App {
     /// y el pie APAGADOS por lo mismo que la barra de paneles: una fila que
     /// aparece sola cambiaría los índices de ochenta tests que no van de esto.
     pub chrome: norte_config::UiChrome,
+    /// Los volúmenes del host, cacheados para el pie de cada panel (spec
+    /// 2026-09-10). Los pide el bucle cuando [`Self::volumes_stale`] lo
+    /// dice —al aterrizar un listado y al refrescar—, nunca un frame:
+    /// `host.volumes` monta y consulta espacio en cada filesystem.
+    pub volumes: Vec<norte_proto::methods::Volume>,
+    /// Hay que volver a pedir [`Self::volumes`].
+    pub volumes_stale: bool,
     /// La fila `..` está encendida (`[ui] parent_entry`).
     ///
     /// Se guarda aquí además de en cada pane porque un pane NUEVO —una
@@ -986,6 +993,8 @@ impl App {
                 pane_footer: Some(false),
                 ..Default::default()
             },
+            volumes: Vec::new(),
+            volumes_stale: true,
             pending_panel_command: None,
             // Apagada hasta que el arranque diga: un `App` de test no lee
             // configuración, y una fila que aparece sola cambiaría los

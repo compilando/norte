@@ -449,7 +449,12 @@ export class Screen {
       const canvas = document.createElement("div");
       canvas.className = "canvas";
       scroller.append(canvas);
-      el.append(tabs, title, header, scroller);
+      // El pie bajo el listado: cuentas, marcado y espacio libre, ya
+      // redactado en Rust. Vacío = `[ui] pane_footer` apagado, y no ocupa.
+      const footer = document.createElement("footer");
+      footer.className = "slot-footer";
+      footer.hidden = true;
+      el.append(tabs, title, header, scroller, footer);
       this.root.append(el);
       const busy = document.createElement("p");
       busy.className = "slot-busy";
@@ -461,6 +466,7 @@ export class Screen {
         header,
         scroller,
         canvas,
+        footer,
         busy,
         rows: new Map(),
         lastRange: null,
@@ -821,6 +827,10 @@ export class Screen {
     }
     dom.root.setAttribute("aria-label", slot.path_display);
     dom.generation = slot.generation;
+    // El pie (puente 63): vacío = apagado, y entonces no ocupa fila.
+    const pie = slot.footer ?? "";
+    dom.footer.textContent = pie;
+    dom.footer.hidden = pie === "";
 
     this.paintHeader(dom, slot);
 

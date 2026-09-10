@@ -174,6 +174,9 @@ export interface BrowserSlotView {
   pruned_note?: string;
   /** Cuantas hay marcadas y cuanto pesan, ya dicho. Vacio = sin marcas. */
   marked_note?: string;
+  /** El pie del listado (cuentas, marcado, espacio libre), ya redactado.
+   *  Vacio o ausente = `[ui] pane_footer` apagado. Puente 63. */
+  footer?: string;
   columns: ColumnHeader[];
   state: SlotState;
   quick: QuickView | null;
@@ -1167,6 +1170,7 @@ export type ViewChange =
       filling_note?: string;
       pruned_note?: string;
       marked_note?: string;
+      footer?: string;
       marks: number;
     }
   | { change: "slot_state"; slot_id: number; state: SlotState }

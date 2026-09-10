@@ -197,6 +197,9 @@ impl Estado {
         self.pedir_capacidades(slot, backend, buzon);
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
+        // Y el espacio libre del pie: este listado puede estar en otro
+        // volumen (spec 2026-09-10).
+        self.pedir_volumenes_de_pie(backend, buzon);
         // Y el árbol, si hay uno: este listado es dónde está mirando el panel
         // ahora, y el panel de al lado tiene que decir lo mismo.
         self.seguir_ramas(slot, backend, buzon);

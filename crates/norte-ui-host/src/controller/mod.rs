@@ -921,6 +921,10 @@ enum Fondo {
     /// Aparte de los del selector por el mismo motivo que los dos catálogos
     /// de plugins: son dos superficies con dos vidas.
     SitiosVolumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// Los volúmenes para el PIE de los listados (spec 2026-09-10). Aparte
+    /// de los de sitios y del selector por lo mismo: otra vida, y llega sin
+    /// que nadie haya abierto nada.
+    VolumenesDePie(Result<Vec<norte_proto::methods::Volume>, Error>),
     /// Los subdirectorios de una rama del ÁRBOL, ya filtrados y ordenados.
     ///
     /// Sin `Result`: una rama que no se deja leer llega VACÍA y se marca como
@@ -2640,6 +2644,12 @@ struct Estado {
     /// Las últimas claves lanzadas desde la paleta, la más reciente primero
     /// (spec 2026-09-10). Viven en la sesión de UI, como en el terminal.
     paleta_recientes: Vec<String>,
+    /// Los volúmenes del host, cacheados para el pie de cada listado (spec
+    /// 2026-09-10). Se piden cuando un listado aterriza, nunca por foto:
+    /// `host.volumes` monta y consulta espacio en cada filesystem.
+    volumenes_pie: Vec<norte_proto::methods::Volume>,
+    /// Hay una petición de [`Self::volumenes_pie`] en vuelo: no se apila otra.
+    pie_en_vuelo: bool,
     /// Por qué menú se desplegó la última vez. Se reabre por ahí: empezar
     /// siempre por el primero obliga a recorrer la barra entera en cada
     /// gesto, y quien usa dos entradas del mismo menú lo paga cada vez.
@@ -3205,6 +3215,8 @@ impl Estado {
             locale,
             paleta: None,
             paleta_recientes: Vec::new(),
+            volumenes_pie: Vec::new(),
+            pie_en_vuelo: false,
             menu: None,
             ayuda: None,
             ajustes: None,

@@ -1917,6 +1917,11 @@ pub struct BrowserSlotView {
     /// marcas.
     #[serde(default)]
     pub marked_note: String,
+    /// El pie del listado (spec 2026-09-10): cuántos directorios y ficheros,
+    /// cuánto pesan, lo marcado y el espacio libre del volumen, ya
+    /// redactado. Vacío = `[ui] pane_footer` apagado.
+    #[serde(default)]
+    pub footer: String,
     /// Las cabeceras de las columnas configuradas, en su orden. Incluye el
     /// nombre, que en las filas viaja aparte (`display_name`).
     pub columns: Vec<ColumnHeader>,
@@ -2800,6 +2805,11 @@ pub enum ViewChange {
         /// Cuántas entradas hay marcadas y cuánto pesan, ya dicho. Vacío sin
         /// marcas: quien no marca no gana ruido.
         marked_note: String,
+        /// El pie del listado (spec 2026-09-10), ya redactado; viaja con la
+        /// cabecera porque cambia con lo mismo que ella: marcar, ocultar,
+        /// rellenar. Vacío = `[ui] pane_footer` apagado.
+        #[serde(default)]
+        footer: String,
         /// Cuántas entradas hay marcadas, en crudo.
         ///
         /// Sigue viajando al lado de [`Self::BrowserHeader::marked_note`] y

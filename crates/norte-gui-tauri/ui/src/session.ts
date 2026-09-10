@@ -140,6 +140,7 @@ export class Session {
         slot.filling_note = c.filling_note ?? "";
         slot.pruned_note = c.pruned_note ?? "";
         slot.marked_note = c.marked_note ?? "";
+        slot.footer = c.footer ?? "";
         slot.marks = c.marks;
         return true;
       }

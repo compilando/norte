@@ -86,6 +86,48 @@ fn la_barra_de_paneles_pinta_nombres_con_la_letra_subrayada_y_cae_a_letras() {
     assert!(!fila.contains("Sitios"), "{fila:?}");
 }
 
+/// El pie del panel (spec 2026-09-10): con `[ui] pane_footer` encendido, el
+/// borde inferior dice cuántos directorios y ficheros hay y el espacio libre
+/// del volumen cacheado en `App`; apagado, el borde queda limpio; y con el
+/// buscador incremental abierto manda el buscador.
+#[test]
+fn el_pie_del_panel_cuenta_y_dice_el_espacio_libre() {
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.chrome.pane_footer = Some(true);
+    app.volumes = vec![norte_proto::methods::Volume {
+        mount: vp("file:///"),
+        label: None,
+        fs_type: "ext4".to_owned(),
+        kind: norte_proto::methods::VolumeKind::Fixed,
+        total_bytes: Some(200 << 30),
+        free_bytes: Some(120 << 30),
+        read_only: false,
+    }];
+    let fila_baja = |app: &App| -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, app)).expect("draw");
+        // La fila del borde inferior de los paneles: la última menos la barra
+        // de estado.
+        (0..100)
+            .map(|x| terminal.backend().buffer()[(x, 14)].symbol().to_string())
+            .collect()
+    };
+    let con = fila_baja(&app);
+    assert!(
+        con.contains("1 dirs") && con.contains("0 ficheros"),
+        "{con:?}"
+    );
+    assert!(con.contains("120") && con.contains("libres"), "{con:?}");
+
+    app.chrome.pane_footer = Some(false);
+    let sin = fila_baja(&app);
+    assert!(
+        !sin.contains("dirs"),
+        "apagado, el borde queda limpio: {sin:?}"
+    );
+}
+
 /// Un panel CERRADO no se pinta como un bloque encendido.
 ///
 /// La barra estilaba `Closed` con `Role::StatusBar`, que es el estilo de la

@@ -256,6 +256,19 @@ body {
   unicode-bidi: isolate;
 }
 
+/* El pie del listado: una fila bajo el desplazable, atenuada, que se recorta
+   por el final si no cabe. Oculta cuando `[ui] pane_footer` está apagado. */
+.slot-footer {
+  flex: 0 0 var(--cell-h);
+  padding: 0 6px;
+  color: var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-top: 1px solid var(--border);
+  unicode-bidi: isolate;
+}
+
 .slot[data-role="target"] .slot-title::after {
   content: " →";
   color: var(--border-focus);
