@@ -64,7 +64,9 @@ pub struct HostCatalog {
     /// No hay `norte.toml` de usuario todavía (spec 2026-09-10): el renderer
     /// abre el asistente de primer arranque al pintar la primera foto. Lo
     /// decide el arranque, que es quien mira el disco; `NORTE_NO_WIZARD` lo
-    /// apaga, como en el terminal.
+    /// apaga, como en el terminal. Con `default`: un catálogo anterior no lo
+    /// trae, y no traerlo es «no es el primero».
+    #[serde(default)]
     pub first_run: bool,
 }
 
