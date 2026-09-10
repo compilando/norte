@@ -467,6 +467,255 @@ async fn el_primer_esc_cierra_la_ficha_y_el_segundo_el_gestor() {
     );
 }
 
+/// Dos extensiones para los botones (puente 61): una aprobada y encendida,
+/// y una sin aprobar.
+fn dos_para_gobernar() -> Arc<Falso> {
+    arbol_con_plugins(
+        vec![extension("acme.ftp", "FTP de ACME", true), {
+            let mut p = extension("org.norte.demo", "Demo", false);
+            p.approved = false;
+            p.enabled = false;
+            p.capabilities = vec!["fs-read".to_owned()];
+            p
+        }],
+        &[("acme.ftp", "Conecta con un servidor FTP.")],
+    )
+}
+
+/// El botón de aprobar abre la MISMA pregunta que la tecla, con las
+/// capabilities dentro, y señala la fila: un botón no es un atajo para
+/// saltarse el consentimiento.
+#[tokio::test]
+async fn el_boton_de_aprobar_abre_la_misma_pregunta_que_la_tecla() {
+    let backend = dos_para_gobernar();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+
+    h.dispatch(UiAction::ExtensionGovern {
+        row: 1,
+        id: "org.norte.demo".to_owned(),
+        change: norte_ui_host::action::ExtensionChange::Approval,
+    })
+    .await
+    .expect("host vivo");
+    let d = siguientes_dialogos(&mut sub).await;
+    let pregunta = d.last().expect("pregunta");
+    assert_eq!(pregunta.title_key, "modal-extension-approve-title");
+    // Con la pregunta delante, ningún botón del gestor hace nada: es modal
+    // para el ratón como para el teclado. Un clic detrás revocaría sin
+    // preguntar, o cerraría el gestor bajo la pregunta.
+    for accion in [
+        UiAction::ExtensionGovern {
+            row: 0,
+            id: "acme.ftp".to_owned(),
+            change: norte_ui_host::action::ExtensionChange::Approval,
+        },
+        UiAction::ExtensionHelp {
+            row: 0,
+            id: "acme.ftp".to_owned(),
+        },
+    ] {
+        let ack = h.dispatch(accion).await.expect("host vivo");
+        assert!(matches!(ack, ActionAck::Stale { .. }), "{ack:?}");
+    }
+    assert!(backend.gobierno.lock().expect("gobierno").is_empty());
+    assert!(
+        pregunta.body.iter().any(|l| l.text == "fs-read"),
+        "las capabilities van dentro: {:?}",
+        pregunta.body
+    );
+    assert!(
+        backend.gobierno.lock().expect("gobierno").is_empty(),
+        "nada viaja antes del sí"
+    );
+    // Y la fila señalada es la del botón, no la que tenía el cursor.
+    let v = siguiente_extensiones(&mut sub)
+        .await
+        .expect("sigue abierto");
+    assert_eq!(v.cursor, 1);
+
+    h.dispatch(UiAction::Dialog {
+        id: pregunta.id,
+        choice: "approve".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+    assert_eq!(
+        backend.gobierno.lock().expect("gobierno").as_slice(),
+        ["approval:org.norte.demo:true:digest-de-org.norte.demo"]
+    );
+}
+
+/// Desinstalar PREGUNTA —por el botón y por la tecla igual— y solo el sí
+/// borra; después el catálogo se repide y la fila ya no está.
+#[tokio::test]
+async fn desinstalar_pregunta_y_solo_el_si_borra() {
+    let backend = dos_para_gobernar();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+
+    // La tecla (`d` es `dialog.remove` en orthodox): pregunta.
+    h.dispatch(tecla("d")).await.expect("host vivo");
+    let d = siguientes_dialogos(&mut sub).await;
+    let pregunta = d.last().expect("pregunta");
+    assert_eq!(pregunta.title_key, "modal-extension-uninstall-title");
+    assert_eq!(
+        pregunta.subject.as_ref().map(|s| s.text.as_str()),
+        Some("acme.ftp")
+    );
+    let si = pregunta
+        .choices
+        .iter()
+        .find(|c| c.id == "confirm")
+        .expect("la respuesta que borra");
+    assert!(si.destructive, "y viene marcada como lo que es");
+    assert_eq!(si.label_key, "dialog-uninstall", "y dice QUÉ confirma");
+    // Cancelar no borra nada.
+    h.dispatch(UiAction::Dialog {
+        id: pregunta.id,
+        choice: "cancel".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    let _ = siguientes_dialogos(&mut sub).await;
+    assert!(backend.gobierno.lock().expect("gobierno").is_empty());
+
+    // El botón: la misma pregunta, y el sí borra.
+    h.dispatch(UiAction::ExtensionGovern {
+        row: 0,
+        id: "acme.ftp".to_owned(),
+        change: norte_ui_host::action::ExtensionChange::Uninstall,
+    })
+    .await
+    .expect("host vivo");
+    let d = siguientes_dialogos(&mut sub).await;
+    let pregunta = d.last().expect("pregunta");
+    assert_eq!(pregunta.title_key, "modal-extension-uninstall-title");
+    h.dispatch(UiAction::Dialog {
+        id: pregunta.id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    // El catálogo se REPIDE tras el sí y llega detrás del parche del cursor:
+    // se espera al que ya no trae la borrada, no al primero que pase.
+    let mut sin_ella = None;
+    for _ in 0..20 {
+        let Some(v) = siguiente_extensiones(&mut sub).await else {
+            continue;
+        };
+        if !v.loading && v.rows.iter().all(|r| r.id != "acme.ftp") {
+            sin_ella = Some(v);
+            break;
+        }
+    }
+    let v = sin_ella.expect("la desinstalada deja de listarse");
+    assert_eq!(
+        backend.gobierno.lock().expect("gobierno").as_slice(),
+        ["uninstall:acme.ftp"]
+    );
+    assert_eq!(
+        v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ["org.norte.demo"]
+    );
+}
+
+/// Encender una sin aprobar por botón se rehúsa y se dice, como con la tecla.
+#[tokio::test]
+async fn encender_una_sin_aprobar_por_boton_se_rehusa() {
+    let backend = dos_para_gobernar();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+    let ack = h
+        .dispatch(UiAction::ExtensionGovern {
+            row: 1,
+            id: "org.norte.demo".to_owned(),
+            change: norte_ui_host::action::ExtensionChange::Enabled,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-extension-not-approved"),
+        "{ack:?}"
+    );
+    assert!(backend.gobierno.lock().expect("gobierno").is_empty());
+    // Una fila que ya no existe, o que ya no es la que el renderer vio —el
+    // catálogo se repide de fondo y una borrada por encima corre las de
+    // debajo—, no gobierna nada: apagar «la fila 0» habría apagado a la
+    // vecina.
+    for (row, id) in [(9, "acme.ftp"), (0, "org.norte.demo")] {
+        let ack = h
+            .dispatch(UiAction::ExtensionGovern {
+                row,
+                id: id.to_owned(),
+                change: norte_ui_host::action::ExtensionChange::Enabled,
+            })
+            .await
+            .expect("host vivo");
+        assert!(
+            matches!(ack, ActionAck::Stale { .. }),
+            "{row} {id}: {ack:?}"
+        );
+    }
+    assert!(backend.gobierno.lock().expect("gobierno").is_empty());
+}
+
+/// El botón de ayuda cierra el gestor y abre la ayuda en la página de ESA
+/// extensión, como `F1` sobre la fila en el terminal.
+#[tokio::test]
+async fn el_boton_de_ayuda_abre_la_pagina_de_esa_extension() {
+    let backend = dos_para_gobernar();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+
+    // Sin página no se abre nada, y se dice.
+    let ack = h
+        .dispatch(UiAction::ExtensionHelp {
+            row: 1,
+            id: "org.norte.demo".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
+
+    h.dispatch(UiAction::ExtensionHelp {
+        row: 0,
+        id: "acme.ftp".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    // El gestor se cierra primero: la ayuda lo sustituye, como en el
+    // terminal.
+    assert!(
+        siguiente_extensiones(&mut sub).await.is_none(),
+        "el gestor se cierra"
+    );
+    let mut pagina = None;
+    for _ in 0..20 {
+        let Some(v) = siguiente_ayuda(&mut sub).await else {
+            continue;
+        };
+        if v.topic_id == "acme.ftp" && !v.blocks.is_empty() {
+            pagina = Some(v);
+            break;
+        }
+    }
+    let pagina = pagina.expect("la página del plugin se abre y se instala");
+    assert!(format!("{:?}", pagina.blocks).contains("Conecta con un servidor FTP"));
+}
+
 /// Un nombre, un publicador y una descripción hostiles llegan enmascarados;
 /// un id inválido no llega en absoluto.
 #[tokio::test]

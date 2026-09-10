@@ -1126,7 +1126,21 @@ use crate::{
 /// escriba; y un cliente que tratara el badge exacto `fs-write` de forma
 /// especial deja de hacerlo. Un cliente 0.70 contra un daemon 0.69 no
 /// negocia.
-pub const PROTOCOL_VERSION: &str = "0.70.0";
+///
+/// # 0.71.0 — desinstalar por el wire (ADR 0104)
+///
+/// Un método nuevo, [`PLUGIN_UNINSTALL`]: el gestor de extensiones de la
+/// ventana y del terminal desinstalan sin pasar por la CLI. Borra el
+/// directorio del plugin y deja su estado apagado y sin aprobar — lo mismo
+/// que `norte plugin uninstall` hacía ya sobre disco, ahora también sobre el
+/// registro EN MEMORIA del daemon, que hasta aquí seguía listando lo borrado
+/// hasta reiniciar. SOLO conexiones User.
+///
+/// Ventana N=0.71.x / N-1=0.70.x. Aditivo: ningún mensaje que existía cambia.
+/// La pérdida, para un **cliente 0.70 contra un daemon 0.71**: ninguna — no
+/// sabe pedirlo y no lo pide. Un cliente 0.71 contra un daemon 0.70 no
+/// negocia.
+pub const PROTOCOL_VERSION: &str = "0.71.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2031,6 +2045,15 @@ pub const PLUGIN_SET_APPROVAL: &str = "plugin.set_approval";
 /// `plugin.set_enabled` — un HUMANO activa o desactiva un plugin (M4-P3). SOLO
 /// conexiones User (misma barrera que [`PLUGIN_SET_APPROVAL`]).
 pub const PLUGIN_SET_ENABLED: &str = "plugin.set_enabled";
+/// `plugin.uninstall` — un HUMANO desinstala un plugin (0.71.0, ADR 0104):
+/// borra su directorio bajo `plugins/` y deja su entrada de estado APAGADA y
+/// SIN APROBAR, para que uno que se instale después con el mismo id no herede
+/// un consentimiento que nadie le dio. SOLO conexiones User (misma barrera
+/// que [`PLUGIN_SET_APPROVAL`]): retirar un consentimiento es tan del humano
+/// como darlo, y borrar ficheros de su configuración, más. Irreversible por
+/// el wire: no hay `plugin.install` — instalar sigue siendo la CLI, que es
+/// donde está el directorio de origen.
+pub const PLUGIN_UNINSTALL: &str = "plugin.uninstall";
 /// `plugin.run_command` — ejecuta un comando de un plugin `command` APROBADO y
 /// ACTIVADO (M4-P4); el plugin corre sandboxeado; devuelve el string del
 /// comando o error.
@@ -7605,6 +7628,26 @@ pub struct PluginSetEnabledParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSetEnabledResult {}
+
+/// Params de [`PLUGIN_UNINSTALL`] (0.71.0, ADR 0104).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginUninstallParams {
+    /// Id del plugin a desinstalar. El daemon lo valida como id reverse-DNS
+    /// ANTES de convertirlo en ruta: un `..` sería un borrado fuera de
+    /// `plugins/`.
+    pub id: String,
+}
+
+/// Result de [`PLUGIN_UNINSTALL`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginUninstallResult {
+    /// `true` si el plugin tenía consentimiento al borrarlo: el informe lo
+    /// dice porque es lo que acaba de dejar de existir, y un frontend puede
+    /// avisar de que uno instalado después bajo el mismo id nace sin él.
+    pub was_approved: bool,
+}
 
 /// Params de [`PLUGIN_RUN_COMMAND`] (M4-P4).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

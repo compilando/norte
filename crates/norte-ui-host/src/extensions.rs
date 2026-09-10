@@ -182,6 +182,17 @@ impl Extensiones {
         self.filas.get(self.cursor)
     }
 
+    /// El catálogo crudo, para dárselo a la ayuda: sus páginas de extensión
+    /// salen de la misma lista que estas filas.
+    pub(crate) fn catalogo(&self) -> &[PluginInfo] {
+        &self.catalogo
+    }
+
+    /// Las filas tal como viajaron, para comprobar que un clic nombra una.
+    pub(crate) fn filas(&self) -> &[ExtensionRowView] {
+        &self.filas
+    }
+
     /// Lo que hay que ENSEÑAR antes de conceder capabilities: el nombre de
     /// la extensión y sus capabilities, cada una enmascarada por su cuenta y
     /// con su propia bandera.

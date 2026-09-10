@@ -1310,10 +1310,12 @@ fn version_ventana_actual() {
     // tampoco se enteró de que los hooks de un plugin se apagaron.
     // 0.70.0 (ADR 0101): un cliente 0.69 descarta el `kind` `effect-denied`
     // y no se entera de que su policy está impidiendo que un plugin escriba.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.70.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.69.0"), "N-1");
+    // 0.71.0 (ADR 0104): un cliente 0.70 no sabe pedir `plugin.uninstall` y
+    // no lo pide; desinstala por la CLI como hasta ahora. Nada se pierde.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.71.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.70.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.68.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.69.9"),
         "N-2 fuera de la ventana"
     );
 }

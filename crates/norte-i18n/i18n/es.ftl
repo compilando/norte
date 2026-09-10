@@ -761,6 +761,26 @@ ext-state-on = aprobada · encendida
 ext-state-off = aprobada · apagada
 ext-config-title = Sus ajustes
 ext-commands-title = Comandos
+# Puente 61: el gestor de la ventana gana una ficha con botones. Los cuatro
+# verbos son los del teclado (`dialog.add`, `dialog.toggle-enabled`,
+# `dialog.remove`, `app.help`) con su estado resuelto en la etiqueta, para
+# que un botón nunca diga «alternar». Los contadores los compone el renderer
+# como `N instaladas · M encendidas`: dos sustantivos, sin marcadores, porque
+# el catálogo de la ventana no lleva argumentos que rellenar.
+ext-approve = Aprobar
+ext-revoke = Revocar
+ext-enable = Encender
+ext-disable = Apagar
+ext-uninstall = Desinstalar
+ext-help = Ayuda
+ext-close = Cerrar
+ext-installed = instaladas
+ext-enabled = encendidas
+ext-actions = acciones sobre esta extensión
+ext-detail-hint = pulsa Intro, o la fila, para ver sus ajustes
+ext-errors-title = No cargaron
+ext-counts-commands = comandos
+ext-counts-columns = columnas
 plugin-output-title = Salida de la extensión
 plugin-output-empty = (no imprimió nada)
 plugin-output-truncated = la salida se cortó: era más larga de lo que cabe
@@ -2078,6 +2098,13 @@ host-extension-changed = las capabilities que declara han cambiado desde que se 
 host-extension-too-many-caps = declara demasiadas capabilities para poder leerlas en una pantalla; no se concede desde aquí
 host-extension-updated = hecho; el catálogo se vuelve a pedir para confirmarlo
 modal-extension-approve-title = ¿conceder estas capabilities?
+# Desinstalar desde el gestor (ADR 0104). La nota dice lo que se pierde —los
+# ficheros Y la aprobación— porque «¿desinstalar?» a secas se lee como
+# «¿apagar del todo?», y no es eso: una instalada después con el mismo id
+# nace sin aprobar.
+modal-extension-uninstall-title = ¿desinstalar esta extensión?
+modal-extension-uninstall-note = se borran sus ficheros y se retira su aprobación; no tiene vuelta
+dialog-uninstall = Desinstalar
 host-settings-closed = los ajustes se cerraron; el valor no se escribió
 msg-nav-at-root = ya estás en la raíz
 msg-nothing-selected = nada seleccionado

@@ -289,6 +289,21 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
                 Err(e) => app.message = Some(error_message(&e)),
             }
         }
+        // Desinstalar (ADR 0104) SIEMPRE pregunta: borra ficheros y retira
+        // el consentimiento, y no tiene vuelta. Mismo molde que conceder —el
+        // nombre saneado y con su bandera, el id aparte— y misma puerta de
+        // confirmación que borrar ficheros.
+        "dialog.remove" => {
+            let Some((id, name)) = mgr.selected().map(|p| (p.id.clone(), p.name.clone())) else {
+                return;
+            };
+            let (nombre, nombre_hostil) = crate::app::display_name(name.as_bytes());
+            app.modal = Some(crate::app::Modal::ConfirmPluginUninstall {
+                id,
+                name: nombre,
+                name_hostile: nombre_hostil,
+            });
+        }
         "dialog.confirm" => {
             let Some((id, name)) = mgr.selected().map(|p| (p.id.clone(), p.name.clone())) else {
                 return;
@@ -417,6 +432,19 @@ async fn revocar_o_decir(app: &mut App, backend: &Backend, id: &str) {
     match backend.plugins_set_approval(id, false, None).await {
         Ok(()) => relistar_extensiones(app, backend).await,
         Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+/// Desinstala —ya confirmado por un humano que leyó qué se pierde (ADR
+/// 0104)— y RELISTA. Un fallo se dice y se relista igual, por la misma
+/// razón que al conceder: la pantalla enseña lo que el core cree.
+pub(crate) async fn desinstalar_confirmada(app: &mut App, backend: &Backend, id: &str) {
+    match backend.plugins_uninstall(id).await {
+        Ok(_) => relistar_extensiones(app, backend).await,
+        Err(e) => {
+            app.message = Some(error_message(&e));
+            relistar_extensiones(app, backend).await;
+        }
     }
 }
 

@@ -183,6 +183,19 @@ enum Cambio {
     Aprobacion,
     /// Encenderla o apagarla.
     Encendido,
+    /// Desinstalarla (ADR 0104).
+    Desinstalacion,
+}
+
+impl From<crate::action::ExtensionChange> for Cambio {
+    fn from(c: crate::action::ExtensionChange) -> Self {
+        use crate::action::ExtensionChange as E;
+        match c {
+            E::Approval => Self::Aprobacion,
+            E::Enabled => Self::Encendido,
+            E::Uninstall => Self::Desinstalacion,
+        }
+    }
 }
 
 /// El cambio ya resuelto a un valor concreto.
@@ -197,6 +210,8 @@ enum Gobierno {
     Aprobar(bool, Option<String>),
     /// `plugin.set_enabled`.
     Encender(bool),
+    /// `plugin.uninstall` (ADR 0104). Ya confirmado por un humano.
+    Desinstalar,
 }
 
 /// Tope de capabilities que una pregunta de concesión puede enseñar.
@@ -2089,6 +2104,14 @@ enum Pendiente {
         /// entran en el ancla y NO en la lista que se pinta.
         digest: Option<String>,
     },
+    /// Desinstalar una extensión (ADR 0104): borrar sus ficheros y retirar
+    /// su consentimiento. Pregunta porque no tiene vuelta —no hay
+    /// `plugin.install` por el wire— y porque un plugin instalado después
+    /// bajo el mismo id nace sin la aprobación que este tenía.
+    DesinstalarExtension {
+        /// Cuál.
+        id: String,
+    },
     /// Decidir sobre una op de agente. La op real la tiene el daemon ligada
     /// al id: aquí solo viaja el sí o el no.
     Decidir {
@@ -3806,6 +3829,12 @@ impl Estado {
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
             UiAction::SettingsActivate { row } => self.activar_ajuste_por_raton(*row, buzon),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
+            UiAction::ExtensionGovern { row, id, change } => {
+                self.gobernar_por_raton(*row, id, (*change).into(), backend, buzon)
+            }
+            UiAction::ExtensionHelp { row, id } => {
+                self.ayuda_de_extension(*row, id, backend, buzon)
+            }
             UiAction::SelectTab { slot_id } => self.elegir_pestana(*slot_id, backend, buzon),
             UiAction::AgentSelectRow { row, generation } => self.elegir_agente(*row, *generation),
             UiAction::PickerSelectRow { row, generation } => {

@@ -277,6 +277,9 @@ export class Screen {
   readonly extensionDetail = extensions.extensionDetail;
 
   /** En `render/extensions.ts`. */
+  readonly extensionPaneHead = extensions.extensionPaneHead;
+
+  /** En `render/extensions.ts`. */
   readonly extensionCommands = extensions.extensionCommands;
 
   /** En `render/extensions.ts`. */

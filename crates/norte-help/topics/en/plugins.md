@@ -53,10 +53,14 @@ that is what approving grants. The schemes norte serves itself — `file`,
 `sftp`, `ftp`, `s3` — cannot be claimed by an extension, so approving one never
 puts it in front of a built-in backend.
 
-Extensions come and go from the command line: `norte plugin install <dir>`
-brings one in unapproved, `norte plugin list` shows the same two facts as this
-screen, and `norte plugin uninstall <id>` removes it **and its approval** — a
-plugin installed later under the same id starts from nothing.
+Extensions come in from the command line: `norte plugin install <dir>` brings
+one in unapproved, and `norte plugin list` shows the same two facts as this
+screen. They leave from either side. The remove key (and, in the window, the
+button) on this screen asks first, because uninstalling deletes the
+extension's files **and its approval** — a plugin installed later under the
+same id starts from nothing. `norte plugin uninstall <id>` does the same
+without asking, and a daemon already running does not notice until it
+restarts.
 
 > 💡 `norte doctor` reports what is wrong with an installed extension: a manifest that does not parse, a digest that no longer matches, a help page over the size limit.
 

@@ -152,6 +152,8 @@ struct ProtocolSchema {
     plugin_set_config_result: PluginSetConfigResult,
     plugin_set_enabled_params: PluginSetEnabledParams,
     plugin_set_enabled_result: PluginSetEnabledResult,
+    plugin_uninstall_params: PluginUninstallParams,
+    plugin_uninstall_result: PluginUninstallResult,
     policy_approval_required: PolicyApprovalRequired,
     policy_decide_params: PolicyDecideParams,
     policy_decide_result: PolicyDecideResult,

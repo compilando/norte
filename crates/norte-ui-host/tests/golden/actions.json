@@ -49,6 +49,17 @@
     "action": "directory_picked",
     "path": "/home/oscar/destino"
   },
+  "extension_govern": {
+    "action": "extension_govern",
+    "change": "uninstall",
+    "id": "org.norte.demo",
+    "row": 1
+  },
+  "extension_help": {
+    "action": "extension_help",
+    "id": "org.norte.demo",
+    "row": 1
+  },
   "extension_select_row": {
     "action": "extension_select_row",
     "row": 1

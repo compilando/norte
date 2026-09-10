@@ -136,6 +136,10 @@ pub async fn on_dialog_key(
 /// El `match` sigue siendo EXHAUSTIVO a propósito: nombrar los modales que no
 /// confirman nada es lo que hace que añadir uno nuevo sea un error de
 /// compilación en vez de un Enter que hace algo a escondidas.
+#[expect(
+    clippy::too_many_lines,
+    reason = "un brazo por modal que confirma: la lista es literal a propósito"
+)]
 pub async fn confirm_modal(
     app: &mut App,
     backend: &Backend,
@@ -157,6 +161,9 @@ pub async fn confirm_modal(
         Modal::ConfirmPluginApproval { id, digest, .. } => {
             crate::screens::extensions::conceder_aprobacion(app, backend, &id, digest.as_deref())
                 .await;
+        }
+        Modal::ConfirmPluginUninstall { id, .. } => {
+            crate::screens::extensions::desinstalar_confirmada(app, backend, &id).await;
         }
         Modal::ConfirmTransfer {
             kind, items, to, ..

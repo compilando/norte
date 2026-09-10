@@ -81,6 +81,30 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **An extension is uninstalled from the manager, on both frontends** (ADR
+  0104, protocol 0.71.0). `plugin.uninstall` does what `norte plugin
+  uninstall` did on disk — delete the directory, leave the state switched off
+  and unapproved — and then what the CLI could not: the daemon forgets the
+  plugin in its in-memory registry, so it stops being listed, and stops
+  decorating listings, at once instead of at the next restart. Human
+  connections only, like approving. The manager binds it to `dialog.remove`
+  (`d` in the bundled presets; the imported four inherit the dialog block) and
+  always asks first, naming the extension and saying the two things that go:
+  its files, and its approval — a plugin installed later under the same id
+  starts unapproved. Cancelling sends nothing.
+- **The window's extension manager has a detail pane and buttons** (bridge
+  61). Two panes: the installed extensions on the left — name, version, a
+  state pill that says both facts, publisher and category, description,
+  capabilities as chips — and the selected one on the right, with **Approve**
+  or **Revoke**, **Enable** or **Disable**, **Help** when it ships a page, and
+  **Uninstall**, followed by its settings sheet or a hint saying how to open
+  it. A header counts what is installed and what is on. The buttons carry no
+  logic: each sends the row and the change, and the host walks the same path
+  the key does — approving opens the consent dialog that enumerates the
+  capabilities, enabling an unapproved extension is refused with the same
+  message (the button is disabled and its tooltip says why), uninstalling
+  asks. `Help` closes the manager and opens the help at that extension's page,
+  as `F1` over the row does in the terminal.
 - **The window writes settings** (bridge 60). F11 in the window was a showcase:
   it listed the shared registry with each effective value and told you it did
   not write. Now `enter` (or a double click) does what it does in the terminal:

@@ -1046,6 +1046,8 @@ impl Estado {
                         // del sistema de extensiones: una ventana que se
                         // declara de solo lectura no la toma.
                         | Pendiente::AprobarExtension { .. }
+                        // Desinstalar BORRA ficheros de la configuración.
+                        | Pendiente::DesinstalarExtension { .. }
                         // Deshacer una sesión ESCRIBE: mueve ficheros de
                         // vuelta y borra lo que el agente creó.
                         | Pendiente::DeshacerSesion { .. }

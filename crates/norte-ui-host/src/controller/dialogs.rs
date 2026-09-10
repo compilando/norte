@@ -371,6 +371,9 @@ impl Estado {
                 rehusado = motivo;
                 salidas.extend(partes);
             }
+            Some(Pendiente::DesinstalarExtension { id }) => {
+                salidas.extend(self.gobernar(&id, Gobierno::Desinstalar, backend, buzon));
+            }
             Some(Pendiente::Decidir {
                 approval_id,
                 session,

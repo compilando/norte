@@ -1193,7 +1193,9 @@ fn golden_methods() {
     // `plugin_info_with_hook_badges` — los badges `hook:<evento>` y
     // `fs-write:<nombre>` que un hook enseña al aprobarse; sin fixtura, su
     // forma en el wire no la congelaba nada.
-    assert_eq!(fixtures.len(), 205, "[methods.json] fixtures sin caso Rust");
+    // 205 → 207 en 0.71.0 (ADR 0104): + `plugin_uninstall_params` y
+    // `plugin_uninstall_result`.
+    assert_eq!(fixtures.len(), 207, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -2291,7 +2293,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
 fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
         PluginListParams, PluginSetApprovalParams, PluginSetApprovalResult, PluginSetEnabledParams,
-        PluginSetEnabledResult,
+        PluginSetEnabledResult, PluginUninstallParams, PluginUninstallResult,
     };
     // `plugin.list` sin params: golden vacío, simetría con `task_list_params`.
     check_one(fixtures, "plugin_list_params", &PluginListParams {});
@@ -2337,6 +2339,20 @@ fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
         fixtures,
         "plugin_set_enabled_result",
         &PluginSetEnabledResult {},
+    );
+    // 0.71.0 (ADR 0104): desinstalar por el wire. El result dice si había
+    // consentimiento, que es lo que acaba de dejar de existir.
+    check_one(
+        fixtures,
+        "plugin_uninstall_params",
+        &PluginUninstallParams {
+            id: "org.norte.demo".into(),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_uninstall_result",
+        &PluginUninstallResult { was_approved: true },
     );
 }
 
@@ -4394,7 +4410,10 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_NOTICE, "plugin.notice");
     // 0.70.0 (ADR 0101): ningún método nuevo — un valor más en el
     // vocabulario de `PluginNotice::kind`, `effect-denied`.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.70.0");
+    // 0.71.0 (ADR 0104): `plugin.uninstall`, el gestor de extensiones
+    // desinstala sin pasar por la CLI. Solo humanos, como sus hermanos.
+    assert_eq!(methods::PLUGIN_UNINSTALL, "plugin.uninstall");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.71.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

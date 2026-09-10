@@ -232,6 +232,7 @@ rpc_catalogo! {
     PLUGIN_LIST, Request, Direct, methods::PluginListParams, methods::PluginListResult;
     PLUGIN_SET_APPROVAL, Request, Direct, methods::PluginSetApprovalParams, methods::PluginSetApprovalResult;
     PLUGIN_SET_ENABLED, Request, Direct, methods::PluginSetEnabledParams, methods::PluginSetEnabledResult;
+    PLUGIN_UNINSTALL, Request, Direct, methods::PluginUninstallParams, methods::PluginUninstallResult;
     PLUGIN_RUN_COMMAND, Request, Direct, methods::PluginRunCommandParams, methods::PluginRunCommandResult;
     PLUGIN_PREVIEW, Request, Direct, methods::PluginPreviewParams, methods::PluginPreviewResult;
     PLUGIN_PREVIEW_STYLED, Request, Direct, methods::PluginPreviewStyledParams, methods::PluginPreviewStyledResult;

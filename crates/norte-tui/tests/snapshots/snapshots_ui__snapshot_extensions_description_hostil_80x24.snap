@@ -23,6 +23,6 @@ expression: text
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
-"│  └ [Enter] confirmar [y] aprobar [Esc] cancelar [e] activar ──────────────┘  │"
+"│  └ [Enter] confirmar [y] aprobar [Esc] cancelar [e] activar [d] borrar ───┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
 " /casa  2/5                                                                     "

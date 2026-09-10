@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::Path;
 
-use norte_ui_host::action::UiAction;
+use norte_ui_host::action::{ExtensionChange, UiAction};
 use norte_ui_host::bridge::{ActionAck, BridgeEnvelope, InstanceId, ModalId, RowKey, StaleAction};
 use norte_ui_host::dto::{
     BrowserSlotView, CellView, ColumnHeader, ConnectionView, DialogChoice, DialogView, LayoutView,
@@ -185,6 +185,8 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::SettingsSelectRow { .. } => "settings_select_row",
         UiAction::SettingsActivate { .. } => "settings_activate",
         UiAction::ExtensionSelectRow { .. } => "extension_select_row",
+        UiAction::ExtensionGovern { .. } => "extension_govern",
+        UiAction::ExtensionHelp { .. } => "extension_help",
         UiAction::AgentSelectRow { .. } => "agent_select_row",
         UiAction::SelectTab { .. } => "select_tab",
         UiAction::PickerSelectRow { .. } => "picker_select_row",
@@ -317,6 +319,33 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
     ]
 }
 
+/// Los tres cambios de `extension_govern` (puente 61), por su nombre de
+/// wire. Fuera de la familia golden porque ahí solo cabe un caso por
+/// variante, y los otros dos son igual de fáciles de escribir mal.
+#[test]
+fn los_tres_cambios_de_una_extension_viajan_por_su_nombre() {
+    for (change, nombre) in [
+        (ExtensionChange::Approval, "approval"),
+        (ExtensionChange::Enabled, "enabled"),
+        (ExtensionChange::Uninstall, "uninstall"),
+    ] {
+        let a = UiAction::ExtensionGovern {
+            row: 0,
+            id: "acme.ftp".to_owned(),
+            change,
+        };
+        let json = serde_json::to_value(&a).expect("serializa");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "action": "extension_govern", "row": 0, "id": "acme.ftp", "change": nombre
+            })
+        );
+        let back: UiAction = serde_json::from_value(json).expect("deserializa");
+        assert_eq!(back, a);
+    }
+}
+
 /// Cerrar el selector sin elegir viaja como `null`, y vuelve como `None`
 /// (#284). Fuera de la familia golden porque ahí solo cabe un caso por
 /// variante — pero la forma en el cable importa igual: un renderer que
@@ -348,6 +377,24 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
         (
             "extension_select_row",
             UiAction::ExtensionSelectRow { row: 1 },
+        ),
+        // Puente 61: el botón. `uninstall` y no `approval` porque es el
+        // valor cuyo nombre de wire más cuesta arreglar después: un renderer
+        // que lo escriba mal desinstala nada, en silencio.
+        (
+            "extension_govern",
+            UiAction::ExtensionGovern {
+                row: 1,
+                id: "org.norte.demo".to_owned(),
+                change: ExtensionChange::Uninstall,
+            },
+        ),
+        (
+            "extension_help",
+            UiAction::ExtensionHelp {
+                row: 1,
+                id: "org.norte.demo".to_owned(),
+            },
         ),
         ("select_tab", UiAction::SelectTab { slot_id: 3 }),
         (

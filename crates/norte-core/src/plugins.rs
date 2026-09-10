@@ -971,6 +971,32 @@ impl PluginRegistry {
         true
     }
 
+    /// Olvida EN MEMORIA un plugin que [`uninstall`] acaba de borrar del
+    /// disco: sale del catálogo y su estado queda apagado y sin aprobar, que
+    /// es exactamente lo que `uninstall` dejó escrito en `plugins-state.toml`.
+    ///
+    /// Devuelve `true` si estaba en el catálogo. Un plugin ROTO —que
+    /// `uninstall` borra igual— no está en `plugins` sino en `errors`, y se
+    /// olvida de ahí: si no, el daemon seguía anunciándolo como «no cargó»
+    /// hasta reiniciar, el mismo cadáver con otro nombre. Sin esto el daemon
+    /// seguía listando lo borrado, y decorando con ello, hasta reiniciar.
+    ///
+    /// Un id que no es un id no toca nada: la entrada de estado que se
+    /// inserta se escribe a `plugins-state.toml` en el siguiente persist, como
+    /// clave, y esta función es `pub`.
+    pub fn forget_in_memory(&mut self, id: &str) -> bool {
+        if !norte_plugin_host::is_valid_plugin_id(id) {
+            return false;
+        }
+        let antes = self.catalog.plugins.len();
+        self.catalog.plugins.retain(|e| e.manifest.id != id);
+        self.catalog
+            .errors
+            .retain(|e| e.dir.file_name() != Some(std::ffi::OsStr::new(id)));
+        self.state.insert(id.to_owned(), PluginState::default());
+        self.catalog.plugins.len() != antes
+    }
+
     /// Fija el estado `approved` de un plugin descubierto y lo persiste, todo en
     /// el MISMO hilo. Es la API para el uso EMBEBIDO, que ya corre dentro de un
     /// `spawn_blocking` (backend del frontend). El daemon NO usa esto: separa la
@@ -1473,6 +1499,11 @@ impl PluginRegistry {
     }
 }
 
+/// Numera los temporales de [`persist_state`] dentro de este proceso: dos
+/// escrituras en vuelo desde dos hilos con el mismo nombre renombraban a
+/// medias la una sobre la otra.
+static SERIE_DE_ESCRITURA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Re-emite `config_dir/plugins-state.toml` preservando el resto del fichero,
 /// con una entrada por cada plugin con estado. La clave con puntos se
 /// entrecomilla.
@@ -1523,11 +1554,14 @@ pub(crate) fn persist_state(
     }
     // Write atómico: temporal en el mismo dir (mismo filesystem → rename atómico)
     // + rename sobre el destino. El sufijo con el pid evita pisar el temporal de
-    // otro proceso que persista a la vez.
+    // otro proceso que persista a la vez; el contador, el de otro HILO de este
+    // (el daemon persiste desde `spawn_blocking`, y dos escrituras en vuelo
+    // con el mismo nombre renombraban a medias la una sobre la otra).
     let tmp = config_dir.join(format!(
-        "{}.tmp.{}",
+        "{}.tmp.{}.{}",
         PluginRegistry::STATE_FILE,
-        std::process::id()
+        std::process::id(),
+        SERIE_DE_ESCRITURA.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::write(&tmp, doc.to_string())?;
     std::fs::rename(&tmp, &path)

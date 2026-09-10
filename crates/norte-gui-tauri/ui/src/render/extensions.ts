@@ -4,6 +4,7 @@
 import type { Screen } from "../render";
 import type {
   ExtensionsView,
+  ExtensionRowView,
   AgentsView,
   ExtensionCommandView,
   ExtensionOutputView,
@@ -12,12 +13,15 @@ import type {
 import { revelar, badge } from "./dom";
 
 /**
- * El gestor de extensiones (F12), en solo lectura.
+ * El gestor de extensiones (F12): la lista a la izquierda y, a la derecha,
+ * la ficha de la elegida con sus botones (puente 61).
  *
  * Las capabilities van en la FILA y no escondidas tras un gesto: son la
- * decisión que un humano aprueba, y esta ventana la enseña sin poder
- * tomarla. No hay ni un control para aprobar o encender: lo que no está no
- * se pulsa por accidente.
+ * decisión que un humano aprueba. Los botones no toman esa decisión por su
+ * cuenta: mandan la MISMA acción que la tecla, y es el host quien pregunta
+ * —conceder enumera las capabilities, desinstalar dice qué se pierde— antes
+ * de tocar nada. Aprobar y desinstalar se pintan como lo que son, no como
+ * el «Aceptar» de un aviso.
  */
 export function paintExtensions(this: Screen, ext: ExtensionsView | null): void {
   if (ext === null) {
@@ -32,28 +36,60 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
   caja.setAttribute("aria-modal", "true");
   caja.setAttribute("aria-label", this.t("ext-title"));
 
+  const cabecera = document.createElement("header");
+  cabecera.className = "extensions-head";
   const titulo = document.createElement("h1");
   titulo.textContent = this.t("ext-title");
-  caja.append(titulo);
-
+  cabecera.append(titulo);
+  const resumen = document.createElement("span");
+  resumen.className = "extensions-summary";
   if (ext.loading) {
     // «Cargando» y «ninguna» no son lo mismo, y una lista vacía sin este
     // aviso se lee como lo segundo.
-    const cargando = document.createElement("p");
-    cargando.className = "extensions-note";
-    cargando.setAttribute("role", "status");
-    cargando.textContent = this.t("ext-loading");
-    caja.append(cargando);
-  } else if (ext.rows.length === 0) {
-    const vacio = document.createElement("p");
-    vacio.className = "extensions-note";
-    vacio.textContent = this.t("ext-empty");
-    caja.append(vacio);
+    resumen.classList.add("extensions-note");
+    resumen.setAttribute("role", "status");
+    resumen.textContent = this.t("ext-loading");
+  } else {
+    // Dos cuentas y no una: «7 instaladas» con «6 encendidas» es la
+    // pregunta que trae a alguien a esta pantalla.
+    const encendidas = ext.rows.filter((r) => r.approved && r.enabled).length;
+    resumen.textContent = `${String(ext.rows.length)} ${this.t("ext-installed")} · ${String(
+      encendidas,
+    )} ${this.t("ext-enabled")}`;
   }
+  cabecera.append(resumen);
+  const cerrar = document.createElement("button");
+  cerrar.type = "button";
+  cerrar.className = "extensions-close";
+  cerrar.setAttribute("aria-label", this.t("ext-close"));
+  cerrar.textContent = "×";
+  cerrar.addEventListener("click", () => {
+    // La misma tecla que cierra: el host decide si el primer `esc` cierra
+    // una ficha o el gestor, y un botón que lo decidiera aparte divergiría.
+    this.send({
+      action: "key",
+      key: "Escape",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    });
+  });
+  cabecera.append(cerrar);
+  caja.append(cabecera);
+
+  const cuerpo = document.createElement("div");
+  cuerpo.className = "extensions-body";
 
   const lista = document.createElement("ul");
   lista.className = "extensions-rows";
   lista.setAttribute("role", "listbox");
+  if (!ext.loading && ext.rows.length === 0) {
+    const vacio = document.createElement("p");
+    vacio.className = "extensions-note";
+    vacio.textContent = this.t("ext-empty");
+    lista.append(vacio);
+  }
   for (const [i, r] of ext.rows.entries()) {
     const fila = document.createElement("li");
     fila.className = "extensions-row";
@@ -64,24 +100,16 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
       this.send({ action: "extension_select_row", row: i });
     });
 
+    const principal = document.createElement("div");
+    principal.className = "extensions-row-main";
     const nombre = document.createElement("span");
     nombre.className = "extensions-name";
     nombre.textContent = r.name;
     const version = document.createElement("span");
     version.className = "extensions-version";
     version.textContent = r.version;
-    fila.append(nombre, version);
-
-    const estado = document.createElement("span");
-    estado.className = "extensions-state";
-    // DOS hechos independientes, y se dicen los dos: una extensión
-    // aprobada pero apagada no es lo mismo que una sin aprobar.
-    estado.dataset["approved"] = String(r.approved);
-    estado.dataset["enabled"] = String(r.enabled);
-    estado.textContent = r.approved
-      ? this.t(r.enabled ? "ext-state-on" : "ext-state-off")
-      : this.t("ext-unapproved");
-    fila.append(estado);
+    principal.append(nombre, version, estadoDe(r, this.t.bind(this)));
+    fila.append(principal);
 
     const meta = document.createElement("span");
     meta.className = "extensions-meta";
@@ -99,32 +127,38 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
       fila.append(desc);
     }
 
-    const caps = document.createElement("ul");
-    caps.className = "extensions-caps";
-    for (const c of r.capabilities) {
-      const cap = document.createElement("li");
-      cap.className = "extensions-cap";
-      cap.textContent = c;
-      caps.append(cap);
-    }
     if (r.capabilities.length > 0) {
-      fila.append(caps);
+      fila.append(capsDe(r.capabilities));
     }
     lista.append(fila);
   }
   if (ext.rows.length > 0) {
     lista.setAttribute("aria-activedescendant", `extension-row-${String(ext.cursor)}`);
   }
-  caja.append(lista);
+  cuerpo.append(lista);
 
-  if (ext.detail !== null) {
-    // La ficha se titula con el NOMBRE de su extensión, no con «sus
-    // ajustes» a secas: con la lista desplazada, la fila elegida puede no
-    // estar a la vista y la ficha se quedaba sin dueño visible.
-    const suya = ext.rows.find((r) => r.id === ext.detail?.id);
-    caja.append(this.extensionDetail(ext.detail, suya?.name ?? ""));
+  const panel = document.createElement("article");
+  panel.className = "extensions-pane";
+  const elegida = ext.rows[ext.cursor];
+  if (elegida !== undefined) {
+    panel.append(this.extensionPaneHead(elegida, ext.cursor));
+    if (ext.detail !== null && ext.detail.id === elegida.id) {
+      panel.append(this.extensionDetail(ext.detail, elegida.name));
+    } else {
+      const pista = document.createElement("p");
+      pista.className = "extensions-note extensions-detail-hint";
+      pista.textContent = this.t("ext-detail-hint");
+      panel.append(pista);
+    }
   }
+  cuerpo.append(panel);
+  caja.append(cuerpo);
+
   if (ext.errors.length > 0) {
+    const titulo = document.createElement("h2");
+    titulo.className = "extensions-errors-title";
+    titulo.textContent = this.t("ext-errors-title");
+    caja.append(titulo);
     const errores = document.createElement("ul");
     errores.className = "extensions-errors";
     for (const e of ext.errors) {
@@ -152,6 +186,160 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
   }
   this.extensionsRoot.replaceChildren(caja);
   revelar(lista.querySelector(`#extension-row-${String(ext.cursor)}`) ?? undefined);
+}
+
+/** La píldora de estado: DOS hechos independientes, y se dicen los dos. */
+function estadoDe(r: ExtensionRowView, t: (key: string) => string): HTMLElement {
+  const estado = document.createElement("span");
+  estado.className = "extensions-state";
+  estado.dataset["approved"] = String(r.approved);
+  estado.dataset["enabled"] = String(r.enabled);
+  estado.textContent = r.approved
+    ? t(r.enabled ? "ext-state-on" : "ext-state-off")
+    : t("ext-unapproved");
+  return estado;
+}
+
+/** Las capabilities como fichas, una por nodo: texto de tercero. */
+function capsDe(capabilities: string[]): HTMLElement {
+  const caps = document.createElement("ul");
+  caps.className = "extensions-caps";
+  for (const c of capabilities) {
+    const cap = document.createElement("li");
+    cap.className = "extensions-cap";
+    cap.textContent = c;
+    caps.append(cap);
+  }
+  return caps;
+}
+
+/**
+ * La cabecera de la ficha (puente 61): quién es, cómo está, y los botones.
+ *
+ * Cada botón dice lo que VA a hacer, resuelto desde el estado —«Revocar»
+ * sobre una aprobada, «Aprobar» sobre una que no—, y manda la misma acción
+ * que la tecla; el host resuelve igual y pregunta lo que haya que preguntar.
+ * Encender una sin aprobar no se ofrece: el botón está deshabilitado y su
+ * `title` dice por qué, con la frase que el host contestaría.
+ */
+export function extensionPaneHead(
+  this: Screen,
+  r: ExtensionRowView,
+  row: number,
+): HTMLElement {
+  const cabecera = document.createElement("header");
+  cabecera.className = "extensions-pane-head";
+
+  const nombre = document.createElement("h2");
+  nombre.className = "extensions-pane-name";
+  nombre.textContent = r.name;
+  cabecera.append(nombre);
+
+  const meta = document.createElement("div");
+  meta.className = "extensions-pane-meta";
+  const version = document.createElement("span");
+  version.className = "extensions-version";
+  version.textContent = r.version;
+  meta.append(version);
+  if (r.publisher !== "") {
+    const quien = document.createElement("span");
+    quien.className = "extensions-publisher";
+    quien.textContent = r.publisher;
+    meta.append(quien);
+  }
+  const categoria = document.createElement("span");
+  categoria.className = "extensions-category";
+  categoria.textContent = r.category;
+  meta.append(categoria, estadoDe(r, this.t.bind(this)));
+  cabecera.append(meta);
+
+  if (r.description !== "") {
+    const desc = document.createElement("p");
+    desc.className = "extensions-pane-desc";
+    desc.textContent = r.description;
+    cabecera.append(desc);
+  }
+
+  const acciones = document.createElement("div");
+  acciones.className = "extensions-actions";
+  acciones.setAttribute("role", "group");
+  acciones.setAttribute("aria-label", this.t("ext-actions"));
+  const boton = (clase: string, texto: string, manda: () => void): HTMLButtonElement => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `extensions-action ${clase}`;
+    b.textContent = texto;
+    b.addEventListener("click", (ev) => {
+      // El clic no sube a la fila: la acción ya la señala, y una segunda
+      // orden de selección pisaría la ficha que la primera pide.
+      ev.stopPropagation();
+      manda();
+    });
+    return b;
+  };
+  const aprobar = boton(
+    "extensions-action-approval",
+    this.t(r.approved ? "ext-revoke" : "ext-approve"),
+    () => {
+      this.send({ action: "extension_govern", row, id: r.id, change: "approval" });
+    },
+  );
+  // Conceder no borra nada, pero es LA decisión de seguridad: se marca
+  // para que no se pinte como el «Aceptar» de un aviso.
+  aprobar.dataset["primary"] = String(!r.approved);
+  acciones.append(aprobar);
+
+  const encender = boton(
+    "extensions-action-enabled",
+    this.t(r.enabled ? "ext-disable" : "ext-enable"),
+    () => {
+      this.send({ action: "extension_govern", row, id: r.id, change: "enabled" });
+    },
+  );
+  if (!r.approved && !r.enabled) {
+    encender.disabled = true;
+    encender.title = this.t("host-extension-not-approved");
+  }
+  acciones.append(encender);
+
+  if (r.has_help) {
+    acciones.append(
+      boton("extensions-action-help", this.t("ext-help"), () => {
+        this.send({ action: "extension_help", row, id: r.id });
+      }),
+    );
+  }
+
+  const desinstalar = boton(
+    "extensions-action-uninstall",
+    this.t("ext-uninstall"),
+    () => {
+      this.send({ action: "extension_govern", row, id: r.id, change: "uninstall" });
+    },
+  );
+  desinstalar.dataset["destructive"] = "true";
+  acciones.append(desinstalar);
+  cabecera.append(acciones);
+
+  if (r.capabilities.length > 0) {
+    cabecera.append(capsDe(r.capabilities));
+  }
+
+  // Cuántas cosas aporta: los números que la fila no tiene sitio para decir.
+  const cuentas = document.createElement("p");
+  cuentas.className = "extensions-counts";
+  const partes: string[] = [];
+  if (r.commands > 0) {
+    partes.push(`${String(r.commands)} ${this.t("ext-counts-commands")}`);
+  }
+  if (r.columns > 0) {
+    partes.push(`${String(r.columns)} ${this.t("ext-counts-columns")}`);
+  }
+  if (partes.length > 0) {
+    cuentas.textContent = partes.join(" · ");
+    cabecera.append(cuentas);
+  }
+  return cabecera;
 }
 
 /** La ficha de una extensión: sus claves `[config]` con su valor. */

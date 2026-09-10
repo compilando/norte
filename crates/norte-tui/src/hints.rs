@@ -193,6 +193,8 @@ pub struct DialogHints {
     pub collision: String,
     /// `Modal::ApproveAgentOp`.
     pub approval: String,
+    /// `Modal::ConfirmPluginUninstall` (ADR 0104): confirmar sin `approve`.
+    pub uninstall: String,
     /// `Modal::TrustHostKey`.
     pub trust_host: String,
     /// `Modal::AskSecret` (#325).
@@ -243,12 +245,13 @@ impl DialogHints {
         use crate::app::{
             ALLOW_APPROVAL, ALLOW_ASK_SECRET, ALLOW_COLLISION, ALLOW_COLUMNS, ALLOW_CONFIRM,
             ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_NAV_VOLUMES, ALLOW_PICKER,
-            ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST,
+            ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST, ALLOW_UNINSTALL,
         };
         Self {
             confirm: dialog_hints(ALLOW_CONFIRM, eff),
             collision: dialog_hints(ALLOW_COLLISION, eff),
             approval: dialog_hints(ALLOW_APPROVAL, eff),
+            uninstall: dialog_hints(ALLOW_UNINSTALL, eff),
             trust_host: dialog_hints(ALLOW_TRUST_HOST, eff),
             ask_secret: dialog_hints(ALLOW_ASK_SECRET, eff),
             // Non-modal overlays (MAJOR-1): arrows are self-evident, so they

@@ -548,6 +548,11 @@ pub trait HostBackend: Send + Sync + 'static {
         enabled: bool,
     ) -> BoxFuture<'static, Result<(), Error>>;
 
+    /// Desinstala un plugin (ADR 0104): borra sus ficheros y retira su
+    /// consentimiento. Devuelve si lo tenía. Quien la llame tiene que haberlo
+    /// preguntado a un humano — esta puerta no pregunta, y no tiene vuelta.
+    fn plugin_uninstall(&self, id: String) -> BoxFuture<'static, Result<bool, Error>>;
+
     /// Fija UNA clave `[config.<key>]` de un plugin.
     ///
     /// `value` viaja como String SIEMPRE, en la codificación canónica del
@@ -963,6 +968,11 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<(), Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.plugins_set_enabled(&id, enabled).await })
+    }
+
+    fn plugin_uninstall(&self, id: String) -> BoxFuture<'static, Result<bool, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugins_uninstall(&id).await.map(|r| r.was_approved) })
     }
 
     fn plugin_set_config(

@@ -174,10 +174,7 @@ body {
      derecha, hasta que «Ayuda» abría su desplegable un título más allá. El
      `calc` con el índice queda solo como fallback sin medida, y el `min`
      acota para que no se salga por la derecha. */
-  left: min(
-    var(--menu-left, calc(var(--menu-open, 0) * 12ch)),
-    calc(100vw - 34ch)
-  );
+  left: min(var(--menu-left, calc(var(--menu-open, 0) * 12ch)), calc(100vw - 34ch));
   margin: 0;
   padding: 2px 0;
   list-style: none;
@@ -1241,7 +1238,10 @@ body {
   display: block;
 }
 
-/* --- El gestor de extensiones (F12), en solo lectura ------------------ */
+/* --- El gestor de extensiones (F12): lista y ficha con botones ----------
+   Dos columnas, como el de un editor: a la izquierda las instaladas, a la
+   derecha la elegida con lo que se puede hacer con ella. Los botones mandan
+   la misma acción que la tecla; las preguntas las hace el host. */
 
 #extensions[data-open="true"] {
   position: fixed;
@@ -1257,22 +1257,30 @@ body {
 }
 
 .extensions {
-  width: min(110ch, 92vw);
-  height: min(80vh, 100%);
+  width: min(120ch, 94vw);
+  height: min(84vh, 100%);
   display: flex;
   flex-direction: column;
-  padding: 0 12px 8px;
+  padding: 0;
   background: var(--panel-bg);
   border: 1px solid var(--border-focus);
-  overflow: auto;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.extensions-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--status-bg);
 }
 
 .extensions h1 {
-  margin-bottom: 2px;
-  padding-bottom: 4px;
-  font-size: 1.35em;
+  margin: 0;
+  font-size: 1.25em;
   color: var(--title-fg);
-  border-bottom: 1px solid var(--border);
 }
 
 .extensions h2 {
@@ -1281,29 +1289,98 @@ body {
   color: var(--title-fg);
 }
 
+.extensions-summary {
+  flex: 1;
+  opacity: 0.8;
+}
+
+.extensions-close {
+  font: inherit;
+  font-size: 1.2em;
+  line-height: 1;
+  color: var(--fg);
+  background: none;
+  border: 0;
+  padding: 0 4px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.extensions-close:hover {
+  opacity: 1;
+}
+
 .extensions-note {
   margin: 0 0 6px;
   opacity: 0.85;
 }
 
+.extensions-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(34ch, 2fr) 3fr;
+}
+
 .extensions-rows {
   margin: 0;
-  padding: 0;
+  padding: 4px 0;
   list-style: none;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+
+.extensions-rows > .extensions-note {
+  padding: 8px 12px;
 }
 
 .extensions-row {
-  display: grid;
-  grid-template-columns: 32ch auto 1fr;
-  gap: 0 12px;
-  padding: 2px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px 6px 12px;
   cursor: pointer;
-  border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
 }
 
+.extensions-row:hover {
+  background: var(--panel-focus-bg);
+}
+
+/* La elegida lleva una barra de acento, no solo un fondo: con la ficha al
+   lado, el ojo tiene que poder unir las dos sin leerlas. */
 .extensions-row[aria-selected="true"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
+  border-left-color: var(--border-focus);
+}
+
+.extensions-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.extensions-row-main .extensions-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: bold;
+}
+
+.extensions-row-main .extensions-state {
+  margin-left: auto;
+}
+
+/* La píldora de estado: sin aprobar es lo que hay que mirar, así que es lo
+   que se ve. Colores por atributo, más abajo. */
+.extensions-state {
+  flex: 0 0 auto;
+  font-size: 0.85em;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid currentcolor;
+  white-space: nowrap;
 }
 
 .extensions-name,
@@ -1348,30 +1425,132 @@ body {
 
 .extensions-meta,
 .extensions-desc {
-  grid-column: 1 / -1;
-  padding-left: 2ch;
-  opacity: 0.85;
+  opacity: 0.8;
+  font-size: 0.92em;
+}
+
+.extensions-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .extensions-caps {
-  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 2px 0;
-  padding-left: 2ch;
+  margin: 3px 0 0;
+  padding: 0;
   list-style: none;
 }
 
 .extensions-cap {
   padding: 0 6px;
+  font-size: 0.85em;
   color: var(--hostile-fg);
   border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+/* La ficha: la elegida, con lo que se puede hacer con ella. */
+.extensions-pane {
+  min-width: 0;
+  padding: 10px 16px 12px;
+  overflow: auto;
+}
+
+.extensions-pane-head {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.extensions-pane-name {
+  margin: 0 0 4px;
+  font-size: 1.4em;
+  color: var(--fg);
+  unicode-bidi: isolate;
+}
+
+.extensions-pane-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  opacity: 0.9;
+}
+
+.extensions-publisher,
+.extensions-category {
+  unicode-bidi: isolate;
+}
+
+.extensions-category::before {
+  content: "· ";
+  opacity: 0.6;
+}
+
+.extensions-pane-desc {
+  margin: 8px 0 0;
+  unicode-bidi: isolate;
+}
+
+/* Los botones: el que concede y el que borra se distinguen del resto, para
+   que ninguno de los dos se lea como el «Aceptar» de un aviso. */
+.extensions-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 8px;
+}
+
+.extensions-action {
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel-focus-bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+
+.extensions-action:hover:not(:disabled) {
+  border-color: var(--border-focus);
+}
+
+.extensions-action[data-primary="true"] {
+  color: var(--selection-fg);
+  background: var(--selection-bg);
+  border-color: var(--border-focus);
+}
+
+.extensions-action[data-destructive="true"] {
+  color: var(--error-fg);
+  border-color: var(--error-fg);
+  margin-left: auto;
+}
+
+.extensions-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.extensions-counts {
+  margin: 6px 0 0;
+  opacity: 0.8;
+  font-size: 0.92em;
+}
+
+.extensions-detail-hint {
+  margin-top: 10px;
 }
 
 .extensions-detail {
   margin-top: 8px;
-  border-top: 1px solid var(--border-focus);
+}
+
+.extensions-errors-title {
+  padding: 0 12px;
+  color: var(--error-fg);
 }
 
 .extensions-config {
@@ -1614,9 +1793,10 @@ body {
 }
 
 .extensions-errors {
-  margin: 8px 0 0;
-  padding: 0 0 0 2ch;
+  margin: 0;
+  padding: 0 12px 8px calc(12px + 2ch);
   color: var(--error-fg);
+  border-top: 1px solid var(--border);
 }
 
 .extensions-error-reason {

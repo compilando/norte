@@ -3796,6 +3796,32 @@
       "description": "Result de [`PLUGIN_SET_ENABLED`]: objeto vacío, reservado para extensión.",
       "type": "object"
     },
+    "PluginUninstallParams": {
+      "description": "Params de [`PLUGIN_UNINSTALL`] (0.71.0, ADR 0104).",
+      "properties": {
+        "id": {
+          "description": "Id del plugin a desinstalar. El daemon lo valida como id reverse-DNS\nANTES de convertirlo en ruta: un `..` sería un borrado fuera de\n`plugins/`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "PluginUninstallResult": {
+      "description": "Result de [`PLUGIN_UNINSTALL`].",
+      "properties": {
+        "was_approved": {
+          "description": "`true` si el plugin tenía consentimiento al borrarlo: el informe lo\ndice porque es lo que acaba de dejar de existir, y un frontend puede\navisar de que uno instalado después bajo el mismo id nace sin él.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "was_approved"
+      ],
+      "type": "object"
+    },
     "PolicyApprovalRequired": {
       "description": "Notificación [`POLICY_APPROVAL_REQUIRED`] (server→client): una op `ask`\nespera decisión. Las rutas van REDACTADAS si llevan userinfo (regla 10).",
       "properties": {
@@ -6041,6 +6067,12 @@
     "plugin_set_enabled_result": {
       "$ref": "#/$defs/PluginSetEnabledResult"
     },
+    "plugin_uninstall_params": {
+      "$ref": "#/$defs/PluginUninstallParams"
+    },
+    "plugin_uninstall_result": {
+      "$ref": "#/$defs/PluginUninstallResult"
+    },
     "policy_approval_required": {
       "$ref": "#/$defs/PolicyApprovalRequired"
     },
@@ -6345,6 +6377,8 @@
     "plugin_set_config_result",
     "plugin_set_enabled_params",
     "plugin_set_enabled_result",
+    "plugin_uninstall_params",
+    "plugin_uninstall_result",
     "policy_approval_required",
     "policy_decide_params",
     "policy_decide_result",

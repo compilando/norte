@@ -669,13 +669,26 @@ async fn en_solo_lectura_no_se_gobierna_ninguna_extension() {
     let mut sub = h.subscribe();
     h.dispatch(tecla("F12")).await.expect("host vivo");
     let _ = extensiones_cargadas(&mut sub).await;
-    for tecla_de in ["a", "e"] {
+    for tecla_de in ["a", "e", "d"] {
         let ack = h.dispatch(tecla(tecla_de)).await.expect("host vivo");
         assert!(
             matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-read-only"),
             "`{tecla_de}` en solo lectura: {ack:?}"
         );
     }
+    // Y el botón (puente 61) pasa por la misma puerta que la tecla.
+    let ack = h
+        .dispatch(UiAction::ExtensionGovern {
+            row: 0,
+            id: "acme.ftp".to_owned(),
+            change: norte_ui_host::action::ExtensionChange::Uninstall,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-read-only"),
+        "desinstalar por botón en solo lectura: {ack:?}"
+    );
     asentar().await;
     assert!(backend.gobierno.lock().expect("gobierno").is_empty());
 }
