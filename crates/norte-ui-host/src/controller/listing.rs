@@ -236,10 +236,22 @@ impl Estado {
     /// fallo que la clave por RUTA evita, y aun así se comprueba el
     /// directorio — las rutas de dos directorios distintos no casan, pero
     /// gastar un parche entero para no pintar nada sí se puede evitar.
-    pub(super) fn aplicar_adornos(&mut self, datos: Adornos) -> Option<BridgeEnvelope<UiUpdate>> {
-        let (slot, dir, adornos, celdas) = datos;
+    pub(super) fn aplicar_adornos(
+        &mut self,
+        datos: Adornos,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let (generacion, slot, dir, adornos, celdas) = datos;
         let hueco = self.huecos.get_mut(&slot)?;
         hueco.adornando = false;
+        if generacion != hueco.gen_adornos {
+            // Pedida ANTES de que se olvidaran los adornos —un plugin
+            // apagado, un ajuste cambiado—: describe lo que había, no lo que
+            // hay. Se tira, y se vuelve a pedir lo que quedó sin pedir.
+            self.adornar(slot, backend, buzon);
+            return None;
+        }
         if *hueco.pane.dir() != dir {
             return None;
         }

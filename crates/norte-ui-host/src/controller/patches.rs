@@ -163,6 +163,7 @@ impl Estado {
         }
         let dir = hueco.pane.dir().clone();
         hueco.adornando = true;
+        let generacion = hueco.gen_adornos;
         let cancelar = hueco.cancelar_sondeo.clone();
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
@@ -178,7 +179,7 @@ impl Estado {
             .await;
             let _ = buzon
                 .send(Mensaje::Fondo(Box::new(Fondo::Adornos(Box::new((
-                    slot, dir, adornos, celdas,
+                    generacion, slot, dir, adornos, celdas,
                 ))))))
                 .await;
         });

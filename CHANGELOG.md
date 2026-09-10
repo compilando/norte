@@ -218,6 +218,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Switching a decorator off in the manager left its icons and badges on
+  the rows** until the next `cd`, on both frontends, and the reader concluded
+  that switching off does not switch off. Any governance change — approve,
+  revoke, enable, disable, uninstall — and any plugin setting written now
+  make every open listing forget what the plugins said and ask again; a
+  batch already in flight lands with an older generation, is dropped, and
+  asked again. The window's rows go bare at once and fill back in; the
+  terminal's event loop drains a flag the manager raises.
 - **The terminal's initial listings carried no icons or badges until the
   first `cd`.** Both panes are built at startup outside the path a `cd`
   takes, and only that path asked the decorators; a freshly opened `ntc`

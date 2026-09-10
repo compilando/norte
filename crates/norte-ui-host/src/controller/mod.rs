@@ -743,9 +743,12 @@ impl From<bool> for Veredicto {
 /// Un enum aparte y no cinco variantes de [`Mensaje`]: el actor es un
 /// reparto, y cinco brazos que hacen lo mismo —comprobar que su superficie
 /// siga abierta y devolver parches— son un brazo con cinco casos.
-/// La respuesta de una tanda de decoración: qué hueco, qué directorio, las
-/// insignias por ruta y las celdas de cada columna `plugin:`.
+/// La respuesta de una tanda de decoración: de qué GENERACIÓN de adornos
+/// (una tanda pedida antes de que el gestor apagara un plugin no describe
+/// lo que hay), qué hueco, qué directorio, las insignias por ruta y las
+/// celdas de cada columna `plugin:`.
 type Adornos = (
+    u64,
     u32,
     VPath,
     std::collections::HashMap<VPath, norte_frontend::Decoration>,
@@ -1820,6 +1823,11 @@ struct Hueco {
     /// memoria que `sondeados` y por el mismo motivo: sin ella, un plugin
     /// que no decora nada se vuelve a preguntar en cada repintado.
     adornadas: std::collections::HashSet<VPath>,
+    /// La generación de los adornos: sube cada vez que se OLVIDAN. Una
+    /// tanda en vuelo lleva la suya, y si aterriza con otra se tira y se
+    /// vuelve a pedir: apagar un decorador desde el gestor con una tanda a
+    /// medio camino dejaba sus insignias pegadas a las filas.
+    gen_adornos: u64,
 }
 
 /// Una búsqueda viva y lo que lleva encontrado.
@@ -3077,6 +3085,7 @@ impl Hueco {
             celdas_plugin: std::collections::HashMap::new(),
             adornando: false,
             adornadas: std::collections::HashSet::new(),
+            gen_adornos: 0,
         }
     }
 
@@ -3089,6 +3098,7 @@ impl Hueco {
         self.adornos.clear();
         self.celdas_plugin.clear();
         self.adornadas.clear();
+        self.gen_adornos += 1;
     }
 }
 
