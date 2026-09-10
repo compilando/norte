@@ -11,6 +11,10 @@
   --border-focus: #4c8fd0;
   --selection-bg: #2d4f76;
   --selection-fg: #ffffff;
+  --selection-unfocused-bg: #2a2f38;
+  --selection-unfocused-fg: #d8dee9;
+  --button-bg: #2d4f76;
+  --button-fg: #ffffff;
   --mark-bg: #6b4b16;
   --hostile-fg: #e0a33a;
   --status-bg: #191d24;
@@ -318,6 +322,13 @@ body {
 .row[aria-selected="true"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
+}
+
+/* El cursor de un panel SIN foco: presente pero apagado, para que dos
+   cursores no compitan por decir a dónde van las teclas. */
+[aria-current="false"] .row[aria-selected="true"] {
+  background: var(--selection-unfocused-bg);
+  color: var(--selection-unfocused-fg);
 }
 
 .row[data-marked="true"] {

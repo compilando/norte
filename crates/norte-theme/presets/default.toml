@@ -6,7 +6,11 @@ name = "default"
 [roles]
 background       = { bg = "#1c1c1c" }
 regular          = { fg = "#d0d0d0" }
-selection        = { fg = "#ffffff", bg = "#3a3a3a" }
+# El cursor con foco lleva el color de acento con texto oscuro: gris sobre gris
+# (#3a3a3a sobre #1c1c1c) se perdía. El del panel sin foco conserva ese gris.
+selection            = { fg = "#1c1c1c", bg = "#5fafd7" }
+selection-unfocused  = { fg = "#ffffff", bg = "#3a3a3a" }
+button               = { fg = "#1c1c1c", bg = "#af87d7" }
 border-focus     = { fg = "#5fafd7", bold = true }
 border-unfocused = { fg = "#6c6c6c", dim = true }
 modal-border     = { fg = "#af87d7" }

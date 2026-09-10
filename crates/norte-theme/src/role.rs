@@ -54,6 +54,14 @@ pub enum Role {
     /// background. Style it with `bg` only (no `fg`) so both readings stay
     /// legible.
     Mark,
+    /// Fila del cursor en un panel SIN foco (spec 2026-09-10). Existe
+    /// porque `Selection` pasó a pintarse con el color de acento, y dos
+    /// cursores igual de vivos no dicen cuál recibe las teclas: el del panel
+    /// sin foco se queda en el gris de antes, presente pero apagado.
+    SelectionUnfocused,
+    /// Un botón de diálogo (`[ Enter  Confirm ]`): cada modal pinta su línea
+    /// de teclas con este rol cuando `[ui] dialog_buttons` está encendido.
+    Button,
 }
 
 impl Role {
@@ -75,6 +83,8 @@ impl Role {
         Role::PaneBackground,
         Role::PaneFocusBackground,
         Role::Mark,
+        Role::SelectionUnfocused,
+        Role::Button,
     ];
 
     /// Estilo por defecto MONOCROMO del rol: reproduce el aspecto de M1
@@ -84,7 +94,10 @@ impl Role {
     #[must_use]
     pub const fn fallback(self) -> Style {
         match self {
-            Role::Selection | Role::StatusBar => Style::new().reverse(),
+            Role::Selection | Role::StatusBar | Role::Button => Style::new().reverse(),
+            // El cursor sin foco: visible sin color, pero no el mismo que el
+            // que recibe las teclas.
+            Role::SelectionUnfocused => Style::new().reverse().dim(),
             Role::BorderFocus | Role::ModalBorder | Role::HostileBadge | Role::Title => {
                 Style::new().bold()
             }
@@ -171,6 +184,8 @@ impl Role {
             Self::Mark => "mark",
             Self::PaneBackground => "pane-background",
             Self::PaneFocusBackground => "pane-focus-background",
+            Self::SelectionUnfocused => "selection-unfocused",
+            Self::Button => "button",
         }
     }
 }

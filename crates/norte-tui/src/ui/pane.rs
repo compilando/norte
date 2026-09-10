@@ -398,7 +398,14 @@ pub(crate) fn draw_pane(
         .style(ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)),
         header_area,
     );
-    let list = List::new(items).highlight_style(theme.role(Role::Selection));
+    // Dos cursores igual de vivos no dicen cuál recibe las teclas: el del
+    // panel sin foco lleva su propio rol (spec 2026-09-10).
+    let cursor_role = if focused {
+        Role::Selection
+    } else {
+        Role::SelectionUnfocused
+    };
+    let list = List::new(items).highlight_style(theme.role(cursor_role));
     let mut state = ListState::default();
     state.select(selected);
     // Scroll EXPLÍCITO y no deducido por ratatui: la ventana es del MODELO

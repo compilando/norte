@@ -3,7 +3,9 @@ name = "catppuccin-mocha"
 [roles]
 background       = { bg = "#1e1e2e" }
 regular          = { fg = "#cdd6f4" }
-selection        = { fg = "#cdd6f4", bg = "#45475a" }
+selection           = { fg = "#1e1e2e", bg = "#89b4fa" }
+selection-unfocused = { fg = "#cdd6f4", bg = "#45475a" }
+button              = { fg = "#1e1e2e", bg = "#cba6f7" }
 border-focus     = { fg = "#89b4fa", bold = true }
 border-unfocused = { fg = "#6c7086", dim = true }
 modal-border     = { fg = "#cba6f7" }
