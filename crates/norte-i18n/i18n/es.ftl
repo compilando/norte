@@ -942,6 +942,28 @@ panelbar-viewer = Visor
 panelbar-processes = Procesos
 panelbar-metadata = Detalles
 panelbar-log = Registro
+
+# El asistente de primer arranque (spec 2026-09-10): tres preguntas cuando
+# aún no hay norte.toml de usuario. Esc en cualquier paso = «no volver a
+# preguntar».
+wizard-title = Bienvenido a norte
+wizard-step-preset = teclas
+wizard-step-theme = tema
+wizard-step-icons = iconos
+wizard-ask-preset = ¿Qué gestor de ficheros tienes en los dedos? Las teclas lo siguen.
+wizard-ask-theme = Elige un tema. Lo que ves mientras te mueves es lo que eliges.
+wizard-ask-icons = ¿Ves aquí tres iconos: 📁 🖼 ⚙ ? Si salen como cuadros, la fuente del terminal no tiene emoji.
+wizard-icons-yes = Sí, los veo — usar iconos
+wizard-icons-no = No — insignias ASCII
+wizard-hint = [Intro] siguiente · [Retroceso] atrás · [Esc] dejar lo de serie y no volver a preguntar
+wizard-preset-orthodox = estilo mc: teclas F, Tab entre paneles. El de serie.
+wizard-preset-vim = hjkl, contadores, : para la paleta.
+wizard-preset-cua = Ctrl+C/X/V y teclas al estilo Windows.
+wizard-preset-krusader = las teclas de Krusader, transcritas.
+wizard-preset-far = las teclas de FAR Manager, transcritas.
+wizard-preset-norton = las teclas de Norton Commander.
+wizard-preset-total-commander = las teclas de Total Commander, transcritas.
+wizard-done = Guardado. Cámbialo cuando quieras desde la pantalla de ajustes.
 menu-item-layout-places = Panel de sitios
 menu-item-layout-preview = Visor acoplado
 menu-item-layout-processes = Panel de procesos

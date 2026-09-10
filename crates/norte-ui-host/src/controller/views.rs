@@ -128,6 +128,7 @@ impl Estado {
             key_bar: self.vista_barra_de_teclas(),
             profiles: self.vista_perfiles(),
             palette: self.vista_paleta(),
+            wizard: self.vista_asistente(),
             whichkey: self.vista_whichkey(),
             help: self.vista_ayuda(),
             settings: self.vista_ajustes(),

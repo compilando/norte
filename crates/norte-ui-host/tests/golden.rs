@@ -203,6 +203,8 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::MenuPointRow { .. } => "menu_point_row",
         UiAction::MenuActivateRow { .. } => "menu_activate_row",
         UiAction::MenuClose => "menu_close",
+        UiAction::WizardOpen => "wizard_open",
+        UiAction::WizardActivateRow { .. } => "wizard_activate_row",
         UiAction::PanelBarActivate { .. } => "panel_bar_activate",
         UiAction::KeyBarActivate { .. } => "key_bar_activate",
         UiAction::ResizeSlot { .. } => "resize_slot",
@@ -459,6 +461,11 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
         ("menu_point_row", UiAction::MenuPointRow { row: 3 }),
         ("menu_activate_row", UiAction::MenuActivateRow { row: 3 }),
         ("menu_close", UiAction::MenuClose),
+        ("wizard_open", UiAction::WizardOpen),
+        (
+            "wizard_activate_row",
+            UiAction::WizardActivateRow { row: 1 },
+        ),
         (
             "panel_bar_activate",
             UiAction::PanelBarActivate { button: 2 },
@@ -1132,6 +1139,16 @@ fn perfiles_de_referencia() -> norte_ui_host::dto::ProfilePickerView {
 
 /// La barra de menús con uno DESPLEGADO: la fixture tiene que llevar las dos
 /// mitades, porque son las dos que el renderer pinta.
+fn asistente_de_referencia() -> norte_ui_host::dto::WizardView {
+    norte_ui_host::dto::WizardView {
+        title: "Bienvenido a norte · 1/3 · teclas".to_owned(),
+        question: "¿Qué gestor de ficheros tienes en los dedos?".to_owned(),
+        rows: vec!["orthodox — estilo mc".to_owned(), "vim — hjkl".to_owned()],
+        cursor: 0,
+        hint: "[Intro] siguiente · [Esc] salir".to_owned(),
+    }
+}
+
 fn barra_de_teclas_de_referencia() -> norte_ui_host::dto::KeyBarView {
     use norte_ui_host::dto::KeyCellView;
     norte_ui_host::dto::KeyBarView {
@@ -1221,6 +1238,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         panel_bar: barra_de_paneles_de_referencia(),
         key_bar: barra_de_teclas_de_referencia(),
         profiles: Some(perfiles_de_referencia()),
+        wizard: Some(asistente_de_referencia()),
         palette: Some(norte_ui_host::dto::PaletteView {
             query: "orde".to_owned(),
             rows: vec![norte_ui_host::dto::PaletteRowView {
@@ -2213,6 +2231,12 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
+            "wizard",
+            ViewChange::Wizard {
+                wizard: Some(asistente_de_referencia()),
+            },
+        ),
+        (
             "panel_bar",
             ViewChange::PanelBar {
                 panel_bar: barra_de_paneles_de_referencia(),
@@ -2373,7 +2397,7 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
     // Puente 63: la ola de usabilidad (spec 2026-09-10).
-    const FORMA: u64 = 12_671_679_031_904_561_038;
+    const FORMA: u64 = 5_398_688_911_765_944_362;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

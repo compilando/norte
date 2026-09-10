@@ -594,6 +594,7 @@ pub(crate) fn overlay_open(app: &App) -> bool {
         || app.viewer.is_some()
         || app.help.is_some()
         || app.palette.is_some()
+        || app.wizard.is_some()
         || app.settings.is_some()
         // K3c: el editor de atajos. Hoy está siempre detrás de `settings`, que
         // ya está en esta lista, pero eso es una propiedad de CÓMO se abre y no

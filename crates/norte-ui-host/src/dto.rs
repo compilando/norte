@@ -59,6 +59,10 @@ pub struct ViewSnapshot {
     pub profiles: Option<ProfilePickerView>,
     /// La paleta de comandos, si está abierta.
     pub palette: Option<PaletteView>,
+    /// El asistente de primer arranque (spec 2026-09-10), si está abierto.
+    /// Puente 63.
+    #[serde(default)]
+    pub wizard: Option<WizardView>,
     /// El panel de continuaciones, si hay un prefijo a medias.
     pub whichkey: Option<WhichKeyView>,
     /// La ayuda, si está abierta. Como el visor, ocupa la pantalla: mientras
@@ -304,6 +308,24 @@ pub struct PaletteView {
     pub cursor: Option<u64>,
     /// Cuántas filas hay en total, para decir cuánto se está acotando.
     pub total: u64,
+}
+
+/// El asistente de primer arranque (spec 2026-09-10, puente 63): un paso,
+/// sus filas y el cursor. Todo ya traducido: el renderer pinta y devuelve
+/// filas o teclas, y el host escribe lo elegido por su camino de ajustes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WizardView {
+    /// `Bienvenido a norte · 1/3 · teclas`.
+    pub title: String,
+    /// La pregunta del paso.
+    pub question: String,
+    /// Las filas del paso, en orden. Un click vuelve como el ÍNDICE
+    /// (`UiAction::WizardActivateRow`).
+    pub rows: Vec<String>,
+    /// Cuál está elegida.
+    pub cursor: u64,
+    /// La línea de teclas.
+    pub hint: String,
 }
 
 /// Un comando ofrecido por la paleta.
@@ -2953,6 +2975,11 @@ pub enum ViewChange {
     Palette {
         /// La paleta, o `None` si se cerró.
         palette: Option<PaletteView>,
+    },
+    /// El asistente de primer arranque se abrió, se movió o se cerró.
+    Wizard {
+        /// El asistente, o `None` si se cerró.
+        wizard: Option<WizardView>,
     },
     /// El panel de continuaciones apareció, cambió o se fue.
     WhichKey {

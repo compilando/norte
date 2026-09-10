@@ -64,6 +64,7 @@ use modals::draw_modal;
 pub use modals::{ModalZone, modal_zones};
 use overlays::{
     EXTENSIONS_WIDE_MIN, draw_extensions, draw_palette, draw_plugin_config_panel, draw_settings,
+    draw_wizard,
 };
 use pane::draw_pane;
 use panels::{
@@ -124,7 +125,7 @@ fn clear_themed(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
 /// El pie de un listado (spec 2026-09-10), o `None` con `[ui] pane_footer`
 /// apagado. Lo redacta el crate compartido; aquí solo se juntan las cuentas
 /// del pane con el espacio libre de su volumen (de la cache de `App`).
-fn pane_footer(app: &App, pane: &crate::app::Pane) -> Option<String> {
+fn pane_footer(app: &App, pane: &crate::app::Pane, width: u16) -> Option<String> {
     if !app.chrome.pane_footer() {
         return None;
     }
@@ -135,11 +136,12 @@ fn pane_footer(app: &App, pane: &crate::app::Pane) -> Option<String> {
         dirs: pane.marked_dirs(),
     };
     let free = norte_frontend::space::free_for(pane.dir(), &app.volumes);
-    Some(norte_frontend::footer::pane_footer(
-        counts,
-        marked,
-        free,
-        norte_i18n::active(),
+    // Lo que el borde deja: las dos esquinas y un espacio a cada lado. Los
+    // tramos que no caben se caen por prioridad, no por el medio.
+    let room = usize::from(width.saturating_sub(4));
+    Some(norte_frontend::footer::fit(
+        norte_frontend::footer::segments(counts, marked, free, norte_i18n::active()),
+        room,
     ))
 }
 
@@ -222,7 +224,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
                 // trabajo de sesión no puede poner a girar una cabecera a la
                 // que no le está pasando nada.
                 app.busy.as_ref().filter(|b| b.visible() && b.affects(i)),
-                pane_footer(app, pane).as_deref(),
+                pane_footer(app, pane, rect.width).as_deref(),
             );
         }
     }
@@ -420,6 +422,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     }
     if let Some(palette) = &app.palette {
         draw_palette(frame, palette, &app.theme);
+    }
+    // El asistente de primer arranque (spec 2026-09-10): encima de la
+    // paleta y de los ajustes, debajo de un modal, como el resto de overlays
+    // que no son una pregunta de seguridad.
+    if let Some(wizard) = &app.wizard {
+        draw_wizard(frame, wizard, &app.theme);
     }
     if let Some(settings) = &app.settings {
         draw_settings(frame, settings, &app.theme);

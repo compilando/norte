@@ -295,5 +295,12 @@
   "window_focus": {
     "action": "window_focus",
     "focused": false
+  },
+  "wizard_activate_row": {
+    "action": "wizard_activate_row",
+    "row": 1
+  },
+  "wizard_open": {
+    "action": "wizard_open"
   }
 }

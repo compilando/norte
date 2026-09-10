@@ -993,6 +993,27 @@ panelbar-viewer = Viewer
 panelbar-processes = Jobs
 panelbar-metadata = Details
 panelbar-log = Log
+
+# The first-run wizard (spec 2026-09-10): three questions when there is no
+# user norte.toml yet. Esc at any step means "do not ask again".
+wizard-title = Welcome to norte
+wizard-step-preset = keys
+wizard-step-theme = theme
+wizard-step-icons = icons
+wizard-ask-preset = Which file manager do you have in your fingers? The keys follow it.
+wizard-ask-theme = Pick a theme. What you see while you move is what you are choosing.
+wizard-ask-icons = Can you see three icons here: 📁 🖼 ⚙ ? If they show as boxes, your terminal font has no emoji.
+wizard-icons-yes = Yes, I see them — use icons
+wizard-icons-no = No — plain ASCII badges
+wizard-hint = [Enter] next · [Backspace] back · [Esc] keep defaults and never ask again
+wizard-preset-orthodox = mc-style: F-keys, Tab between panes. The default.
+wizard-preset-vim = hjkl, counts, : for the palette.
+wizard-preset-cua = Ctrl+C/X/V and Windows-style keys.
+wizard-preset-krusader = Krusader's bindings, transcribed.
+wizard-preset-far = FAR Manager's bindings, transcribed.
+wizard-preset-norton = Norton Commander's bindings.
+wizard-preset-total-commander = Total Commander's bindings, transcribed.
+wizard-done = Saved. Change any of it later with the settings screen.
 menu-item-layout-places = Places sidebar
 menu-item-layout-preview = Docked viewer
 menu-item-layout-processes = Processes panel

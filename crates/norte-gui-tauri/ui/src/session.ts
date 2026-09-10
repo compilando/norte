@@ -210,6 +210,9 @@ export class Session {
       case "profiles":
         s.profiles = c.profiles;
         return true;
+      case "wizard":
+        s.wizard = c.wizard;
+        return true;
       case "palette":
         s.palette = c.palette;
         return true;

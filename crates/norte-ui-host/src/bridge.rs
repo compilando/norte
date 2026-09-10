@@ -259,6 +259,10 @@ use serde::{Deserialize, Serialize};
 ///   sintetiza la tecla. `StatusView.notices_unread`: avisos que caducaron
 ///   (`[ui] notice_seconds`) sin que nadie abriera el registro; la
 ///   insignia abre el registro por su botón de la barra de paneles.
+///   `ViewSnapshot.wizard`, el cambio `wizard` y las acciones `wizard_open`
+///   y `wizard_activate_row`: el asistente de primer arranque, que el
+///   renderer pide cuando el catálogo dice `first_run` y el host escribe
+///   por el camino de los ajustes.
 pub const BRIDGE_VERSION: u32 = 63;
 
 /// Tope de una cadena que cruza al renderer, en bytes.

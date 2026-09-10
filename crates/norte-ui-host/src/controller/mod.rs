@@ -72,6 +72,7 @@ mod transfer;
 mod tree;
 mod viewer;
 mod views;
+mod wizard;
 
 /// Capacidad del buzón del actor. Acotado a propósito: si el renderer manda
 /// más rápido de lo que el host aplica, se le hace esperar — jamás se crece
@@ -2647,6 +2648,9 @@ struct Estado {
     /// Es un contexto de entrada más, como el buscador incremental y el
     /// visor: mientras esté abierta, las teclas de texto son suyas.
     paleta: Option<norte_frontend::palette_state::Palette>,
+    /// El asistente de primer arranque (spec 2026-09-10), mientras está
+    /// abierto. Un overlay más: se queda las teclas.
+    asistente: Option<norte_frontend::wizard::Wizard>,
     /// Las últimas claves lanzadas desde la paleta, la más reciente primero
     /// (spec 2026-09-10). Viven en la sesión de UI, como en el terminal.
     paleta_recientes: Vec<String>,
@@ -3227,6 +3231,7 @@ impl Estado {
             token: 0,
             locale,
             paleta: None,
+            asistente: None,
             paleta_recientes: Vec::new(),
             volumenes_pie: Vec::new(),
             pie_en_vuelo: false,
@@ -3791,6 +3796,10 @@ impl Estado {
             UiAction::MenuPointRow { row } => self.apuntar_en_menu(*row),
             UiAction::MenuActivateRow { row } => self.activar_del_menu(*row, backend, buzon),
             UiAction::MenuClose => self.cerrar_menu(),
+            UiAction::WizardOpen => self.abrir_asistente(),
+            UiAction::WizardActivateRow { row } => {
+                self.activar_fila_de_asistente(*row, backend, buzon)
+            }
             UiAction::PanelBarActivate { button } => {
                 self.pulsar_barra_de_paneles(*button, backend, buzon)
             }

@@ -163,6 +163,7 @@ describe("el contrato con el host", () => {
       "theme",
       "viewer",
       "which_key",
+      "wizard",
     ]);
   });
 

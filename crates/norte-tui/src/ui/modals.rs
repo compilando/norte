@@ -231,20 +231,24 @@ pub(crate) fn modal_title_body(
     hints: &crate::hints::DialogHints,
 ) -> (String, ModalBody) {
     let (title, mut body) = modal_title_body_raw(modal, reinterpret, hints);
-    // `[ui] dialog_buttons` (spec 2026-09-10): la línea de teclas que
-    // GENERÓ `dialog_hints` pasa a botones. Por igualdad exacta con lo
-    // generado, no por la forma: un nombre de fichero puede empezar por `[`.
-    // Vale para los dos cuerpos con papeles y para las 55 variantes que
-    // componen `String`, sin tocar ninguna.
-    if hints.buttons {
-        for line in &mut body {
-            if line.kind != LineKind::Field
-                && hints.is_hint_line(&line.text)
-                && crate::hints::hint_buttons(&line.text).is_some()
-            {
-                line.kind = LineKind::Buttons;
-            }
-        }
+    // `[ui] dialog_buttons` (spec 2026-09-10): la línea de teclas pasa a
+    // botones. Es la ÚLTIMA línea del cuerpo por construcción en todos los
+    // modales —la generada por `dialog_hints` y las escritas en Fluent
+    // (`[enter] confirm · [esc] cancel`)—, y solo si parsea entera como
+    // `[tecla] verbo`. Última Y con forma: un nombre de fichero `[y] borrar`
+    // en mitad de la lista no puede disfrazarse de botón, y un cuerpo cuya
+    // última línea es un campo o prosa se queda como está. Con la ayuda
+    // tapando el modal (`modals_inert`) no hay botones: sus teclas no hacen
+    // nada, y un botón que no hace nada es la mentira que `hints` existe
+    // para no contar. Vale para los dos cuerpos con papeles y para las 55
+    // variantes que componen `String`, sin tocar ninguna.
+    if hints.buttons
+        && !hints.modals_inert
+        && let Some(last) = body.last_mut()
+        && last.kind != LineKind::Field
+        && crate::hints::hint_buttons(&last.text).is_some()
+    {
+        last.kind = LineKind::Buttons;
     }
     (title, body)
 }

@@ -7,6 +7,7 @@ import type {
   MenuView,
   KeyBarView,
   PanelBarView,
+  WizardView,
   PaletteView,
   TabGroupView,
   WhichKeyView,
@@ -135,6 +136,61 @@ export function paintKeyBar(this: Screen, bar: KeyBarView | null): void {
     fila.append(boton);
   }
   raiz.replaceChildren(fila);
+}
+
+/**
+ * El asistente de primer arranque (puente 63): el título del paso, la
+ * pregunta, las filas con el cursor y la línea de teclas. Todo llega ya
+ * traducido; un click en una fila la elige y la confirma. Su raíz se busca
+ * por id y, si el documento no la trae, se crea al final del cuerpo: es un
+ * velo a pantalla completa, y el orden del documento no le importa.
+ */
+export function paintWizard(this: Screen, wizard: WizardView | null): void {
+  const doc = this.root.ownerDocument;
+  let raiz = doc.getElementById("wizard");
+  if (raiz === null) {
+    raiz = doc.createElement("div");
+    raiz.id = "wizard";
+    doc.body.append(raiz);
+  }
+  if (wizard === null) {
+    raiz.replaceChildren();
+    raiz.dataset["open"] = "false";
+    return;
+  }
+  raiz.dataset["open"] = "true";
+  const caja = doc.createElement("section");
+  caja.className = "wizard";
+  caja.setAttribute("role", "dialog");
+  caja.setAttribute("aria-modal", "true");
+  caja.setAttribute("aria-label", wizard.title);
+  const titulo = doc.createElement("h2");
+  titulo.className = "wizard-title";
+  titulo.textContent = wizard.title;
+  const pregunta = doc.createElement("p");
+  pregunta.className = "wizard-question";
+  pregunta.textContent = wizard.question;
+  const lista = doc.createElement("ul");
+  lista.className = "wizard-rows";
+  lista.setAttribute("role", "listbox");
+  for (const [i, texto] of wizard.rows.entries()) {
+    const fila = doc.createElement("li");
+    fila.className = "wizard-row";
+    fila.id = `wizard-row-${String(i)}`;
+    fila.setAttribute("role", "option");
+    fila.setAttribute("aria-selected", String(wizard.cursor === i));
+    fila.textContent = texto;
+    fila.addEventListener("click", () => {
+      this.send({ action: "wizard_activate_row", row: i });
+    });
+    lista.append(fila);
+  }
+  lista.setAttribute("aria-activedescendant", `wizard-row-${String(wizard.cursor)}`);
+  const pista = doc.createElement("p");
+  pista.className = "wizard-hint";
+  pista.textContent = wizard.hint;
+  caja.append(titulo, pregunta, lista, pista);
+  raiz.replaceChildren(caja);
 }
 
 /**

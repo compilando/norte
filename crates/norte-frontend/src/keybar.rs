@@ -109,15 +109,29 @@ pub fn layout(width: usize) -> Vec<(usize, usize)> {
 }
 
 /// El texto de una celda que mide `width`: el número pegado a la
-/// izquierda y la etiqueta detrás, recortada por celdas. `F` no se pinta:
-/// diez celdas de `F` no dicen nada y cuestan diez columnas.
+/// izquierda y la etiqueta detrás, con mayúscula inicial y CORTADA por el
+/// final si no cabe — `7New dire` se lee, `7New …ctory` no: en ocho celdas
+/// lo que dice algo es el principio. `F` no se pinta: diez celdas de `F` no
+/// dicen nada y cuestan diez columnas.
 #[must_use]
 pub fn cell_text(cell: &KeyCell, width: usize) -> String {
     let num = cell.key.to_string();
     let room = width.saturating_sub(num.len());
-    let label = crate::middle_ellipsis(&cell.label, room);
-    let pad = room.saturating_sub(crate::display::cells(&label));
-    format!("{num}{label}{}", " ".repeat(pad))
+    let mut label = String::new();
+    let mut used = 0;
+    for (i, c) in cell.label.chars().enumerate() {
+        let w = crate::display::cells(&c.to_string());
+        if used + w > room {
+            break;
+        }
+        if i == 0 {
+            label.extend(c.to_uppercase());
+        } else {
+            label.push(c);
+        }
+        used += w;
+    }
+    format!("{num}{label}{}", " ".repeat(room - used))
 }
 
 #[cfg(test)]

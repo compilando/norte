@@ -41,6 +41,9 @@ async fn main() -> Result<()> {
     let Some(args) = args_or_exit(parsed)? else {
         return Ok(()); // `--help`/`--version`: ya impreso.
     };
+    // `--setup` (spec 2026-09-10): volver a abrir el asistente de primer
+    // arranque. Se lee ANTES de que `args` se desmonte por campos.
+    let cli_setup = args.has("--setup");
     let (cli_preset, cli_layout, cli_profile, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
         args.text("--preset"),
         // `--layout` NO es texto por contrato: acaba siendo un nombre de
@@ -334,6 +337,11 @@ async fn main() -> Result<()> {
     // browse/viewer ANTES de que se muevan al `Resolver` de abajo — mismo
     // criterio que `help_lines`/`dialog_hints`.
     app.palette_rows = norte_tui::palette::build_rows(&browse_eff, &viewer_eff);
+    // El asistente de primer arranque (spec 2026-09-10): sin `norte.toml` de
+    // usuario, o con `--setup`. Nunca bajo `--pick`.
+    if norte_tui::wizard::should_open(cli_setup, cli_pick).await {
+        norte_tui::wizard::open(&mut app, &cfg);
+    }
     let mut resolver = Resolver::new(browse_eff);
     let mut viewer_resolver = Resolver::new(viewer_eff);
     // H1 T2: resolver compartido por TODOS los overlays (modal, theme
@@ -593,7 +601,7 @@ fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -
 }
 
 /// Flags booleanos del TUI.
-const BOOL_FLAGS: &[&str] = &["--daemon", "--pick"];
+const BOOL_FLAGS: &[&str] = &["--daemon", "--pick", "--setup"];
 /// Flags con valor del TUI.
 const VALUE_FLAGS: &[&str] = &["--preset", "--layout", "--profile", "--socket", "--cd-file"];
 
@@ -619,6 +627,9 @@ Options:
       --pick             print the selection, NUL-terminated, and exit
       --cd-file PATH     write the final directory here, NUL-terminated
                          (used by the `norte shell-init` wrapper)
+      --setup            Run the first-start wizard again (keys, theme, icons).
+                         It also runs on its own when you have no norte.toml;
+                         NORTE_NO_WIZARD=1 keeps it closed
   -h, --help             Print help
   -V, --version          Print version
 ";

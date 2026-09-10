@@ -582,6 +582,29 @@ pub struct PendingWrite {
     pub display: String,
 }
 
+impl PendingWrite {
+    /// A write of a STRING value (spec 2026-09-10, the first-run wizard):
+    /// the typed `toml_edit::Value` is built here so a frontend that never
+    /// depends on `toml_edit` can still hand a write to its settings path.
+    ///
+    /// ```
+    /// use norte_frontend::settings::PendingWrite;
+    /// let w = PendingWrite::text("ui", "theme", "nord", "Theme".to_owned());
+    /// assert_eq!((w.section, w.key.as_str(), w.display.as_str()), ("ui", "theme", "nord"));
+    /// assert_eq!(w.value.as_str(), Some("nord"));
+    /// ```
+    #[must_use]
+    pub fn text(section: &'static str, key: &str, value: &str, name: String) -> Self {
+        Self {
+            section,
+            key: key.to_owned(),
+            value: toml_edit::Value::from(value),
+            name,
+            display: value.to_owned(),
+        }
+    }
+}
+
 /// Why [`SettingsState::edit_commit`] rejected the buffer — WITHOUT
 /// persisting (S3/S4: "invalid = status-bar/inline error, value untouched").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

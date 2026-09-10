@@ -556,6 +556,16 @@ export interface ImageView {
   height: number;
 }
 
+/** El asistente de primer arranque (puente 63): un paso, sus filas y el
+ *  cursor, todo ya traducido. Un click en una fila la elige y la confirma. */
+export interface WizardView {
+  title: string;
+  question: string;
+  rows: string[];
+  cursor: number;
+  hint: string;
+}
+
 export interface PaletteRowView {
   text: string;
   desc: string;
@@ -1147,6 +1157,9 @@ export interface ViewSnapshot {
   key_bar?: KeyBarView;
   profiles: ProfilePickerView | null;
   palette: PaletteView | null;
+  /** El asistente de primer arranque (puente 63), si está abierto. Opcional:
+   *  un host anterior no lo manda. */
+  wizard?: WizardView | null;
   whichkey: WhichKeyView | null;
   help: HelpView | null;
   settings: SettingsView | null;
@@ -1215,6 +1228,7 @@ export type ViewChange =
   | { change: "key_bar"; key_bar: KeyBarView }
   | { change: "profiles"; profiles: ProfilePickerView | null }
   | { change: "palette"; palette: PaletteView | null }
+  | { change: "wizard"; wizard: WizardView | null }
   | { change: "help"; help: HelpView | null }
   | { change: "settings"; settings: SettingsView | null }
   | { change: "extensions"; extensions: ExtensionsView | null }
@@ -1336,6 +1350,8 @@ export type UiAction =
   | { action: "menu_point_row"; row: number }
   | { action: "menu_activate_row"; row: number }
   | { action: "menu_close" }
+  | { action: "wizard_open" }
+  | { action: "wizard_activate_row"; row: number }
   | { action: "panel_bar_activate"; button: number }
   | { action: "key_bar_activate"; key: number }
   | { action: "resize_slot"; slot_id: number; cells: number }
@@ -1367,6 +1383,9 @@ export interface HostCatalog {
   busy_threshold_ms?: number;
   /** `[ui] font`, `mono_font`, `font_size` y `reduce_motion`. */
   appearance?: Appearance;
+  /** No hay `norte.toml` de usuario todavía (puente 63): el renderer abre el
+   *  asistente de primer arranque al pintar la primera foto. */
+  first_run?: boolean;
 }
 
 /** Lo que esta ventana pinta y no es color. Cada campo `null` = no lo dice la

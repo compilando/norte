@@ -295,7 +295,7 @@ impl Estado {
     /// La capa es la del PERFIL activo si lo hay, y la del usuario si no
     /// ([`Self::dir_de_escritura`]): un ajuste escrito abajo que el perfil
     /// también fija queda tapado — guardado y sin efecto (ADR 0079).
-    fn escribir_ajuste(
+    pub(super) fn escribir_ajuste(
         &mut self,
         write: norte_frontend::settings::PendingWrite,
         buzon: &mpsc::Sender<Mensaje>,

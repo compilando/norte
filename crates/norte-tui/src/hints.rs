@@ -252,13 +252,14 @@ pub struct HintButton {
     pub label: String,
 }
 
-/// Los botones de una línea de teclas generada por [`dialog_hints`]
-/// (`[Enter] confirm [Esc] cancel`), o `None` si la línea no tiene esa
-/// forma —una pista en prosa, o el aviso de «cierra la ayuda»—.
+/// Los botones de una línea de teclas —la generada por [`dialog_hints`]
+/// (`[Enter] confirm [Esc] cancel`) o una escrita en Fluent (`[enter]
+/// confirm · [esc] cancel`)—, o `None` si la línea no tiene esa forma.
 ///
-/// La forma es la de este módulo y de nadie más: cada grupo empieza por `[`,
-/// el chord acaba en `] ` y el verbo llega hasta el ` [` siguiente. Un verbo
-/// puede llevar espacios; un chord no lleva `]`.
+/// Cada grupo empieza por `[`, el chord acaba en `] ` y el verbo llega hasta
+/// el siguiente ` [` o ` · [`. Un verbo puede llevar espacios; un chord no
+/// lleva `]` ni espacios, y se pinta como lo escribe la documentación
+/// (`Enter`, no `enter`), que es también lo que el ratón sintetiza.
 #[must_use]
 pub fn hint_buttons(line: &str) -> Option<Vec<HintButton>> {
     if !line.starts_with('[') {
@@ -268,11 +269,12 @@ pub fn hint_buttons(line: &str) -> Option<Vec<HintButton>> {
     for group in line.split(" [") {
         let group = group.strip_prefix('[').unwrap_or(group);
         let (chord, label) = group.split_once("] ")?;
-        if chord.is_empty() || label.is_empty() {
+        let label = label.trim_end_matches(" ·").trim();
+        if chord.is_empty() || chord.contains(' ') || chord.len() > 16 || label.is_empty() {
             return None;
         }
         out.push(HintButton {
-            chord: chord.to_owned(),
+            chord: crate::keymap::paint_chord(chord),
             label: label.to_owned(),
         });
     }
@@ -280,24 +282,6 @@ pub fn hint_buttons(line: &str) -> Option<Vec<HintButton>> {
 }
 
 impl DialogHints {
-    /// ¿Es `text` una de las líneas de teclas que este conjunto generó? Es
-    /// lo que deja marcar como botones la línea de un cuerpo compuesto como
-    /// `String` sin adivinar por la forma: igualdad exacta con lo generado.
-    #[must_use]
-    pub fn is_hint_line(&self, text: &str) -> bool {
-        !self.modals_inert
-            && [
-                &self.confirm,
-                &self.collision,
-                &self.approval,
-                &self.uninstall,
-                &self.trust_host,
-                &self.ask_secret,
-            ]
-            .into_iter()
-            .any(|h| !h.is_empty() && h == text)
-    }
-
     /// Reconstruye todos los hints del efectivo `dialog` vigente.
     #[must_use]
     pub fn build(eff: &Effective) -> Self {

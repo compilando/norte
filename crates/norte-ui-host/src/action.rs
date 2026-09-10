@@ -560,6 +560,15 @@ pub enum UiAction {
     },
     /// Cierra el menú desplegado sin ejecutar nada (un click fuera).
     MenuClose,
+    /// Abre el asistente de primer arranque (spec 2026-09-10, puente 63).
+    /// Lo manda el renderer al arrancar cuando el catálogo dice
+    /// `first_run`: no hay `norte.toml` de usuario todavía.
+    WizardOpen,
+    /// Elige una fila del asistente Y la confirma: lo que hace un click.
+    WizardActivateRow {
+        /// Qué fila, en el orden en que viajaron.
+        row: u32,
+    },
     /// Pulsa un botón de la barra de paneles (#324, puente 51): abre el
     /// panel si está cerrado y lo cierra si está abierto.
     ///

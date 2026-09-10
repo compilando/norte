@@ -88,6 +88,7 @@ pub mod viewer;
 pub mod viewport;
 pub mod watch;
 pub mod whichkey;
+pub mod wizard;
 
 pub use decoration::{
     BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration, sanitize_icon,

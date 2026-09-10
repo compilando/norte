@@ -1283,6 +1283,16 @@
         }
       ],
       "title": "ctrl+x"
+    },
+    "wizard": {
+      "cursor": 0,
+      "hint": "[Intro] siguiente · [Esc] salir",
+      "question": "¿Qué gestor de ficheros tienes en los dedos?",
+      "rows": [
+        "orthodox — estilo mc",
+        "vim — hjkl"
+      ],
+      "title": "Bienvenido a norte · 1/3 · teclas"
     }
   }
 }

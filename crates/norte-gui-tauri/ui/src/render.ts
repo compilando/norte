@@ -223,6 +223,7 @@ export class Screen {
     this.paintPanelBar(view.panel_bar);
     this.paintKeyBar(view.key_bar ?? null);
     this.paintPalette(view.palette);
+    this.paintWizard(view.wizard ?? null);
     this.paintWhichKey(view.whichkey);
     this.paintHelp(view.help);
     this.paintSettings(view.settings);
@@ -252,6 +253,7 @@ export class Screen {
 
   /** En `render/menus.ts`. */
   readonly paintPalette = menus.paintPalette;
+  readonly paintWizard = menus.paintWizard;
 
   /** En `render/menus.ts`. */
   readonly paintWhichKey = menus.paintWhichKey;

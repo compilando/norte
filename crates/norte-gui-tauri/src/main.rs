@@ -172,6 +172,7 @@ fn main() -> ExitCode {
             let mut cat =
                 norte_gui_tauri::catalog::catalogo(boot.host.instance(), boot.lang, &boot.theme);
             cat.appearance = boot.appearance;
+            cat.first_run = boot.first_run;
             AppState::Ready(Box::new(Bridge::new(
                 boot.host,
                 boot.snapshot,

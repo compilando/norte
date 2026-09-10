@@ -63,29 +63,73 @@ pub struct Marked {
 /// ```
 #[must_use]
 pub fn pane_footer(counts: Counts, marked: Marked, free: Option<u64>, lang: Lang) -> String {
-    let mut out = ta_in(
-        lang,
-        "pane-footer-counts",
-        &[
-            ("dirs", &counts.dirs.to_string()),
-            ("files", &counts.files.to_string()),
-            ("size", &crate::human_bytes(counts.bytes)),
-        ],
-    );
+    join(&segments(counts, marked, free, lang))
+}
+
+/// Los tramos del pie con su PRIORIDAD (mayor = más importante): lo
+/// marcado es lo que el lector acaba de hacer, las cuentas dicen qué hay,
+/// y el espacio libre es lo primero que cede cuando no cabe. Van en el
+/// orden de pantalla; la prioridad solo decide qué se cae.
+#[must_use]
+pub fn segments(
+    counts: Counts,
+    marked: Marked,
+    free: Option<u64>,
+    lang: Lang,
+) -> Vec<(u8, String)> {
+    let mut out = vec![(
+        1,
+        ta_in(
+            lang,
+            "pane-footer-counts",
+            &[
+                ("dirs", &counts.dirs.to_string()),
+                ("files", &counts.files.to_string()),
+                ("size", &crate::human_bytes(counts.bytes)),
+            ],
+        ),
+    )];
     let marcado = crate::notes::marked(marked.n, marked.bytes, marked.dirs, lang);
     if !marcado.is_empty() {
-        out.push_str(" · ");
-        out.push_str(&marcado);
+        out.push((2, marcado));
     }
     if let Some(free) = free {
-        out.push_str(" · ");
-        out.push_str(&ta_in(
-            lang,
-            "pane-footer-free",
-            &[("free", &crate::human_bytes(free))],
+        out.push((
+            0,
+            ta_in(
+                lang,
+                "pane-footer-free",
+                &[("free", &crate::human_bytes(free))],
+            ),
         ));
     }
     out
+}
+
+fn join(segments: &[(u8, String)]) -> String {
+    segments
+        .iter()
+        .map(|(_, s)| s.as_str())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// El pie que CABE en `width` celdas: se van cayendo los tramos de menor
+/// prioridad hasta que quepa, y si ni el último cabe, se recorta. Un pie
+/// que dice «2 marcadas» entero vale más que uno que dice «…ked» y el
+/// espacio libre.
+#[must_use]
+pub fn fit(mut segments: Vec<(u8, String)>, width: usize) -> String {
+    loop {
+        let text = join(&segments);
+        if crate::display::cells(&text) <= width || segments.len() <= 1 {
+            return crate::middle_ellipsis(&text, width);
+        }
+        let Some((i, _)) = segments.iter().enumerate().min_by_key(|(_, (p, _))| *p) else {
+            return String::new();
+        };
+        segments.remove(i);
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +179,35 @@ mod tests {
             Counts::default(),
             "vacío con fila padre: nada"
         );
+    }
+
+    /// Sin sitio, cae primero el espacio libre y después las cuentas; lo
+    /// marcado es lo último que se pierde, y entero.
+    #[test]
+    fn el_pie_cede_por_prioridad_y_no_por_el_medio() {
+        let c = Counts {
+            dirs: 1,
+            files: 2,
+            bytes: 0,
+        };
+        let m = Marked {
+            n: 2,
+            bytes: 4096,
+            dirs: 0,
+        };
+        let s = segments(c, m, Some(120 << 30), Lang::En);
+        let entero = fit(s.clone(), 200);
+        assert!(
+            entero.contains("free") && entero.contains("marked"),
+            "{entero}"
+        );
+        let sin_libre = fit(s.clone(), crate::display::cells(&entero) - 1);
+        assert!(
+            !sin_libre.contains("free") && sin_libre.contains("marked"),
+            "{sin_libre}"
+        );
+        let solo_marcado = fit(s, 20);
+        assert!(solo_marcado.starts_with("2 marked"), "{solo_marcado}");
     }
 
     /// Las dos lenguas redactan, y el pie es corto: cabe en un borde.

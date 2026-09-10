@@ -236,6 +236,12 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   }
   repaint();
   sendViewport(send, screen, doc);
+  // Sin `norte.toml` de usuario, el asistente de primer arranque (spec
+  // 2026-09-10): lo abre el host, que es quien lo escribe; aquí solo se le
+  // dice que este arranque es el primero.
+  if (catalog.first_run === true) {
+    send({ action: "wizard_open" });
+  }
 
   doc.addEventListener("keydown", (e) => {
     const k = keyInputOf(e);

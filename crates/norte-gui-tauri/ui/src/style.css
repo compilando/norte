@@ -507,6 +507,63 @@ body {
   gap: 8px;
 }
 
+/* El asistente de primer arranque (puente 63): un velo a pantalla completa
+   con una caja en el centro, como la paleta. */
+#wizard[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 45%);
+}
+
+#wizard[data-open="false"],
+#wizard:not([data-open]) {
+  display: none;
+}
+
+.wizard {
+  width: min(70ch, 90vw);
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  padding: 8px 12px;
+}
+
+.wizard-title {
+  margin: 0 0 8px;
+  font-size: inherit;
+  color: var(--title-fg);
+}
+
+.wizard-question,
+.wizard-hint {
+  margin: 4px 0;
+}
+
+.wizard-hint {
+  color: var(--info-fg);
+}
+
+.wizard-rows {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wizard-row {
+  padding: 0 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wizard-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
 #palette[data-open="true"] {
   position: fixed;
   inset: 0;

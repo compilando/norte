@@ -982,6 +982,10 @@ pub struct App {
     /// OK, ANTES de que los efectivos se muevan al `Resolver`. Abrir la
     /// palette (`dispatch`, brazo `app.palette`) solo clona esta snapshot.
     pub palette_rows: Vec<crate::palette::Row>,
+    /// El asistente de primer arranque (spec 2026-09-10), mientras está
+    /// abierto. Es un overlay más: se queda las teclas, y el modelo es el
+    /// compartido con la ventana.
+    pub wizard: Option<norte_frontend::wizard::Wizard>,
     /// Estado del ratón (captura aparte, que es de la terminal): la
     /// geometría PINTADA del último frame, el gesto armado y el último
     /// click. La geometría la devuelve el run loop tras cada `draw`
@@ -1159,6 +1163,7 @@ impl App {
             palette: None,
             palette_recent: Vec::new(),
             palette_rows: Vec::new(),
+            wizard: None,
             mouse: crate::mouse::MouseState::default(),
             settings: None,
             shortcuts: None,
