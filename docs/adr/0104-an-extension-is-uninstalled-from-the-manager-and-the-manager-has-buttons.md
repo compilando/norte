@@ -124,6 +124,16 @@ extension's page, which is what `F1` over the row does in the terminal.
   the end is `Stale`, not an action on whatever is now at that index.
 - The `plugins` help page now says an extension leaves from either side, and
   that both ask.
+- **The terminal's manager was levelled the same day** (2026-09-10, later):
+  two columns from 64 useful cells, the same detail pane — state as two
+  facts, description, capabilities, counts, the settings table inside the
+  pane, the commands — painted from the same `PluginInfo` the window reads,
+  with the compact list on the left. The keys did not change; the ADR 0077
+  rule holds because the two managers never had two rules, only two screens.
+  And any governance or settings change now makes every open listing forget
+  its decorations and ask again (a batch in flight is dropped by
+  generation), on both frontends — switching a decorator off used to leave
+  its glyphs on the rows until the next `cd`.
 - **Not journalled, on purpose.** Hard rule 4 asks that a mutation without an
   undo path be classified. Uninstalling mutates the user's configuration,
   not their files; it has no undo by wire (there is no `plugin.install`);

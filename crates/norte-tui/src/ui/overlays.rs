@@ -33,13 +33,15 @@ pub(crate) fn draw_extensions(
     // clamp(24, 80)) puede quedarse corto para el footer GENERADO — mismo
     // criterio de sizing que [`draw_nav_popup`] (medir el footer en CELDAS,
     // `Line::width`, y crecer si hace falta), tope en el ancho del frame.
+    // Con ficha (ADR 0104, nivelación con la ventana) el tope sube a 120:
+    // dos columnas en 80 son dos columnas estrechas.
     let footer_w = Line::raw(format!(" {hint} ")).width();
     let min_width = u16::try_from(footer_w.saturating_add(4)).unwrap_or(u16::MAX);
     let width = frame
         .area()
         .width
         .saturating_sub(6)
-        .clamp(24, 80)
+        .clamp(24, 120)
         .max(min_width)
         .min(frame.area().width);
     let area = centered(
@@ -48,47 +50,262 @@ pub(crate) fn draw_extensions(
         frame.area().height.saturating_sub(4).max(6),
     );
     clear_themed(frame, area, theme);
-    // Ancho útil para la segunda línea (description, P1): igual criterio que
-    // `draw_palette` (borde + margen), NO el `width` de la caja completa.
-    let inner = usize::from(area.width.saturating_sub(4));
-    let mut lines: Vec<Line<'_>> = Vec::new();
-    if mgr.plugins.is_empty() && mgr.errors.is_empty() {
-        lines.push(Line::raw(t("ext-empty")));
-    } else {
-        let mut last_cat: Option<&str> = None;
-        for (i, p) in mgr.plugins.iter().enumerate() {
-            if last_cat != Some(p.category.as_str()) {
-                last_cat = Some(p.category.as_str());
-                let (cat, _) = display_name(p.category.as_bytes());
-                lines.push(Line::styled(cat, theme.role(Role::Title)));
-            }
-            lines.push(plugin_line(p, i == mgr.cursor, theme));
-            if let Some(desc_line) = plugin_description_line(p, theme, inner) {
-                lines.push(desc_line);
-            }
-        }
-        for e in &mgr.errors {
-            // Los BYTES si el peer los manda (#265): la cadena `dir` viene de
-            // un `to_string_lossy` del core, así que un directorio llamado
-            // `caf\xff` llegaría por ahí ya convertido. La insignia de abajo
-            // va SIEMPRE —una fila de error de carga es, por definición, algo
-            // que no se pudo leer bien— así que aquí lo que cambia es el
-            // nombre, no la marca.
-            let (dir, _) = display_name(e.dir_bytes.as_deref().unwrap_or(e.dir.as_bytes()));
-            let (reason, _) = display_name(e.reason.as_bytes());
-            lines.push(Line::styled(
-                format!(" {HOSTILE_BADGE} {dir}: {reason}"),
-                theme.role(Role::Error),
-            ));
-        }
-    }
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("ext-title")))
         .title_style(theme.role(Role::Title))
         .title_bottom(Line::raw(format!(" {hint} ")))
         .border_style(theme.role(Role::ModalBorder));
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+    // Dos columnas, como la ventana (ADR 0104): la lista a la izquierda y la
+    // FICHA de la elegida a la derecha —estado, descripción, capabilities,
+    // comandos y sus ajustes—. Con menos de [`EXTENSIONS_WIDE_MIN`] celdas
+    // útiles no caben dos columnas legibles y se pinta la lista de siempre,
+    // con la descripción bajo cada fila y los ajustes en su propia caja.
+    if inner_area.width < EXTENSIONS_WIDE_MIN || mgr.plugins.is_empty() {
+        let inner = usize::from(inner_area.width.saturating_sub(2));
+        let lines = extensions_list_lines(mgr, theme, inner, true);
+        frame.render_widget(Paragraph::new(lines), inner_area);
+        return;
+    }
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Min(1)])
+        .split(inner_area);
+    let lista = extensions_list_lines(mgr, theme, usize::from(cols[0].width), false);
+    frame.render_widget(Paragraph::new(lista), cols[0]);
+    let borde = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(theme.role(Role::BorderUnfocused));
+    let ficha_area = borde.inner(cols[1]);
+    frame.render_widget(borde, cols[1]);
+    if let Some(p) = mgr.plugins.get(mgr.cursor) {
+        let ficha = extension_pane_lines(p, mgr.config.as_ref(), theme);
+        frame.render_widget(
+            Paragraph::new(ficha).wrap(ratatui::widgets::Wrap { trim: false }),
+            ficha_area,
+        );
+    }
+}
+
+/// Celdas útiles a partir de las que el gestor pinta la ficha al lado de la
+/// lista. Por debajo, la lista de siempre.
+pub(crate) const EXTENSIONS_WIDE_MIN: u16 = 64;
+
+/// Las líneas de la LISTA del gestor: cabeceras de categoría, una fila por
+/// plugin y los directorios que no cargaron al final. `con_descripcion`
+/// mete la descripción bajo cada fila —la lista estrecha, sin ficha— o la
+/// deja para la ficha.
+fn extensions_list_lines<'a>(
+    mgr: &'a crate::app::ExtensionManager,
+    theme: &TuiTheme,
+    inner: usize,
+    con_descripcion: bool,
+) -> Vec<Line<'a>> {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    if mgr.plugins.is_empty() && mgr.errors.is_empty() {
+        lines.push(Line::raw(t("ext-empty")));
+        return lines;
+    }
+    let mut last_cat: Option<&str> = None;
+    for (i, p) in mgr.plugins.iter().enumerate() {
+        if last_cat != Some(p.category.as_str()) {
+            last_cat = Some(p.category.as_str());
+            let (cat, _) = display_name(p.category.as_bytes());
+            lines.push(Line::styled(cat, theme.role(Role::Title)));
+        }
+        if con_descripcion {
+            lines.push(plugin_line(p, i == mgr.cursor, theme));
+            if let Some(desc_line) = plugin_description_line(p, theme, inner) {
+                lines.push(desc_line);
+            }
+        } else {
+            lines.push(plugin_row_compact(p, i == mgr.cursor, theme, inner));
+        }
+    }
+    for e in &mgr.errors {
+        // Los BYTES si el peer los manda (#265): la cadena `dir` viene de
+        // un `to_string_lossy` del core, así que un directorio llamado
+        // `caf\xff` llegaría por ahí ya convertido. La insignia de abajo
+        // va SIEMPRE —una fila de error de carga es, por definición, algo
+        // que no se pudo leer bien— así que aquí lo que cambia es el
+        // nombre, no la marca.
+        let (dir, _) = display_name(e.dir_bytes.as_deref().unwrap_or(e.dir.as_bytes()));
+        let (reason, _) = display_name(e.reason.as_bytes());
+        lines.push(Line::styled(
+            format!(" {HOSTILE_BADGE} {dir}: {reason}"),
+            theme.role(Role::Error),
+        ));
+    }
+    lines
+}
+
+/// Una fila COMPACTA de la lista con ficha: `> nombre v1.0 ✓` o `⚠`. Las
+/// capabilities no van aquí: van en la ficha, que es donde se leen enteras.
+/// Recortada al ancho de la columna, que es la mitad de la caja.
+fn plugin_row_compact<'a>(
+    p: &norte_proto::methods::PluginInfo,
+    selected: bool,
+    theme: &TuiTheme,
+    inner: usize,
+) -> Line<'a> {
+    let (name, _) = display_name(p.name.as_bytes());
+    let (version, _) = display_name(p.version.as_bytes());
+    let cursor = if selected { ">" } else { " " };
+    // Sin aprobar se DICE en la fila, no solo en la ficha: es lo que hay que
+    // mirar, y la ficha solo habla de la elegida.
+    let aviso = if p.approved {
+        0
+    } else {
+        Line::raw(format!("⚠ {}", t("ext-unapproved"))).width() + 1
+    };
+    let texto = middle_ellipsis(
+        &format!("{name} v{version}"),
+        inner.saturating_sub(4 + aviso),
+    );
+    let mut spans = vec![Span::raw(format!("{cursor} {texto} "))];
+    if !p.approved {
+        spans.push(Span::styled(
+            format!("⚠ {}", t("ext-unapproved")),
+            theme.role(Role::Warning),
+        ));
+    } else if p.enabled {
+        spans.push(Span::styled("✓", theme.role(Role::Info)));
+    }
+    let mut line = Line::from(spans);
+    if selected {
+        line = line.style(theme.role(Role::Selection));
+    }
+    line
+}
+
+/// La FICHA de una extensión (nivelación con la ventana, ADR 0104): quién
+/// es, cómo está, qué hace, qué pide, qué aporta, y —si está abierta— la
+/// tabla de sus ajustes con su cursor. Todo lo que escribe el plugin pasa
+/// por [`display_name`], como en la lista.
+fn extension_pane_lines(
+    p: &norte_proto::methods::PluginInfo,
+    config: Option<&crate::app::PluginConfigPanel>,
+    theme: &TuiTheme,
+) -> Vec<Line<'static>> {
+    let (name, _) = display_name(p.name.as_bytes());
+    let (version, _) = display_name(p.version.as_bytes());
+    let (publisher, _) = display_name(p.publisher.as_bytes());
+    let (category, _) = display_name(p.category.as_bytes());
+    let dim = theme.role(Role::BorderUnfocused);
+    let mut lines: Vec<Line<'static>> = vec![Line::styled(name, theme.role(Role::Title))];
+    let mut meta = vec![format!("v{version}")];
+    if !publisher.is_empty() {
+        meta.push(publisher);
+    }
+    meta.push(category);
+    lines.push(Line::styled(meta.join(" · "), dim));
+    // El estado son DOS hechos, y se dicen los dos: aprobada y apagada no es
+    // lo mismo que sin aprobar.
+    lines.push(if !p.approved {
+        Line::styled(
+            format!("⚠ {}", t("ext-unapproved")),
+            theme.role(Role::Warning),
+        )
+    } else if p.enabled {
+        Line::styled(format!("✓ {}", t("ext-state-on")), theme.role(Role::Info))
+    } else {
+        Line::styled(t("ext-state-off"), dim)
+    });
+    if let Some(raw) = p.description.as_deref() {
+        let clamped: String = raw
+            .chars()
+            .take(crate::app::PLUGIN_DESCRIPTION_WIRE_CAP)
+            .collect();
+        let (masked, _) = display_name(clamped.as_bytes());
+        if !masked.is_empty() {
+            lines.push(Line::raw(""));
+            lines.push(Line::raw(masked));
+        }
+    }
+    if !p.capabilities.is_empty() {
+        lines.push(Line::raw(""));
+        // Cada capability es texto de un TERCERO y va en su propio span,
+        // entre corchetes, para que una no pueda fingir ser dos.
+        let mut spans = Vec::new();
+        for c in &p.capabilities {
+            let (cap, _) = display_name(c.as_bytes());
+            spans.push(Span::styled(format!("[{cap}]"), theme.role(Role::Warning)));
+            spans.push(Span::raw(" "));
+        }
+        lines.push(Line::from(spans));
+    }
+    let mut cuentas = Vec::new();
+    if !p.commands.is_empty() {
+        cuentas.push(format!("{} {}", p.commands.len(), t("ext-counts-commands")));
+    }
+    if !p.columns.is_empty() {
+        cuentas.push(format!("{} {}", p.columns.len(), t("ext-counts-columns")));
+    }
+    if p.has_help {
+        cuentas.push(t("ext-help"));
+    }
+    if !cuentas.is_empty() {
+        lines.push(Line::styled(cuentas.join(" · "), dim));
+    }
+    lines.push(Line::raw(""));
+    match config {
+        Some(panel) if panel.plugin_id == p.id => {
+            lines.push(Line::styled(t("ext-config-title"), theme.role(Role::Title)));
+            lines.extend(plugin_config_lines(panel, theme));
+        }
+        _ => lines.push(Line::styled(t("ext-detail-hint"), dim)),
+    }
+    if !p.commands.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            t("ext-commands-title"),
+            theme.role(Role::Title),
+        ));
+        for c in &p.commands {
+            let (title, _) = display_name(c.title.as_bytes());
+            lines.push(Line::raw(format!("  · {title}")));
+        }
+    }
+    lines
+}
+
+/// Las líneas de la tabla `[config]` de un plugin: una por clave, la
+/// elegida resaltada, y bajo ella el buffer que se teclea o su descripción.
+/// Las pinta la ficha (con ancho) y la caja propia (sin él): UNA definición.
+fn plugin_config_lines(
+    panel: &crate::app::PluginConfigPanel,
+    theme: &TuiTheme,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let rows = panel.state.rows();
+    if rows.is_empty() {
+        lines.push(Line::raw(t("ext-config-none")));
+        return lines;
+    }
+    for (i, row) in rows.iter().enumerate() {
+        let selected = i == panel.state.cursor();
+        let cursor = if selected { ">" } else { " " };
+        let mut line = Line::raw(format!("{cursor} {}: {}", row.key, row.display.value));
+        if selected {
+            line = line.style(theme.role(Role::Selection));
+        }
+        lines.push(line);
+        if selected && panel.state.is_editing() {
+            let buf = panel.state.edit_buffer().unwrap_or_default();
+            lines.push(Line::styled(
+                format!("   {buf}_"),
+                theme.role(Role::BorderUnfocused),
+            ));
+        } else if !row.description.is_empty() {
+            lines.push(Line::styled(
+                format!("   {}", row.description),
+                theme.role(Role::BorderUnfocused),
+            ));
+        }
+    }
+    lines
 }
 
 /// Panel de `[config]` de UN plugin (G3c, drill-down de
@@ -122,33 +339,7 @@ pub(crate) fn draw_plugin_config_panel(
         frame.area().height.saturating_sub(4).max(6),
     );
     clear_themed(frame, area, theme);
-    let mut lines: Vec<Line<'_>> = Vec::new();
-    let rows = panel.state.rows();
-    if rows.is_empty() {
-        lines.push(Line::raw(t("ext-empty")));
-    } else {
-        for (i, row) in rows.iter().enumerate() {
-            let selected = i == panel.state.cursor();
-            let cursor = if selected { ">" } else { " " };
-            let mut line = Line::raw(format!("{cursor} {}: {}", row.key, row.display.value));
-            if selected {
-                line = line.style(theme.role(Role::Selection));
-            }
-            lines.push(line);
-            if selected && panel.state.is_editing() {
-                let buf = panel.state.edit_buffer().unwrap_or_default();
-                lines.push(Line::styled(
-                    format!("   {buf}_"),
-                    theme.role(Role::BorderUnfocused),
-                ));
-            } else if !row.description.is_empty() {
-                lines.push(Line::styled(
-                    format!("   {}", row.description),
-                    theme.role(Role::BorderUnfocused),
-                ));
-            }
-        }
-    }
+    let lines = plugin_config_lines(panel, theme);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", panel.plugin_name))

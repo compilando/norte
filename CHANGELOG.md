@@ -9,6 +9,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **The terminal's extension manager has the window's detail pane.** Two
+  columns when the terminal is 64 cells or wider: the list on the left,
+  compact — name, version, ✓ or «not approved» — and the selected extension
+  on the right: version · publisher · category, its state as two facts, its
+  description, its capabilities as chips, how many commands and columns it
+  brings and whether it ships help, then its settings table when opened with
+  Enter — inside the pane now, with the cursor and the key's description —
+  and the commands it contributes. Narrower terminals keep the single list
+  with the settings in their own box. Same keys as before; the decisions
+  behind the two managers were already the host's and the terminal's shared
+  ones, only the screen differed.
 - **A daemon a frontend started stops with its last client.** The window,
   `ntc --daemon` and a one-shot `norte --daemon …` start a daemon when none
   answers, and it used to outlive them by five minutes: a process nobody

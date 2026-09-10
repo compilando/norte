@@ -57,7 +57,9 @@ pub(crate) use geometry::{
     body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_rect,
 };
 use modals::draw_modal;
-use overlays::{draw_extensions, draw_palette, draw_plugin_config_panel, draw_settings};
+use overlays::{
+    EXTENSIONS_WIDE_MIN, draw_extensions, draw_palette, draw_plugin_config_panel, draw_settings,
+};
 use pane::draw_pane;
 use panels::{
     draw_log, draw_metadata, draw_places, draw_preview, draw_processes, draw_tasks, draw_tree,
@@ -328,10 +330,30 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         draw_connections_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }
     if let Some(mgr) = &app.extensions {
-        if let Some(panel) = &mgr.config {
-            draw_plugin_config_panel(frame, panel, &app.theme, &app.dialog_hints.plugin_config);
-        } else {
-            draw_extensions(frame, mgr, &app.theme, &app.dialog_hints.extensions);
+        // Con ficha (ADR 0104) los ajustes van DENTRO del gestor, con el
+        // pie del panel de ajustes; en un terminal estrecho la ficha no
+        // cabe y los ajustes tienen su caja, como antes.
+        let ancho_util = frame
+            .area()
+            .width
+            .saturating_sub(6)
+            .clamp(24, 120)
+            .saturating_sub(2);
+        // La ficha hospeda los ajustes solo de la extensión ELEGIDA: un panel
+        // de otra —o de una que ya no está en la lista— tiene su caja.
+        let en_ficha = ancho_util >= EXTENSIONS_WIDE_MIN
+            && mgr
+                .plugins
+                .get(mgr.cursor)
+                .is_some_and(|p| mgr.config.as_ref().is_some_and(|c| c.plugin_id == p.id));
+        match &mgr.config {
+            Some(panel) if !en_ficha => {
+                draw_plugin_config_panel(frame, panel, &app.theme, &app.dialog_hints.plugin_config);
+            }
+            Some(_) => {
+                draw_extensions(frame, mgr, &app.theme, &app.dialog_hints.plugin_config);
+            }
+            None => draw_extensions(frame, mgr, &app.theme, &app.dialog_hints.extensions),
         }
     }
     if let Some(popup) = &app.nav_popup {

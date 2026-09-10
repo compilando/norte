@@ -797,6 +797,55 @@ fn snapshot_extensions_description_hostil_80x24() {
 /// description HOSTIL) se pintan sin bytes crudos, la seleccionada
 /// resaltada.
 #[test]
+/// ADR 0104, nivelación con la ventana: el gestor a dos columnas, y los
+/// ajustes de la extensión ELEGIDA dentro de su ficha, con el cursor en la
+/// clave y la descripción de la clave debajo. Los comandos que aporta, al
+/// pie de la ficha.
+fn snapshot_extensions_ficha_con_ajustes_80x24() {
+    use norte_frontend::plugin_config::{PluginConfigState, sanitize_config_keys};
+    let mut app = app_base();
+    let wire_keys = vec![norte_proto::methods::PluginConfigKeyWire {
+        key: "style".into(),
+        kind: "enum".into(),
+        default: "emoji".into(),
+        min: None,
+        max: None,
+        values: vec!["emoji".into(), "ascii".into()],
+        description: Some("Glyph set".into()),
+        value: "ascii".into(),
+    }];
+    app.extensions = Some(norte_tui::app::ExtensionManager {
+        plugins: vec![norte_proto::methods::PluginInfo {
+            id: "org.norte.file-icons".into(),
+            name: "File icons".into(),
+            publisher: "norte".into(),
+            version: "0.1.0".into(),
+            category: "decorator".into(),
+            capabilities: Vec::new(),
+            approved: true,
+            enabled: true,
+            description: Some("An icon on each row.".into()),
+            commands: vec![norte_proto::methods::PluginCommandInfo {
+                id: "reload".into(),
+                title: "Reload the table".into(),
+                kind: norte_proto::methods::PluginCommandKind::Command,
+            }],
+            columns: Vec::new(),
+            has_help: true,
+            manifest_digest: None,
+        }],
+        errors: Vec::new(),
+        cursor: 0,
+        config: Some(norte_tui::app::PluginConfigPanel {
+            plugin_id: "org.norte.file-icons".into(),
+            plugin_name: "File icons".into(),
+            state: PluginConfigState::new(sanitize_config_keys(&wire_keys)),
+        }),
+    });
+    insta::assert_snapshot!(render_80x24(&app));
+}
+
+#[test]
 fn snapshot_plugin_config_panel_80x24() {
     use norte_frontend::plugin_config::{PluginConfigState, sanitize_config_keys};
     let hostile = norte_testkit::corpus::hostile_names()
