@@ -32,7 +32,11 @@ second copy of a fact diverges in silence.
 1. **The chrome is derived, never drawn.** The key bar is computed from the
    effective keymap of the screen that owns the keyboard (`keybar::cells_in`);
    rebinding F5 relabels it and a screen that binds nothing to F7 shows an
-   empty cell. The panel bar's names come from the kind registry and the same
+   empty cell. With a dialog or an overlay in front the row is blank and its
+   cells are not clickable: no preset binds a function key in `[dialog]`,
+   and a cell advertising a verb the active modal refuses would be the lie
+   the hints module exists to prevent. The row stays reserved so opening a
+   modal does not relayout the screen behind it. The panel bar's names come from the kind registry and the same
    Fluent keys that named its letters. The pane footer is counted from the
    listing and the volume table. Dialog buttons are the generated key line,
    recognised as the last body line that parses as `[key] verb`. Nothing new
@@ -94,6 +98,19 @@ second copy of a fact diverges in silence.
   differently.
 - The spec's "modifier-sensitive key bar" is out: a terminal does not report
   a held modifier, and a bar that lied about Shift would be worse than none.
+- The terminal fetches `host.volumes` for the footer inline in its loop,
+  bounded to 250 ms: `Backend` is not `Clone`, so it cannot spawn the request
+  the way the window does. Past the bound the footer keeps the previous
+  table, which still holds the right mount. A clonable backend handle would
+  remove the bound; that is a change to `norte-core`, not to this wave.
+- A modal button synthesizes its chord through `unpaint_chord`, the inverse
+  of `paint_chord`, so `Alt+Shift+C` presses `alt+C` and a bare `K` stays
+  `K` (the keymap distinguishes it from `k`). The inverse is pinned by a
+  round-trip doctest.
+- The notice counter keys on the message text: repeating the same action
+  within the bound does not restart it. Restarting it on assignment would
+  need a setter at the ~220 sites that write `app.message`; left as is and
+  said so.
 
 ## Alternatives considered
 

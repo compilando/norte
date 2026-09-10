@@ -339,6 +339,64 @@ pub fn paint_chord(raw: &str) -> String {
     out
 }
 
+/// La inversa de [`paint_chord`]: lo que un lector VE (`Alt+Shift+C`,
+/// `Ctrl+k`, `F5`, `Enter`) vuelve a la forma que [`parse_chord`] entiende
+/// (`alt+C`, `ctrl+k`, `f5`, `enter`). Existe para que un botón pintado con
+/// un chord sintetice EXACTAMENTE ese chord: un `to_lowercase` convertía
+/// `Alt+Shift+C` en `alt+shift+c`, que no es una atadura, y una `K` suelta
+/// en `k`, que es OTRA atadura (spec 2026-09-10, revisión M2).
+///
+/// Solo deshace lo que `paint_chord` hizo: los modificadores vuelven a
+/// minúscula, `Shift+X` (una letra mayúscula bajo modificador) se pliega en
+/// `X`, y las teclas con nombre y las `F` vuelven a minúscula. Una letra
+/// sola conserva su caja, que es lo que la distingue. El enmascarado que
+/// `paint_chord` aplicó no se puede deshacer y no se intenta.
+///
+/// ```
+/// use norte_frontend::keymap::{paint_chord, unpaint_chord};
+///
+/// for raw in ["f5", "shift+f8", "ctrl+k", "ctrl+K", "y", "Y", "g g", "alt+C",
+///             "ctrl+alt+K", "enter", "esc", "alt+9", "ctrl+p"] {
+///     assert_eq!(unpaint_chord(&paint_chord(raw)), raw, "{raw}");
+/// }
+/// ```
+#[must_use]
+pub fn unpaint_chord(painted: &str) -> String {
+    let mut out = String::with_capacity(painted.len());
+    for (i, key) in painted.split(' ').enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        let tokens: Vec<&str> = key.split('+').collect();
+        let n = tokens.len();
+        let mut j = 0;
+        while j < n {
+            let token = tokens[j];
+            let last = j == n - 1;
+            // `Shift+X` justo antes de la letra mayúscula final, bajo otro
+            // modificador: se pliega en la letra.
+            if token == "Shift" && j > 0 && j + 1 == n - 1 && es_letra_mayuscula(tokens[j + 1]) {
+                out.push('+');
+                out.push_str(tokens[j + 1]);
+                break;
+            }
+            if j > 0 {
+                out.push('+');
+            }
+            // La tecla final de UN carácter conserva su caja (`k` y `K` son
+            // dos ataduras); todo lo demás —modificadores, `F5`, `Enter`—
+            // vuelve a minúscula.
+            if last && token.chars().count() == 1 {
+                out.push_str(token);
+            } else {
+                out.push_str(&token.to_lowercase());
+            }
+            j += 1;
+        }
+    }
+    out
+}
+
 /// Un token que es exactamente una letra ASCII mayúscula.
 fn es_letra_mayuscula(token: &str) -> bool {
     let mut chars = token.chars();

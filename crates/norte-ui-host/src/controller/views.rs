@@ -316,28 +316,28 @@ impl Estado {
         }
     }
 
-    /// La proyección de la barra de paneles (#324).
-    ///
-    /// Lo que la TUI hace en `panel_buttons`, con lo que este host sabe: qué
-    /// se COLOCÓ (del reparto, no del árbol — un hueco detrás de una pestaña
-    /// o descartado por falta de sitio no está abierto, #329/#331), quién
-    /// tiene el teclado, y qué tiene algo que contar sin estar a la vista.
-    /// El QUÉ y el ORDEN son de `norte_frontend::panelbar`, compartidos.
     /// La barra de teclas (spec 2026-09-10): las diez celdas del keymap de
-    /// la pantalla que tiene el teclado AHORA — el diálogo si hay uno, el
-    /// visor a pantalla completa si está, los listados si no. El mismo orden
-    /// que `tecla` usa para elegir resolver, y por eso la barra dice la
-    /// verdad.
+    /// la pantalla que tiene el teclado AHORA — el visor a pantalla completa
+    /// si está, los listados si no. Con un diálogo delante la fila va EN
+    /// BLANCO: ningún preset ata una tecla de función en `[dialog]`, y una
+    /// celda que anunciara un verbo que el modal activo rehúsa sería la
+    /// mentira que `hints` existe para no contar. El mismo orden que la TUI
+    /// (`App::key_bar_cells`), y por eso las dos barras dicen lo mismo.
     pub(super) fn vista_barra_de_teclas(&self) -> crate::dto::KeyBarView {
-        let eff = if !self.dialogos.is_empty() {
-            self.resolver_dialogo.effective()
-        } else if self.visor.is_some() {
+        let bar = self.config.common.ui_chrome.key_bar();
+        if !self.dialogos.is_empty() {
+            return crate::dto::KeyBarView {
+                bar,
+                cells: Vec::new(),
+            };
+        }
+        let eff = if self.visor.is_some() {
             &self.efectivo_visor
         } else {
             self.resolver.effective()
         };
         crate::dto::KeyBarView {
-            bar: self.config.common.ui_chrome.key_bar(),
+            bar,
             cells: norte_frontend::keybar::cells_in(eff, self.lang)
                 .into_iter()
                 .map(|c| crate::dto::KeyCellView {
@@ -349,6 +349,13 @@ impl Estado {
         }
     }
 
+    /// La proyección de la barra de paneles (#324).
+    ///
+    /// Lo que la TUI hace en `panel_buttons`, con lo que este host sabe: qué
+    /// se COLOCÓ (del reparto, no del árbol — un hueco detrás de una pestaña
+    /// o descartado por falta de sitio no está abierto, #329/#331), quién
+    /// tiene el teclado, y qué tiene algo que contar sin estar a la vista.
+    /// El QUÉ y el ORDEN son de `norte_frontend::panelbar`, compartidos.
     pub(super) fn vista_barra_de_paneles(&self) -> crate::dto::PanelBarView {
         let botones = self.botones_de_paneles();
         crate::dto::PanelBarView {

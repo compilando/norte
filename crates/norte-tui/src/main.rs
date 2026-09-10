@@ -277,7 +277,7 @@ async fn main() -> Result<()> {
     app.dialog_hints.buttons = app.chrome.dialog_buttons();
     // La barra de teclas (spec 2026-09-10): de los TRES efectivos, aquí y en
     // cada hot-reload OK, por lo mismo que los hints.
-    app.key_bars = norte_tui::app::KeyBars::build(&browse_eff, &viewer_eff, &dialog_eff);
+    app.key_bars = norte_tui::app::KeyBars::build(&browse_eff, &viewer_eff);
     // #142: el acorde que devuelve los paneles, del MISMO efectivo y en el
     // mismo momento que lo de arriba. Si un rebind no llegara aquí, la tecla
     // que abre el subshell y la que lo cierra serían distintas.

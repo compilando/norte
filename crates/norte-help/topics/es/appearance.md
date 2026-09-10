@@ -14,10 +14,11 @@ La barra de teclas
 ------------------
 
 La última fila de la pantalla nombra las diez teclas de función y qué hace
-cada una en la pantalla que tiene el teclado: el listado, el visor o el
-diálogo que tienes delante. Se lee de tu keymap, así que reatar F5 cambia su
-etiqueta, y una tecla que aquí no hace nada enseña solo su número. Pulsar
-una celda con el ratón es pulsar la tecla. `key_bar = false` quita la fila.
+cada una en la pantalla que tiene el teclado: el listado, o el visor. Se lee
+de tu keymap, así que reatar F5 cambia su etiqueta, y una tecla que aquí no
+hace nada enseña solo su número. Con un diálogo delante la fila se queda en
+blanco: ningún preset pone una tecla de función en un diálogo. Pulsar una
+celda con el ratón es pulsar la tecla. `key_bar = false` quita la fila.
 
 La barra de paneles
 -------------------

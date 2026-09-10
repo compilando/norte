@@ -53,8 +53,14 @@ pub enum Outcome {
     Continue,
     /// El último paso contestado: escribir esto.
     Done(Choices),
-    /// El lector salió: no volver a preguntar, sin cambiar nada.
-    Dismissed,
+    /// El lector salió: no volver a preguntar, sin cambiar nada. Lleva el
+    /// tema VIGENTE para que el frontend escriba exactamente ese y el
+    /// fichero exista — nunca `default` sobre un tema que ya había
+    /// (revisión B1).
+    Dismissed {
+        /// El tema con el que se abrió el asistente.
+        keep_theme: String,
+    },
 }
 
 /// El asistente.
@@ -65,6 +71,8 @@ pub struct Wizard {
     themes: Vec<String>,
     cursor: [usize; 3],
     choices: Choices,
+    /// El tema con el que se abrió: lo que se conserva al salir con Esc.
+    current_theme: String,
 }
 
 impl Wizard {
@@ -90,6 +98,7 @@ impl Wizard {
             themes,
             cursor: [p, t, 0],
             choices: Choices::default(),
+            current_theme: current_theme.to_owned(),
         }
     }
 
@@ -224,10 +233,13 @@ impl Wizard {
         };
     }
 
-    /// Esc: salir sin cambiar nada y no volver a preguntar.
+    /// Esc: salir sin cambiar nada y no volver a preguntar. Lleva el tema
+    /// vigente para que quien escribe conserve exactamente ese.
     #[must_use]
     pub fn dismiss(&self) -> Outcome {
-        Outcome::Dismissed
+        Outcome::Dismissed {
+            keep_theme: self.current_theme.clone(),
+        }
     }
 }
 
@@ -279,7 +291,13 @@ mod tests {
                 icons: Some(false),
             })
         );
-        assert_eq!(w.dismiss(), Outcome::Dismissed);
+        assert_eq!(
+            w.dismiss(),
+            Outcome::Dismissed {
+                keep_theme: "nord".into()
+            },
+            "salir conserva el tema con el que se abrió, no `default`"
+        );
     }
 
     /// Un clic fuera de las filas no mueve nada; uno dentro, sí.

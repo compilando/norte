@@ -818,9 +818,10 @@ fn por_encima_de_los_paneles(app: &mut App, ev: MouseEvent) -> Option<After> {
         return Some(menu_click(app, ev.column, ev.row));
     }
     // La barra de teclas (spec 2026-09-10): una celda pulsada es la tecla
-    // pulsada, y se despacha como tal. ANTES del cerrojo de los overlays:
-    // con un modal delante la barra enseña las teclas del diálogo, y pulsar
-    // `[Enter] Confirm` tiene que confirmar. Su fila no es de ningún panel.
+    // pulsada, y se despacha como tal. ANTES del cerrojo de los overlays por
+    // lo mismo que los botones de un modal de abajo: las zonas ya vienen
+    // vacías cuando no hay nada que pulsar (`key_zones`), y este orden no
+    // depende de que alguien se acuerde. Su fila no es de ningún panel.
     if clic
         && let Some(key) = app
             .mouse
@@ -848,7 +849,12 @@ fn por_encima_de_los_paneles(app: &mut App, ev: MouseEvent) -> Option<After> {
             .iter()
             .find(|z| z.row == ev.row && ev.column >= z.x0 && ev.column <= z.x1)
             .map(|z| z.chord.clone())
-        && let Ok(chord) = norte_frontend::keymap::parse_chord(&chord.to_lowercase())
+        // La inversa de `paint_chord`, no un `to_lowercase`: `Alt+Shift+C`
+        // vuelve a `alt+C` y una `K` suelta sigue siendo `K`, que el keymap
+        // distingue de `k` (revisión M2).
+        && let Ok(chord) = norte_frontend::keymap::parse_chord(
+            &norte_frontend::keymap::unpaint_chord(&chord),
+        )
         && let Some((mods, code)) = crate::keymap::crossterm_from_chord(chord)
     {
         app.mouse.drag.cancel();

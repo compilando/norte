@@ -49,9 +49,11 @@ pub struct Palette {
 /// ¿Es `needle` subsecuencia de `hay`? (`cpf` casa `copy path` porque `c`,
 /// `p`, `f`... — sí, `f` no: casa `cop` y `pat`; lo que importa es que cada
 /// byte aparezca en orden). Vacío casa todo. Solo bytes plegados.
-fn is_subsequence(needle: &[u8], hay: &[u8]) -> bool {
-    let mut it = hay.iter();
-    needle.iter().all(|b| it.any(|h| h == b))
+fn is_subsequence(needle: &str, hay: &str) -> bool {
+    // Por CHARS, no por bytes: una consulta no puede casar sobre un byte de
+    // continuación en mitad de un carácter (revisión m12).
+    let mut it = hay.chars();
+    needle.chars().all(|c| it.any(|h| h == c))
 }
 
 impl Palette {
@@ -147,7 +149,7 @@ impl Palette {
                 self.folds
                     .iter()
                     .enumerate()
-                    .filter(|(_, f)| is_subsequence(q.as_bytes(), f.as_bytes()))
+                    .filter(|(_, f)| is_subsequence(&q, f))
                     .map(|(i, _)| i)
                     .collect()
             } else {
@@ -313,7 +315,11 @@ mod palette_tests {
             p.push_char(c);
         }
         assert_eq!(p.visible().len(), 1, "substring exacto: solo app.help");
-        assert!(super::is_subsequence(b"", b"x") && !super::is_subsequence(b"ba", b"ab"));
+        assert!(super::is_subsequence("", "x") && !super::is_subsequence("ba", "ab"));
+        assert!(
+            !super::is_subsequence("\u{a9}", "é"),
+            "por chars, no por bytes"
+        );
     }
 
     #[test]

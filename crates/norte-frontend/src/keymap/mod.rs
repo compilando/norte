@@ -21,7 +21,9 @@ mod rebind;
 mod resolve;
 
 pub use catalogue::{CATALOGUE, CommandDef, Status};
-pub use chord::{Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_mod_key};
+pub use chord::{
+    Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_mod_key, unpaint_chord,
+};
 pub use effective::{Availability, Continuation, Effective, valid_lua_name};
 // Not public API: the spelling a sequence has IN THE FILE, which the keyboard
 // sheet paints (after `paint_chord`) and the shortcut editor hands to the

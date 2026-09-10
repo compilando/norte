@@ -242,13 +242,20 @@ pub(crate) fn modal_title_body(
     // nada, y un botón que no hace nada es la mentira que `hints` existe
     // para no contar. Vale para los dos cuerpos con papeles y para las 55
     // variantes que componen `String`, sin tocar ninguna.
-    if hints.buttons
-        && !hints.modals_inert
-        && let Some(last) = body.last_mut()
-        && last.kind != LineKind::Field
-        && crate::hints::hint_buttons(&last.text).is_some()
-    {
-        last.kind = LineKind::Buttons;
+    // Los modales de texto libre empujan su ERROR debajo de la línea de
+    // teclas, así que se busca desde el final saltando avisos y errores
+    // (revisión m8): un error a la vista no puede apagar los botones.
+    if hints.buttons && !hints.modals_inert {
+        let keys = body
+            .iter_mut()
+            .rev()
+            .find(|l| !matches!(l.kind, LineKind::Error | LineKind::Warning));
+        if let Some(line) = keys
+            && line.kind != LineKind::Field
+            && crate::hints::hint_buttons(&line.text).is_some()
+        {
+            line.kind = LineKind::Buttons;
+        }
     }
     (title, body)
 }

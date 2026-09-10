@@ -342,9 +342,20 @@ pub async fn run(
         // encendido — con él apagado la tabla de montaje no le hace falta a
         // nadie. Un fallo deja la cache como estaba: el pie calla el espacio
         // antes que inventarlo.
+        //
+        // EN LÍNEA pero ACOTADO (revisión M5): `Backend` no es `Clone`, así
+        // que no se puede lanzar a una tarea como hace la ventana, y la
+        // enumeración hace un `statvfs` por montaje con 200 ms de plazo cada
+        // uno — un montaje de red colgado paraba el bucle entero. El tope de
+        // 250 ms es el precio máximo por listado; pasado, el pie se queda con
+        // la tabla anterior, que sigue teniendo el montaje correcto.
         if app.chrome.pane_footer()
             && std::mem::take(&mut app.volumes_stale)
-            && let Ok(vols) = backend.volumes(false).await
+            && let Ok(Ok(vols)) = tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                backend.volumes(false),
+            )
+            .await
         {
             app.volumes = vols;
         }

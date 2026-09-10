@@ -122,6 +122,10 @@ fn clear_themed(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
 /// paneles el destino es «el otro» y una marca que sale siempre deja de
 /// leerse; a partir de tres, una copia hacia el que el motor desempate solo
 /// es pérdida de datos silenciosa (ADR 0058 D7).
+fn marca_destino(app: &App, i: usize) -> bool {
+    norte_frontend::layout::target_worth_marking(app.panes.len()) && app.target_index() == Some(i)
+}
+
 /// El pie de un listado (spec 2026-09-10), o `None` con `[ui] pane_footer`
 /// apagado. Lo redacta el crate compartido; aquí solo se juntan las cuentas
 /// del pane con el espacio libre de su volumen (de la cache de `App`).
@@ -143,10 +147,6 @@ fn pane_footer(app: &App, pane: &crate::app::Pane, width: u16) -> Option<String>
         norte_frontend::footer::segments(counts, marked, free, norte_i18n::active()),
         room,
     ))
-}
-
-fn marca_destino(app: &App, i: usize) -> bool {
-    norte_frontend::layout::target_worth_marking(app.panes.len()) && app.target_index() == Some(i)
 }
 
 /// El cuerpo del frame: los dos panes —o el panel que los sustituye—, la
@@ -492,8 +492,8 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         );
     }
     // La barra de teclas (spec 2026-09-10) va la ÚLTIMA: su fila está fuera
-    // del cuerpo, así que ningún overlay la tapa, y con un modal delante
-    // enseña las teclas del diálogo, que es cuando más falta hace.
+    // del cuerpo, así que ningún overlay la tapa. Con un modal delante va en
+    // blanco (`App::key_bar_cells`): ningún preset ata una `F` en `[dialog]`.
     draw_key_bar(frame, app);
 }
 

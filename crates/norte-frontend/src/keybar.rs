@@ -116,19 +116,29 @@ pub fn layout(width: usize) -> Vec<(usize, usize)> {
 #[must_use]
 pub fn cell_text(cell: &KeyCell, width: usize) -> String {
     let num = cell.key.to_string();
-    let room = width.saturating_sub(num.len());
+    // Una celda que no puede con su propio número va en blanco: pintar `10`
+    // en una celda de una columna desplazaría todas las de su derecha
+    // respecto a sus zonas (revisión m11).
+    if width < num.len() {
+        return " ".repeat(width);
+    }
+    let room = width - num.len();
+    // Mayúscula inicial ANTES de medir, y se mide lo que se pinta: `ß` sube a
+    // `SS` y ocupa dos (revisión m7).
+    let mut chars = cell.label.chars();
+    let capitalized: String = chars
+        .next()
+        .map(|c| c.to_uppercase().collect::<String>())
+        .unwrap_or_default()
+        + chars.as_str();
     let mut label = String::new();
     let mut used = 0;
-    for (i, c) in cell.label.chars().enumerate() {
+    for c in capitalized.chars() {
         let w = crate::display::cells(&c.to_string());
         if used + w > room {
             break;
         }
-        if i == 0 {
-            label.extend(c.to_uppercase());
-        } else {
-            label.push(c);
-        }
+        label.push(c);
         used += w;
     }
     format!("{num}{label}{}", " ".repeat(room - used))

@@ -135,19 +135,18 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // Con `Dismissed` se escribe el tema con el que se ABRIÓ el
+        // asistente: el modelo lo trae, y así el terminal y la ventana
+        // escriben lo mismo (ADR 0077, revisión B1).
         let (preset, theme, icons) = match outcome {
-            Outcome::Done(c) => (c.preset, c.theme, c.icons),
-            Outcome::Dismissed | Outcome::Continue => (None, None, None),
+            Outcome::Done(c) => (
+                c.preset,
+                c.theme.or_else(|| Some("default".to_owned())),
+                c.icons,
+            ),
+            Outcome::Dismissed { keep_theme } => (None, Some(keep_theme), None),
+            Outcome::Continue => (None, None, None),
         };
-        let theme = theme.or_else(|| {
-            Some(
-                self.config
-                    .common
-                    .ui_theme
-                    .clone()
-                    .unwrap_or_else(|| "default".to_owned()),
-            )
-        });
         let mut fuera = Vec::new();
         for (section, key, value) in [("keymap", "preset", preset), ("ui", "theme", theme)] {
             let Some(v) = value else { continue };

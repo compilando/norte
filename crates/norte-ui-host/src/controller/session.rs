@@ -87,20 +87,16 @@ impl Estado {
             .map_or_else(|| "default".to_owned(), ToOwned::to_owned)
     }
 
-    /// Mira si la pantalla cambió desde lo último escrito y, si cambió, la
-    /// escribe FUERA del actor. Es el tic de la sesión, y también lo que
-    /// cada cambio del árbol llama sin esperar al tic.
-    ///
-    /// Una ventana suelta no escribe; una sesión del futuro no se machaca; y
-    /// con un diálogo delante no se guarda lo que se está decidiendo, como en
-    /// el terminal. Con un `put` en vuelo se espera a que conteste: dos
-    /// escrituras cruzadas con la misma revisión son un conflicto seguro.
     /// Un tic de un segundo sobre el aviso de la barra (spec 2026-09-10,
     /// `[ui] notice_seconds`): pasado el tope, el mensaje sale de la barra,
     /// va al registro por `tracing` y `notices_unread` cuenta uno más. Con
     /// `0` no caduca nada. Abrir el panel de registro pone la cuenta a
     /// cero. Devuelve el parche de estado si algo cambió; los tests lo hacen
     /// avanzar tic a tic, sin reloj.
+    ///
+    /// La cuenta va por TEXTO: repetir la misma acción dentro del plazo no la
+    /// reinicia (revisión m10). Reiniciarla al asignar pediría un setter en
+    /// los ~40 sitios que escriben `status.message`; se deja dicho.
     pub(super) fn caducar_aviso(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
         let mut cambio = false;
         let registro_abierto = self
@@ -130,7 +126,9 @@ impl Estado {
                     self.mensaje_ticks = 0;
                     self.mensaje_contado = None;
                     self.status.notices_unread = self.status.notices_unread.saturating_add(1);
-                    tracing::warn!(target: "norte::notice", "{text}");
+                    // `info`, no `warn`: «copiado 1 fichero» no es un aviso, y
+                    // el nivel es por lo que se filtra el panel de registro.
+                    tracing::info!(target: "norte::notice", "{text}");
                     cambio = true;
                 }
             }
@@ -138,6 +136,14 @@ impl Estado {
         cambio.then(|| self.parche(vec![ViewChange::Status(self.status.clone())]))
     }
 
+    /// Mira si la pantalla cambió desde lo último escrito y, si cambió, la
+    /// escribe FUERA del actor. Es el tic de la sesión, y también lo que
+    /// cada cambio del árbol llama sin esperar al tic.
+    ///
+    /// Una ventana suelta no escribe; una sesión del futuro no se machaca; y
+    /// con un diálogo delante no se guarda lo que se está decidiendo, como en
+    /// el terminal. Con un `put` en vuelo se espera a que conteste: dos
+    /// escrituras cruzadas con la misma revisión son un conflicto seguro.
     pub(super) fn empujar_sesion(
         &mut self,
         backend: &Arc<dyn HostBackend>,

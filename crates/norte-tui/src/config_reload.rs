@@ -149,7 +149,7 @@ pub async fn reload_config(
                 app.dialog_hints = DialogHints::build(&dialog);
                 app.dialog_hints.buttons = cfg.common.ui_chrome.dialog_buttons();
                 // Y la barra de teclas, de los tres (spec 2026-09-10).
-                app.key_bars = crate::app::KeyBars::build(&browse, &viewer, &dialog);
+                app.key_bars = crate::app::KeyBars::build(&browse, &viewer);
                 // #142: el acorde de vuelta del subshell, del efectivo
                 // `browse` VIGENTE y antes de que se mude al resolver —
                 // mismo criterio. Un rebind que no llegara aquí dejaría al

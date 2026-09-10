@@ -259,9 +259,10 @@ pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
 }
 
 /// La fila donde va la barra de teclas (spec 2026-09-10), si está: la ÚLTIMA
-/// del frame, como en mc, far y norton, y la de estado queda encima. No se
-/// esconde con un overlay delante: entonces enseña las teclas del diálogo,
-/// que es cuando más falta hace.
+/// del frame, como en mc, far y norton, y la de estado queda encima. La fila
+/// se RESERVA aunque haya un overlay delante —abrir un modal no recoloca la
+/// pantalla de detrás, como con la barra de paneles—; lo que se pinta en
+/// ella lo decide `App::key_bar_cells`, y con un modal es nada.
 #[must_use]
 pub(crate) fn key_bar_area(app: &App, area: Rect) -> Option<Rect> {
     // Con las tres barras en un terminal de tres filas no queda cuerpo; la

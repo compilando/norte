@@ -243,23 +243,21 @@ pub struct KeyBars {
     pub browse: Vec<norte_frontend::keybar::KeyCell>,
     /// Con el visor a pantalla completa.
     pub viewer: Vec<norte_frontend::keybar::KeyCell>,
-    /// Con un modal o un overlay delante.
-    pub dialog: Vec<norte_frontend::keybar::KeyCell>,
 }
 
 impl KeyBars {
-    /// De los tres efectivos, en el idioma activo.
+    /// De los dos efectivos con teclas de función, en el idioma activo. El
+    /// de `dialog` no entra: ningún preset ata una `F` ahí, y con un modal o
+    /// un overlay delante la fila va en blanco (`App::key_bar_cells`).
     #[must_use]
     pub fn build(
         browse: &norte_frontend::keymap::Effective,
         viewer: &norte_frontend::keymap::Effective,
-        dialog: &norte_frontend::keymap::Effective,
     ) -> Self {
         let lang = norte_i18n::active();
         Self {
             browse: norte_frontend::keybar::cells_in(browse, lang),
             viewer: norte_frontend::keybar::cells_in(viewer, lang),
-            dialog: norte_frontend::keybar::cells_in(dialog, lang),
         }
     }
 }
@@ -303,20 +301,27 @@ impl App {
             self.message_ticks = 0;
             self.message_counted = None;
             self.notices_unread = self.notices_unread.saturating_add(1);
-            tracing::warn!(target: "norte::notice", "{text}");
+            // `info`, no `warn`: «copiado 1 fichero» no es un aviso, y el
+            // nivel es por lo que se filtra el panel de registro.
+            tracing::info!(target: "norte::notice", "{text}");
         }
     }
 
-    /// Las celdas de la pantalla que tiene las teclas AHORA: un modal o un
-    /// overlay delante, las del diálogo; el visor a pantalla completa, las
-    /// suyas; si no, las de los listados. El mismo orden que `on_key` usa
-    /// para elegir resolver, y por eso la barra dice la verdad.
+    /// Las celdas de la pantalla que tiene las teclas AHORA: con un modal o
+    /// un overlay delante, NINGUNA —la fila va en blanco: ningún preset ata
+    /// una `F` en `[dialog]`, y una celda que anunciara un verbo que el modal
+    /// activo rehúsa sería la mentira que `hints` existe para no contar—; el
+    /// visor a pantalla completa, las suyas; si no, las de los listados. El
+    /// visor se pregunta ANTES que `overlay_open`, que lo incluye: es el mismo
+    /// orden que `vista_barra_de_teclas` en la ventana (ADR 0077).
     #[must_use]
     pub fn key_bar_cells(&self) -> &[norte_frontend::keybar::KeyCell] {
-        if self.modal.is_some() || crate::mouse::overlay_open(self) {
-            &self.key_bars.dialog
+        if self.modal.is_some() || self.help.is_some() || self.wizard.is_some() {
+            &[]
         } else if self.viewer.is_some() {
             &self.key_bars.viewer
+        } else if crate::mouse::overlay_open(self) {
+            &[]
         } else {
             &self.key_bars.browse
         }

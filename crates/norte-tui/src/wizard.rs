@@ -103,11 +103,18 @@ pub async fn finish(app: &mut App, backend: &norte_core::backend::Backend, outco
         app.message = Some(t("msg-settings-no-config-dir"));
         return;
     };
+    // Con `Dismissed` se escribe el tema con el que se ABRIÓ el asistente, no
+    // `default`: `ntc --setup` + Esc sobre un `theme = "nord"` lo dejaba en
+    // `default`, y una capa de sistema con tema quedaba tapada (revisión B1).
     let (preset, theme, icons) = match outcome {
-        Outcome::Done(c) => (c.preset, c.theme, c.icons),
-        Outcome::Dismissed | Outcome::Continue => (None, None, None),
+        Outcome::Done(c) => (
+            c.preset,
+            c.theme.or_else(|| Some("default".to_owned())),
+            c.icons,
+        ),
+        Outcome::Dismissed { keep_theme } => (None, Some(keep_theme), None),
+        Outcome::Continue => (None, None, None),
     };
-    let theme = theme.or_else(|| Some("default".to_owned()));
     let escritura = tokio::task::spawn_blocking(move || {
         let mut res = Ok(());
         if let Some(p) = preset {
@@ -192,7 +199,9 @@ mod tests {
         ));
         assert_eq!(
             apply_key(&mut app, tecla(KeyCode::Esc)),
-            Some(Outcome::Dismissed)
+            Some(Outcome::Dismissed {
+                keep_theme: "default".into()
+            })
         );
         assert!(app.wizard.is_none());
     }

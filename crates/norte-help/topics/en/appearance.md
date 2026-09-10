@@ -14,10 +14,11 @@ The key bar
 -----------
 
 The last row of the screen names the ten function keys and what each does
-on the screen that has the keyboard: the listing, the viewer, or the dialog
-in front of you. It is read from your keymap, so rebinding F5 relabels it,
-and a key that does nothing here shows only its number. Clicking a cell
-presses the key. `key_bar = false` removes the row.
+on the screen that has the keyboard: the listing, or the viewer. It is read
+from your keymap, so rebinding F5 relabels it, and a key that does nothing
+here shows only its number. With a dialog in front the row goes blank: no
+preset puts a function key on a dialog. Clicking a cell presses the key.
+`key_bar = false` removes the row.
 
 The panel bar
 -------------
