@@ -152,25 +152,32 @@ fn marca_destino(app: &App, i: usize) -> bool {
 ///
 /// Aparte de [`draw`] porque un reparto, dos ramas de sustitución y tres
 /// pintados no caben en una función que además monta todos los overlays.
-fn draw_body(frame: &mut Frame<'_>, app: &App) {
-    // UN reparto por frame: de él salen el cuerpo, los dos panes, la
-    // franja de tareas y la barra de estado.
-    let res = resolved_frame(app, frame.area());
-    let body = body_rect(&res, &app.layout).unwrap_or_else(|| chrome_body(app, frame.area()));
-    let tasks_area = slot_rect(&res, crate::panel::SLOT_TASKS).unwrap_or(Rect {
+/// Las dos franjas de abajo del cuerpo —tareas y estado— del reparto, con su
+/// respaldo cuando el árbol no las coloca. El respaldo del estado va al
+/// final del CUERPO, no del frame: la barra de teclas se reserva la última
+/// fila (spec 2026-09-10).
+fn bottom_strips(res: &norte_frontend::layout::Resolved, body: Rect) -> (Rect, Rect) {
+    let tasks_area = slot_rect(res, crate::panel::SLOT_TASKS).unwrap_or(Rect {
         x: body.x,
         y: body.y.saturating_add(body.height),
         width: body.width,
         height: 0,
     });
-    // El respaldo sin hueco de estado va al final del CUERPO, no del frame:
-    // la barra de teclas se reserva la última fila (spec 2026-09-10).
-    let status_area = slot_rect(&res, crate::panel::SLOT_STATUS).unwrap_or(Rect {
+    let status_area = slot_rect(res, crate::panel::SLOT_STATUS).unwrap_or(Rect {
         x: body.x,
         y: body.y.saturating_add(body.height).saturating_sub(1),
         width: body.width,
         height: 1,
     });
+    (tasks_area, status_area)
+}
+
+fn draw_body(frame: &mut Frame<'_>, app: &App) {
+    // UN reparto por frame: de él salen el cuerpo, los dos panes, la
+    // franja de tareas y la barra de estado.
+    let res = resolved_frame(app, frame.area());
+    let body = body_rect(&res, &app.layout).unwrap_or_else(|| chrome_body(app, frame.area()));
+    let (tasks_area, status_area) = bottom_strips(&res, body);
     let cols = pane_cols(&res, &app.layout);
     // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
     // frame; los tests lo fijan (`App::render_now_ms`) para snapshots

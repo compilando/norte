@@ -2175,6 +2175,7 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
 }
 
 /// Todo lo demás que puede cambiar de la pantalla.
+#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
 fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
     vec![
         ("layout", ViewChange::Layout(disposicion_de_referencia())),

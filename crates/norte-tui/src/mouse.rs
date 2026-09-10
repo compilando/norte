@@ -1481,7 +1481,10 @@ pub async fn on_mouse(
     me: crossterm::event::MouseEvent,
 ) {
     match self::handle(app, me) {
-        self::After::Nothing => {}
+        // `SynthKey`: la tecla sintetizada la despacha el bucle por
+        // `on_key`, justo después de este gesto — aquí no están los tres
+        // resolvers. Nada que hacer, como con `Nothing`.
+        self::After::Nothing | self::After::SynthKey => {}
         // El indicador de sesión suelta: la explicación está en la ayuda, y
         // se abre por el MISMO constructor que `F1` sobre una fila de la
         // paleta — una página en mano, no un contexto que resolver.
@@ -1494,9 +1497,6 @@ pub async fn on_mouse(
         self::After::Extension(cmd) => {
             crate::screens::on_extensions_click(app, backend, lang, help_lines, cmd).await;
         }
-        // La tecla sintetizada la despacha el bucle por `on_key`, justo
-        // después de este gesto: aquí no están los tres resolvers.
-        self::After::SynthKey => {}
         // #324: un botón de la barra de paneles va por el MISMO despacho que
         // su atajo. Dos caminos para abrir el mismo panel divergen en cuanto
         // uno de los dos crece un detalle — es la lección de ADR 0077 aplicada

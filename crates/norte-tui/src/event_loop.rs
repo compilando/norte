@@ -342,10 +342,11 @@ pub async fn run(
         // encendido — con él apagado la tabla de montaje no le hace falta a
         // nadie. Un fallo deja la cache como estaba: el pie calla el espacio
         // antes que inventarlo.
-        if app.chrome.pane_footer() && std::mem::take(&mut app.volumes_stale) {
-            if let Ok(vols) = backend.volumes(false).await {
-                app.volumes = vols;
-            }
+        if app.chrome.pane_footer()
+            && std::mem::take(&mut app.volumes_stale)
+            && let Ok(vols) = backend.volumes(false).await
+        {
+            app.volumes = vols;
         }
         turn::drain_pending(
             app,

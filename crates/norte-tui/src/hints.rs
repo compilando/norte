@@ -246,7 +246,7 @@ pub struct DialogHints {
 /// Un botón de la línea de teclas de un modal: el chord pintado y su verbo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HintButton {
-    /// El chord tal y como lo escribe [`paint_chord`] (`Enter`, `Esc`, `F5`).
+    /// El chord tal y como lo escribe `paint_chord` (`Enter`, `Esc`, `F5`).
     pub chord: String,
     /// El verbo, en el idioma del lector.
     pub label: String,

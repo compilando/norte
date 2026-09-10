@@ -1000,7 +1000,6 @@ fn snapshot_modal_transfer_name_cjk_largo() {
     insta::assert_snapshot!(render(&app));
 }
 
-#[test]
 /// Los botones de un modal (spec 2026-09-10, `[ui] dialog_buttons`): la
 /// línea de teclas generada se pinta como ` Enter confirm ` ` Esc cancel `
 /// con el rol `button` (monocromo: invertido), cada botón es una zona, y un
