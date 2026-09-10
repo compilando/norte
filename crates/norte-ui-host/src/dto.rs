@@ -207,10 +207,21 @@ pub struct PanelBarView {
     /// `[ui] panel_bar`: si la barra se pinta. Apagada, los paneles siguen
     /// abriéndose por su tecla, su menú y la paleta.
     pub bar: bool,
+    /// `[ui] panel_bar_style = "names"` (spec 2026-09-10): cada botón
+    /// enseña su nombre con la letra de acceso marcada; `false` = solo la
+    /// letra. Ausente en un host anterior al puente 63 = nombres.
+    #[serde(default = "default_true")]
+    pub names: bool,
     /// Los botones, en el orden en que se pintan. Un click vuelve como el
     /// ÍNDICE en esta lista (`UiAction::PanelBarActivate`), nunca como un
     /// comando: el renderer no despacha (ADR 0069).
     pub buttons: Vec<PanelButtonView>,
+}
+
+/// `true` para un campo que un host anterior no mandaba y que encendido es
+/// lo de siempre.
+fn default_true() -> bool {
+    true
 }
 
 /// Un botón de la barra de paneles.

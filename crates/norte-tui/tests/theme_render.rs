@@ -30,6 +30,62 @@ fn app_con_dir(depth: ColorDepth) -> App {
     app
 }
 
+/// La barra de paneles con NOMBRES (spec 2026-09-10): cada botón pinta su
+/// nombre con la letra de acceso subrayada; con `letters` o sin sitio para
+/// todos, vuelve a las letras; y las zonas del ratón miden lo mismo que lo
+/// pintado en los dos casos.
+#[test]
+fn la_barra_de_paneles_pinta_nombres_con_la_letra_subrayada_y_cae_a_letras() {
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.panel_bar = true;
+    app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Names);
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let fila: String = (0..80)
+        .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
+        .collect();
+    assert!(
+        fila.contains("Sitios"),
+        "con nombres se lee el nombre: {fila:?}"
+    );
+    let s = fila.find('S').expect("la S de Sitios");
+    let s = u16::try_from(fila[..s].chars().count()).expect("cabe");
+    assert!(
+        terminal.backend().buffer()[(s, 1)]
+            .modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "la letra de acceso va subrayada"
+    );
+    let zonas = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 80, 16));
+    let ancho_zona = zonas[0].x1 - zonas[0].x0 + 1;
+    assert_eq!(
+        usize::from(ancho_zona),
+        "Sitios".len() + 2,
+        "la zona mide lo pintado"
+    );
+
+    // Sin sitio para todos los nombres: letras, y zonas de tres celdas.
+    let mut terminal = Terminal::new(TestBackend::new(30, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let fila: String = (0..30)
+        .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
+        .collect();
+    assert!(!fila.contains("Sitios"), "sin sitio, letras: {fila:?}");
+    let zonas = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 30, 16));
+    assert_eq!(zonas[0].x1 - zonas[0].x0 + 1, 3);
+
+    // `letters` pedido a mano, con sitio de sobra: letras igual.
+    app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let fila: String = (0..80)
+        .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
+        .collect();
+    assert!(!fila.contains("Sitios"), "{fila:?}");
+}
+
 /// Un panel CERRADO no se pinta como un bloque encendido.
 ///
 /// La barra estilaba `Closed` con `Role::StatusBar`, que es el estilo de la

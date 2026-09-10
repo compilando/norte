@@ -249,7 +249,8 @@ use serde::{Deserialize, Serialize};
 ///   iconos la cerraría y correría todos los nombres.
 /// - **63**: la ola de usabilidad (spec 2026-09-10), en UN salto.
 ///   `PaletteRowView.recent`: la fila va arriba por ser de las últimas
-///   lanzadas, solo con la consulta vacía.
+///   lanzadas, solo con la consulta vacía. `PanelBarView.names`: si los
+///   botones enseñan su nombre (`[ui] panel_bar_style`) o solo la letra.
 pub const BRIDGE_VERSION: u32 = 63;
 
 /// Tope de una cadena que cruza al renderer, en bytes.

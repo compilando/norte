@@ -631,6 +631,9 @@ export interface PanelButtonView {
 export interface PanelBarView {
   /** `[ui] panel_bar`: si la barra se pinta. */
   bar: boolean;
+  /** `[ui] panel_bar_style = "names"`: nombre con la letra marcada, o solo
+   *  la letra. Opcional: un host anterior al puente 63 no lo manda. */
+  names?: boolean;
   /** Un click vuelve como el ÍNDICE aquí, nunca como un comando. */
   buttons: PanelButtonView[];
 }

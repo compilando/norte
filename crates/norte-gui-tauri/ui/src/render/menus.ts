@@ -41,6 +41,9 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
   fila.className = "panelbar";
   fila.setAttribute("role", "toolbar");
   fila.setAttribute("aria-label", this.t("panelbar-label"));
+  // `[ui] panel_bar_style`: con nombres o solo con la letra. El nombre
+  // sigue en el título del botón en los dos casos.
+  fila.dataset["names"] = String(bar.names !== false);
   for (const [i, b] of bar.buttons.entries()) {
     const boton = document.createElement("button");
     boton.type = "button";

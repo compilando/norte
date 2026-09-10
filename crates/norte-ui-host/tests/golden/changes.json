@@ -659,7 +659,8 @@
           "letter": "R",
           "state": "closed"
         }
-      ]
+      ],
+      "names": true
     }
   },
   "picker": {

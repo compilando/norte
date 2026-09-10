@@ -1133,6 +1133,7 @@ fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
     use norte_ui_host::dto::{PanelButtonState, PanelButtonView};
     norte_ui_host::dto::PanelBarView {
         bar: true,
+        names: true,
         buttons: vec![
             PanelButtonView {
                 kind: "places".to_owned(),
@@ -2338,7 +2339,7 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
     // Puente 63: la ola de usabilidad (spec 2026-09-10).
-    const FORMA: u64 = 9_502_970_461_236_339_452;
+    const FORMA: u64 = 13_267_140_221_554_411_039;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

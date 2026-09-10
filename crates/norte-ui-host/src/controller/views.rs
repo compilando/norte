@@ -326,6 +326,8 @@ impl Estado {
         crate::dto::PanelBarView {
             // Por defecto ENCENDIDA, igual que la de menús y que la TUI.
             bar: self.config.common.ui_panel_bar.unwrap_or(true),
+            names: self.config.common.ui_chrome.panel_bar_style()
+                == norte_config::PanelBarStyle::Names,
             buttons: botones
                 .iter()
                 .map(|b| {

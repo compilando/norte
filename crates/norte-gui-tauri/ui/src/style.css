@@ -98,6 +98,12 @@ body {
 
 .panelbar-letter {
   font-weight: bold;
+  text-decoration: underline;
+}
+
+/* `[ui] panel_bar_style = "letters"`: la fila de siempre, solo la letra. */
+.panelbar[data-names="false"] .panelbar-name {
+  display: none;
 }
 
 /* Tres estilos para tres estados, como en la TUI: abierto con el color de

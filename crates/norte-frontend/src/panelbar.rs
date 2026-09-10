@@ -58,10 +58,75 @@ pub struct PanelButton {
     pub command: String,
     /// La letra que se pinta.
     pub letter: char,
+    /// El nombre corto del que salió la letra, en el idioma con que se
+    /// construyó (spec 2026-09-10): lo que `[ui] panel_bar_style = "names"`
+    /// pinta entero.
+    pub name: String,
     /// Cómo está.
     pub state: PanelState,
     /// Tiene algo que contar (errores nuevos, tareas vivas).
     pub attention: bool,
+}
+
+/// Lo que un botón ocupa y enseña en una fila de celdas (spec 2026-09-10).
+///
+/// Con `names`, ` Places ` con la letra de acceso subrayada donde aparezca en
+/// el nombre; sin él, ` P `, la fila de siempre. La celda de la derecha es
+/// SIEMPRE de la marca de novedad, para que la fila no baile cuando algo
+/// pasa. Los dos frontends parten de aquí: la TUI para pintar y para las
+/// zonas del ratón (que así son el mismo número), la ventana para el texto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ButtonCell {
+    /// El texto SIN el espacio de la izquierda ni la celda de la marca.
+    pub text: String,
+    /// Índice (en chars de `text`) de la letra de acceso: donde aparece en
+    /// el nombre, o `0` si no está y va pintada delante.
+    pub letter_at: usize,
+    /// Ancho total en celdas, espacio y marca incluidos.
+    pub width: usize,
+}
+
+/// La celda de un botón en el estilo pedido.
+#[must_use]
+pub fn button_cell(b: &PanelButton, names: bool) -> ButtonCell {
+    if !names {
+        return ButtonCell {
+            text: b.letter.to_string(),
+            letter_at: 0,
+            width: 3,
+        };
+    }
+    let letter_at = b
+        .name
+        .chars()
+        .position(|c| c.to_uppercase().next().is_some_and(|u| u == b.letter));
+    let text = if letter_at.is_some() {
+        b.name.clone()
+    } else {
+        // La letra no está en el nombre (desempate por otra libre): se
+        // pinta delante para que siga sabiéndose cuál es.
+        format!("{} {}", b.letter, b.name)
+    };
+    let width = crate::display::cells(&text) + 2;
+    // Sin la letra en el nombre, va delante: índice 0.
+    let letter_at = letter_at.unwrap_or(0);
+    ButtonCell {
+        text,
+        letter_at,
+        width,
+    }
+}
+
+/// ¿Caben TODOS los botones con nombre en `width` celdas? Si no, la fila
+/// vuelve sola a letras: media palabra no es un botón, y una barra que
+/// esconde botones dice menos que una de letras que los enseña todos.
+#[must_use]
+pub fn names_fit(buttons: &[PanelButton], width: usize) -> bool {
+    buttons
+        .iter()
+        .map(|b| button_cell(b, true).width)
+        .sum::<usize>()
+        <= width
 }
 
 /// Lo que la barra necesita saber del momento.
@@ -129,7 +194,8 @@ fn buttons_con(
             .iter()
             .find(|(k, _)| *k == id)
             .map_or_else(|| format!("layout.{id}"), |(_, c)| (*c).to_string());
-        let letter = letra(&nombre_con(id, &command, &t), id, &out);
+        let name = nombre_con(id, &command, &t);
+        let letter = letra(&name, id, &out);
         let abierto = input.open.contains(&id);
         let state = if !abierto {
             PanelState::Closed
@@ -142,6 +208,7 @@ fn buttons_con(
             kind: id.to_string(),
             command,
             letter,
+            name,
             state,
             attention: input.attention.contains(&id),
         });
@@ -414,6 +481,38 @@ mod tests {
         // Sin nombre traducible, el id del kind; y si tampoco, el alfabeto:
         // un botón sin letra no es un botón.
         assert_eq!(letra("", "gitlog", &[]), 'G');
+    }
+
+    /// La celda de un botón (spec 2026-09-10): con nombres, el nombre entero
+    /// y la letra localizada dentro; si la letra no está en el nombre, va
+    /// delante; sin nombres, tres celdas como siempre. Y `names_fit` dice
+    /// cuándo la fila vuelve sola a letras.
+    #[test]
+    fn la_celda_de_un_boton_lleva_el_nombre_y_sabe_donde_esta_su_letra() {
+        let b = |name: &str, letter: char| PanelButton {
+            kind: "x".into(),
+            command: "layout.x".into(),
+            letter,
+            name: name.into(),
+            state: PanelState::Closed,
+            attention: false,
+        };
+        let sitios = button_cell(&b("Sitios", 'S'), true);
+        assert_eq!(
+            (sitios.text.as_str(), sitios.letter_at, sitios.width),
+            ("Sitios", 0, 8)
+        );
+        let arbol = button_cell(&b("Árbol", 'R'), true);
+        assert_eq!((arbol.text.as_str(), arbol.letter_at), ("Árbol", 1));
+        let ajena = button_cell(&b("Log", 'Q'), true);
+        assert_eq!(
+            (ajena.text.as_str(), ajena.letter_at, ajena.width),
+            ("Q Log", 0, 7)
+        );
+        let letra = button_cell(&b("Sitios", 'S'), false);
+        assert_eq!((letra.text.as_str(), letra.width), ("S", 3));
+        let fila = [b("Sitios", 'S'), b("Visor", 'V')];
+        assert!(names_fit(&fila, 15) && !names_fit(&fila, 14));
     }
 
     /// Cada panel tiene nombre corto en LOS DOS idiomas.

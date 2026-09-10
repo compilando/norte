@@ -394,6 +394,10 @@ fn sin_barra_de_menus_la_de_paneles_se_muda_a_la_fila_cero() {
 #[test]
 fn cada_boton_de_la_barra_cae_en_su_sitio() {
     let mut app = app_pintada(5);
+    // Las columnas de este test son las de LETRAS (tres celdas por botón);
+    // con nombres, las zonas siguen a lo pintado y lo comprueba
+    // `theme_render`.
+    app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
     let _ = pintar(&mut app);
     let pulsa = |app: &mut norte_tui::app::App, col: u16| {
         app.pending_panel_command = None;
