@@ -157,6 +157,51 @@ fn pulsar_la_marca_de_una_rama_la_pliega_y_la_despliega() {
 /// La barra de menús es cromo de la APLICACIÓN, no de los listados: con el
 /// teclado dentro de un panel lateral su tecla tiene que seguir abriéndola.
 ///
+/// `F10` (y `q`, y lo que ate `app.quit`) SALE también con el teclado dentro
+/// de un panel lateral, y honra `[ui] confirm_quit` igual que desde un
+/// listado.
+///
+/// Estaba muerta en los cuatro —árbol, sitios, procesos y registro—: `app.quit`
+/// no figuraba en sus allowlists, así que el panel se la comía. El lector
+/// pulsaba `F10`, no pasaba nada, cerraba la ventana del terminal creyendo que
+/// había salido, y el `ntc` seguía vivo con el lock de la sesión: cada `ntc`
+/// siguiente arrancaba suelto y «no guardaba nada». Solo `Ctrl+C` salía.
+#[test]
+fn salir_funciona_con_el_teclado_dentro_de_un_panel_lateral() {
+    for lista in [
+        norte_tui::app::ALLOW_PLACES,
+        norte_tui::app::ALLOW_PROCESSES,
+        norte_tui::app::ALLOW_LOG,
+    ] {
+        assert!(
+            lista.contains(&"app.quit"),
+            "un panel lateral no puede comerse la tecla de salir"
+        );
+    }
+
+    let mut app = app_con_arbol();
+    assert_eq!(app.key_owner(), KeyOwner::Tree);
+    assert!(
+        app.panel_chrome_command("app.quit"),
+        "salir lo atiende el cromo, no el panel"
+    );
+    assert!(
+        app.quit,
+        "y sale: sin tasks y con `confirm_quit = auto` no pregunta"
+    );
+
+    // Con `[ui] confirm_quit = always` pregunta, como desde un listado.
+    let mut app = app_con_arbol();
+    app.confirm_quit = norte_config::ConfirmQuit::Always;
+    assert!(app.panel_chrome_command("app.quit"));
+    assert!(!app.quit, "no sale a la primera");
+    assert!(
+        matches!(app.modal, Some(norte_tui::app::Modal::ConfirmQuit)),
+        "abre la confirmación: {:?}",
+        app.modal.is_some()
+    );
+}
+
 /// Estaba muerta en los tres —árbol, sitios y procesos—: `app.menu` no
 /// figuraba en sus allowlists, así que el panel se la comía y la pantalla se
 /// quedaba igual. Es la misma lección que ya trajo aquí `layout.places`.

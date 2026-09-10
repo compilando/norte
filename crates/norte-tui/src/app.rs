@@ -436,6 +436,11 @@ pub struct App {
     focus: usize,
     /// `true` cuando el usuario pidió salir.
     pub quit: bool,
+    /// `[ui] confirm_quit` vigente, para que salir desde DENTRO de un panel
+    /// lateral honre lo mismo que salir desde un listado. El run loop tiene
+    /// su copia para el despacho nombrado de `app.quit`; las dos se ponen en
+    /// los mismos dos sitios (arranque y recarga en caliente).
+    pub confirm_quit: crate::config::ConfirmQuit,
     /// Secuencia de teclas pendiente, ya formateada (status bar). Se escribe
     /// SOLO por [`App::show_pending`]/[`App::clear_pending`], que la mantienen
     /// de acuerdo con [`App::which_key`].
@@ -941,6 +946,7 @@ impl App {
             columns: norte_frontend::columns::ColumnsSettings::default(),
             focus: 0,
             quit: false,
+            confirm_quit: crate::config::ConfirmQuit::default(),
             pending: String::new(),
             which_key: None,
             modal: None,
@@ -1131,11 +1137,34 @@ impl App {
     /// `layout.places` a esos allowlists, y por eso vive en UN sitio: tres
     /// paneles con su propia copia son tres sitios donde olvidarse del cuarto.
     pub fn panel_chrome_command(&mut self, cmd: &str) -> bool {
-        if cmd == "app.menu" {
-            self.toggle_menu();
-            return true;
+        match cmd {
+            "app.menu" => {
+                self.toggle_menu();
+                true
+            }
+            // Salir tampoco es del panel. Sin esto, `F10` y `q` morían con el
+            // teclado dentro del árbol o del sidebar —solo `Ctrl+C` salía—, y
+            // el lector cerraba la ventana del terminal creyendo que había
+            // salido: el `ntc` seguía vivo con el lock de la sesión, y cada
+            // `ntc` siguiente arrancaba suelto sin guardar nada.
+            "app.quit" => {
+                self.request_quit();
+                true
+            }
+            _ => false,
         }
-        false
+    }
+
+    /// `app.quit` honrando `[ui] confirm_quit`: pregunta si toca, y si no,
+    /// sale. La misma decisión de tres vías que el despacho nombrado
+    /// ([`quit_needs_confirm`]); los `app.quit = true` de `Ctrl+C` siguen
+    /// siendo la salida de emergencia, inmediata y sin preguntar.
+    pub fn request_quit(&mut self) {
+        if quit_needs_confirm(self.confirm_quit, self.board.has_active()) {
+            self.modal = Some(Modal::ConfirmQuit);
+        } else {
+            self.quit = true;
+        }
     }
 
     /// El reloj de la interfaz, en milisegundos de época.
