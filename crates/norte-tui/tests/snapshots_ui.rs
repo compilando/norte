@@ -2189,12 +2189,17 @@ fn snapshot_ayuda_cuerpo_con_foco() {
     let chord = resolver
         .chord(&comando)
         .unwrap_or_else(|| panic!("{comando} tiene chord en el preset orthodox"));
-    let label = resolver.label(&comando);
+    // La etiqueta puede salir RECORTADA («mover la selección al otro …»): la
+    // columna de teclas mide lo que mide la más ancha del tema, y desde que
+    // `alt+A` se pinta `Alt+Shift+A` a la etiqueta le quedan menos columnas
+    // en un terminal de 80. Lo que identifica la fila es su arranque.
+    let arranque = |texto: &str| texto.chars().take(16).collect::<String>();
+    let label = arranque(&resolver.label(&comando));
     let row = &row_texts(&con_foco)[distintas[0]];
     assert!(
         row.contains(&chord) && row.contains(&label),
         "la fila resaltada tiene que ser la de `{comando}` ({chord} / \
-         {label}), no otra: {row:?}"
+         {label}…), no otra: {row:?}"
     );
     // …y NO la de su vecina. Un mapa desplazado una posición resaltaría
     // `pane.copy` mientras `Enter` despacha `pane.move`.
@@ -2203,7 +2208,7 @@ fn snapshot_ayuda_cuerpo_con_foco() {
         .chord(vecino)
         .unwrap_or_else(|| panic!("{vecino} tiene chord en el preset orthodox"));
     assert!(
-        !row.contains(&resolver.label(vecino)) && !row.contains(&chord_vecino),
+        !row.contains(&arranque(&resolver.label(vecino))) && !row.contains(&chord_vecino),
         "la fila resaltada es la de la acción VECINA: el mapa acción→línea \
          está desplazado: {row:?}"
     );

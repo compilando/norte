@@ -2,7 +2,7 @@
 source: crates/norte-tui/tests/snapshots_ui.rs
 expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 ---
-" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+" Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "  ┌ Ayuda ───────────────────────────────────────────────────────────────────┐  "
 "┌/│Fundamentos                 █ Esto es norte                              █│─┐"
 "│N│  Esto es norte             █ ───────────────────────────────────────────║│a│"
@@ -20,7 +20,7 @@ expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 " /casa  2/5                                                                     "
 
 ===
-" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+" Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "  ┌ Ayuda ───────────────────────────────────────────────────────────────────┐  "
 "┌/│                            ║                                            █│─┐"
 "│N│Remoto y archivos           ║ ── Navegación (panes) ──                   ║│a│"

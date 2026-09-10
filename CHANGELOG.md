@@ -9,6 +9,27 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **The menu bar has ten groups, by what the reader wants to do.** File
+  (what reads a file: view, edit, open, properties, size, copy the path,
+  quit), Operate (what writes: copy, move, rename, batch and AI rename, new
+  folder, delete, permissions, pack, unpack, test, split, combine,
+  checksums), Mark, Go (parent, back, forward, history, hotlist, volumes,
+  connect, disconnect, refresh, command line, terminal), Panels, Tabs, Find,
+  View (what the listing shows and the side panes), Tools (extensions,
+  agents, settings, profiles, the palette) and Help. Every built command is
+  in exactly one menu — 32 of them were in none: permissions, packing,
+  checksums, the batch rename, the hotlist, the history, the agents… were
+  keyboard- and palette-only. In the terminal the bar tightens to one space
+  between titles when ten do not fit in the width, instead of dropping the
+  last one.
+- **An upper-case letter under a modifier is labelled `Shift`.** `alt+C`
+  printed `Alt+C` in the menus, the palette, the help and the reference
+  sheet, and nothing said the case mattered — while `alt+c` is another
+  command. It now prints `Alt+Shift+C` everywhere the chord is painted; the
+  stored chord is unchanged. And `mark.files` moves from `alt+F` to `alt+f`
+  in the orthodox, vim and cua presets, because the lower case was free: a
+  Shift that buys nothing is a Shift the reader should not have to press.
+  The imported presets keep their transcribed chords.
 - **The terminal's extension manager has the window's detail pane.** Two
   columns when the terminal is 64 cells or wider: the list on the left,
   compact — name, version, ✓ or «not approved» — and the selected extension
