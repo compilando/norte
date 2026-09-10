@@ -72,6 +72,7 @@ pub async fn reload_config(
                 // `app.quit` NUEVOS (uno ya abierto como `Modal::ConfirmQuit`
                 // conserva su decisión hasta que el usuario responda).
                 *confirm_quit = cfg.common.ui_confirm_quit;
+                app.confirm_quit = cfg.common.ui_confirm_quit;
                 // La copia de hotlist también (un popup abierto conserva su
                 // snapshot hasta reabrirse — items congelados a propósito).
                 app.set_hotlist(cfg.common.hotlist.clone());

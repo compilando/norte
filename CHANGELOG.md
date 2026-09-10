@@ -171,6 +171,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`F10` and `q` quit from inside a side panel.** With the keyboard in the
+  tree, the places sidebar, the processes panel or the log, `app.quit` was
+  not in the panel's allowlist, so the panel swallowed it and only `Ctrl+C`
+  got out. The consequence was worse than a dead key: the reader pressed
+  `F10`, nothing happened, closed the terminal window believing the program
+  had exited, and the `ntc` stayed alive holding the session lock — every
+  `ntc` opened afterwards started detached and saved nothing, for as long as
+  the ghost lived (a week, in the case that surfaced this). Quitting now goes
+  through the same chrome funnel as the menu key, honouring
+  `[ui] confirm_quit` exactly as it does from a listing.
 - **The window remembers its panels.** Open the places sidebar, pick a layout
   template, split a pane, close the window, open it again: everything was back
   to the configured layout. The window never wrote its layout tree into the

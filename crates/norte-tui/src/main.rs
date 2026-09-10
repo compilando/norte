@@ -240,6 +240,9 @@ async fn main() -> Result<()> {
         };
         app.apply_loaded_layout(&name, loaded);
     }
+    // `[ui] confirm_quit` también en el modelo: salir desde dentro de un
+    // panel lateral lo decide `App`, no el despacho del run loop.
+    app.confirm_quit = cfg.common.ui_confirm_quit;
     // L2: la pantalla que dejaste. Va DESPUÉS de `[ui] layout` a propósito —
     // una sesión guardada es más específica que una preferencia de config, y
     // es la que gana— y antes del tema, que no depende de ninguna de las dos.

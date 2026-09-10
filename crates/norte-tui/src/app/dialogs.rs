@@ -179,6 +179,11 @@ pub const ALLOW_PLACES: &[&str] = &[
     // había forma de saber por qué — el panel se comía la tecla. Lo despacha
     // `App::panel_chrome_command`, uno para los tres.
     "app.menu",
+    // Y salir, que es la tecla que peor puede morirse dentro de un panel: el
+    // lector cerraba la terminal creyendo que había salido y el proceso
+    // seguía vivo con el lock de la sesión. La atiende el cromo
+    // (`App::panel_chrome_command`), honrando `[ui] confirm_quit`.
+    "app.quit",
 ];
 
 /// ALLOWLIST del panel de procesos (`on_processes_key` en main.rs).
@@ -217,6 +222,11 @@ pub const ALLOW_PROCESSES: &[&str] = &[
     "pane.tree",
     // Y el cromo de la aplicación, por lo mismo que en el sidebar.
     "app.menu",
+    // Y salir, que es la tecla que peor puede morirse dentro de un panel: el
+    // lector cerraba la terminal creyendo que había salido y el proceso
+    // seguía vivo con el lock de la sesión. La atiende el cromo
+    // (`App::panel_chrome_command`), honrando `[ui] confirm_quit`.
+    "app.quit",
 ];
 
 /// ALLOWLIST del panel de registro (#323).
@@ -248,6 +258,11 @@ pub const ALLOW_LOG: &[&str] = &[
     "layout.metadata",
     "pane.tree",
     "app.menu",
+    // Y salir, que es la tecla que peor puede morirse dentro de un panel: el
+    // lector cerraba la terminal creyendo que había salido y el proceso
+    // seguía vivo con el lock de la sesión. La atiende el cromo
+    // (`App::panel_chrome_command`), honrando `[ui] confirm_quit`.
+    "app.quit",
 ];
 
 /// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,
