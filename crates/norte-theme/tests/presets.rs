@@ -29,7 +29,14 @@ fn cada_preset_parsea_y_es_completo() {
 
         // Cada rol tiene color de frente EXPLÍCITO (un preset colorea todo, no
         // se queda en el fallback monocromo).
-        for &role in Role::ALL {
+        //
+        // CORE, no ALL: los diez roles de CROMO (spec 2026-09-11, F2) se
+        // derivan en la hoja de estilos de la ventana de colores que el tema
+        // ya tiene, así que exigírselos a cada preset serían ochenta valores
+        // inventados — y un `hover` monocromo no es un hover prudente, es uno
+        // invisible. Los presets `vscode-*` sí los definen, porque para ellos
+        // el cromo es el asunto.
+        for &role in Role::CORE {
             let st = theme.style(role);
             assert!(
                 st.fg.is_some() || st.bg.is_some(),

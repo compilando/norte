@@ -21,7 +21,10 @@ pub enum Role {
     Regular,
     /// Fila seleccionada en un panel.
     Selection,
-    /// Borde del panel con foco.
+    /// Borde del panel con foco: dice a cuál de los paneles van las teclas
+    /// de navegación. No es [`Role::FocusBorder`], que es el anillo de un
+    /// CONTROL dentro de un diálogo; los nombres se parecen y significan
+    /// cosas distintas.
     BorderFocus,
     /// Borde del panel sin foco.
     BorderUnfocused,
@@ -62,10 +65,108 @@ pub enum Role {
     /// Un botón de diálogo (`[ Enter  Confirm ]`): cada modal pinta su línea
     /// de teclas con este rol cuando `[ui] dialog_buttons` está encendido.
     Button,
+
+    // --- Cromo de la ventana (spec 2026-09-11, F2) ---------------------
+    //
+    // Los diez que siguen nombran SUPERFICIES, no significados: son lo que
+    // hace que una ventana se parezca a un editor concreto en vez de a un
+    // formulario. Comparten tres rasgos que los separan de los de arriba:
+    //
+    // 1. NO están en [`Role::CORE`], así que un preset no tiene que
+    //    definirlos (ver el rustdoc de esa constante).
+    // 2. Su [`Role::fallback`] no lleva color. El valor sensato NO se puede
+    //    escribir aquí: depende de la paleta del tema, y la hoja de estilos
+    //    de la ventana lo deriva con `var(--hover, var(--panel-focus-bg))`.
+    // 3. No son [`Role::REQUESTABLE`]: un plugin no puede pedirlos para una
+    //    insignia, porque el color del deslizador de la barra de
+    //    desplazamiento no significa nada pegado a un nombre de fichero.
+    //
+    /// Fila bajo el PUNTERO, en un panel o en una lista. Distinta del cursor
+    /// (`Selection`): el ratón está encima, las teclas no van ahí. Pierde
+    /// contra el cursor y contra una fila marcada.
+    Hover,
+    /// Fondo de un campo de texto (diálogos, paleta, ajustes).
+    InputBackground,
+    /// Borde de un campo de texto. Es el filete del control, no el del panel
+    /// (`BorderUnfocused`) ni el anillo de foco (`FocusBorder`).
+    InputBorder,
+    /// Fondo de un WIDGET flotante: la paleta de comandos, un desplegable,
+    /// el menú, el `which-key`. Se apoya sobre el fondo base y por eso
+    /// normalmente es un poco más claro que `PaneBackground`.
+    WidgetBackground,
+    /// El color de la SOMBRA de esos widgets. Existe porque un negro cosido
+    /// al CSS es una sombra que en un tema claro se ve como suciedad.
+    WidgetShadow,
+    /// Una INSIGNIA con fondo: un contador, una etiqueta.
+    ///
+    /// Sirve a DOS consumidores, igual que [`Role::Mark`], y la pareja
+    /// `fg`/`bg` se lee distinta en cada uno: la ventana lo usa como el
+    /// contador de un panel lateral, y el panel de registro como el chip que
+    /// marca una línea del daemon. Defínelo con `bg` Y `fg`: un chip sin
+    /// primer plano hereda el color de la línea que marca, que es
+    /// justamente lo que el chip tiene que distinguir.
+    Badge,
+    /// El DESLIZADOR de la barra de desplazamiento (el canal va
+    /// transparente). Solo la ventana: un terminal no pinta barra.
+    ScrollbarSlider,
+    /// El filete que separa dos SUPERFICIES del cromo — la barra de teclas
+    /// del listado, la de paneles de la de menús, el panel lateral del
+    /// central.
+    ///
+    /// Es lo que permite el aspecto «por elevación» de los editores
+    /// modernos: un tema que lo pone casi igual a su fondo deja de tener
+    /// filetes sin que la hoja de estilos sepa nada de ese tema. No es el
+    /// borde de un panel con o sin foco — esos son [`Role::BorderFocus`] y
+    /// [`Role::BorderUnfocused`], y significan dónde van las teclas.
+    Separator,
+    /// El anillo de foco de un CONTROL: un campo, un botón, una casilla.
+    ///
+    /// No confundir con [`Role::BorderFocus`], que es el borde del PANEL que
+    /// tiene el foco. Los nombres se parecen peligrosamente y dicen cosas
+    /// distintas: este marca qué control recibe lo que teclees dentro de un
+    /// diálogo; aquel, cuál de los dos paneles recibe las teclas de
+    /// navegación.
+    FocusBorder,
+    /// Texto ATENUADO pero legible: migas de pan, un tamaño, una columna
+    /// secundaria, la descripción de un ajuste. Es un color propio y no un
+    /// `dim` sobre `Regular` porque `dim` en un terminal es un atributo que
+    /// muchos emuladores ignoran.
+    Muted,
 }
 
 impl Role {
-    /// Todos los roles, para iterar (p. ej. validar que un preset los cubre).
+    /// Los roles que un preset está OBLIGADO a colorear: los dieciocho que
+    /// existían antes del cromo de la ventana (spec 2026-09-11, F2).
+    ///
+    /// Es lo que itera la completitud de los presets, y no [`Self::ALL`], por
+    /// una razón concreta: los diez roles de CROMO se derivan en la hoja de
+    /// estilos de la ventana de colores que el tema ya tiene, así que
+    /// exigírselos a cada preset serían ochenta valores inventados — y el
+    /// monocromo de [`Self::fallback`] es un mal defecto para ellos (un
+    /// `hover` sin color no es un hover prudente, es uno invisible).
+    pub const CORE: &'static [Role] = &[
+        Role::Background,
+        Role::Regular,
+        Role::Selection,
+        Role::BorderFocus,
+        Role::BorderUnfocused,
+        Role::ModalBorder,
+        Role::StatusBar,
+        Role::Title,
+        Role::HostileBadge,
+        Role::Error,
+        Role::Warning,
+        Role::Info,
+        Role::Match,
+        Role::PaneBackground,
+        Role::PaneFocusBackground,
+        Role::Mark,
+        Role::SelectionUnfocused,
+        Role::Button,
+    ];
+
+    /// Todos los roles, para iterar (p. ej. comprobar que los nombres kebab
+    /// hacen ida y vuelta). Es [`Self::CORE`] más los diez de cromo.
     pub const ALL: &'static [Role] = &[
         Role::Background,
         Role::Regular,
@@ -85,6 +186,17 @@ impl Role {
         Role::Mark,
         Role::SelectionUnfocused,
         Role::Button,
+        // Cromo de la ventana (spec 2026-09-11, F2).
+        Role::Hover,
+        Role::InputBackground,
+        Role::InputBorder,
+        Role::WidgetBackground,
+        Role::WidgetShadow,
+        Role::Badge,
+        Role::ScrollbarSlider,
+        Role::Separator,
+        Role::FocusBorder,
+        Role::Muted,
     ];
 
     /// Estilo por defecto MONOCROMO del rol: reproduce el aspecto de M1
@@ -111,6 +223,14 @@ impl Role {
             // PaneBackground/PaneFocusBackground: chrome nuevo de la GUI, sin
             // equivalente en la TUI de M1; mismo tratamiento que Background
             // (sin color = fondo heredado del backend).
+            //
+            // Los diez de CROMO tampoco llevan color, y por un motivo
+            // distinto que merece decirse: su defecto sensato NO SE PUEDE
+            // ESCRIBIR AQUÍ. Un `hover` correcto es «el fondo del panel con
+            // foco de ESTE tema», y un literal no puede seguir a ocho
+            // paletas. La derivación vive en la hoja de estilos de la
+            // ventana (`var(--hover, var(--panel-focus-bg))`), que es el
+            // único sitio donde los dos colores están a la vez.
             Role::Background
             | Role::Regular
             | Role::Error
@@ -118,7 +238,17 @@ impl Role {
             | Role::Info
             | Role::Match
             | Role::PaneBackground
-            | Role::PaneFocusBackground => Style::new(),
+            | Role::PaneFocusBackground
+            | Role::Hover
+            | Role::InputBackground
+            | Role::InputBorder
+            | Role::WidgetBackground
+            | Role::WidgetShadow
+            | Role::Badge
+            | Role::ScrollbarSlider
+            | Role::Separator
+            | Role::FocusBorder
+            | Role::Muted => Style::new(),
         }
     }
 
@@ -186,6 +316,16 @@ impl Role {
             Self::PaneFocusBackground => "pane-focus-background",
             Self::SelectionUnfocused => "selection-unfocused",
             Self::Button => "button",
+            Self::Hover => "hover",
+            Self::InputBackground => "input-background",
+            Self::InputBorder => "input-border",
+            Self::WidgetBackground => "widget-background",
+            Self::WidgetShadow => "widget-shadow",
+            Self::Badge => "badge",
+            Self::ScrollbarSlider => "scrollbar-slider",
+            Self::Separator => "separator",
+            Self::FocusBorder => "focus-border",
+            Self::Muted => "muted",
         }
     }
 }
@@ -239,5 +379,47 @@ mod tests {
         assert_eq!(Role::from_kebab("number"), None);
         assert_eq!(Role::from_kebab("keyword"), None);
         assert_eq!(Role::from_kebab("HostileBadge"), None); // no es kebab-case
+    }
+
+    /// `CORE` es un SUBCONJUNTO de `ALL`, y `ALL` no pierde a nadie.
+    ///
+    /// Los dos conjuntos existen porque miden cosas distintas: `ALL` es el
+    /// vocabulario entero, `CORE` es lo que un preset está OBLIGADO a
+    /// colorear. Sin esta comprobación, un rol nuevo puede caer fuera de los
+    /// dos y no existir para nadie.
+    #[test]
+    fn core_es_subconjunto_de_all_y_all_los_tiene_a_todos() {
+        for &r in Role::CORE {
+            assert!(Role::ALL.contains(&r), "{r:?} está en CORE y no en ALL");
+        }
+        assert_eq!(Role::CORE.len(), 18, "CORE son los dieciocho de siempre");
+        assert_eq!(Role::ALL.len(), 28, "ALL son esos más los diez de cromo");
+    }
+
+    /// Los diez roles de cromo NO están en CORE: se DERIVAN en la hoja de
+    /// estilos de la ventana a partir de colores que el tema ya tiene (spec
+    /// 2026-09-11, F2), y por eso un preset no tiene que definirlos. Exigirlos
+    /// serían ochenta valores inventados repartidos por los ocho presets que
+    /// ya existen.
+    #[test]
+    fn los_roles_de_cromo_quedan_fuera_de_core() {
+        for r in [
+            Role::Hover,
+            Role::InputBackground,
+            Role::InputBorder,
+            Role::WidgetBackground,
+            Role::WidgetShadow,
+            Role::Badge,
+            Role::ScrollbarSlider,
+            Role::Separator,
+            Role::FocusBorder,
+            Role::Muted,
+        ] {
+            assert!(
+                !Role::CORE.contains(&r),
+                "{r:?} no debería exigírsele a cada preset"
+            );
+            assert!(Role::ALL.contains(&r), "{r:?} tiene que existir");
+        }
     }
 }
