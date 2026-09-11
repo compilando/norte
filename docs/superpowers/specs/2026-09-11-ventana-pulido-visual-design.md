@@ -59,8 +59,13 @@ compatibilidad = no depender de qué fuentes tenga la máquina.
 ## Plugins (V3, V4, V7)
 
 - V3 `file-icons`: `style = nerd` (tercer valor del enum) y el webview
-  empaqueta Symbols Nerd Font Mono. Parámetros nuevos: `dir_icon`
-  (string), `hidden_dim` (bool). La TUI lo pinta con la fuente del terminal.
+  empaqueta Symbols Nerd Font Mono RECORTADA a los glifos del plugin (3,8
+  KB). Parámetros nuevos: `dir-icon` (string, el glifo de una carpeta
+  normal) y `unknown-icon` (string, el glifo de un fichero sin clase). Se
+  descartó `hidden_dim`: el hueco de icono no lleva rol de tema y no hay
+  rol «atenuado» en el vocabulario; atenuar pediría plumbing en el host, y
+  la regla es que un plugin se parametriza sin tocar el host. La TUI lo
+  pinta con la fuente del terminal.
 - V4 `size-bar` (columns): `▂▄▆█` por tramo, parámetros `scale`
   (`linear|log`), `width` (int 3–8), `relative_to` (`page|dir`). `age`
   (decorator, hueco `badge`): parámetros `thresholds` (string `1,7,30`),

@@ -83,8 +83,22 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
         skipped_note: "",
         hidden_note: "",
         columns: [
-          { id: "name", label: "Nombre", sort: "asc", sortable: true },
-          { id: "size", label: "Tamaño", sort: null, sortable: true },
+          {
+            id: "name",
+            label: "Nombre",
+            sort: "asc",
+            sortable: true,
+            width: null,
+            align: "left",
+          },
+          {
+            id: "size",
+            label: "Tamaño",
+            sort: null,
+            sortable: true,
+            width: 9,
+            align: "right",
+          },
         ],
         state: { state: "ready" },
         quick: null,
@@ -660,12 +674,69 @@ describe("la cabecera", () => {
     const v = vista({});
     const slot = v.slots[0];
     if (slot?.kind === "browser") {
-      slot.columns = [{ id: "plugin:x/y", label: "X", sort: null, sortable: false }];
+      slot.columns = [
+        {
+          id: "plugin:x/y",
+          label: "X",
+          sort: null,
+          sortable: false,
+          width: null,
+          align: "left",
+        },
+      ];
     }
     screen.paint(v);
     const col = root.querySelector(".slot-columns .col") as HTMLElement;
     col.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     expect(enviadas.some((a) => a.action === "sort_by")).toBe(false);
+  });
+
+  it("un ancho fijo se declara en la raíz del hueco y las celdas lo leen", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({ rows: [fila(1, "a.txt")] }));
+    const hueco = root.querySelector(".slot") as HTMLElement;
+    // `size` viene con 9 celdas y a la derecha; `name` no lleva variable.
+    expect(hueco.style.getPropertyValue("--colw-size")).toBe("calc(var(--cell-w) * 9)");
+    expect(hueco.style.getPropertyValue("--colw-size-align")).toBe("right");
+    expect(hueco.style.getPropertyValue("--colw-name")).toBe("");
+    const celda = root.querySelector(".row .cell") as HTMLElement;
+    expect(celda.style.width).toBe("var(--colw-size, auto)");
+    // El nombre no tiene tirador; el tamaño sí.
+    const cols = root.querySelectorAll(".slot-columns .col");
+    expect(cols[0]?.querySelector(".col-grip")).toBeNull();
+    expect(cols[1]?.querySelector(".col-grip")).not.toBeNull();
+  });
+
+  it("arrastrar el tirador manda el ancho en CELDAS al soltar, y no ordena", () => {
+    const { screen, enviadas, root } = montar();
+    document.documentElement.style.setProperty("--cell-w", "8px");
+    screen.paint(vista({}));
+    const grip = root.querySelector(".col-grip") as HTMLElement;
+    grip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
+    expect(enviadas.some((a) => a.action === "sort_by")).toBe(false);
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 140 }));
+    // Mientras se arrastra, solo cambia la variable: ningún envío.
+    const hueco = root.querySelector(".slot") as HTMLElement;
+    expect(hueco.style.getPropertyValue("--colw-size")).toBe("40px");
+    expect(enviadas.some((a) => a.action === "resize_column")).toBe(false);
+    document.dispatchEvent(new MouseEvent("mouseup"));
+    expect(enviadas.at(-1)).toEqual({
+      action: "resize_column",
+      slot_id: 1,
+      column: "size",
+      cells: 5,
+    });
+  });
+});
+
+describe("la casilla de marca", () => {
+  it("cada fila lleva la casilla, dice si está marcada, y pulsarla alterna la marca", () => {
+    const { screen, enviadas, root } = montar();
+    screen.paint(vista({ rows: [fila(1, "a.txt"), fila(2, "b.txt", { marked: true })] }));
+    const casillas = root.querySelectorAll(".row .row-check");
+    expect([...casillas].map((c) => c.textContent)).toEqual(["☐", "☑"]);
+    casillas[0]?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(enviadas.at(-1)).toMatchObject({ action: "toggle_mark", slot_id: 1, key: 1 });
   });
 });
 

@@ -2122,6 +2122,15 @@ pub struct ColumnHeader {
     pub sort: Option<String>,
     /// La columna ordena. Una que no, se pinta sin afordancia de click.
     pub sortable: bool,
+    /// Ancho FIJO en celdas, si `[ui.columns] spec.width` lo fija (puente
+    /// 64): la cabecera y las celdas de la columna lo siguen, y arrastrar el
+    /// borde de la cabecera lo cambia. `None` = a lo que mida su contenido.
+    #[serde(default)]
+    pub width: Option<u16>,
+    /// `left` o `right`: la alineación configurada de la columna, la misma
+    /// que aplica el terminal. Solo tiene efecto con un ancho fijo.
+    #[serde(default)]
+    pub align: String,
 }
 
 /// La clase de una entrada, en lo que al pintado le importa.

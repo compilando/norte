@@ -1630,6 +1630,18 @@ impl ColumnsSettings {
         self.specs_global.entry(id.to_owned()).or_default().format = Some(format.to_owned());
     }
 
+    /// Aplica EN MEMORIA un ancho fijo (spec 2026-09-11, V2: arrastrar el
+    /// borde de una cabecera): la pareja de `persist_column_width`, con el
+    /// mismo lockstep sesión↔disco que [`Self::apply_format`]. `cells` se
+    /// acota aquí a `[1, 64]`, el rango que el loader acepta: un ancho fuera
+    /// de él escrito a disco dejaría el `norte.toml` entero sin cargar.
+    pub fn apply_width(&mut self, id: &str, cells: u16) -> u16 {
+        let cells = cells.clamp(1, 64);
+        self.specs_global.entry(id.to_owned()).or_default().width =
+            Some(norte_config::WidthChoice::Fixed(cells));
+        cells
+    }
+
     /// ¿Fija un spec DEL SCHEME el formato de `builtin`? (#108 7b m2). Con
     /// un override así, ciclar en el picker escribiría el spec GLOBAL que
     /// el del scheme seguiría enmascarando — sesión y disco «consistentes»
@@ -2435,6 +2447,41 @@ mod style_tests {
             s.style_for("file", Builtin::Mtime).time_format,
             TimeFormat::Iso
         );
+    }
+
+    /// V2 (spec 2026-09-11): `apply_width` fija la política en sesión, se
+    /// acota al rango del loader, y conserva los otros campos del spec.
+    #[test]
+    fn apply_width_fija_la_politica_en_sesion_y_acota() {
+        let cfg = norte_config::ColumnsConfig {
+            specs: [(
+                "size".to_owned(),
+                norte_config::ColumnSpec {
+                    format: Some("si".to_owned()),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        };
+        let mut s = ColumnsSettings::resolve(&cfg);
+        let politica = |s: &ColumnsSettings| {
+            s.layout_items_for("file")
+                .into_iter()
+                .find(|(id, _)| *id == ColumnId::Builtin(Builtin::Size))
+                .map(|(_, item)| item.policy)
+        };
+        assert_ne!(politica(&s), Some(WidthPolicy::Fixed(12)));
+        assert_eq!(s.apply_width("size", 12), 12);
+        assert_eq!(politica(&s), Some(WidthPolicy::Fixed(12)));
+        assert_eq!(
+            s.style_for("file", Builtin::Size).size_format,
+            SizeFormat::Si,
+            "el formato del spec sobrevive"
+        );
+        assert_eq!(s.apply_width("size", 0), 1, "suelo del loader");
+        assert_eq!(s.apply_width("size", 900), 64, "techo del loader");
+        assert_eq!(politica(&s), Some(WidthPolicy::Fixed(64)));
     }
 
     /// m3 revisión 7b: las cadenas de las tablas del frontend son

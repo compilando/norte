@@ -158,6 +158,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::History { .. } => "history",
         UiAction::SetVisibleRange { .. } => "set_visible_range",
         UiAction::SortBy { .. } => "sort_by",
+        UiAction::ResizeColumn { .. } => "resize_column",
         UiAction::FocusSlot { .. } => "focus_slot",
         UiAction::Dialog { .. } => "dialog",
         UiAction::DialogInput { .. } => "dialog_input",
@@ -531,6 +532,14 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             UiAction::SortBy {
                 slot_id: 1,
                 column: "size".to_owned(),
+            },
+        ),
+        (
+            "resize_column",
+            UiAction::ResizeColumn {
+                slot_id: 1,
+                column: "size".to_owned(),
+                cells: 12,
             },
         ),
         (
@@ -935,12 +944,16 @@ fn slots_de_referencia() -> Vec<SlotView> {
                     label: "Nombre".to_owned(),
                     sort: Some("asc".to_owned()),
                     sortable: true,
+                    width: None,
+                    align: "left".to_owned(),
                 },
                 ColumnHeader {
                     id: "size".to_owned(),
                     label: "Tamaño".to_owned(),
                     sort: None,
                     sortable: true,
+                    width: Some(9),
+                    align: "right".to_owned(),
                 },
             ],
             state: SlotState::Ready,
@@ -2053,6 +2066,8 @@ fn cambios_del_listado() -> Vec<(&'static str, ViewChange)> {
                     label: "Tamaño".to_owned(),
                     sort: Some("desc".to_owned()),
                     sortable: true,
+                    width: None,
+                    align: "right".to_owned(),
                 }],
             },
         ),
@@ -2396,8 +2411,8 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    // Puente 63: la ola de usabilidad (spec 2026-09-10).
-    const FORMA: u64 = 5_398_688_911_765_944_362;
+    // Puente 64: anchos de columna (spec 2026-09-11, V2).
+    const FORMA: u64 = 12_901_597_783_499_783_402;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

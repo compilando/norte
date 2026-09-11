@@ -753,3 +753,83 @@ pub(super) async fn siguiente_columnas(
     }
     panic!("el selector sigue abierto");
 }
+
+/// Puente 64: arrastrar el borde de una cabecera fija el ancho de ESA
+/// columna en sesión —la cabecera lo declara en celdas, acotado a lo que
+/// la configuración acepta— y una columna que el hueco no pinta se rehúsa
+/// sin tocar nada.
+#[tokio::test]
+async fn redimensionar_una_columna_fija_su_ancho_en_la_cabecera() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let ancho_de = |s: &norte_ui_host::ViewSnapshot, id: &str| {
+        listado(s)
+            .columns
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.width)
+            .expect("la columna se pinta")
+    };
+    // De fábrica `size` ya es fija (la tabla compartida de anchos), así que
+    // lo que se comprueba es que el arrastre la CAMBIA, no que la estrene.
+    assert_ne!(
+        ancho_de(&snap, "size"),
+        Some(12),
+        "el ancho de partida no es el pedido"
+    );
+    let mut sub = h.subscribe();
+
+    h.dispatch(UiAction::ResizeColumn {
+        slot_id: 1,
+        column: "size".to_owned(),
+        cells: 12,
+    })
+    .await
+    .expect("host vivo");
+    let _ = sub.recv().await.expect("el host sigue vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let despues = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        ancho_de(&despues, "size"),
+        Some(12),
+        "la cabecera lo declara"
+    );
+    assert_eq!(
+        listado(&despues)
+            .columns
+            .iter()
+            .find(|c| c.id == "size")
+            .map(|c| c.align.as_str()),
+        Some("right"),
+        "y la alineación configurada viaja con ella"
+    );
+
+    // Fuera del rango del loader: se acota, nunca se escribe algo que el
+    // siguiente `load` rechazaría entero.
+    h.dispatch(UiAction::ResizeColumn {
+        slot_id: 1,
+        column: "size".to_owned(),
+        cells: 900,
+    })
+    .await
+    .expect("host vivo");
+    let _ = sub.recv().await.expect("el host sigue vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let acotado = siguiente_foto(&mut sub).await;
+    assert_eq!(ancho_de(&acotado, "size"), Some(64), "techo del loader");
+
+    // Una columna que este hueco no pinta: obsoleta, y la cabecera no cambia.
+    h.dispatch(UiAction::ResizeColumn {
+        slot_id: 1,
+        column: "attr:nadie".to_owned(),
+        cells: 5,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let igual = siguiente_foto(&mut sub).await;
+    assert_eq!(ancho_de(&igual, "size"), Some(64));
+    assert!(
+        listado(&igual).columns.iter().all(|c| c.id != "attr:nadie"),
+        "no nace una columna por pedir su ancho"
+    );
+}

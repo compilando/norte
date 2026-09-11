@@ -386,9 +386,22 @@ impl Estado {
         let spec = hueco.pane.sort();
         let catalogo = self.catalogo_de(hueco.pane.dir());
         let esquema = hueco.pane.dir().scheme().to_owned();
+        // La política de ancho de cada columna, UNA vez por cabecera: solo
+        // la fija viaja (puente 64); `auto` y `flex` se pintan a lo que
+        // midan, que es lo que esta ventana hacía con todas.
+        let politicas = self.columnas.layout_items_for(&esquema);
         self.columnas_de(hueco.pane.dir())
             .iter()
             .map(|id| {
+                let width =
+                    politicas
+                        .iter()
+                        .find(|(c, _)| c == id)
+                        .and_then(|(_, item)| match item.policy {
+                            norte_frontend::columns::WidthPolicy::Fixed(n) => Some(n),
+                            norte_frontend::columns::WidthPolicy::Auto
+                            | norte_frontend::columns::WidthPolicy::Flex { .. } => None,
+                        });
                 // El estilo CONFIGURADO, no el de fábrica: `[ui.columns]`
                 // deja poner rótulo propio, formato, alineación y ancho por
                 // columna, y pidiendo `default_for_id` todo eso estaba muerto
@@ -410,9 +423,78 @@ impl Estado {
                     label: clamp_display(header_label_in(id, &estilo, catalogo, self.lang)),
                     sort,
                     sortable: ordena.is_some(),
+                    width,
+                    align: match estilo.align {
+                        norte_frontend::columns::Align::Left => "left",
+                        norte_frontend::columns::Align::Right => "right",
+                    }
+                    .to_owned(),
                 }
             })
             .collect()
+    }
+
+    /// Fija el ancho de una columna: el borde de su cabecera arrastrado en
+    /// la ventana (puente 64, spec 2026-09-11 V2).
+    ///
+    /// Solo una columna que este hueco PINTA: el renderer no nombra columnas
+    /// que no vio. El ancho se aplica en memoria y se escribe en
+    /// `[ui.columns] spec.width` fuera del actor; y como es de la columna y
+    /// no del hueco, vuelve la cabecera de TODOS los huecos, que es lo que
+    /// el terminal verá también en su siguiente carga.
+    pub(super) fn redimensionar_columna(
+        &mut self,
+        slot_id: u32,
+        column: &str,
+        cells: u16,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let pintada = self
+            .huecos
+            .get(&slot_id)
+            .map(|h| self.columnas_de(h.pane.dir()))
+            .unwrap_or_default()
+            .iter()
+            .any(|c| identidad_de_columna(c) == column);
+        if !pintada {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let cells = self.columnas.apply_width(column, cells);
+        self.persistir_ancho(column, cells, buzon);
+        let cambios: Vec<ViewChange> = self
+            .huecos
+            .iter()
+            .map(|(id, h)| ViewChange::Columns {
+                slot_id: *id,
+                columns: self.cabeceras(h),
+            })
+            .collect();
+        (self.aplicada(), vec![self.parche(cambios)])
+    }
+
+    /// Escribe el ancho fuera del actor, como el tema (`persistir_tema`):
+    /// `persist_column_width` toma un lock entre procesos y hacerlo aquí
+    /// congelaría la ventana. Solo el fallo vuelve por el buzón.
+    fn persistir_ancho(&mut self, column: &str, cells: u16, buzon: &mpsc::Sender<Mensaje>) {
+        let Some(dir) = self.dir_de_escritura() else {
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "host-no-config-dir",
+            )));
+            return;
+        };
+        let column = column.to_owned();
+        let buzon = buzon.clone();
+        tokio::task::spawn_blocking(move || {
+            let clave = match norte_config::persist_column_width(&dir, &column, cells) {
+                Ok(_) => None,
+                Err(e) => Some(clave_de_io(&e)),
+            };
+            let _ = buzon.blocking_send(Mensaje::AnchoPersistido(clave));
+        });
     }
 
     /// La proyección de UN listado.

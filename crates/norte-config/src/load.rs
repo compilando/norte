@@ -452,6 +452,32 @@ fn nested_table_mut<'d>(
 /// `[ui.columns]` no es tabla, `spec` existe con otra forma, o falla el
 /// I/O.
 pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Result<PathBuf> {
+    persist_column_spec_field(dir, id, "format", toml_edit::value(format))
+}
+
+/// Persiste el ANCHO de una columna como `width = <celdas>` en su
+/// `[[ui.columns.spec]]` (spec 2026-09-11, V2: arrastrar el borde de una
+/// cabecera en la ventana). Misma mecánica y mismos guards que
+/// [`persist_column_format`]: reemplazo por id, los otros campos y los
+/// comentarios sobreviven, todas las entradas duplicadas se actualizan.
+///
+/// CONTRATO: `cells` ya está en `[1, 64]` —lo que el loader acepta— o el
+/// siguiente `load` lo rechazará entero; el caller (el host) acota antes.
+/// BLOQUEANTE: I/O de FS síncrono — envolver en `spawn_blocking` (regla 2).
+///
+/// # Errors
+/// Los de [`persist_column_format`].
+pub fn persist_column_width(dir: &Path, id: &str, cells: u16) -> std::io::Result<PathBuf> {
+    persist_column_spec_field(dir, id, "width", toml_edit::value(i64::from(cells)))
+}
+
+/// El escritor común de UN campo de un `[[ui.columns.spec]]` por id.
+fn persist_column_spec_field(
+    dir: &Path,
+    id: &str,
+    key: &str,
+    value: toml_edit::Item,
+) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
     // #116: lock ANTES de leer — el RMW entero es la sección crítica.
@@ -482,13 +508,13 @@ pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Res
         .iter_mut()
         .filter(|tb| tb.get("id").and_then(|v| v.as_str()) == Some(id))
     {
-        tb["format"] = toml_edit::value(format);
+        tb[key] = value.clone();
         alguna = true;
     }
     if !alguna {
         let mut tb = toml_edit::Table::new();
         tb["id"] = toml_edit::value(id);
-        tb["format"] = toml_edit::value(format);
+        tb[key] = value;
         arr.push(tb);
     }
     write_config_file(&lock, &doc)?;
@@ -3833,6 +3859,28 @@ mod persist_columns_tests {
                 .and_then(|sp| sp.format.as_deref()),
             Some("iso")
         );
+    }
+
+    /// El ancho comparte escritor con el formato: entra en la MISMA entrada
+    /// del id (no nace una segunda), conserva el formato que había, y el
+    /// `load` real lo devuelve como `WidthChoice::Fixed`.
+    #[test]
+    fn persist_column_width_round_tripea_por_load_y_conserva_el_formato() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_column_format(dir.path(), "size", "si").expect("format");
+        persist_column_width(dir.path(), "size", 12).expect("width");
+        persist_column_width(dir.path(), "size", 14).expect("width otra vez");
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert_eq!(s.matches(r#"id = "size""#).count(), 1, "UNA entrada: {s}");
+        assert!(s.contains("width = 14"), "{s}");
+        assert!(!s.contains("width = 12"), "sin valor viejo: {s}");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("load");
+        let spec = cfg.ui_columns.specs.get("size").expect("spec");
+        assert_eq!(spec.width, Some(WidthChoice::Fixed(14)));
+        assert_eq!(spec.format.as_deref(), Some("si"));
     }
 
     /// MAJOR revisión 7b: con DOS entradas del mismo id editadas a mano, el

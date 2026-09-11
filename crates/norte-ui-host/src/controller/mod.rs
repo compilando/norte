@@ -564,6 +564,9 @@ enum Mensaje {
     /// mensaje por cada Enter en una pantalla cuyo resultado ya se ve: los
     /// colores cambiaron.
     TemaPersistido(Option<&'static str>),
+    /// El ancho de una columna ya está (o no) en el `norte.toml` (puente
+    /// 64). Mismo trato que el tema: solo el fallo se dice.
+    AnchoPersistido(Option<&'static str>),
     /// Un `[ui] theme` que era una RUTA, ya leído fuera del actor.
     ///
     /// Lleva el spec para poder nombrarlo en el efecto nativo —quien hospeda
@@ -1354,7 +1357,7 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::TemaPersistido(fallo) => {
+            Mensaje::TemaPersistido(fallo) | Mensaje::AnchoPersistido(fallo) => {
                 if let Some(clave) = fallo {
                     for u in estado.decir(clave) {
                         let _ = updates.send(u);
@@ -3725,6 +3728,11 @@ impl Estado {
                 (self.aplicada(), vec![self.parche_filas_de(slot_id)])
             }
             UiAction::SortBy { slot_id, column } => self.ordenar_por(*slot_id, column),
+            UiAction::ResizeColumn {
+                slot_id,
+                column,
+                cells,
+            } => self.redimensionar_columna(*slot_id, column, *cells, buzon),
             UiAction::FocusSlot { slot_id } => {
                 let slot_id = *slot_id;
                 // Enfocar algo que no se ve, o que no recibe foco, es una

@@ -119,6 +119,22 @@ pub enum UiAction {
         /// Id de la columna, tal como viajó en su cabecera.
         column: String,
     },
+    /// Fija el ancho de una columna (arrastrar el borde de su cabecera,
+    /// puente 64).
+    ///
+    /// El ancho es de la COLUMNA, no del hueco: `[ui.columns] spec.width`
+    /// es global, así que todos los huecos que la pintan cambian a la vez,
+    /// y el terminal la lee igual en su siguiente carga. `cells` llega en
+    /// celdas de la rejilla; el host lo acota a lo que la configuración
+    /// acepta.
+    ResizeColumn {
+        /// Hueco donde se arrastró.
+        slot_id: u32,
+        /// Id de la columna, tal como viajó en su cabecera.
+        column: String,
+        /// Ancho pedido, en celdas.
+        cells: u16,
+    },
     /// Cambia el foco de teclado de hueco.
     FocusSlot {
         /// Hueco.

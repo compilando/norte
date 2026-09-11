@@ -147,9 +147,18 @@ body {
   cursor: default;
 }
 
+/* El número como TECLA (spec 2026-09-11, V2): una insignia con borde y
+   sombra de un píxel, que se lee como la tecla física que es. Los colores
+   son los del texto, así que vale para cualquier tema. */
 .keybar-num {
   flex: 0 0 auto;
-  padding: 0 2px;
+  margin: 0 4px 0 3px;
+  padding: 0 4px;
+  font-size: 0.8em;
+  line-height: 1.35;
+  border: 1px solid currentcolor;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 currentcolor;
   color: var(--fg);
 }
 
@@ -406,9 +415,18 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+/* Las cabeceras en VERSALITAS con un poco de aire (spec 2026-09-11, V2):
+   se distinguen de las filas sin gastar color, y con un ancho fijo se
+   recortan con elipsis como las celdas. `position: relative` es para el
+   tirador del borde. */
 .col {
   flex: 0 0 auto;
   opacity: 0.85;
+  position: relative;
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.05em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .col[data-sortable="true"] {
@@ -417,13 +435,37 @@ body {
 
 .col-name {
   flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+/* El hueco de la casilla de marca, para que «Name» siga sobre los nombres
+   (ver `.row-check`). */
+.slot-columns::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 1.1em;
 }
 
 .sort-mark {
   margin-left: 4px;
+  font-size: 0.7em;
   color: var(--border-focus);
+}
+
+/* El tirador del borde derecho de una cabecera: seis píxeles que cambian el
+   cursor. Arrastrarlo fija el ancho de la columna (`resize_column`). */
+.col-grip {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+}
+
+.col-grip:hover,
+.col[data-resizing="true"] .col-grip {
+  background: var(--border-focus);
+  opacity: 0.6;
 }
 
 .scroller {
@@ -451,9 +493,14 @@ body {
   cursor: default;
 }
 
+/* El cursor lleva un borde de ACENTO a la izquierda (spec 2026-09-11, V2)
+   además del fondo: en un tema donde selección y fondo se parecen, el
+   borde es lo que dice dónde está. Como sombra interior, no como borde:
+   un borde real movería el texto de esa fila tres píxeles. */
 .row[aria-selected="true"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
+  box-shadow: inset 3px 0 0 var(--border-focus);
 }
 
 /* El cursor de un panel SIN foco: presente pero apagado, para que dos
@@ -461,15 +508,46 @@ body {
 [aria-current="false"] .row[aria-selected="true"] {
   background: var(--selection-unfocused-bg);
   color: var(--selection-unfocused-fg);
+  box-shadow: inset 3px 0 0 var(--border);
 }
 
 .row[data-marked="true"] {
   background: var(--mark-bg);
 }
 
+/* Marcada Y bajo el cursor: el acento del cursor y, detrás, la franja de
+   la marca. Dos sombras interiores; la primera pinta encima. */
 .row[aria-selected="true"][data-marked="true"] {
   background: var(--selection-bg);
-  box-shadow: inset 3px 0 0 var(--mark-bg);
+  box-shadow:
+    inset 3px 0 0 var(--border-focus),
+    inset 6px 0 0 var(--mark-bg);
+}
+
+/* La casilla de marca (spec 2026-09-11, V2): un hueco reservado en cada
+   fila que solo se pinta al pasar el ratón o cuando la fila está marcada.
+   Pulsarla alterna la marca sin Ctrl, que es lo que quien viene del
+   escritorio busca. Reservado siempre, para que los nombres no salten. */
+.row-check {
+  flex: 0 0 auto;
+  width: 1.1em;
+  opacity: 0;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.row:hover .row-check,
+.row[data-marked="true"] .row-check {
+  opacity: 0.9;
+}
+
+/* Un cambio de cursor o de marca se desliza 80 ms; nada si el escritorio o
+   `[ui] reduce_motion` piden quietud (ver el bloque del final). */
+.row {
+  transition:
+    background-color 80ms ease-out,
+    box-shadow 80ms ease-out;
 }
 
 /* El nombre y lo que lo decora. Es el que CRECE, así que el nombre de dentro
@@ -498,6 +576,10 @@ body {
 .cell {
   flex: 0 0 auto;
   opacity: 0.75;
+  /* Con un ancho fijo (puente 64) la celda se recorta como el nombre. Sin
+     él, `width: auto` y nada de esto actúa. */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .kind-dir .cell-name::before {
@@ -515,6 +597,21 @@ body {
   overflow: hidden;
   white-space: nowrap;
   unicode-bidi: isolate;
+  /* Los glifos Nerd (`file-icons`, `style = nerd`) salen de la fuente de
+     símbolos empaquetada, que solo tiene esos codepoints privados: todo lo
+     demás —emoji, ASCII— cae a la pila del cuerpo. */
+  font-family: "Symbols Nerd Font Mono", var(--font-mono);
+}
+
+/* Symbols Nerd Font Mono (MIT), RECORTADA a los dieciocho glifos que el
+   plugin `file-icons` usa en su estilo `nerd` (3,8 KB en woff2, frente a los
+   2,6 MB de la fuente entera). Cómo se regenera está en
+   `ui/src/fonts/README.md`; añadir un glifo al plugin es añadirlo ahí. */
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("./fonts/symbols-nerd-mono-subset.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+E700-E7C5, U+F000-F2E0;
 }
 
 .empty,
@@ -2952,11 +3049,19 @@ body {
     opacity: 1;
     animation: none;
   }
+
+  .row {
+    transition: none;
+  }
 }
 
 :root[data-reduce-motion="true"] .slot-busy {
   opacity: 1;
   animation: none;
+}
+
+:root[data-reduce-motion="true"] .row {
+  transition: none;
 }
 
 /* --- El selector de columnas ------------------------------------------- */

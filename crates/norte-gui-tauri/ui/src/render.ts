@@ -22,6 +22,7 @@ import {
   revelar,
   nota,
   OVERSCAN,
+  colVar,
   place,
   newRow,
   updateRow,
@@ -513,6 +514,14 @@ export class Screen {
       if (!(target instanceof Element)) {
         return;
       }
+      // El tirador va ANTES que la ordenación: está dentro de la cabecera
+      // que ordena, y un arrastre no es un click.
+      const grip = target.closest(".col-grip");
+      if (grip instanceof HTMLElement) {
+        e.preventDefault();
+        this.dragColumn(slotId, dom, grip, e);
+        return;
+      }
       const col = target.closest('[data-sortable="true"]');
       if (!(col instanceof HTMLElement)) {
         return;
@@ -543,6 +552,17 @@ export class Screen {
       }
       e.preventDefault();
       // El foco ya lo mandó el listener de captura del panel entero.
+      // La casilla de marca alterna la marca sin modificador: es lo mismo
+      // que Ctrl+click, dicho con el ratón solo.
+      if (target.closest(".row-check") !== null) {
+        this.send({
+          action: "toggle_mark",
+          slot_id: slotId,
+          key: rowKey,
+          generation: dom.generation,
+        });
+        return;
+      }
       if (e.shiftKey) {
         // El rango lo marca el HOST: qué entra y qué no —`..`, por ejemplo—
         // es una regla de selección compartida, no una del renderer.
@@ -593,6 +613,44 @@ export class Screen {
         });
       }
     });
+  }
+
+  /**
+   * Arrastra el borde de una cabecera (puente 64).
+   *
+   * Mientras dura, solo se mueve la variable del ancho en la raíz del hueco:
+   * cabecera y celdas la leen y nada se repinta. Al soltar, el ancho en
+   * CELDAS —redondeado sobre `--cell-w`— va al host, que lo acota, lo guarda
+   * en `[ui.columns] spec.width` y devuelve la cabecera de todos los huecos.
+   * El ratón se captura en el documento: un arrastre rápido sale del
+   * tirador de seis píxeles en el primer movimiento.
+   */
+  dragColumn(slotId: number, dom: SlotDom, grip: HTMLElement, start: MouseEvent): void {
+    const id = grip.dataset["grip"];
+    const col = grip.parentElement;
+    if (id === undefined || col === null) {
+      return;
+    }
+    const v = colVar(id);
+    const cellW = this.cell().w;
+    const inicio = col.getBoundingClientRect().width;
+    const x0 = start.clientX;
+    let ancho = inicio;
+    col.dataset["resizing"] = "true";
+    const doc = dom.root.ownerDocument;
+    const mover = (e: MouseEvent): void => {
+      ancho = Math.max(cellW, inicio + (e.clientX - x0));
+      dom.root.style.setProperty(v, `${String(ancho)}px`);
+    };
+    const soltar = (): void => {
+      doc.removeEventListener("mousemove", mover);
+      doc.removeEventListener("mouseup", soltar);
+      delete col.dataset["resizing"];
+      const cells = Math.max(1, Math.round(ancho / cellW));
+      this.send({ action: "resize_column", slot_id: slotId, column: id, cells });
+    };
+    doc.addEventListener("mousemove", mover);
+    doc.addEventListener("mouseup", soltar);
   }
 
   cursorOf(slotId: number): number | null {

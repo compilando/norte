@@ -80,10 +80,12 @@
     "change": "columns",
     "columns": [
       {
+        "align": "right",
         "id": "size",
         "label": "Tamaño",
         "sort": "desc",
-        "sortable": true
+        "sortable": true,
+        "width": null
       }
     ],
     "slot_id": 1

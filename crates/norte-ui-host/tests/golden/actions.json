@@ -217,6 +217,12 @@
   "request_quit": {
     "action": "request_quit"
   },
+  "resize_column": {
+    "action": "resize_column",
+    "cells": 12,
+    "column": "size",
+    "slot_id": 1
+  },
   "resize_slot": {
     "action": "resize_slot",
     "cells": 42,

@@ -12,7 +12,7 @@ import type {
   TabGroupView,
   WhichKeyView,
 } from "../types";
-import { badge } from "./dom";
+import { badge, colVar } from "./dom";
 import type { SlotDom } from "./dom";
 
 /**
@@ -464,7 +464,14 @@ export function paintTabs(
   dom.tabs.replaceChildren(lista);
 }
 
-/** La cabecera: etiquetas y marca de orden, ambas resueltas en Rust. */
+/**
+ * La cabecera: etiquetas y marca de orden, ambas resueltas en Rust.
+ *
+ * El ancho fijo y la alineación de cada columna (puente 64) se escriben como
+ * variables en la RAÍZ del hueco, no en cada celda: las filas ya pintadas
+ * las leen sin repintarse, y arrastrar el tirador solo cambia una variable.
+ * La del nombre nunca: es la que crece.
+ */
 export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): void {
   const nodes = slot.columns.map((c) => {
     const el = document.createElement("span");
@@ -484,6 +491,24 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
       el.dataset["sortable"] = "true";
       el.setAttribute("tabindex", "-1");
     }
+    const v = colVar(c.id);
+    if (c.id === "name") {
+      dom.root.style.removeProperty(v);
+      dom.root.style.removeProperty(`${v}-align`);
+      return el;
+    }
+    if (c.width === null) {
+      dom.root.style.removeProperty(v);
+    } else {
+      dom.root.style.setProperty(v, `calc(var(--cell-w) * ${String(c.width)})`);
+    }
+    dom.root.style.setProperty(`${v}-align`, c.align === "right" ? "right" : "left");
+    el.style.width = `var(${v}, auto)`;
+    el.style.textAlign = `var(${v}-align, left)`;
+    const grip = document.createElement("span");
+    grip.className = "col-grip";
+    grip.dataset["grip"] = c.id;
+    el.append(grip);
     return el;
   });
   dom.header.replaceChildren(...nodes);

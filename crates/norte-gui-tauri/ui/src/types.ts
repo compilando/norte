@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 63;
+export const BRIDGE_VERSION = 64;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -133,6 +133,12 @@ export interface ColumnHeader {
   label: string;
   sort: "asc" | "desc" | null;
   sortable: boolean;
+  /** Ancho FIJO en celdas (puente 64), o `null` si la columna se pinta a lo
+   *  que mida. Arrastrar el borde de la cabecera lo cambia. */
+  width: number | null;
+  /** `left` o `right`: la alineación configurada, con efecto solo bajo un
+   *  ancho fijo. */
+  align: string;
 }
 
 export interface BrowserSlotView {
@@ -1284,6 +1290,7 @@ export type UiAction =
   | { action: "set_visible_range"; slot_id: number; first: number; count: number }
   | { action: "focus_slot"; slot_id: number }
   | { action: "sort_by"; slot_id: number; column: string }
+  | { action: "resize_column"; slot_id: number; column: string; cells: number }
   | {
       action: "dialog";
       id: ModalId;
