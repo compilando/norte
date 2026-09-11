@@ -14,6 +14,7 @@ gate red.
 | `file-icons/` | `org.norte.file-icons` | decorator | An icon left of each name: folder, link, or the kind of file its name says; `style = emoji`, `ascii` or `nerd` (the window bundles the Nerd glyphs), plus `dir-icon` and `unknown-icon`. |
 | `media-info/` | `org.norte.media-info` | columns | `dims` for PNG/JPEG/GIF/WebP and `duration` for WAV/MP3/FLAC, from at most 64 KiB of header read under the location token. |
 | `size-bar/` | `org.norte.size-bar` | columns | Each file's size as a `█░` bar from `stat` alone; `scale` log or linear, `width` 3–8, `relative-to` the page's biggest file or one gibibyte. |
+| `image-thumb/` | `org.norte.image-thumb` | thumbnail | A downscaled raster of an image file for the window's viewer (ADR 0107): PNG/JPEG/GIF/WebP/BMP/TIFF in, JPEG or PNG out (`format`, `quality`); the host verifies encoding, magic and dimensions before painting. |
 | `age/` | `org.norte.age` | columns | How long ago each entry changed: a glyph per bucket (`thresholds` in days, `glyphs` one per bucket) and a short figure (`3h`, `2d`, `5mo`), from `stat` and the WASI clock. |
 | `markdown/` | `org.norte.markdown` | previewer | `text/markdown` as styled lines: headings, emphasis, code, lists, quotes, links. |
 | `image-ansi/` | `org.norte.image-ansi` | previewer | PNG, JPEG and GIF as `▀` half-block cells, two pixels per cell (`fg` + `bg`), shrunk to the viewer's width. |

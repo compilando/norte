@@ -75,6 +75,7 @@ impl Estado {
                 // La imagen se SUELTA al cerrar: son megas, y un visor
                 // cerrado no tiene nada que enseñar.
                 self.imagen = None;
+                self.miniatura = None;
             }
             crate::commands::EfectoVisor::Linea(n) if n < 0 => v.scroll_up(pasos(n)),
             crate::commands::EfectoVisor::Linea(n) => v.scroll_down(pasos(n)),
@@ -244,6 +245,7 @@ impl Estado {
         // Un visor nuevo: la imagen del anterior sobra. Y hay que soltarla,
         // no solo dejar de pintarla: son megas.
         self.imagen = None;
+        self.miniatura = None;
         match leido {
             Ok(mut bytes) => {
                 let cap = usize::try_from(VISOR_CAP).unwrap_or(usize::MAX);
@@ -266,6 +268,7 @@ impl Estado {
                     None => norte_frontend::viewer::Viewer::new(path, bytes, truncado),
                 });
                 self.pedir_imagen(&ruta, token, backend, buzon);
+                self.pedir_miniatura(&ruta, token, backend, buzon);
             }
             Err(e) => {
                 // No se pudo leer: se DICE y no se abre un visor vacío que
@@ -338,6 +341,85 @@ impl Estado {
     /// Se descartan si el visor ya es otro: pintar la foto anterior sobre el
     /// fichero de ahora es la misma clase de error que abrir un visor que
     /// nadie pidió.
+    /// Pide a un plugin la MINIATURA del fichero del visor (ADR 0107), y
+    /// solo cuando el visor no tiene imagen propia que pintar: un formato
+    /// que la webview no decodifica, o una imagen que no cabe en sus topes.
+    /// Con imagen propia no se molesta a nadie. El lado pedido es el alto
+    /// del visor en píxeles estimados (`alto` filas × 22), acotado.
+    pub(super) fn pedir_miniatura(
+        &mut self,
+        path: &VPath,
+        token: RequestToken,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        // El techo es el del plugin-host (`THUMB_MAX_EDGE`), repetido aquí
+        // porque este crate no lo conoce: acota igual en los dos lados.
+        const MINIATURA_MAX_EDGE: u32 = 2048;
+        let Some(v) = self.visor.as_ref() else {
+            return;
+        };
+        if matches!(Self::imagen_de(v), Ok(Some(_))) {
+            return;
+        }
+        let filas = u32::from(self.viewport.1).max(10);
+        let max_edge = (filas * 22).clamp(128, MINIATURA_MAX_EDGE);
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let path = path.clone();
+        tokio::spawn(async move {
+            let thumb =
+                match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_thumbnail(path, max_edge))
+                    .await
+                {
+                    Ok(Ok(t)) => t,
+                    _ => None,
+                };
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::Miniatura(token, thumb))))
+                .await;
+        });
+    }
+
+    /// La miniatura llegó (o no): con ella, el visor la anuncia como imagen
+    /// y dice de quién es; sin ella, nada cambia. Los bytes ya vienen
+    /// verificados por el plugin-host (ADR 0107 decisión 3); aquí se acota
+    /// el nombre del plugin, que es texto suyo.
+    pub(super) fn aplicar_miniatura(
+        &mut self,
+        token: RequestToken,
+        thumb: Option<norte_proto::methods::PluginThumbnail>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        if self.visor_token != Some(token) {
+            return None;
+        }
+        let t = thumb?;
+        if t.bytes.is_empty() || t.width == 0 || t.height == 0 {
+            return None;
+        }
+        let (nombre, _) = norte_frontend::display_name(t.plugin_name.as_bytes());
+        self.imagen = Some(std::sync::Arc::new(t.bytes));
+        self.miniatura = Some((
+            crate::dto::ImageView {
+                // La etiqueta que el visor pinta para una imagen propia es el
+                // formato en mayúsculas (`PNG`); la misma forma aquí.
+                format: t
+                    .mimetype
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("image")
+                    .to_ascii_uppercase(),
+                width: t.width,
+                height: t.height,
+            },
+            clamp_display(nombre),
+        ));
+        let cambio = ViewChange::Viewer {
+            viewer: self.vista_visor(),
+        };
+        Some(self.parche(vec![cambio]))
+    }
+
     pub(super) fn aplicar_imagen(
         &mut self,
         token: RequestToken,

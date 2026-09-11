@@ -431,6 +431,11 @@ fn mimetype_matches(pat: &str, mime: &str) -> bool {
     }
 }
 
+/// Techo de los bytes que se le dan a un guest de miniaturas (ADR 0107):
+/// una foto, no un vídeo. El sandbox del guest tiene 64 MiB de memoria y
+/// tiene que decodificar lo que recibe.
+pub const THUMBNAIL_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Resultado de [`PluginRegistry::resolve_previewer`]: `(id, name,
 /// wasm_path, capabilities, settings)` — factorizado a un alias (en vez de un
 /// tuple de 5 elementos in-line) porque clippy `type_complexity` lo pide;
@@ -1162,6 +1167,43 @@ impl PluginRegistry {
         // Dos pasadas: la exacta gana a la de comodín aunque venga después.
         let exact = self.previewer_matching(|pat| pat == mime);
         exact.or_else(|| self.previewer_matching(|pat| mimetype_matches(pat, mime)))
+    }
+
+    /// El primer plugin de MINIATURAS consentido que casa `mime` (ADR
+    /// 0107), con las mismas reglas que [`Self::resolve_previewer`]: la
+    /// declaración exacta gana a la de comodín, y solo entran los aprobados
+    /// con digest vigente y encendidos.
+    #[must_use]
+    pub fn resolve_thumbnailer(&self, mime: &str) -> Option<ResolvedPreviewer> {
+        let exact = self.thumbnailer_matching(|pat| pat == mime);
+        exact.or_else(|| self.thumbnailer_matching(|pat| mimetype_matches(pat, mime)))
+    }
+
+    fn thumbnailer_matching(&self, casa: impl Fn(&str) -> bool) -> Option<ResolvedPreviewer> {
+        self.catalog.plugins.iter().find_map(|e| {
+            let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+            if !Self::approval_is_current(&st, e) || !st.enabled {
+                return None;
+            }
+            let handles = e
+                .manifest
+                .contributions
+                .thumbnail
+                .iter()
+                .flat_map(|c| c.mimetypes.iter())
+                .any(|pat| casa(pat));
+            if !handles {
+                return None;
+            }
+            let wasm = Self::verified_wasm(&e.dir)?;
+            Some((
+                e.manifest.id.clone(),
+                e.manifest.name.clone(),
+                wasm,
+                e.manifest.capabilities.clone(),
+                e.settings.clone(),
+            ))
+        })
     }
 
     /// El primer previewer consentido, en orden de catálogo, con alguna

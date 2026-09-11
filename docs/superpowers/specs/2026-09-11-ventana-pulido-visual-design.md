@@ -70,8 +70,14 @@ compatibilidad = no depender de qué fuentes tenga la máquina.
   (`linear|log`), `width` (int 3–8), `relative_to` (`page|dir`). `age`
   (decorator, hueco `badge`): parámetros `thresholds` (string `1,7,30`),
   `role`. `git-status`: `mode = badge|column|both`.
-- V7 `thumbnail`: kind nuevo que devuelve bytes de imagen para el panel de
-  vista previa; WIT 0.11 y ADR propia. El último, y el único que toca el WIT.
+- V7 `thumbnail`: kind nuevo que devuelve bytes de imagen para el visor
+  (ADR 0107). Hecho como PAQUETE WIT propio, `norte:thumbnail@0.1.0`, y
+  no como bump de `norte:plugin` a 0.11: el host sirve UNA versión de cada
+  paquete (ADR 0094) y un bump invalidaría los ocho guests instalados y el
+  FTP embebido por un kind que ninguno implementa. `plugin.thumbnail`
+  (proto 0.73.0) lo cruza; el plugin-host verifica magia, mimetype y
+  dimensiones antes de que llegue a un `blob:`. Primer guest:
+  `image-thumb`.
 
 ## Fuera de alcance
 

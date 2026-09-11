@@ -71,6 +71,14 @@ const MAX_STYLED_SPAN_TEXT_BYTES: usize = 4 * 1024;
 /// [`span_wire_cost`] —texto MÁS campos—, no solo con el texto.
 const MAX_STYLED_TOTAL_TEXT_BYTES: usize = MAX_RETURN_BYTES;
 
+/// Techo de los bytes de una miniatura devuelta (ADR 0107): el mismo que
+/// cualquier valor de retorno, y el que el wire aplica al leerla.
+pub const THUMB_MAX_BYTES: usize = MAX_RETURN_BYTES;
+
+/// El lado mayor que se le pide a un guest de miniaturas, como mucho: por
+/// encima no es una miniatura, es la imagen.
+pub const THUMB_MAX_EDGE: u32 = 2048;
+
 /// Tope del tamaño del ARTEFACTO `.wasm` en disco ANTES de compilarlo (issue
 /// #68): compilar un componente con cranelift cuesta CPU y memoria proporcional
 /// al tamaño; no se gasta ese trabajo en un artefacto arbitrariamente grande. 64
@@ -159,6 +167,10 @@ pub enum RuntimeError {
     /// (el caller cae a la previsualización plana `render`).
     #[error("preview estilizado supera un tope: {0}")]
     StyledPreviewTooLarge(String),
+    /// La miniatura que devolvió el guest no pasó la verificación del host
+    /// (ADR 0107 decisión 3): encoding, magia, dimensiones o lado.
+    #[error("miniatura rechazada: {0}")]
+    ThumbnailRejected(String),
 }
 
 /// Aplica el tope de tamaño al valor de retorno del guest (issue #68). Fail-loud:
@@ -558,6 +570,28 @@ impl PluginRuntime {
         let bindings = NorteDecorator::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
         Ok(DecoratorInstance {
+            store,
+            bindings,
+            epoch_deadline: self.epoch_deadline,
+        })
+    }
+
+    /// Instancia un guest de MINIATURAS (world `norte-thumbnail`, ADR 0107)
+    /// con el MISMO sandbox y límites que [`Self::instantiate`]. Devuelve
+    /// una [`ThumbnailInstance`] para llamar a `render`.
+    ///
+    /// # Errors
+    /// Igual que [`Self::instantiate`].
+    pub fn instantiate_thumbnail(
+        &self,
+        wasm_path: &Path,
+        caps: Capabilities,
+    ) -> Result<ThumbnailInstance, RuntimeError> {
+        use crate::bindings::thumbnail_world::NorteThumbnail;
+        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let bindings = NorteThumbnail::instantiate(&mut store, &component, &linker)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        Ok(ThumbnailInstance {
             store,
             bindings,
             epoch_deadline: self.epoch_deadline,
@@ -1236,6 +1270,7 @@ impl ProviderInstance {
 /// que [`provider_iface`], para que el adapter host los use sin cavar en el
 /// módulo de bindings generado (ADR 0037 decisión 2).
 pub use crate::bindings::decorator_world::exports::norte::plugin::decorator as decorator_iface;
+pub use crate::bindings::thumbnail_world::exports::norte::thumbnail::thumbnail as thumbnail_iface;
 
 /// Los tipos de la interfaz `location` (ADR 0057): `Meta`, `Dirent` y
 /// `EntryKind` tal y como cruzan la ABI. Reexportados para que quien implemente
@@ -1496,6 +1531,119 @@ impl DecoratorInstance {
             .sum();
         cap_total_bytes(total)?;
         Ok(out)
+    }
+}
+
+/// Una miniatura que pasó la verificación del host (ADR 0107 decisión 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Thumbnail {
+    /// `image/png`, `image/jpeg` o `image/webp`: el de la MAGIA, que casó
+    /// con el que el guest declaró.
+    pub mimetype: &'static str,
+    /// Los bytes codificados, por debajo de [`THUMB_MAX_BYTES`].
+    pub bytes: Vec<u8>,
+    /// Lo que dice la cabecera del raster, que casó con lo declarado.
+    pub width: u32,
+    /// Ídem.
+    pub height: u32,
+}
+
+/// Una instancia viva de un guest de MINIATURAS (ADR 0107, world
+/// `norte-thumbnail`): su `Store` (estado host + sandbox) y los bindings
+/// para llamar a `render`.
+pub struct ThumbnailInstance {
+    store: Store<HostState>,
+    bindings: crate::bindings::thumbnail_world::NorteThumbnail,
+    /// Los ticks de época de CADA llamada. Ver [`PluginInstance::rearm`].
+    epoch_deadline: u64,
+}
+
+impl std::fmt::Debug for ThumbnailInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThumbnailInstance").finish_non_exhaustive()
+    }
+}
+
+impl ThumbnailInstance {
+    fn rearm(&mut self) {
+        self.store.set_epoch_deadline(self.epoch_deadline);
+    }
+
+    /// Instala los valores VALIDADOS de `[config]` que el guest verá vía
+    /// `host-config::get`/`all`. Llamar ANTES de `render`.
+    pub fn set_settings(&mut self, settings: BTreeMap<String, String>) {
+        self.store.data_mut().settings = settings;
+    }
+
+    /// Pide la miniatura de `content` (ya ACOTADO por quien llama) que quepa
+    /// en `max_edge` —recortado a [`THUMB_MAX_EDGE`]— y la VERIFICA antes de
+    /// devolverla (ADR 0107 decisión 3): tamaño bajo [`THUMB_MAX_BYTES`],
+    /// encoding entre los tres que la ventana pinta y reconocido por su
+    /// magia, mimetype declarado igual al de la magia, dimensiones
+    /// declaradas iguales a las de la cabecera, y ninguna por encima del
+    /// lado pedido. Un guest describe una imagen; no mete bytes en un
+    /// `blob:`.
+    ///
+    /// # Errors
+    /// - [`RuntimeError::Guest`] si el guest dijo que no (`Err`).
+    /// - [`RuntimeError::Trap`] / [`RuntimeError::Deadline`] si atrapó o se
+    ///   pasó de tiempo.
+    /// - [`RuntimeError::ReturnTooLarge`] por encima del techo de bytes.
+    /// - [`RuntimeError::ThumbnailRejected`] si no pasa la verificación.
+    pub fn render_thumbnail(
+        &mut self,
+        mimetype: &str,
+        content: &[u8],
+        max_edge: u32,
+    ) -> Result<Thumbnail, RuntimeError> {
+        self.rearm();
+        let max_edge = max_edge.clamp(1, THUMB_MAX_EDGE);
+        let input = thumbnail_iface::ThumbInput {
+            mimetype: mimetype.to_owned(),
+            content: content.to_vec(),
+            max_edge,
+        };
+        let out = self
+            .bindings
+            .norte_thumbnail_thumbnail()
+            .call_render(&mut self.store, &input)
+            .map_err(|e| map_call_error(&e))?
+            .map_err(RuntimeError::Guest)?;
+        if out.bytes.len() > THUMB_MAX_BYTES {
+            return Err(RuntimeError::ReturnTooLarge {
+                len: out.bytes.len(),
+                cap: THUMB_MAX_BYTES,
+            });
+        }
+        let Some((kind, w, h)) = crate::thumb::sniff(&out.bytes) else {
+            return Err(RuntimeError::ThumbnailRejected(
+                "los bytes no son PNG, JPEG ni WebP".to_owned(),
+            ));
+        };
+        if kind.mimetype() != out.mimetype {
+            return Err(RuntimeError::ThumbnailRejected(format!(
+                "declara {} y la magia dice {}",
+                out.mimetype,
+                kind.mimetype()
+            )));
+        }
+        if (w, h) != (out.width, out.height) {
+            return Err(RuntimeError::ThumbnailRejected(format!(
+                "declara {}x{} y la cabecera dice {w}x{h}",
+                out.width, out.height
+            )));
+        }
+        if w == 0 || h == 0 || w > max_edge || h > max_edge {
+            return Err(RuntimeError::ThumbnailRejected(format!(
+                "{w}x{h} no cabe en el lado pedido ({max_edge})"
+            )));
+        }
+        Ok(Thumbnail {
+            mimetype: kind.mimetype(),
+            bytes: out.bytes,
+            width: w,
+            height: h,
+        })
     }
 }
 

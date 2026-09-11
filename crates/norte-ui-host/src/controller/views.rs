@@ -553,21 +553,39 @@ impl Estado {
             lines: v.rows(alto).into_iter().map(clamp_display).collect(),
             // El nombre ya viene enmascarado del modelo compartido; se acota
             // aquí como todo lo que cruza.
-            preview_by: v.preview_plugin().map_or_else(String::new, |n| {
-                // La MISMA clave que el TUI: el indicador «via …» no puede
-                // decirse de dos maneras según quién pinte. El nombre ya
-                // viene enmascarado del modelo compartido.
-                clamp_display(norte_i18n::ta_in(
+            // Una MINIATURA de plugin (ADR 0107) manda sobre las dos cosas:
+            // es la imagen que se anuncia, y el «via …» dice de quién es.
+            // Solo en el visor grande (`con_imagen`), que es el único que
+            // sirve bytes.
+            preview_by: match (con_imagen, self.miniatura.as_ref()) {
+                (true, Some((_, plugin))) => clamp_display(norte_i18n::ta_in(
                     self.lang,
                     "viewer-plugin-preview",
-                    &[("plugin", n)],
-                ))
-            }),
+                    &[("plugin", plugin)],
+                )),
+                _ => v.preview_plugin().map_or_else(String::new, |n| {
+                    // La MISMA clave que el TUI: el indicador «via …» no
+                    // puede decirse de dos maneras según quién pinte. El
+                    // nombre ya viene enmascarado del modelo compartido.
+                    clamp_display(norte_i18n::ta_in(
+                        self.lang,
+                        "viewer-plugin-preview",
+                        &[("plugin", n)],
+                    ))
+                }),
+            },
             preview_lossy: v.preview_lossy(),
-            image: imagen.clone().ok().flatten(),
+            image: match (con_imagen, self.miniatura.as_ref()) {
+                (true, Some((vista, _))) => Some(vista.clone()),
+                _ => imagen.clone().ok().flatten(),
+            },
             image_refused: match &imagen {
-                Err(clave) => clamp_display(norte_i18n::t_in(self.lang, clave)),
-                Ok(_) => String::new(),
+                // Con miniatura, el motivo por el que el visor no pinta la
+                // suya deja de importar: hay imagen.
+                Err(clave) if !(con_imagen && self.miniatura.is_some()) => {
+                    clamp_display(norte_i18n::t_in(self.lang, clave))
+                }
+                _ => String::new(),
             },
             // Los fragmentos con estilo de la MISMA ventana de filas que
             // `lines` (mismo `alto`, mismo `scroll`): una entrada por fila.

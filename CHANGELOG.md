@@ -21,6 +21,15 @@ independently through `PROTOCOL_VERSION`.
   `theme_dark` follow the desktop's colour scheme live, and a theme's
   `[effects] backdrop = "blur"` blurs what lies behind a dialog (the
   default preset asks for it). Bridge 64 and 65.
+- **A `thumbnail` plugin kind** (ADR 0107), in its own WIT package
+  `norte:thumbnail@0.1.0` so no installed guest needs a rebuild. A guest
+  lists mimetypes like a previewer, gets the file's bytes (capped at 8 MiB)
+  and the longest edge allowed, and answers a PNG/JPEG/WebP raster that
+  the plugin-host verifies — magic, declared mimetype, dimensions, edge —
+  before it crosses. `plugin.thumbnail` (protocol 0.73.0) carries it; the
+  window's viewer asks for one when it has no picture of its own and paints
+  it labelled «via ‹plugin›». `org.norte.image-thumb` is the first guest:
+  a photo too big for the viewer's cap now gets a picture.
 - **Plugins parametrised.** `file-icons` paints one-cell Nerd Font glyphs
   (`style = "nerd"`, bundled in the window as a 3.8 KB subset) and takes
   `dir-icon` and `unknown-icon`; two new columns plugins, `size-bar` (a

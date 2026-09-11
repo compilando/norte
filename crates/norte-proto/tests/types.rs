@@ -1315,10 +1315,12 @@ fn version_ventana_actual() {
     // 0.72.0 (ADR 0105): un cliente 0.71 no manda `kinds` ni lee `slot`: las
     // carpetas van sin icono y el icono se pinta como una insignia. Feo, no
     // roto.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.72.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.71.0"), "N-1");
+    // 0.73.0 (ADR 0107): un cliente 0.72 no sabe pedir `plugin.thumbnail` y
+    // no lo pide; el visor se queda sin miniatura, que es lo que tenía.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.73.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.72.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.70.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.71.9"),
         "N-2 fuera de la ventana"
     );
 }

@@ -3822,6 +3822,104 @@
       "description": "Result de [`PLUGIN_SET_ENABLED`]: objeto vacío, reservado para extensión.",
       "type": "object"
     },
+    "PluginThumbnail": {
+      "description": "Una miniatura (0.73.0, ADR 0107): una imagen codificada, ya verificada\npor el plugin-host —encoding entre los que la ventana pinta, magia y\ndimensiones que casan— con el plugin que la hizo.",
+      "properties": {
+        "bytes": {
+          "contentEncoding": "base64",
+          "description": "Los bytes de la imagen, en base64 en el wire. Acotados a\n[`THUMBNAIL_WIRE_MAX_BYTES`] al deserializar: por encima, el mensaje\nentero es inválido.",
+          "type": "string"
+        },
+        "height": {
+          "description": "Alto en píxeles, el que dice la cabecera del raster.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mimetype": {
+          "description": "`image/png`, `image/jpeg` o `image/webp`.",
+          "type": "string"
+        },
+        "plugin_id": {
+          "description": "Id del plugin que la hizo.",
+          "type": "string"
+        },
+        "plugin_name": {
+          "description": "Nombre del plugin, TEXTO DEL PLUGIN: el frontend lo enmascara.",
+          "type": "string"
+        },
+        "width": {
+          "description": "Ancho en píxeles, el que dice la cabecera del raster.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "plugin_name",
+        "mimetype",
+        "bytes",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "PluginThumbnailParams": {
+      "description": "Parámetros de [`PLUGIN_THUMBNAIL`] (0.73.0, ADR 0107).",
+      "properties": {
+        "max_edge": {
+          "description": "El lado mayor que la miniatura no debe superar, en píxeles. El\nplugin-host lo acota a su propio techo antes de llamar al guest.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "El fichero."
+        }
+      },
+      "required": [
+        "path",
+        "max_edge"
+      ],
+      "type": "object"
+    },
+    "PluginThumbnailResult": {
+      "description": "Resultado de [`PLUGIN_THUMBNAIL`]: la miniatura, o nada (`null`) si\nningún plugin consentido casa o el que casa no supo.",
+      "properties": {
+        "bytes": {
+          "contentEncoding": "base64",
+          "description": "Los bytes de la imagen, en base64 en el wire. Acotados a\n[`THUMBNAIL_WIRE_MAX_BYTES`] al deserializar: por encima, el mensaje\nentero es inválido.",
+          "type": "string"
+        },
+        "height": {
+          "description": "Alto en píxeles, el que dice la cabecera del raster.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mimetype": {
+          "description": "`image/png`, `image/jpeg` o `image/webp`.",
+          "type": "string"
+        },
+        "plugin_id": {
+          "description": "Id del plugin que la hizo.",
+          "type": "string"
+        },
+        "plugin_name": {
+          "description": "Nombre del plugin, TEXTO DEL PLUGIN: el frontend lo enmascara.",
+          "type": "string"
+        },
+        "width": {
+          "description": "Ancho en píxeles, el que dice la cabecera del raster.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "PluginUninstallParams": {
       "description": "Params de [`PLUGIN_UNINSTALL`] (0.71.0, ADR 0104).",
       "properties": {
@@ -6096,6 +6194,15 @@
     "plugin_set_enabled_result": {
       "$ref": "#/$defs/PluginSetEnabledResult"
     },
+    "plugin_thumbnail": {
+      "$ref": "#/$defs/PluginThumbnail"
+    },
+    "plugin_thumbnail_params": {
+      "$ref": "#/$defs/PluginThumbnailParams"
+    },
+    "plugin_thumbnail_result": {
+      "$ref": "#/$defs/PluginThumbnailResult"
+    },
     "plugin_uninstall_params": {
       "$ref": "#/$defs/PluginUninstallParams"
     },
@@ -6399,6 +6506,9 @@
     "plugin_preview_styled",
     "plugin_preview_styled_params",
     "plugin_preview_styled_result",
+    "plugin_thumbnail",
+    "plugin_thumbnail_params",
+    "plugin_thumbnail_result",
     "plugin_run_command_params",
     "plugin_run_command_result",
     "plugin_set_approval_params",

@@ -546,3 +546,63 @@ async fn cerrar_el_visor_suelta_la_imagen() {
         "un visor cerrado no retiene megas de imagen"
     );
 }
+
+/// Un fichero que el visor no sabe pintar como imagen, y un plugin de
+/// miniaturas que sí (ADR 0107): el visor anuncia la miniatura como imagen,
+/// dice de quién es, sirve sus bytes por el mismo canal que una imagen
+/// propia, y los suelta al cerrar.
+#[tokio::test]
+async fn el_visor_ensena_la_miniatura_de_un_plugin_y_dice_de_quien_es() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"informe.pdf".to_vec(), false)]);
+    f.contenido.insert(
+        "mem:///casa/informe.pdf".to_owned(),
+        b"%PDF-1.7 crudo".to_vec(),
+    );
+    f.thumbnails.insert(
+        "mem:///casa/informe.pdf".to_owned(),
+        norte_proto::methods::PluginThumbnail {
+            plugin_id: "org.acme.thumbs".to_owned(),
+            plugin_name: "Miniaturas ACME".to_owned(),
+            mimetype: "image/png".to_owned(),
+            bytes: b"\x89PNG\r\n\x1a\nno hace falta que sea real aqui".to_vec(),
+            width: 120,
+            height: 60,
+        },
+    );
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    let mut visor = None;
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone()
+            && v.image.is_some()
+        {
+            visor = Some(v);
+            break;
+        }
+    }
+    let v = visor.expect("el visor abre con la miniatura");
+    let img = v.image.expect("anuncia una imagen");
+    assert_eq!(
+        (img.format.as_str(), img.width, img.height),
+        ("PNG", 120, 60)
+    );
+    assert!(
+        v.preview_by.contains("Miniaturas ACME"),
+        "y dice de quién es: {:?}",
+        v.preview_by
+    );
+    assert_eq!(v.image_refused, "", "con miniatura no hay motivo que dar");
+    let bytes = h
+        .image_bytes()
+        .await
+        .expect("host vivo")
+        .expect("los bytes");
+    assert!(bytes.starts_with(b"\x89PNG"), "los de la miniatura");
+
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    assert!(h.image_bytes().await.expect("host vivo").is_none());
+}

@@ -2800,6 +2800,9 @@ async fn dispatch(
         methods::PLUGIN_PREVIEW_STYLED => {
             handle_plugin_preview_styled(req.params, &conn.actor, shared).await
         }
+        // plugin.thumbnail (ADR 0107): ABIERTO, con el mismo gate de lectura
+        // que sus gemelos — una miniatura LEE el fichero.
+        methods::PLUGIN_THUMBNAIL => handle_plugin_thumbnail(req.params, &conn.actor, shared).await,
         // plugin.decorate / plugin.column_values (G3b, ADR 0037): ABIERTOS
         // como el resto de `plugin.preview*`, con el mismo gate de lectura
         // (#80) extendido al lote entero (`read_gate_all`).
@@ -3944,6 +3947,77 @@ async fn handle_plugin_preview(
 /// (headless) no depende de `norte-theme` — ver el rustdoc de
 /// [`crate::plugins::to_wire_lines`] y de `Backend::plugin_preview_styled`
 /// para el razonamiento completo de esa frontera.
+/// `plugin.thumbnail` (ADR 0107): el mismo camino que `plugin.preview` —gate
+/// de lectura, resolver bajo el lock, leer ACOTADO fuera de él, correr el
+/// guest en `spawn_blocking`— y una diferencia: un guest que falla NO es un
+/// error del método. Una miniatura es cosmética: «no hay» es la respuesta
+/// honesta, y el visor se queda con lo que tenía. Solo el fichero ilegible
+/// se propaga.
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_thumbnail(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginThumbnailParams = parse_params(params)?;
+    read_gate(actor, &p.path, shared)?;
+    let mime = crate::plugins::guess_mimetype(&p.path);
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_thumbnailer(mime)
+    };
+    let Some((id, name, wasm, caps, settings)) = resolved else {
+        return to_value(&methods::PluginThumbnailResult { thumbnail: None });
+    };
+
+    let range = norte_proto::ByteRange {
+        offset: 0,
+        len: Some(crate::plugins::THUMBNAIL_MAX_BYTES),
+    };
+    let mut stream = shared
+        .engine
+        .read(&p.path, Some(range))
+        .await
+        .map_err(RpcError::from)?;
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(RpcError::from)?;
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() as u64 >= crate::plugins::THUMBNAIL_MAX_BYTES {
+            break;
+        }
+    }
+    let cap = usize::try_from(crate::plugins::THUMBNAIL_MAX_BYTES).unwrap_or(usize::MAX);
+    bytes.truncate(cap.min(bytes.len()));
+
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let max_edge = p.max_edge;
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut inst = runtime.instantiate_thumbnail(&wasm, caps)?;
+        inst.set_settings(settings);
+        inst.render_thumbnail(mime, &bytes, max_edge)
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "thumbnail task panicked"))?;
+    let thumb = match outcome {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(plugin = %id, error = %e, "thumbnail runtime failed");
+            return to_value(&methods::PluginThumbnailResult { thumbnail: None });
+        }
+    };
+    to_value(&methods::PluginThumbnailResult {
+        thumbnail: Some(methods::PluginThumbnail {
+            plugin_id: id,
+            plugin_name: name,
+            mimetype: thumb.mimetype.to_owned(),
+            bytes: thumb.bytes,
+            width: thumb.width,
+            height: thumb.height,
+        }),
+    })
+}
+
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_preview_styled(
     params: Option<serde_json::Value>,

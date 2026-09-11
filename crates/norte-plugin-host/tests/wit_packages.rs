@@ -93,6 +93,7 @@ fn las_referencias_cruzadas_llevan_version() {
         "deps/provider/provider.wit",
         "deps/renamer/renamer.wit",
         "deps/hook/hook.wit",
+        "deps/thumbnail/thumbnail.wit",
     ] {
         let src = leer(fichero);
         for (i, linea) in src.lines().enumerate() {
@@ -123,6 +124,7 @@ fn served_wit_matches_the_package_files() {
         "deps/location/location.wit",
         "deps/renamer/renamer.wit",
         "deps/hook/hook.wit",
+        "deps/thumbnail/thumbnail.wit",
     ] {
         let src = leer(fichero);
         let linea = src

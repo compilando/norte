@@ -110,5 +110,9 @@ without Ctrl. The `file-icons` extension can paint one-cell Nerd Font
 glyphs (`style = "nerd"`): the window bundles the glyphs it needs, a
 terminal needs a Nerd-patched font.
 
+When the viewer has no picture of its own — a photo too big for its cap, a
+format the window cannot decode — a `thumbnail` extension can give it one:
+`image-thumb` does for image files, and the viewer says «via» whose it is.
+
 > 💡 Every row on the settings screen says what it does and applies at once.
 > The file is the real interface; the screen is a way to edit it.

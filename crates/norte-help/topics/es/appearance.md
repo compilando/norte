@@ -113,5 +113,10 @@ marca sin Ctrl. La extensión `file-icons` puede pintar glifos Nerd Font de
 una celda (`style = "nerd"`): la ventana lleva los glifos que necesita, un
 terminal necesita una fuente Nerd parcheada.
 
+Cuando el visor no tiene imagen propia — una foto que no cabe en su tope, un
+formato que la ventana no decodifica — una extensión `thumbnail` puede
+dársela: `image-thumb` lo hace con los ficheros de imagen, y el visor dice
+«via» de quién es.
+
 > 💡 Cada fila de la pantalla de ajustes dice qué hace y aplica al momento.
 > El fichero es la interfaz de verdad; la pantalla es una forma de editarlo.

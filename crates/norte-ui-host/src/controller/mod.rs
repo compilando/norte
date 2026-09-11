@@ -908,6 +908,9 @@ enum Fondo {
     Adornos(Box<Adornos>),
     /// Los bytes enteros de una imagen que el visor aceptó.
     Imagen(RequestToken, Result<Vec<u8>, Error>),
+    /// La MINIATURA que un plugin dio del fichero del visor (ADR 0107), o
+    /// `None` si ninguno casó o el que casó no supo.
+    Miniatura(RequestToken, Option<norte_proto::methods::PluginThumbnail>),
     /// La búsqueda de esta época ya tiene Task: este es su id.
     ///
     /// Llega por su cuenta y no dentro del primer lote porque puede no haber
@@ -2752,6 +2755,10 @@ struct Estado {
     /// garantía de tamaño que `payload.rs` vigila. El renderer los pide
     /// aparte y hace un `blob:` con ellos (ADR 0069).
     imagen: Option<std::sync::Arc<Vec<u8>>>,
+    /// La miniatura que un plugin dio del fichero del visor (ADR 0107): lo
+    /// que la proyección anuncia como imagen y de quién es, mientras los
+    /// bytes van en `imagen`. `None` = el visor pinta lo suyo.
+    miniatura: Option<(crate::dto::ImageView, String)>,
     /// La búsqueda abierta, si la hay.
     busqueda: Option<Busqueda>,
     /// Cuántas búsquedas ha lanzado esta ventana. Es la identidad de la
@@ -3277,6 +3284,7 @@ impl Estado {
             gen_paleta: 0,
             gen_salida: 0,
             imagen: None,
+            miniatura: None,
             busqueda: None,
             epoca_busqueda: 0,
             disposiciones: user_layouts,

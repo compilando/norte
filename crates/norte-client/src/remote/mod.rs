@@ -2219,6 +2219,30 @@ impl RemoteBackend {
         }
     }
 
+    /// `plugin.thumbnail` contra el daemon (ADR 0107): `MethodNotFound` —un
+    /// daemon 0.72 que no lo tiene— cae a SIN miniatura, que es lo que
+    /// había. Cualquier otro error se propaga.
+    ///
+    /// # Errors
+    /// Los del wire, traducidos a la taxonomía; nunca `MethodNotFound`.
+    pub async fn plugin_thumbnail(
+        &self,
+        path: &VPath,
+        max_edge: u32,
+    ) -> Result<Option<methods::PluginThumbnail>, Error> {
+        let client = self.client().await?;
+        let params = methods::PluginThumbnailParams {
+            path: path.clone(),
+            max_edge,
+        };
+        let call =
+            client.call::<_, methods::PluginThumbnailResult>(methods::PLUGIN_THUMBNAIL, &params);
+        match tokio::time::timeout(CALL_TIMEOUT, call).await {
+            Ok(res) => map_thumbnail_result(res),
+            Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+        }
+    }
+
     /// `plugin.decorate` contra el daemon (G3b, ADR 0037): `MethodNotFound`
     /// (mismos DOS triggers documentados en el ADR — un daemon 0.27 que aún
     /// no cableó el handler, o un cliente que decide no llamarlo) cae a SIN
@@ -2388,6 +2412,22 @@ impl RemoteBackend {
 /// (mismo destino que "ningún previewer aplica" — el caller cae al
 /// preview plano); cualquier OTRO error va por la taxonomía normal
 /// (`to_taxonomy`, que SÍ mira `rpc.data` para los `APP_ERROR`).
+/// Traduce el `Result` crudo de `plugin.thumbnail` (ADR 0107) al contrato
+/// de [`RemoteBackend::plugin_thumbnail`]: `METHOD_NOT_FOUND` → `Ok(None)`.
+fn map_thumbnail_result(
+    res: Result<methods::PluginThumbnailResult, ClientError>,
+) -> Result<Option<methods::PluginThumbnail>, Error> {
+    match res {
+        Ok(r) => Ok(r.thumbnail),
+        Err(ClientError::Rpc(ref rpc))
+            if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(to_taxonomy(e)),
+    }
+}
+
 fn map_styled_preview_result(
     res: Result<methods::PluginPreviewStyledResult, ClientError>,
 ) -> Result<Option<methods::PluginPreviewStyled>, Error> {

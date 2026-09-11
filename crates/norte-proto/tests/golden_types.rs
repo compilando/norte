@@ -4451,7 +4451,10 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_UNINSTALL, "plugin.uninstall");
     // 0.72.0 (ADR 0105): ningún método nuevo — `kinds` en los params de
     // `plugin.decorate` y `slot` en cada bloque de decoraciones.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.72.0");
+    // 0.73.0 (ADR 0107): `plugin.thumbnail`, la miniatura de un fichero por
+    // un plugin del kind nuevo. Abierto, como `plugin.preview`.
+    assert_eq!(methods::PLUGIN_THUMBNAIL, "plugin.thumbnail");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.73.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

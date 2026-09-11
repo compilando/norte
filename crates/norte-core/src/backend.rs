@@ -2704,6 +2704,79 @@ impl Backend {
         }
     }
 
+    /// `plugin.thumbnail` (ADR 0107): la miniatura de `path` por el primer
+    /// plugin de miniaturas consentido cuyo mimetype casa, o `None` si no
+    /// hay ninguno o el que hay no supo — cosmético y fail-soft, como la
+    /// preview con estilo. Embebido: resolver y leer aquí, correr el guest
+    /// en `spawn_blocking`. Remoto: el daemon hace lo mismo.
+    ///
+    /// # Errors
+    /// Los de la lectura del fichero; jamás por un fallo del guest.
+    pub async fn plugin_thumbnail(
+        &self,
+        path: &VPath,
+        max_edge: u32,
+    ) -> Result<Option<norte_proto::methods::PluginThumbnail>, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let dir = crate::connect::config_dir();
+                let mime = crate::plugins::guess_mimetype(path);
+                let resolved = tokio::task::spawn_blocking(
+                    move || -> Result<Option<crate::plugins::ResolvedPreviewer>, Error> {
+                        let reg = crate::PluginRegistry::discover(&dir)
+                            .map_err(|_| Error::Io { retryable: false })?;
+                        Ok(reg.resolve_thumbnailer(mime))
+                    },
+                )
+                .await
+                .map_err(|_| Error::Internal { panic: true })??;
+                let Some((id, name, wasm, caps, settings)) = resolved else {
+                    return Ok(None);
+                };
+                let range = ByteRange {
+                    offset: 0,
+                    len: Some(crate::plugins::THUMBNAIL_MAX_BYTES),
+                };
+                let mut stream = engine.read(path, Some(range)).await?;
+                let mut bytes: Vec<u8> = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    bytes.extend_from_slice(&chunk?);
+                    if bytes.len() as u64 >= crate::plugins::THUMBNAIL_MAX_BYTES {
+                        break;
+                    }
+                }
+                let cap =
+                    usize::try_from(crate::plugins::THUMBNAIL_MAX_BYTES).unwrap_or(usize::MAX);
+                bytes.truncate(cap.min(bytes.len()));
+                let outcome = tokio::task::spawn_blocking(move || {
+                    let runtime = norte_plugin_host::PluginRuntime::new()?;
+                    let mut inst = runtime.instantiate_thumbnail(&wasm, caps)?;
+                    inst.set_settings(settings);
+                    inst.render_thumbnail(mime, &bytes, max_edge)
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })?;
+                let thumb = match outcome {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::debug!(plugin = %id, error = %e, "thumbnail falló: sin miniatura");
+                        return Ok(None);
+                    }
+                };
+                Ok(Some(norte_proto::methods::PluginThumbnail {
+                    plugin_id: id,
+                    plugin_name: name,
+                    mimetype: thumb.mimetype.to_owned(),
+                    bytes: thumb.bytes,
+                    width: thumb.width,
+                    height: thumb.height,
+                }))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugin_thumbnail(path, max_edge).await,
+        }
+    }
+
     /// Decora `paths` (G3b, ADR 0037 decisión 2): la SUPERPOSICIÓN de TODOS
     /// los plugins `decorator` APROBADOS y ACTIVADOS ([`crate::PluginRegistry::
     /// resolve_decorators`], plural — a diferencia del previewer que elige

@@ -1,0 +1,33 @@
+[plugin]
+id = "org.norte.image-thumb"
+name = "Image thumbnails"
+publisher = "norte"
+version = "0.1.0"
+category = "thumbnail"
+description = "A small picture of an image file for the window's viewer, even when the file is too big for the viewer itself."
+
+# A thumbnail plugin (ADR 0107) is asked for a file whose mimetype it lists,
+# gets the file's bytes (capped by the host) and the longest edge allowed,
+# and answers a downscaled raster. The window paints it in the viewer,
+# labelled with this plugin's name.
+[[contributions.thumbnail]]
+mimetypes = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/tiff"]
+
+# Nothing: the bytes arrive with the request.
+[capabilities]
+
+# The encoding of the thumbnail. JPEG is a tenth the size of PNG for a
+# photo; PNG keeps hard edges and transparency.
+[config.format]
+type = "enum"
+values = ["jpeg", "png"]
+default = "jpeg"
+description = "Encoding of the thumbnail: JPEG (small) or PNG (exact)."
+
+# JPEG quality, when the format is JPEG.
+[config.quality]
+type = "int"
+default = 80
+min = 30
+max = 95
+description = "JPEG quality of the thumbnail, 30 to 95."
