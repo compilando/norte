@@ -293,6 +293,15 @@ impl Estado {
                 self.decir("msg-layout-last-panel"),
             );
         }
+        // Cerrar un panel es fácil de hacer sin querer y difícil de deshacer
+        // si no se sabe con qué: el que lo hace se queda mirando media
+        // pantalla. Se DICE, y con el atajo de verdad del preset puesto —no
+        // uno cableado—, igual que el resto del cromo (ADR 0106).
+        let aviso = norte_frontend::notes::slot_closed(
+            norte_frontend::palette::first_chord("layout.split-h", &self.efectivo).as_deref(),
+            self.lang,
+        );
+        self.status.message = Some(clamp_display(aviso));
         self.aplicar_disposicion(nuevo, backend, buzon)
     }
 

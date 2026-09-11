@@ -1072,6 +1072,8 @@ help-cmd-profile-prev = perfil anterior
 help-cmd-profile-save-as = guarda este espacio de trabajo como perfil
 cmd-planned-profile-save-as = escribir un perfil desde lo que hay en pantalla llega con el resto de la edición de config
 msg-layout-last-panel = no se puede cerrar el último panel
+msg-layout-slot-closed = panel cerrado · { $chord } vuelve a partir
+msg-layout-slot-closed-nokey = panel cerrado · «partir lado a lado», en el menú de paneles
 # Un gesto de panel con tres o más y ninguno designado: adivinar cuál es «el
 # otro» sería mandar un panel a un sitio que nadie eligió (ADR 0058 D7).
 msg-no-target-designated = hay más de un panel: designa antes un destino

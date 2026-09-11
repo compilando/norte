@@ -962,6 +962,11 @@ pub struct App {
     /// `Resolver`. Cada frame elige cuál pintar según qué pantalla tiene
     /// las teclas.
     pub key_bars: KeyBars,
+    /// El acorde que el preset PUESTO ata a `layout.split-h`, precomputado
+    /// como las barras y por lo mismo: al cerrar un panel hay que decir con
+    /// qué se vuelve a partir, y el resolver no llega hasta ahí. `None` = el
+    /// preset no lo ata y se nombra el menú.
+    pub chord_split_h: Option<String>,
     /// Una tecla que el ratón pidió sintetizar: un clic en la barra de
     /// teclas ES pulsar la tecla, y el bucle la despacha por `on_key`, que
     /// es el único camino con los tres resolvers a mano.
@@ -1166,6 +1171,7 @@ impl App {
             pending_osc52: None,
             dialog_hints: crate::hints::DialogHints::default(),
             key_bars: KeyBars::default(),
+            chord_split_h: None,
             pending_key: None,
             version_line: "",
             help_chords: default_help_chords(),

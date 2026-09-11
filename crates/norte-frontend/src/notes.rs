@@ -189,6 +189,29 @@ pub fn hidden(n: usize, lang: Lang) -> String {
     ta_in(lang, "status-hidden", &[("n", &n.to_string())])
 }
 
+/// «panel cerrado · alt+h vuelve a partir»: lo que se dice al cerrar un
+/// hueco, con el acorde que el preset PUESTO ata a `layout.split-h`.
+///
+/// Cerrar un panel es fácil de hacer sin querer y difícil de deshacer si no
+/// se sabe con qué —el que lo hace se queda mirando media pantalla—, y el
+/// atajo no se cablea: sale del keymap efectivo, como el resto del cromo
+/// (ADR 0106). Sin ninguno atado, se nombra el menú, que siempre está.
+///
+/// ```
+/// use norte_frontend::notes::slot_closed;
+/// use norte_i18n::Lang;
+///
+/// assert!(slot_closed(Some("alt+h"), Lang::Es).contains("alt+h"));
+/// assert!(!slot_closed(None, Lang::Es).is_empty(), "sin tecla, el menú");
+/// ```
+#[must_use]
+pub fn slot_closed(chord: Option<&str>, lang: Lang) -> String {
+    match chord {
+        Some(c) => ta_in(lang, "msg-layout-slot-closed", &[("chord", c)]),
+        None => t_in(lang, "msg-layout-slot-closed-nokey"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +234,8 @@ mod tests {
                 filling(true, 3, lang),
                 unlisted(true, lang),
                 hidden(5, lang),
+                slot_closed(Some("alt+h"), lang),
+                slot_closed(None, lang),
             ] {
                 assert!(!frase.is_empty(), "sin frase en {lang:?}");
                 assert!(
@@ -238,6 +263,8 @@ mod tests {
                 filling(true, 3, lang),
                 unlisted(true, lang),
                 hidden(5, lang),
+                slot_closed(Some("alt+h"), lang),
+                slot_closed(None, lang),
             ] {
                 assert_eq!(frase.trim(), frase, "trae espaciado propio: {frase:?}");
             }

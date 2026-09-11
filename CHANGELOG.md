@@ -66,6 +66,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A double click opens a directory in the window.** The renderer waited
+  for the engine's own `dblclick`, the only door into a directory with the
+  mouse; it now counts two presses on the same row itself, the way the
+  terminal does. And the host no longer refuses an activation that names a
+  pane other than the focused one: it focuses it first, so a double click
+  on the pane next door works.
+- **A column a plugin contributes is named by its manifest.** The `header`
+  every manifest declares was parsed, carried over the wire and read by
+  nobody, so the listing showed the column's id (`acme.git/status`). Both
+  frontends now install the catalogue's label into the shared model, under
+  the user's `[ui.columns] header` and above the id.
 - **The terminal's extension manager answers the mouse.** It was the one
   overlay where a click did nothing: no row selected, and none of the
   buttons the window has. The detail pane now opens with a row of buttons —

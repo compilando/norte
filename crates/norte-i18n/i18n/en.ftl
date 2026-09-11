@@ -1122,6 +1122,8 @@ help-cmd-profile-prev = previous profile
 help-cmd-profile-save-as = save this workspace as a profile
 cmd-planned-profile-save-as = writing a profile from what is on screen comes with the rest of config editing
 msg-layout-last-panel = cannot close the last panel
+msg-layout-slot-closed = panel closed · { $chord } splits again
+msg-layout-slot-closed-nokey = panel closed · «split side by side», in the panels menu
 # A panel gesture with three or more and none designated: guessing which one is
 # "the other" would send a panel somewhere nobody chose (ADR 0058 D7).
 msg-no-target-designated = more than one panel: designate a destination first

@@ -143,7 +143,15 @@ pub async fn dispatch(
         Command::LayoutFocusNext => app.layout_focus(1),
         Command::LayoutFocusPrev => app.layout_focus(-1),
         Command::LayoutCloseSlot => {
-            if !app.layout_close_slot() {
+            if app.layout_close_slot() {
+                // Se DICE, y con el atajo que el preset puesto ata de verdad:
+                // cerrar un panel es fácil sin querer y difícil de deshacer
+                // si no se sabe con qué. La misma frase que la ventana.
+                app.message = Some(norte_frontend::notes::slot_closed(
+                    app.chord_split_h.clone().as_deref(),
+                    lang,
+                ));
+            } else {
                 app.message = Some(norte_i18n::t("msg-layout-last-panel"));
             }
         }
