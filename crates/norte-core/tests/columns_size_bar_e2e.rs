@@ -111,11 +111,22 @@ fn size_bar_draws_a_bar_per_file_and_nothing_for_a_directory() {
 
     let got = cells(&reg, &rt, Some(&loc), &names);
     // Defaults: log scale, five cells, the page's biggest file fills it.
-    assert_eq!(got[0].as_deref(), Some("█████"), "the biggest file fills the bar");
+    assert_eq!(
+        got[0].as_deref(),
+        Some("█████"),
+        "the biggest file fills the bar"
+    );
     let small = got[1].as_deref().expect("a small file has a bar");
     assert_eq!(small.chars().count(), 5);
-    assert!(small.starts_with('█') && small.ends_with('░'), "partial: {small}");
-    assert_eq!(got[2].as_deref(), Some("░░░░░"), "an empty file is an empty bar");
+    assert!(
+        small.starts_with('█') && small.ends_with('░'),
+        "partial: {small}"
+    );
+    assert_eq!(
+        got[2].as_deref(),
+        Some("░░░░░"),
+        "an empty file is an empty bar"
+    );
     assert_eq!(got[3], None, "a directory has no bar");
     assert_eq!(got[4], None, "an entry the host cannot stat stays empty");
     assert_eq!(

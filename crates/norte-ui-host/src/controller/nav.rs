@@ -71,6 +71,34 @@ impl Estado {
                     self.navegar(&destino, Trail::Record, backend, buzon),
                 )
             }
+            UiAction::BreadcrumbActivate { slot_id, depth } => {
+                let slot_id = *slot_id;
+                if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                }
+                let Some(hueco) = self.huecos.get(&slot_id) else {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                };
+                let actual = hueco.pane.dir().clone();
+                let profundidad = usize::try_from(*depth).unwrap_or(usize::MAX);
+                // La miga del directorio ACTUAL no navega: ya se está ahí.
+                if profundidad >= actual.segments().count() {
+                    return (self.aplicada(), Vec::new());
+                }
+                // Recortar por detrás hasta la profundidad pedida, con la
+                // misma operación que `..`: un ancestro es padres encadenados.
+                let mut destino = actual;
+                while destino.segments().count() > profundidad {
+                    let Some(padre) = destino.parent() else {
+                        break;
+                    };
+                    destino = padre;
+                }
+                (
+                    self.aplicada(),
+                    self.navegar_hueco(slot_id, &destino, Trail::Record, backend, buzon),
+                )
+            }
             UiAction::Parent { slot_id } => {
                 if *slot_id != self.activo() {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());

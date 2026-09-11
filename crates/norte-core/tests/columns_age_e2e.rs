@@ -118,8 +118,16 @@ fn age_buckets_a_fresh_file_as_today_and_an_old_one_as_older() {
     let loc = norte_vfs_local::vpath_from_native(dir.path()).expect("vpath");
 
     let got = cells(&reg, &rt, Some(&loc), &names);
-    assert_eq!(got[0].as_deref(), Some("● now"), "written this second: today");
-    assert_eq!(got[1].as_deref(), Some("· 2y"), "two years back: the last bucket");
+    assert_eq!(
+        got[0].as_deref(),
+        Some("● now"),
+        "written this second: today"
+    );
+    assert_eq!(
+        got[1].as_deref(),
+        Some("· 2y"),
+        "two years back: the last bucket"
+    );
     assert!(
         got[2].as_deref().is_some_and(|c| c.starts_with("● ")),
         "a directory has an mtime too: {:?}",

@@ -394,7 +394,13 @@ export function statusNodes(
     el.textContent = connection;
     nodes.push(el);
   }
+  // El mensaje efímero es un TOAST (spec 2026-09-11, V5): con clase
+  // propia, la hoja de estilos lo saca de la barra a la esquina inferior
+  // derecha mientras dure; el host lo caduca (`[ui] notice_seconds`) y
+  // entonces el nodo queda vacío y no se pinta. Sigue dentro de la región
+  // viva de la barra, así que un lector de pantalla lo anuncia igual.
   const msg = document.createElement("span");
+  msg.className = "status-message";
   msg.textContent = status.message ?? "";
   nodes.push(msg);
   // Los avisos caducados sin leer (puente 63): una insignia `!n` que abre

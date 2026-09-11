@@ -382,6 +382,8 @@ body {
    por el final si no cabe. Oculta cuando `[ui] pane_footer` está apagado. */
 .slot-footer {
   flex: 0 0 var(--cell-h);
+  /* Para el indicador de espacio, que se pega a su borde inferior. */
+  position: relative;
   padding: 0 6px;
   color: var(--border);
   white-space: nowrap;
@@ -1189,9 +1191,114 @@ body {
   color: var(--error-fg);
 }
 
+/* Un aviso persistente es una PÍLDORA (spec 2026-09-11, V5): fondo tenue
+   del color de aviso, borde redondeado y un ⚠ delante. Es estado, no un
+   mensaje: se queda mientras dure lo que avisa. */
 .banner {
+  display: inline-block;
   color: var(--hostile-fg);
   margin-right: 8px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--hostile-fg) 45%, transparent);
+  background: color-mix(in srgb, var(--hostile-fg) 12%, transparent);
+  line-height: calc(var(--cell-h) - 4px);
+}
+
+.banner::before {
+  content: "⚠ ";
+  opacity: 0.8;
+}
+
+/* El mensaje efímero es un TOAST: abajo a la derecha, sobre la barra de
+   teclas, con una entrada de 120 ms. El host lo caduca (`[ui]
+   notice_seconds`); vacío no se pinta. Un mensaje largo se recorta a
+   media pantalla y no tapa el listado entero. */
+.status-message:empty {
+  display: none;
+}
+
+.status-message {
+  position: fixed;
+  right: 12px;
+  bottom: calc(var(--keybar-h, 0px) + 10px);
+  max-width: 50vw;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+  border: 1px solid var(--border-focus);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: toast-in 120ms ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Las migas de la ruta (puente 65): botones sin cromo, el actual sin
+   afordancia, y un separador tenue. */
+.crumb {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  cursor: pointer;
+  border-radius: 3px;
+  unicode-bidi: isolate;
+}
+
+.crumb:hover:not(:disabled) {
+  background: var(--selection-unfocused-bg);
+  color: var(--fg);
+}
+
+.crumb:disabled {
+  cursor: default;
+  color: var(--fg);
+}
+
+.crumb-sep {
+  opacity: 0.5;
+  padding: 0 1px;
+}
+
+/* El indicador de espacio del pie (puente 65): dos píxeles al pie del
+   pie, llenos hasta lo ocupado. Del color del borde de foco; de aviso
+   pasado el 75 %, y de error pasado el 90 %, que es cuando importa. */
+.slot-gauge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.slot-gauge > i {
+  display: block;
+  height: 100%;
+  background: var(--border-focus);
+}
+
+.slot-gauge[data-level="high"] > i {
+  background: var(--warning-fg);
+}
+
+.slot-gauge[data-level="critical"] > i {
+  background: var(--error-fg);
 }
 
 /* Una orden rechazada en la frontera: error, no nombre hostil. */

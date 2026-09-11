@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 64;
+export const BRIDGE_VERSION = 65;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -183,6 +183,13 @@ export interface BrowserSlotView {
   /** El pie del listado (cuentas, marcado, espacio libre), ya redactado.
    *  Vacio o ausente = `[ui] pane_footer` apagado. Puente 63. */
   footer?: string;
+  /** Las migas de la ruta (puente 65): la raíz y un tramo por directorio,
+   *  ya enmascarados. Pulsar el tramo `i` navega a esa profundidad. Vacío o
+   *  ausente = la ruta va entera en `path_display`. */
+  path_segments?: string[];
+  /** Cuánto del volumen está ocupado, 0..1 (puente 65); `null` o ausente =
+   *  no se sabe, y entonces el pie no lleva indicador. */
+  used_ratio?: number | null;
   columns: ColumnHeader[];
   state: SlotState;
   quick: QuickView | null;
@@ -1213,6 +1220,8 @@ export type ViewChange =
       pruned_note?: string;
       marked_note?: string;
       footer?: string;
+      path_segments?: string[];
+      used_ratio?: number | null;
       marks: number;
     }
   | { change: "slot_state"; slot_id: number; state: SlotState }
@@ -1291,6 +1300,7 @@ export type UiAction =
   | { action: "focus_slot"; slot_id: number }
   | { action: "sort_by"; slot_id: number; column: string }
   | { action: "resize_column"; slot_id: number; column: string; cells: number }
+  | { action: "breadcrumb_activate"; slot_id: number; depth: number }
   | {
       action: "dialog";
       id: ModalId;

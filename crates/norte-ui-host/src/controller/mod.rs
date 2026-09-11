@@ -3778,9 +3778,10 @@ impl Estado {
                 self.hueco_mut().pane.mark_range(a, b);
                 (self.aplicada(), vec![self.parche_filas()])
             }
-            UiAction::Activate { .. } | UiAction::Parent { .. } | UiAction::History { .. } => {
-                self.navegacion(accion, backend, buzon)
-            }
+            UiAction::Activate { .. }
+            | UiAction::Parent { .. }
+            | UiAction::BreadcrumbActivate { .. }
+            | UiAction::History { .. } => self.navegacion(accion, backend, buzon),
             UiAction::SetViewport { width, height } => {
                 self.viewport = (*width, *height);
                 self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);

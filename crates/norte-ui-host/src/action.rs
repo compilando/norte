@@ -89,6 +89,17 @@ pub enum UiAction {
         /// Hueco.
         slot_id: u32,
     },
+    /// Pulsa una miga de la ruta (puente 65): navega al directorio con los
+    /// primeros `depth` tramos de la ruta actual. `0` es la raíz.
+    ///
+    /// Por PROFUNDIDAD y no por nombre: los tramos ya viajaron enmascarados,
+    /// y un nombre enmascarado no vuelve a ser un nombre.
+    BreadcrumbActivate {
+        /// Hueco.
+        slot_id: u32,
+        /// Cuántos tramos conservar.
+        depth: u32,
+    },
     /// Atrás y adelante en el rastro de navegación.
     History {
         /// Hueco.

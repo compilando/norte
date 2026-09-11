@@ -155,6 +155,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::MarkRange { .. } => "mark_range",
         UiAction::Activate { .. } => "activate",
         UiAction::Parent { .. } => "parent",
+        UiAction::BreadcrumbActivate { .. } => "breadcrumb_activate",
         UiAction::History { .. } => "history",
         UiAction::SetVisibleRange { .. } => "set_visible_range",
         UiAction::SortBy { .. } => "sort_by",
@@ -540,6 +541,13 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
                 slot_id: 1,
                 column: "size".to_owned(),
                 cells: 12,
+            },
+        ),
+        (
+            "breadcrumb_activate",
+            UiAction::BreadcrumbActivate {
+                slot_id: 1,
+                depth: 1,
             },
         ),
         (
@@ -938,6 +946,8 @@ fn slots_de_referencia() -> Vec<SlotView> {
             pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
             marked_note: "2 marcadas, 4,0 kB".to_owned(),
             footer: "1 dirs · 2 ficheros · 4,0 kB · 2 marcadas, 4,0 kB · 120 GiB libres".to_owned(),
+            path_segments: vec!["⟨file⟩".to_owned(), "home".to_owned(), "oscar".to_owned()],
+            used_ratio: Some(0.35),
             columns: vec![
                 ColumnHeader {
                     id: "name".to_owned(),
@@ -2202,6 +2212,12 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
                 marked_note: "2 marcadas, 4,0 kB".to_owned(),
                 footer: "1 dirs · 2 ficheros · 4,0 kB · 2 marcadas, 4,0 kB · 120 GiB libres"
                     .to_owned(),
+                path_segments: vec![
+                    "⟨mem⟩".to_owned(),
+                    "casa".to_owned(),
+                    "caf\u{fffd}".to_owned(),
+                ],
+                used_ratio: None,
                 marks: 4,
             },
         ),
@@ -2411,8 +2427,8 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    // Puente 64: anchos de columna (spec 2026-09-11, V2).
-    const FORMA: u64 = 12_901_597_783_499_783_402;
+    // Puente 65: migas e indicador de espacio (spec 2026-09-11, V5).
+    const FORMA: u64 = 4_635_105_071_315_551_863;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

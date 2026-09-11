@@ -729,6 +729,57 @@ describe("la cabecera", () => {
   });
 });
 
+describe("las migas, el indicador de espacio y el toast", () => {
+  it("cada tramo de la ruta es un botón que navega a su profundidad, salvo el actual", () => {
+    const { screen, enviadas, root } = montar();
+    screen.paint(
+      vista({
+        path_segments: ["⟨file⟩", "home", "oscar"],
+        path_display: "⟨file⟩/home/oscar",
+      }),
+    );
+    const migas = root.querySelectorAll(".title-path .crumb");
+    expect([...migas].map((m) => m.textContent)).toEqual(["⟨file⟩", "home", "oscar"]);
+    expect((migas[2] as HTMLButtonElement).disabled).toBe(true);
+    (migas[1] as HTMLButtonElement).click();
+    expect(enviadas.at(-1)).toEqual({
+      action: "breadcrumb_activate",
+      slot_id: 1,
+      depth: 1,
+    });
+    // La ruta entera sigue disponible de una pieza.
+    expect(root.querySelector(".title-path")?.getAttribute("title")).toBe(
+      "⟨file⟩/home/oscar",
+    );
+  });
+
+  it("sin migas, la ruta va como texto, igual que antes", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({}));
+    expect(root.querySelector(".title-path")?.textContent).toBe("⟨file⟩/casa");
+    expect(root.querySelector(".crumb")).toBeNull();
+  });
+
+  it("el pie lleva el indicador solo con dato, y dice su nivel", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({ footer: "2 ficheros", used_ratio: 0.92 }));
+    const gauge = root.querySelector(".slot-footer .slot-gauge") as HTMLElement;
+    expect(gauge.getAttribute("aria-valuenow")).toBe("92");
+    expect(gauge.dataset["level"]).toBe("critical");
+    expect((gauge.firstElementChild as HTMLElement).style.width).toBe("92%");
+    screen.paint(vista({ footer: "2 ficheros", used_ratio: null }));
+    expect(root.querySelector(".slot-gauge")).toBeNull();
+  });
+
+  it("el mensaje efímero va en su nodo de toast", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({}));
+    expect(root.querySelector(".statusbar .status-message")?.textContent).toBe(
+      "2 entradas",
+    );
+  });
+});
+
 describe("la casilla de marca", () => {
   it("cada fila lleva la casilla, dice si está marcada, y pulsarla alterna la marca", () => {
     const { screen, enviadas, root } = montar();

@@ -917,6 +917,11 @@
         "names_note": "nombres: cp866",
         "path_display": "⟨file⟩/home/oscar",
         "path_hostile": false,
+        "path_segments": [
+          "⟨file⟩",
+          "home",
+          "oscar"
+        ],
         "pruned_note": "2 marcas caídas, sus entradas ya no están",
         "quick": {
           "matches": 1,
@@ -987,7 +992,8 @@
         "state": {
           "state": "ready"
         },
-        "total_rows": 3
+        "total_rows": 3,
+        "used_ratio": 0.3499999940395355
       },
       {
         "fields": [

@@ -1971,6 +1971,17 @@ pub struct BrowserSlotView {
     /// marcas.
     #[serde(default)]
     pub marked_note: String,
+    /// Las MIGAS de la ruta (puente 65): la raíz (`⟨file⟩`, `⟨sftp⟩host`) y
+    /// un tramo por directorio, cada uno ya enmascarado. Pulsar el tramo
+    /// `depth` navega al directorio con esos `depth` tramos
+    /// (`breadcrumb_activate`). Vacío = la ruta va entera en `path_display`.
+    #[serde(default)]
+    pub path_segments: Vec<String>,
+    /// Cuánto del volumen está OCUPADO, en `0.0..=1.0` (puente 65): el
+    /// indicador de espacio del pie. `None` = no se sabe (sin volumen, o
+    /// un esquema que no lo dice).
+    #[serde(default)]
+    pub used_ratio: Option<f32>,
     /// El pie del listado (spec 2026-09-10): cuántos directorios y ficheros,
     /// cuánto pesan, lo marcado y el espacio libre del volumen, ya
     /// redactado. Vacío = `[ui] pane_footer` apagado.
@@ -2879,6 +2890,12 @@ pub enum ViewChange {
         /// rellenar. Vacío = `[ui] pane_footer` apagado.
         #[serde(default)]
         footer: String,
+        /// Las migas de la ruta (puente 65); ver `BrowserSlotView`.
+        #[serde(default)]
+        path_segments: Vec<String>,
+        /// Cuánto del volumen está ocupado (puente 65); ver `BrowserSlotView`.
+        #[serde(default)]
+        used_ratio: Option<f32>,
         /// Cuántas entradas hay marcadas, en crudo.
         ///
         /// Sigue viajando al lado de [`Self::BrowserHeader::marked_note`] y

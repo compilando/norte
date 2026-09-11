@@ -270,7 +270,14 @@ use serde::{Deserialize, Serialize};
 ///   arrastrar el borde de una cabecera fija el ancho de esa columna en
 ///   memoria y en el `norte.toml`, y vuelve la cabecera de todos los
 ///   huecos, porque el ancho es de la columna y no del hueco.
-pub const BRIDGE_VERSION: u32 = 64;
+/// - **65**: migas e indicador de espacio (spec 2026-09-11, V5).
+///   `BrowserSlotView` y `BrowserHeader` ganan `path_segments` —la raíz y
+///   un tramo por directorio, cada uno enmascarado— y `used_ratio`, cuánto
+///   del volumen está ocupado. Llega `breadcrumb_activate { slot_id,
+///   depth }`: navega al directorio con los primeros `depth` tramos, por
+///   profundidad y no por nombre, porque un tramo enmascarado no vuelve a
+///   ser un nombre.
+pub const BRIDGE_VERSION: u32 = 65;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

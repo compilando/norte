@@ -548,8 +548,32 @@ impl Estado {
                 self.lang,
             )),
             footer: clamp_display(self.pie_de(hueco)),
+            path_segments: Self::migas_de(hueco),
+            used_ratio: norte_frontend::space::used_ratio_for(
+                hueco.pane.dir(),
+                &self.volumenes_pie,
+            ),
             marks: hueco.pane.marks_len() as u64,
         }
+    }
+
+    /// Las migas de la ruta (puente 65): la raíz y un tramo por directorio,
+    /// cada uno enmascarado por su cuenta — un tramo es un nombre de fichero
+    /// y se trata como tal. La raíz lleva el esquema y, si la hay, la
+    /// autoridad, con la misma forma que `path_display` (`⟨file⟩`,
+    /// `⟨sftp⟩host`).
+    fn migas_de(hueco: &Hueco) -> Vec<String> {
+        let dir = hueco.pane.dir();
+        let raiz = match dir.authority() {
+            Some(a) => format!("⟨{}⟩{}", dir.scheme(), a),
+            None => format!("⟨{}⟩", dir.scheme()),
+        };
+        std::iter::once(clamp_display(raiz))
+            .chain(dir.segments().map(|s| {
+                let (texto, _hostil) = norte_frontend::display_name(s);
+                clamp_display(texto)
+            }))
+            .collect()
     }
 
     /// El pie de un listado (spec 2026-09-10), redactado por el crate
@@ -634,6 +658,8 @@ impl Estado {
             pruned_note,
             marked_note,
             footer,
+            path_segments,
+            used_ratio,
             marks,
         } = self.cabecera_de(id, hueco)
         else {
@@ -658,6 +684,8 @@ impl Estado {
             pruned_note,
             marked_note,
             footer,
+            path_segments,
+            used_ratio,
             columns: self.cabeceras(hueco),
             state: hueco.estado.clone(),
             quick: hueco.pane.quick().map(|q| crate::dto::QuickView {

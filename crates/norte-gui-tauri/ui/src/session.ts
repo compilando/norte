@@ -141,6 +141,10 @@ export class Session {
         slot.pruned_note = c.pruned_note ?? "";
         slot.marked_note = c.marked_note ?? "";
         slot.footer = c.footer ?? "";
+        // Las migas y el indicador de espacio (puente 65) van con la
+        // cabecera: cambian cuando cambia el directorio, y por lo mismo.
+        slot.path_segments = c.path_segments ?? [];
+        slot.used_ratio = c.used_ratio ?? null;
         slot.marks = c.marks;
         return true;
       }

@@ -861,7 +861,38 @@ export class Screen {
     // en silencio, que es justo lo contrario de lo que existen para hacer.
     const ruta = document.createElement("span");
     ruta.className = "title-path";
-    ruta.textContent = slot.path_display;
+    const migas = slot.path_segments ?? [];
+    if (migas.length === 0) {
+      ruta.textContent = slot.path_display;
+    } else {
+      // MIGAS (puente 65): un botón por tramo, con separador; el último es
+      // el directorio actual y no navega. La ruta entera sigue en el
+      // `title` del nodo y en el `aria-label` del hueco, para quien la
+      // quiera leer o copiar de una pieza.
+      ruta.title = slot.path_display;
+      for (const [i, tramo] of migas.entries()) {
+        if (i > 0) {
+          const sep = document.createElement("span");
+          sep.className = "crumb-sep";
+          sep.setAttribute("aria-hidden", "true");
+          sep.textContent = "›";
+          ruta.append(sep);
+        }
+        const miga = document.createElement("button");
+        miga.type = "button";
+        miga.className = "crumb";
+        miga.textContent = tramo;
+        const actual = i === migas.length - 1;
+        miga.dataset["current"] = String(actual);
+        miga.disabled = actual;
+        if (!actual) {
+          miga.addEventListener("click", () => {
+            this.send({ action: "breadcrumb_activate", slot_id: slot.slot_id, depth: i });
+          });
+        }
+        ruta.append(miga);
+      }
+    }
     dom.title.replaceChildren(ruta);
     if (slot.path_hostile) {
       ruta.append(badge(this.t("hostile-name")));
@@ -907,6 +938,23 @@ export class Screen {
     const pie = slot.footer ?? "";
     dom.footer.textContent = pie;
     dom.footer.hidden = pie === "";
+    // El indicador de espacio (puente 65): dos píxeles bajo el texto del
+    // pie, llenos hasta lo ocupado del volumen. Sin dato, sin barra.
+    const ocupado = slot.used_ratio ?? null;
+    if (pie !== "" && ocupado !== null) {
+      const gauge = document.createElement("span");
+      gauge.className = "slot-gauge";
+      gauge.setAttribute("role", "progressbar");
+      gauge.setAttribute("aria-valuemin", "0");
+      gauge.setAttribute("aria-valuemax", "100");
+      const pct = Math.round(Math.min(1, Math.max(0, ocupado)) * 100);
+      gauge.setAttribute("aria-valuenow", String(pct));
+      gauge.dataset["level"] = pct >= 90 ? "critical" : pct >= 75 ? "high" : "normal";
+      const lleno = document.createElement("i");
+      lleno.style.width = `${String(pct)}%`;
+      gauge.append(lleno);
+      dom.footer.append(gauge);
+    }
 
     this.paintHeader(dom, slot);
 
