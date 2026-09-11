@@ -2,7 +2,33 @@
    `applyTheme()` con lo que el host proyecta. Lo que hay aquí es geometría. */
 :root {
   --cell-w: 8px;
-  --cell-h: 20px;
+  --cell-h: 22px;
+  /* Tipografía EMPAQUETADA (spec 2026-09-11, V1): JetBrains Mono para lo
+     que se alinea en celdas —listados, visor, barra de teclas— e Inter para
+     el cromo —menús, diálogos, paleta—. Las dos van dentro del bundle
+     (`@fontsource`, OFL), así que la ventana se ve igual en una máquina sin
+     fuentes instaladas. `[ui] mono_font` y `[ui] font` siguen mandando: son
+     `--mono` y `--ui-font`, que `applyAppearance()` escribe en el raíz, y
+     aquí solo se les pone la pila de respaldo detrás. */
+  --font-mono: var(
+    --mono,
+    "JetBrains Mono",
+    ui-monospace,
+    "DejaVu Sans Mono",
+    "Cascadia Mono",
+    "Liberation Mono",
+    monospace
+  );
+  --font-ui: var(
+    --ui-font,
+    "Inter",
+    system-ui,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif
+  );
   --bg: #101216;
   --fg: #d8dee9;
   --panel-bg: #14171c;
@@ -35,18 +61,33 @@ body {
   overflow: hidden;
   background: var(--bg);
   color: var(--fg);
-  /* `[ui] font` y `[ui] font_size`, si la configuración los dice. El
-     fallback es la pila de siempre: una clave ausente no cambia nada. */
-  font-family: var(
-    --ui-font,
-    ui-monospace,
-    "DejaVu Sans Mono",
-    "Cascadia Mono",
-    "Liberation Mono",
-    monospace
-  );
-  font-size: var(--ui-font-size, 13px);
+  /* La base es la MONOESPACIADA: esta ventana se reparte en celdas, y todo
+     lo que no diga otra cosa se alinea con el listado. `[ui] font_size` si
+     la configuración lo dice; 14 px es lo que hoy usan los terminales que
+     la gente elige (WezTerm, Ghostty, Kitty) con una fila de 22 px. */
+  font-family: var(--font-mono);
+  font-size: var(--ui-font-size, 14px);
   line-height: var(--cell-h);
+  /* Numerales tabulares: un tamaño y una fecha con dígitos del mismo ancho
+     forman columna aunque la fuente elegida sea proporcional. Y sin
+     ligaduras en un listado: `->` o `!=` dentro de un nombre de fichero son
+     dos caracteres y tienen que verse como dos. */
+  font-variant-numeric: tabular-nums;
+  font-variant-ligatures: none;
+}
+
+/* El cromo lleva la proporcional: lo que se lee como texto, no lo que se
+   alinea en columnas. Los paneles, el visor, la barra de teclas y la salida
+   de un programa se quedan con la monoespaciada del cuerpo. */
+.menubar,
+.menu-items,
+.panelbar,
+.dialog,
+.palette,
+#whichkey,
+#fatal {
+  font-family: var(--font-ui);
+  font-variant-ligatures: normal;
 }
 
 #screen {

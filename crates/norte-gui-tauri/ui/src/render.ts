@@ -185,7 +185,7 @@ export class Screen {
     const cs = getComputedStyle(document.documentElement);
     return {
       w: Number.parseFloat(cs.getPropertyValue("--cell-w")) || 8,
-      h: Number.parseFloat(cs.getPropertyValue("--cell-h")) || 20,
+      h: Number.parseFloat(cs.getPropertyValue("--cell-h")) || 22,
     };
   }
 
