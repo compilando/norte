@@ -3,6 +3,11 @@ name = "default"
 # Tema neutro (no ligado a ninguna marca): color discreto sobre fondo oscuro.
 # Es el que se aplica cuando `[ui].theme` está ausente.
 
+# Efectos de la ventana (ADR 0036: bloque libre, el terminal lo ignora).
+# `backdrop = "blur"` desenfoca lo que hay detrás de un diálogo.
+[effects]
+backdrop = "blur"
+
 [roles]
 background       = { bg = "#1c1c1c" }
 regular          = { fg = "#d0d0d0" }

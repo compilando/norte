@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window, polished** (spec 2026-09-11). Bundled typography —
+  JetBrains Mono for cells, Inter for chrome, 14 px on 22 px rows — with
+  `[ui] font`/`mono_font`/`font_size` still in charge; column widths by
+  dragging a header's edge, written to `[ui.columns] width` and honoured
+  by both frontends, with the terminal's discard rule when the name would
+  fall under ten cells; keycaps on the key bar, small-caps headers, an
+  accent on the cursor, a mark checkbox on hover; breadcrumbs in the pane
+  title, a toast for notices, pills for persistent warnings, a two-pixel
+  gauge of the volume's usage in the footer; `[ui] theme_light` /
+  `theme_dark` follow the desktop's colour scheme live, and a theme's
+  `[effects] backdrop = "blur"` blurs what lies behind a dialog (the
+  default preset asks for it). Bridge 64 and 65.
+- **Plugins parametrised.** `file-icons` paints one-cell Nerd Font glyphs
+  (`style = "nerd"`, bundled in the window as a 3.8 KB subset) and takes
+  `dir-icon` and `unknown-icon`; two new columns plugins, `size-bar` (a
+  `█░` bar per file; `scale`, `width`, `relative-to`) and `age` (a glyph
+  per bucket and a short figure; `thresholds`, `glyphs`, `format`);
+  `git-status` takes `glyphs` (letters or symbols) and `ignored`.
 - **The chrome of an orthodox manager, derived and configurable** (ADR
   0106). A function-key bar on the last row of the terminal and a strip at
   the bottom of the window, read from the keymap of the screen that owns the

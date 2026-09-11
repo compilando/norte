@@ -160,9 +160,13 @@ pub fn used_ratio_for(
     let free = v.free_bytes?.min(total);
     // Precisión de f32 de sobra para una barra: el cociente cabe en 24 bits
     // mucho antes de que un píxel lo note.
-    #[allow(clippy::cast_precision_loss)]
-    let ratio = 1.0 - (free as f64 / total as f64);
-    Some(ratio.clamp(0.0, 1.0) as f32)
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "un cociente en [0, 1] para una barra de dos píxeles"
+    )]
+    let ratio = (1.0 - (free as f64 / total as f64)).clamp(0.0, 1.0) as f32;
+    Some(ratio)
 }
 
 /// El volumen MÁS PROFUNDO que contiene a `path`, solo para rutas locales.

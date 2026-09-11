@@ -630,6 +630,22 @@
             "string",
             "null"
           ]
+        },
+        "theme_dark": {
+          "default": null,
+          "description": "The theme the window paints when the desktop prefers a dark scheme;\nsee `theme_light`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "theme_light": {
+          "default": null,
+          "description": "The theme the WINDOW paints when the desktop prefers a light colour\nscheme (`prefers-color-scheme: light`): a preset name or a path, like\n`theme`. Absent = `theme` in both schemes. The terminal ignores it.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"

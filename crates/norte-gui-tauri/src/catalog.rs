@@ -68,6 +68,14 @@ pub struct HostCatalog {
     /// trae, y no traerlo es «no es el primero».
     #[serde(default)]
     pub first_run: bool,
+    /// `[ui] theme_light` / `theme_dark` ya resueltos a variables (spec
+    /// 2026-09-11, V6): el renderer aplica el que casa con
+    /// `prefers-color-scheme`, y `theme` cuando no hay variante para ese
+    /// lado. `None` = solo `theme`.
+    #[serde(default)]
+    pub theme_light: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub theme_dark: Option<BTreeMap<String, String>>,
 }
 
 /// `[ui] font`, `mono_font`, `font_size` y `reduce_motion`, para el renderer.
@@ -143,6 +151,8 @@ pub fn catalogo(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog
             .unwrap_or(250),
         appearance: Appearance::default(),
         first_run: false,
+        theme_light: None,
+        theme_dark: None,
     }
 }
 
@@ -169,9 +179,16 @@ impl HostCatalog {
 /// le da la forma que la webview espera.
 #[must_use]
 pub fn variables(theme: &Theme) -> BTreeMap<String, String> {
-    norte_ui_host::pickers::roles_de_tema(theme)
+    let mut v: BTreeMap<String, String> = norte_ui_host::pickers::roles_de_tema(theme)
         .into_iter()
-        .collect()
+        .collect();
+    // `[effects] backdrop` (spec 2026-09-11, V6): el único efecto que esta
+    // ventana interpreta hoy. Viaja como la variable que `#dialogs` lee;
+    // cualquier otro valor —o su ausencia— es el velo de siempre.
+    if theme.effect_str("backdrop") == Some("blur") {
+        v.insert("dialog-backdrop".to_owned(), "blur(6px)".to_owned());
+    }
+    v
 }
 
 #[cfg(test)]
@@ -214,5 +231,22 @@ mod tests {
             );
         }
         assert!(v.contains_key("fg"), "al menos el texto normal está");
+    }
+
+    /// `[effects] backdrop = "blur"` cruza como la variable del velo; un
+    /// tema sin efectos no la lleva, y el renderer cae al velo de siempre.
+    #[test]
+    fn el_desenfoque_del_tema_cruza_como_variable() {
+        let con = Theme::preset_default();
+        assert_eq!(
+            variables(&con).get("dialog-backdrop").map(String::as_str),
+            Some("blur(6px)"),
+            "el preset de fábrica lo pide"
+        );
+        let sin = Theme::preset("nord").expect("parsea").expect("preset");
+        assert!(
+            !variables(&sin).contains_key("dialog-backdrop"),
+            "sin `[effects]`, sin variable"
+        );
     }
 }

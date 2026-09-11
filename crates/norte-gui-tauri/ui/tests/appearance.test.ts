@@ -10,7 +10,8 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { FILA_POR_TAMANO, applyAppearance } from "../src/main";
+import { FILA_POR_TAMANO, applyAppearance, themeFor } from "../src/main";
+import type { HostCatalog } from "../src/types";
 
 const CSS = readFileSync(resolve(__dirname, "../src/style.css"), "utf8");
 
@@ -56,6 +57,31 @@ describe("la tipografía empaquetada y la configuración", () => {
     });
     expect(raiz.style.getPropertyValue("--mono")).toBe("Fira Code");
     expect(raiz.style.getPropertyValue("--cell-h")).toBe("22px");
+  });
+
+  it("el tema por esquema: la variante si la hay, y `theme` si no", () => {
+    const base: HostCatalog = {
+      bridge_version: 0,
+      instance_id: "i",
+      locale: "es",
+      strings: {},
+      theme: { fg: "#111111" },
+      measure: false,
+      theme_dark: { fg: "#eeeeee" },
+      theme_light: null,
+    };
+    expect(themeFor(base, true)).toEqual({ fg: "#eeeeee" });
+    // Sin variante clara, `theme`.
+    expect(themeFor(base, false)).toEqual({ fg: "#111111" });
+    const soloBase: HostCatalog = {
+      bridge_version: 0,
+      instance_id: "i",
+      locale: "es",
+      strings: {},
+      theme: { fg: "#111111" },
+      measure: false,
+    };
+    expect(themeFor(soloBase, true)).toEqual({ fg: "#111111" });
   });
 
   it("la fila por defecto es 22 px para 14 px de letra", () => {

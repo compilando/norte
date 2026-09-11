@@ -101,4 +101,14 @@ impl Theme {
             _ => None,
         }
     }
+
+    /// El valor de UN efecto, si es una cadena (`[effects] backdrop =
+    /// "blur"`). Para el frontend que lo interprete sin depender de `toml`.
+    #[must_use]
+    pub fn effect_str(&self, key: &str) -> Option<&str> {
+        match self.effects.as_ref()? {
+            toml::Value::Table(t) => t.get(key)?.as_str(),
+            _ => None,
+        }
+    }
 }

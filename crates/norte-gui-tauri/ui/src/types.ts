@@ -1403,6 +1403,12 @@ export interface HostCatalog {
   /** No hay `norte.toml` de usuario todavía (puente 63): el renderer abre el
    *  asistente de primer arranque al pintar la primera foto. */
   first_run?: boolean;
+  /** `[ui] theme_light` / `theme_dark` ya resueltos a variables (spec
+   *  2026-09-11, V6): el renderer aplica el que casa con
+   *  `prefers-color-scheme`, y `theme` cuando no hay variante para ese
+   *  lado. Ausente o `null` = solo `theme`. */
+  theme_light?: Record<string, string> | null;
+  theme_dark?: Record<string, string> | null;
 }
 
 /** Lo que esta ventana pinta y no es color. Cada campo `null` = no lo dice la

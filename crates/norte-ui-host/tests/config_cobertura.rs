@@ -60,6 +60,11 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         //     una ruta pide leer un fichero y eso corre dentro del actor
         //     (regla 2). Plan, fase 3.
         ui_theme: _,
+        //     Las variantes por esquema del escritorio (spec 2026-09-11, V6):
+        //     la cáscara las resuelve al arrancar y viajan en el catálogo ya
+        //     como variables; el renderer elige por `prefers-color-scheme`.
+        ui_theme_light: _,
+        ui_theme_dark: _,
 
         // ─── El host las lee para lanzar un programa: `openers.toml` manda en
         //     `pane.open` y `[ui] editor` en `pane.edit`, con el manejador del

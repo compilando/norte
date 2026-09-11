@@ -81,5 +81,34 @@ whether your terminal font shows icons. Esc keeps the defaults and never asks
 again. `ntc --setup` asks again; `NORTE_NO_WIZARD=1` keeps it closed. F9
 opens the menu in every preset but Krusader's, where it stays the terminal.
 
+The window
+----------
+
+The window carries its own typography: JetBrains Mono for everything that
+lines up in cells and Inter for menus and dialogs, 14 px on 22 px rows,
+bundled so it looks the same on every machine. `font`, `mono_font` and
+`font_size` under `[ui]` still win when set.
+
+Column headers paint in small caps, and dragging the right edge of a header
+sets that column's width: it is written to `[ui.columns]` as a `width`,
+which the terminal reads too. When the fixed columns would leave the name
+fewer than ten cells, the window drops columns from the right until they
+fit, as the terminal does.
+
+The pane title is a row of breadcrumbs — each segment is a button that goes
+there — and the footer carries a two-pixel gauge of the volume's usage,
+warning past 75 % and error past 90 %. A notice shows as a toast at the
+bottom right for `notice_seconds`; persistent warnings are pills.
+
+`theme_light` and `theme_dark` name the theme the window paints when the
+desktop prefers a light or a dark scheme; `theme` covers whichever is not
+set. A theme can ask for `backdrop = "blur"` under `[effects]` to blur what
+lies behind a dialog; the terminal ignores that block.
+
+Every row shows a mark checkbox on hover; clicking it toggles the mark
+without Ctrl. The `file-icons` extension can paint one-cell Nerd Font
+glyphs (`style = "nerd"`): the window bundles the glyphs it needs, a
+terminal needs a Nerd-patched font.
+
 > 💡 Every row on the settings screen says what it does and applies at once.
 > The file is the real interface; the screen is a way to edit it.

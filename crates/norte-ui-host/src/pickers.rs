@@ -22,6 +22,10 @@ use norte_proto::VPath;
 use crate::bridge::clamp_display;
 use crate::dto::{PickerRowView, PickerView, ThemeRoleView, ThemeView};
 
+/// Las claves de `[effects]` que la ventana interpreta (spec 2026-09-11,
+/// V6). Todo lo demás se enseña en la vista del tema como «sin soporte».
+pub const EFECTOS_DE_LA_VENTANA: &[&str] = &["backdrop"];
+
 /// Los roles del tema con su color, en el orden en que se nombran.
 ///
 /// La correspondencia es EXPLÍCITA y no automática: una variable de la hoja
@@ -107,7 +111,15 @@ impl HostTheme {
         Self {
             name: nombre.to_owned(),
             roles: roles_de_tema(theme),
-            effects: theme.effect_names().unwrap_or_default(),
+            // Los efectos que la ventana SÍ interpreta no se enseñan como
+            // «sin soporte»: `backdrop` (spec 2026-09-11, V6) lo traduce el
+            // catálogo de la ventana a una variable CSS.
+            effects: theme
+                .effect_names()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| !EFECTOS_DE_LA_VENTANA.contains(&e.as_str()))
+                .collect(),
         }
     }
 

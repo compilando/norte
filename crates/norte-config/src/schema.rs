@@ -182,6 +182,15 @@ pub struct UiSection {
     /// TOML theme (ADR 0020). When absent, use `default`.
     #[serde(default)]
     pub theme: Option<String>,
+    /// The theme the WINDOW paints when the desktop prefers a light colour
+    /// scheme (`prefers-color-scheme: light`): a preset name or a path, like
+    /// `theme`. Absent = `theme` in both schemes. The terminal ignores it.
+    #[serde(default)]
+    pub theme_light: Option<String>,
+    /// The theme the window paints when the desktop prefers a dark scheme;
+    /// see `theme_light`.
+    #[serde(default)]
+    pub theme_dark: Option<String>,
     /// Quick-search mode for `/`: `"filter"` narrows the listing (the default),
     /// while `"jump"` moves the cursor without changing the listing.
     ///

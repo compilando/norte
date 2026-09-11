@@ -19,7 +19,7 @@ import { esParaElCampo, keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
 import { Session } from "./session";
 import { BRIDGE_VERSION } from "./types";
-import type { Appearance, UiAction } from "./types";
+import type { Appearance, HostCatalog, UiAction } from "./types";
 
 /** Medidas del spike: latencia tecla→pintado. Las lee el arnés de la 3.6. */
 export interface Metrics {
@@ -83,8 +83,18 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const metrics: Metrics = { keyToPaint: [], scrollToPaint: [], updates: 0, resyncs: 0 };
   const session = new Session();
   const catalog = await port.catalog();
-  applyTheme(doc, catalog.theme);
+  let catalogoActual = catalog;
+  applyThemeFor(doc, catalog);
   applyAppearance(doc, catalog.appearance);
+  // El escritorio cambia de claro a oscuro y la ventana le sigue (V6): el
+  // catálogo ya trae las dos variantes resueltas, así que no hay que pedir
+  // nada al host, solo enchufar el otro juego de variables.
+  const w = doc.defaultView;
+  if (w !== null && typeof w.matchMedia === "function") {
+    w.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+      applyTheme(doc, themeFor(catalogoActual, e.matches));
+    });
+  }
   // El umbral de «te estoy haciendo esperar» viene del host, que lo saca del
   // crate compartido con el terminal. Aquí solo se enchufa como variable CSS:
   // escribirlo en la hoja de estilos sería un tercer sitio donde vive el
@@ -226,7 +236,8 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     void port
       .catalog()
       .then((cat) => {
-        applyTheme(doc, cat.theme);
+        catalogoActual = cat;
+        applyThemeFor(doc, cat);
         applyAppearance(doc, cat.appearance);
       })
       .catch((e: unknown) => {
@@ -405,6 +416,30 @@ function applyTheme(doc: Document, theme: Record<string, string>): void {
   for (const [name, value] of Object.entries(theme)) {
     doc.documentElement.style.setProperty(`--${name}`, value);
   }
+}
+
+/**
+ * El tema que toca según el escritorio (spec 2026-09-11, V6): la variante
+ * clara u oscura de `[ui] theme_light` / `theme_dark` si la hay para ese
+ * lado, y `[ui] theme` si no. Las tres llegan ya resueltas a variables: aquí
+ * no se sabe qué es un tema, solo cuál de los tres juegos enchufar.
+ */
+export function themeFor(cat: HostCatalog, dark: boolean): Record<string, string> {
+  const variante = dark ? cat.theme_dark : cat.theme_light;
+  return variante ?? cat.theme;
+}
+
+/** Si el escritorio pide oscuro. Sin `matchMedia` (un test), no. */
+function escritorioOscuro(doc: Document): boolean {
+  const w = doc.defaultView;
+  if (w === null || typeof w.matchMedia !== "function") {
+    return false;
+  }
+  return w.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function applyThemeFor(doc: Document, cat: HostCatalog): void {
+  applyTheme(doc, themeFor(cat, escritorioOscuro(doc)));
 }
 
 /** La proporción alto/tamaño de una fila. 22px de fila para 14px de letra es

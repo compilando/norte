@@ -281,6 +281,21 @@ const CATALOG: &[SettingDef] = &[
         kind: SettingKind::Bool,
         applies_live: true,
     },
+    // ─── El tema por esquema del escritorio (spec 2026-09-11, V6): solo la
+    //     ventana lo lee, pero el fichero es uno y la pantalla de ajustes
+    //     es la misma en los dos frontends.
+    SettingDef {
+        id: "ui.theme-light",
+        section: Section::General,
+        kind: SettingKind::Text,
+        applies_live: true,
+    },
+    SettingDef {
+        id: "ui.theme-dark",
+        section: Section::General,
+        kind: SettingKind::Text,
+        applies_live: true,
+    },
     SettingDef {
         id: "keymap.preset",
         section: Section::General,
@@ -400,6 +415,9 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         "ui.date-format" => cfg.common.ui_chrome.date_format().as_str().to_owned(),
         "ui.notice-seconds" => cfg.common.ui_chrome.notice_seconds().to_string(),
         "ui.dialog-buttons" => cfg.common.ui_chrome.dialog_buttons().to_string(),
+        // Vacío = sin variante: la ventana pinta `theme` en los dos esquemas.
+        "ui.theme-light" => cfg.common.ui_theme_light.clone().unwrap_or_default(),
+        "ui.theme-dark" => cfg.common.ui_theme_dark.clone().unwrap_or_default(),
         "keymap.preset" => cfg.common.preset.clone(),
         // Unreachable for anything in `CATALOG` (pinned by the coverage
         // test below); an id typo'd into `current_value` but not `CATALOG`
@@ -1443,9 +1461,15 @@ mod tests {
 
     #[test]
     fn activate_en_theme_name_cicla_sobre_la_lista_viva() {
-        // "ui.theme" es el id COMPLETO — no es substring de ningún otro id
-        // del catálogo (a diferencia de "ui.font", ver el test de abajo).
-        let mut s = only("ui.theme");
+        // "ui.theme" es prefijo de `ui.theme-light` y `ui.theme-dark` (spec
+        // 2026-09-11, V6): el filtro deja TRES filas, y el cursor queda en la
+        // primera, que por orden del catálogo es la del tema a secas.
+        let mut s = SettingsState::new(rows());
+        for c in "ui.theme".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.visible().len(), 3, "theme, theme-light y theme-dark");
+        assert_eq!(s.rows()[s.visible()[0]].name, t("setting-ui-theme-name"));
         let names = vec!["default".to_owned(), "nord".to_owned()];
         // El valor actual (default de S2) es "default": el próximo es "nord".
         let write = s.activate(&names, &[]).expect("ThemeName activa");

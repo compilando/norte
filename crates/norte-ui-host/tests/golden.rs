@@ -484,6 +484,7 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
 }
 
 /// Las demás: pantalla, teclado, diálogos y tasks.
+#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
 fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
     vec![
         ("focus_slot", UiAction::FocusSlot { slot_id: 2 }),
@@ -2428,7 +2429,7 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
     // Puente 65: migas e indicador de espacio (spec 2026-09-11, V5).
-    const FORMA: u64 = 4_635_105_071_315_551_863;
+    const FORMA: u64 = 1_308_015_479_219_455_546;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

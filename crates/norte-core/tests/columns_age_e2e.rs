@@ -104,7 +104,7 @@ fn age_buckets_a_fresh_file_as_today_and_an_old_one_as_older() {
     let old = dir.path().join("old.txt");
     std::fs::write(&old, b"then").expect("old");
     // Two years back, well past the last default edge (30 days).
-    let two_years = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 365 * 86_400);
+    let two_years = std::time::SystemTime::now() - std::time::Duration::from_hours(2 * 365 * 24);
     let f = std::fs::File::options()
         .write(true)
         .open(&old)
