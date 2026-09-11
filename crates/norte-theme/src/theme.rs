@@ -91,8 +91,14 @@ impl Theme {
     /// ```
     /// use norte_theme::Theme;
     ///
+    /// // El tema de fábrica declara uno: el desenfoque de los diálogos de
+    /// // la ventana (spec 2026-09-11, V6). El terminal lo ignora.
     /// let t = Theme::preset_default();
-    /// assert!(t.effect_names().is_none(), "el tema por defecto no declara efectos");
+    /// assert_eq!(t.effect_names().as_deref(), Some(&["backdrop".to_owned()][..]));
+    ///
+    /// // Uno que no declara ninguno no tiene nada que nombrar.
+    /// let nord = Theme::preset("nord").unwrap().unwrap();
+    /// assert!(nord.effect_names().is_none());
     /// ```
     #[must_use]
     pub fn effect_names(&self) -> Option<Vec<String>> {

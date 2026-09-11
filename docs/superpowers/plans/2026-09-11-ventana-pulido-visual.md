@@ -75,12 +75,19 @@ ventana y NO entra en `just ci`: correrlo tras cada bloque V.
 - [x] `[effects] backdrop` → `--dialog-backdrop`; `backdrop-filter` en
       `#dialogs`; el preset `default` lo pide.
 
-### V7: `thumbnail` — EN CIERRE
+### V7: `thumbnail` — HECHO (`0ae77319`, `40088af7`)
 - [x] ADR 0107: paquete `norte:thumbnail@0.1.0` (no bump de `norte:plugin`),
       `plugin.thumbnail` (proto 0.73.0), verificación en el plugin-host.
 - [x] Plugin `image-thumb`; el visor de la ventana lo pinta con «via».
-- [ ] Gate verde, `protocol-guardian` + `security-reviewer`, `just plugins force`.
+- [x] `protocol-guardian` (sin hallazgos), `security-reviewer` (1 MAJOR: los
+      bytes del guest llegaban a los decodificadores nativos de la webview
+      → el host los RE-CODIFICA; 1 MINOR: el motivo del guest, acotado).
 
 ### Cierre
 - [x] Ayuda `appearance` (en/es); changelog; memoria.
-- [ ] `just ci` y `just gui-ci` una vez; revisión; merge a `main`; `link-gui`.
+- [x] Revisión `rust-reviewer`: 3 MAJOR aplicados (fit de columnas contando
+      todas y con el suelo del host, `breadcrumb_activate` con generación,
+      límites del decodificador en `image-thumb`).
+- [x] `just ci` (lint, test 6439 + doctests, docs, cov 87,58 %) y
+      `just gui-ci` verdes.
+- [ ] Merge a `main` (sin pushear) y `just link-gui`.
