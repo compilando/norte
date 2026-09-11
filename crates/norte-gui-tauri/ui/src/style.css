@@ -95,6 +95,11 @@ body {
   overflow: hidden;
   cursor: pointer;
   unicode-bidi: isolate;
+  /* Un `<button>` centra su contenido: el número quedaba pegado a la
+     izquierda y la etiqueta en medio, y se leía «Ayuda 2 Renombrar 3».
+     Todo a la izquierda, número y etiqueta juntos, como en mc. */
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .keybar-cell:disabled {
@@ -144,7 +149,12 @@ body {
 
 .panelbar-button {
   font: inherit;
-  color: var(--status-fg, inherit);
+  /* `--fg`, no `--status-fg`: el de la barra de estado es texto OSCURO
+     sobre fondo vivo, y aquí el fondo es el del panel — en los temas
+     ámbar/CRT los botones cerrados salían invisibles (2026-09-11). Cerrado
+     = atenuado, como en la TUI. */
+  color: var(--fg);
+  opacity: 0.7;
   background: none;
   border: 0;
   padding: 0 6px;
@@ -171,11 +181,13 @@ body {
    la mitad de lo que se pregunta al mirar la barra. */
 .panelbar-button[data-state="open"] {
   color: var(--title-fg, inherit);
+  opacity: 1;
 }
 
 .panelbar-button[data-state="focused"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
+  opacity: 1;
 }
 
 .panelbar-attention {

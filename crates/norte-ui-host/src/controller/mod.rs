@@ -3573,6 +3573,10 @@ impl Estado {
             let stream = backend.list(dir.clone(), self.attrs_de(&dir)).await;
             let res = Self::primera_pagina(stream, id, token, buzon.clone()).await;
             self.aterriza_en(id, dir, res);
+            // El espacio libre del pie (spec 2026-09-10): también en el
+            // arranque, que no pasa por `aterrizar_listado`. Sin esto la
+            // ventana abría sin «libres» hasta la primera navegación.
+            self.pedir_volumenes_de_pie(backend_arc, buzon);
             // Lo mismo que hace el aterrizaje de una navegación, y que este
             // camino no hacía: el PRIMER directorio de un hueco se quedaba sin
             // capacidades hasta que el lector navegara a otro sitio. O sea que
