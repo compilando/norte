@@ -254,6 +254,9 @@ export function updateRow(
     const v = colVar(c.column);
     cell.style.width = `var(${v}, auto)`;
     cell.style.textAlign = `var(${v}-align, left)`;
+    // Una columna que la cabecera DESCARTÓ por no caber (`${v}-show: none`)
+    // se va de todas las filas a la vez, sin repintarlas.
+    cell.style.display = `var(${v}-show, block)`;
     nodes.push(cell);
   }
   // La casilla de marca va la PRIMERA: un hueco reservado que se pinta al

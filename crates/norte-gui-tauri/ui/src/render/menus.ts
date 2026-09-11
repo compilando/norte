@@ -505,6 +505,10 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
     dom.root.style.setProperty(`${v}-align`, c.align === "right" ? "right" : "left");
     el.style.width = `var(${v}, auto)`;
     el.style.textAlign = `var(${v}-align, left)`;
+    el.style.display = `var(${v}-show, block)`;
+    // Se vuelve a decidir en cada pintado: un hueco que se ensanchó recupera
+    // la columna que descartó cuando era estrecho.
+    dom.root.style.removeProperty(`${v}-show`);
     const grip = document.createElement("span");
     grip.className = "col-grip";
     grip.dataset["grip"] = c.id;
@@ -512,4 +516,44 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
     return el;
   });
   dom.header.replaceChildren(...nodes);
+  descartarLasQueNoCaben(dom, slot, this.cell().w);
+}
+
+/** El suelo del nombre, en celdas: `norte_frontend::columns::NAME_MIN`. */
+const NOMBRE_MIN = 10;
+
+/**
+ * La regla 2 del reparto compartido (`columns::layout`): si las columnas
+ * fijas no dejan al nombre su suelo, se descartan desde la MÁS A LA DERECHA
+ * hasta que quepan. Se hace aquí y no en el host porque el ancho útil del
+ * hueco en píxeles —bordes, relleno, tiradores— solo lo sabe quien pinta.
+ * Sin medida (un documento sin layout, como el de los tests) no se descarta
+ * nada: mejor una columna de más que un listado sin columnas.
+ */
+function descartarLasQueNoCaben(
+  dom: SlotDom,
+  slot: BrowserSlotView,
+  cellW: number,
+): void {
+  const total = dom.root.clientWidth;
+  if (total <= 0 || cellW <= 0) {
+    return;
+  }
+  // Relleno de la fila (6 px a cada lado), el borde del hueco, la casilla
+  // de marca (1,1 em ≈ una celda y media) y una celda de separación por
+  // columna.
+  const fijas = slot.columns.filter((c) => c.id !== "name" && c.width !== null);
+  let libre = total - 14 - cellW * 1.5 - cellW * slot.columns.length;
+  for (const c of fijas) {
+    libre -= (c.width ?? 0) * cellW;
+  }
+  const minimo = NOMBRE_MIN * cellW;
+  for (let i = fijas.length - 1; i >= 0 && libre < minimo; i -= 1) {
+    const c = fijas[i];
+    if (c === undefined) {
+      break;
+    }
+    dom.root.style.setProperty(`${colVar(c.id)}-show`, "none");
+    libre += (c.width ?? 0) * cellW + cellW;
+  }
 }
