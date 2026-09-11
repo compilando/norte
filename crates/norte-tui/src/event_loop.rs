@@ -654,15 +654,22 @@ pub async fn run(
                 // ve (mismo criterio anti-stale que el drain-guard de
                 // `apply_fill_msg` para búsqueda virtual).
                 if let Some(f) = work.decorate.remove(slot)
-                    && let Some((map, cols)) = res
-                    && let Some(p) = app.panes.browser_mut(f.slot)
-                    && p.dir() == &f.dir
+                    && let Some((map, cols, headers)) = res
                 {
-                    p.set_decorations(map);
-                    // #117-follow-up: los valores de columnas plugin:
-                    // viajan en el mismo fetch y comparten el guard
-                    // anti-stale.
-                    p.set_plugin_columns(cols);
+                    // Los RÓTULOS no son del listado: dicen cómo se llama una
+                    // columna, y eso vale aunque esta respuesta llegue tarde
+                    // o para otro directorio. Van al modelo compartido, fuera
+                    // del guard anti-stale de las celdas.
+                    app.columns.apply_plugin_headers(headers);
+                    if let Some(p) = app.panes.browser_mut(f.slot)
+                        && p.dir() == &f.dir
+                    {
+                        p.set_decorations(map);
+                        // #117-follow-up: los valores de columnas plugin:
+                        // viajan en el mismo fetch y comparten el guard
+                        // anti-stale.
+                        p.set_plugin_columns(cols);
+                    }
                 }
             }
             (slot, res) = std::future::poll_fn(|cx| {

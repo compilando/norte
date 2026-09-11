@@ -245,7 +245,13 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let (generacion, slot, dir, adornos, celdas) = datos;
+        let (generacion, slot, dir, adornos, celdas, rotulos) = datos;
+        // Los rótulos son del PLUGIN, no del hueco: valen para las cabeceras
+        // de todos, y se quedan aunque esta tanda se descarte por vieja —
+        // cómo se llama una columna no caduca con un listado. Viven en el
+        // modelo COMPARTIDO, que es quien resuelve el estilo de una columna
+        // para los dos frontends.
+        let cambian_cabeceras = self.columnas.apply_plugin_headers(rotulos);
         let hueco = self.huecos.get_mut(&slot)?;
         hueco.adornando = false;
         if generacion != hueco.gen_adornos {
@@ -260,8 +266,12 @@ impl Estado {
         }
         if adornos.is_empty() && celdas.is_empty() {
             // Ningún decorador consentido y ninguna columna de plugin. No es
-            // un fallo y no repinta nada.
-            return None;
+            // un fallo y no repinta nada — salvo que hayan llegado rótulos
+            // nuevos, que solo mueven las cabeceras.
+            return cambian_cabeceras.then(|| {
+                let cambios = self.cabeceras_de_todos();
+                self.parche(cambios)
+            });
         }
         hueco.adornos.extend(adornos);
         for (columna, valores) in celdas {
@@ -276,8 +286,25 @@ impl Estado {
         hueco.pane.set_decorations(hueco.adornos.clone());
         hueco.pane.set_plugin_columns(hueco.celdas_plugin.clone());
         // Las FILAS, que es lo único que cambia: una insignia no mueve el
-        // cursor ni el directorio.
-        Some(self.parche_filas())
+        // cursor ni el directorio. Con rótulos nuevos viajan también las
+        // cabeceras de TODOS los huecos: cómo se llama una columna no es de
+        // un listado.
+        let mut cambios = vec![self.cambio_de_filas()];
+        if cambian_cabeceras {
+            cambios.extend(self.cabeceras_de_todos());
+        }
+        Some(self.parche(cambios))
+    }
+
+    /// La cabecera de cada hueco de listado, para un parche.
+    pub(super) fn cabeceras_de_todos(&self) -> Vec<ViewChange> {
+        self.huecos
+            .iter()
+            .map(|(id, h)| ViewChange::Columns {
+                slot_id: *id,
+                columns: self.cabeceras(h),
+            })
+            .collect()
     }
 
     /// Un lote más del listado que se está drenando por detrás.

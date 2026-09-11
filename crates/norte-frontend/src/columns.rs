@@ -1447,6 +1447,13 @@ pub struct ColumnsSettings {
         String,
         std::collections::BTreeMap<String, norte_config::ColumnSpec>,
     >,
+    /// El rótulo que su MANIFIESTO le puso a cada columna de plugin, por id
+    /// de columna (`plugin:acme.git/status`), ya saneado. No sale de la
+    /// configuración sino del catálogo vivo de plugins, así que lo instala
+    /// el frontend cuando lo recibe ([`Self::apply_plugin_headers`]); sin
+    /// él la cabecera enseñaría el id, que es lo que el lector menos
+    /// reconoce.
+    plugin_headers: std::collections::BTreeMap<String, String>,
     /// Ids configurados que NO parsean (diagnóstico para doctor).
     pub invalid: Vec<String>,
     /// Ids `plugin:` configurados MÁS ALLÁ del cap de petición
@@ -1580,6 +1587,14 @@ impl ColumnsSettings {
         if let Some(t) = self.default_time {
             style.time_format = t;
         }
+        // El rótulo del manifiesto, DEBAJO de los specs: `[ui.columns]
+        // header` sigue mandando, y el id solo aparece cuando no hay ni lo
+        // uno ni lo otro.
+        if matches!(id, ColumnId::Plugin { .. }) {
+            style
+                .header
+                .clone_from(&self.plugin_headers.get(&key).cloned());
+        }
         let global = self.specs_global.get(&key);
         let scoped = self.specs_schemes.get(scheme).and_then(|m| m.get(&key));
         for spec in [global, scoped].into_iter().flatten() {
@@ -1628,6 +1643,29 @@ impl ColumnsSettings {
     /// a nivel de scheme sigue ganando (persistencia por scheme = diferido).
     pub fn apply_format(&mut self, id: &str, format: &str) {
         self.specs_global.entry(id.to_owned()).or_default().format = Some(format.to_owned());
+    }
+
+    /// Instala los rótulos que los MANIFIESTOS dan a las columnas de plugin
+    /// (spec 2026-09-11): `{ "plugin:acme.git/status": "Estado" }`, ya
+    /// saneados por quien los recibe del catálogo. Los dos frontends llaman
+    /// aquí con lo que su sonda de columnas ya pide, y así la cabecera se
+    /// llama igual en los dos — `[ui.columns] header` sigue por encima.
+    ///
+    /// Solo AÑADE: un catálogo que llega sin una columna no borra su rótulo,
+    /// porque el catálogo se pide por tandas y una tanda no es la verdad
+    /// entera.
+    pub fn apply_plugin_headers(
+        &mut self,
+        headers: impl IntoIterator<Item = (String, String)>,
+    ) -> bool {
+        let mut cambio = false;
+        for (id, rotulo) in headers {
+            if self.plugin_headers.get(&id) != Some(&rotulo) {
+                self.plugin_headers.insert(id, rotulo);
+                cambio = true;
+            }
+        }
+        cambio
     }
 
     /// Aplica EN MEMORIA un ancho fijo (spec 2026-09-11, V2: arrastrar el
@@ -2287,6 +2325,46 @@ pub fn header_label_in(
 #[cfg(test)]
 mod style_tests {
     use super::*;
+
+    /// El rótulo del MANIFIESTO de una columna de plugin se usa en la
+    /// cabecera; `[ui.columns] header` sigue ganándole, y sin ninguno de los
+    /// dos queda el id, que es lo que se enseñaba siempre.
+    #[test]
+    fn el_rotulo_del_manifiesto_nombra_una_columna_de_plugin() {
+        let id: ColumnId = "plugin:acme.git/status".parse().expect("id de plugin");
+        let mut s = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        let rotulo = |s: &ColumnsSettings| {
+            header_label_in(
+                &id,
+                &s.style_for_id("file", &id, None),
+                None,
+                norte_i18n::Lang::Es,
+            )
+        };
+        assert_eq!(rotulo(&s), "acme.git/status", "sin catálogo, el id");
+
+        assert!(
+            s.apply_plugin_headers([("plugin:acme.git/status".to_owned(), "Estado".to_owned())])
+        );
+        assert_eq!(rotulo(&s), "Estado");
+        assert!(
+            !s.apply_plugin_headers([("plugin:acme.git/status".to_owned(), "Estado".to_owned())]),
+            "el mismo rótulo otra vez no es un cambio"
+        );
+
+        // El del usuario manda sobre el del manifiesto.
+        let mut cfg = norte_config::ColumnsConfig::default();
+        cfg.specs.insert(
+            "plugin:acme.git/status".to_owned(),
+            norte_config::ColumnSpec {
+                header: Some("Git".to_owned()),
+                ..Default::default()
+            },
+        );
+        let mut con_spec = ColumnsSettings::resolve(&cfg);
+        con_spec.apply_plugin_headers([("plugin:acme.git/status".to_owned(), "Estado".to_owned())]);
+        assert_eq!(rotulo(&con_spec), "Git");
+    }
 
     #[test]
     fn style_for_aplica_spec_global_y_scheme_gana() {

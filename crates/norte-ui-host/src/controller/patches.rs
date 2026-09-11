@@ -184,13 +184,13 @@ impl Estado {
                 .await
                 .unwrap_or_default();
             let adornos = norte_frontend::merge_decorations(&candidatos, &crudas);
-            let celdas = celdas_de_plugin(&backend, &columnas, &candidatos, || {
+            let (celdas, rotulos) = celdas_de_plugin(&backend, &columnas, &candidatos, || {
                 cancelar.load(std::sync::atomic::Ordering::SeqCst)
             })
             .await;
             let _ = buzon
                 .send(Mensaje::Fondo(Box::new(Fondo::Adornos(Box::new((
-                    generacion, slot, dir, adornos, celdas,
+                    generacion, slot, dir, adornos, celdas, rotulos,
                 ))))))
                 .await;
         });
@@ -412,7 +412,15 @@ impl Estado {
 
     /// Lo que cambia una marca o un scroll: las filas visibles.
     pub(super) fn parche_filas(&mut self) -> BridgeEnvelope<UiUpdate> {
-        let cambio = ViewChange::Rows {
+        let cambio = self.cambio_de_filas();
+        let cabecera = self.cabecera_de(self.activo(), self.hueco());
+        self.parche(vec![cambio, cabecera])
+    }
+
+    /// El cambio de FILAS del hueco activo, sin envolver: para quien tenga
+    /// que mandarlo junto a otros en un mismo parche.
+    pub(super) fn cambio_de_filas(&self) -> ViewChange {
+        ViewChange::Rows {
             slot_id: self.activo(),
             generation: self.generacion(),
             first_visible: self.hueco().primera_visible,
@@ -422,9 +430,7 @@ impl Estado {
             // mueve entradas dentro y fuera del listado, o sea que el total y
             // la altura del desplazamiento se mueven con ellas.
             total_rows: Some(self.hueco().pane.entries().len() as u64),
-        };
-        let cabecera = self.cabecera_de(self.activo(), self.hueco());
-        self.parche(vec![cambio, cabecera])
+        }
     }
 
     pub(super) fn fila(&self, hueco: &Hueco, i: usize, e: &Entry) -> RowView {

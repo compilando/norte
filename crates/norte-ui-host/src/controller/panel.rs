@@ -410,6 +410,9 @@ impl Estado {
                 // deja poner rótulo propio, formato, alineación y ancho por
                 // columna, y pidiendo `default_for_id` todo eso estaba muerto
                 // en esta ventana mientras el terminal lo honraba.
+                // El rótulo del manifiesto de una columna de plugin viene
+                // dentro, por `apply_plugin_headers`: sin él la cabecera
+                // enseñaba el id (`ORG.NORTE.SIZE-BAR/BAR` en vez de «Size»).
                 let estilo = self.columnas.style_for_id(&esquema, id, catalogo);
                 let ordena = sort_column_id(id);
                 let sort = ordena.filter(|c| *c == spec.column).map(|_| {

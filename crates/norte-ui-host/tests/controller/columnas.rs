@@ -135,6 +135,68 @@ pub(super) fn arbol_grande_con_plugins(n: usize) -> Arc<Falso> {
 /// multiplica ese precio por el tamaño del directorio, y para nada — el
 /// renderer solo puede pintar su ventana. Es donde esto se separa del TUI,
 /// que decora todo lo cargado porque su pane no declara ventana.
+/// Lo que un plugin contesta LLEGA a la celda de su fila, y su cabecera se
+/// llama como el manifiesto dice (`[[contributions.columns]] header`) y no
+/// como su id. Hasta aquí solo se comprobaba que la columna se PIDIERA.
+#[tokio::test]
+async fn la_columna_de_un_plugin_llega_a_la_fila_y_se_llama_como_su_manifiesto() {
+    let backend = arbol_grande_con_plugins(3);
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: columnas_de(&["name", "plugin:acme.git/status"]),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::SetVisibleRange {
+        slot_id: 1,
+        first: 0,
+        count: 20,
+    })
+    .await
+    .expect("host vivo");
+
+    let foto = esperar_foto(&h, &mut sub, "la celda del plugin llegue", |f| {
+        listado(f)
+            .rows
+            .iter()
+            .any(|r| r.cells.iter().any(|c| c.text.as_deref() == Some("limpio")))
+    })
+    .await;
+    let b = listado(&foto);
+    let columna = b
+        .columns
+        .iter()
+        .find(|c| c.id == "plugin:acme.git/status")
+        .expect("la columna configurada se pinta");
+    assert_eq!(
+        columna.label, "Estado",
+        "el rótulo del manifiesto, no el id crudo"
+    );
+    let fila = &b.rows[0];
+    let celda = fila
+        .cells
+        .iter()
+        .find(|c| c.column == "plugin:acme.git/status")
+        .expect("la fila lleva la celda de esa columna");
+    assert_eq!(celda.text.as_deref(), Some("limpio"));
+}
+
 #[tokio::test]
 async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
     const TOTAL: usize = 2000;

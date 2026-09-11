@@ -148,6 +148,11 @@ pub fn spawn_compare_stat_probe(
 pub type PluginColumnValues =
     std::collections::HashMap<String, std::collections::HashMap<VPath, String>>;
 
+/// El rótulo que su MANIFIESTO le da a cada columna de plugin, por id
+/// Display, ya saneado: lo que `ColumnsSettings::apply_plugin_headers`
+/// instala para que la cabecera no enseñe el id.
+pub type PluginColumnHeaders = std::collections::BTreeMap<String, String>;
+
 /// Un fetch de decoraciones y columnas de plugin en vuelo, por HUECO.
 pub struct DecorateFetch {
     /// El HUECO al que va, no la posición: una respuesta tardía tiene que
@@ -159,6 +164,7 @@ pub struct DecorateFetch {
     pub rx: tokio::sync::oneshot::Receiver<(
         std::collections::HashMap<VPath, norte_frontend::Decoration>,
         PluginColumnValues,
+        PluginColumnHeaders,
     )>,
 }
 
@@ -290,8 +296,9 @@ pub fn spawn_decorate_fetch(
         // Review MINOR-1 (regla 3 en espíritu): un fetch SUPERADO (el run
         // loop pisó el slot → rx dropeado) corta antes de cada RPC restante
         // en vez de gastar hasta 8 llamadas cuyo send fallará igual.
-        let cols = fetch_plugin_columns(&b, &plugin_cols, &paths, || tx.is_closed()).await;
-        let _ = tx.send((merged, cols));
+        let (cols, headers) =
+            fetch_plugin_columns(&b, &plugin_cols, &paths, || tx.is_closed()).await;
+        let _ = tx.send((merged, cols, headers));
     });
     Some(DecorateFetch { slot, dir, rx })
 }
@@ -309,19 +316,40 @@ async fn fetch_plugin_columns(
     requested: &[(String, String)],
     paths: &[VPath],
     superseded: impl Fn() -> bool,
-) -> PluginColumnValues {
+) -> (PluginColumnValues, PluginColumnHeaders) {
     let mut out = std::collections::HashMap::new();
+    let mut headers = std::collections::BTreeMap::new();
     if requested.is_empty() {
-        return out;
+        return (out, headers);
     }
     let Ok(list) = backend.plugins_list().await else {
-        return out;
+        return (out, headers);
     };
     for (plugin, column) in
         norte_frontend::columns::validated_plugin_requests(requested, &list.plugins)
     {
+        // El rótulo que su manifiesto le puso, para que la cabecera no diga
+        // el id. Texto de un plugin: enmascarado y acotado como cualquier
+        // cabecera.
+        if let Some(h) = list
+            .plugins
+            .iter()
+            .find(|p| p.id == plugin)
+            .and_then(|p| p.columns.iter().find(|c| c.id == column))
+        {
+            let sane: String = norte_frontend::columns::sanitize_header(&h.header)
+                .chars()
+                .take(norte_frontend::columns::HEADER_MAX_CHARS)
+                .collect();
+            if !sane.is_empty() {
+                headers.insert(
+                    norte_frontend::columns::plugin_display_id(&plugin, &column),
+                    sane,
+                );
+            }
+        }
         if superseded() {
-            return out;
+            return (out, headers);
         }
         let raw = backend
             .plugin_column_values(&plugin, &column, paths)
@@ -333,5 +361,5 @@ async fn fetch_plugin_columns(
             sanitized,
         );
     }
-    out
+    (out, headers)
 }

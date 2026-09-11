@@ -757,6 +757,9 @@ type Adornos = (
     VPath,
     std::collections::HashMap<VPath, norte_frontend::Decoration>,
     std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
+    // El rótulo que el manifiesto le puso a cada columna de plugin, ya
+    // saneado: la cabecera lo prefiere a su id.
+    std::collections::BTreeMap<String, String>,
 );
 
 enum Fondo {
@@ -1651,19 +1654,44 @@ async fn celdas_de_plugin(
     pedidas: &[(String, String)],
     paths: &[VPath],
     superado: impl Fn() -> bool,
-) -> std::collections::HashMap<String, std::collections::HashMap<VPath, String>> {
+) -> (
+    std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
+    std::collections::BTreeMap<String, String>,
+) {
     let mut out = std::collections::HashMap::new();
+    let mut rotulos = std::collections::BTreeMap::new();
     if pedidas.is_empty() {
-        return out;
+        return (out, rotulos);
     }
     let Ok(lista) = backend.plugin_list().await else {
-        return out;
+        return (out, rotulos);
     };
     for (plugin, columna) in
         norte_frontend::columns::validated_plugin_requests(pedidas, &lista.plugins)
     {
+        // El RÓTULO que el manifiesto le puso, para que la cabecera no diga
+        // el id (`acme.git/status`). Texto de un plugin: se enmascara y se
+        // acota como cualquier cabecera. Un manifiesto que lo deja vacío se
+        // queda sin rótulo y la cabecera cae al id, como antes.
+        if let Some(h) = lista
+            .plugins
+            .iter()
+            .find(|p| p.id == plugin)
+            .and_then(|p| p.columns.iter().find(|c| c.id == columna))
+        {
+            let sano: String = norte_frontend::columns::sanitize_header(&h.header)
+                .chars()
+                .take(norte_frontend::columns::HEADER_MAX_CHARS)
+                .collect();
+            if !sano.is_empty() {
+                rotulos.insert(
+                    norte_frontend::columns::plugin_display_id(&plugin, &columna),
+                    sano,
+                );
+            }
+        }
         if superado() {
-            return out;
+            return (out, rotulos);
         }
         let crudos = backend
             .plugin_column_values(plugin.clone(), columna.clone(), paths.to_vec())
@@ -1675,7 +1703,7 @@ async fn celdas_de_plugin(
             sanos,
         );
     }
-    out
+    (out, rotulos)
 }
 
 /// Cómo se llama una columna en el selector, y si eso difiere de lo real.
