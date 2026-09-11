@@ -62,18 +62,64 @@ pub enum State {
     Ignored,
 }
 
+/// Con qué se pinta cada estado (`[config] glyphs`, spec 2026-09-11 V4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Glyphs {
+    /// Las letras de `git status --short`: `M`, `D`, `?`, `!`.
+    #[default]
+    Letters,
+    /// Símbolos de una celda: `●` modificado, `✖` borrado, `+` nuevo, `·`
+    /// ignorado. Se leen de un vistazo y no se confunden con un nombre.
+    Symbols,
+}
+
+/// Cómo se pinta la columna: los glifos y si los ignorados se marcan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Style {
+    pub glyphs: Glyphs,
+    /// `false` = un fichero ignorado se pinta como limpio. Con `.gitignore`
+    /// grandes la marca se repite en media pantalla y deja de decir nada.
+    pub hide_ignored: bool,
+}
+
+impl Style {
+    /// Desde los dos valores de `[config]` tal como los da el host.
+    #[must_use]
+    pub fn parse(glyphs: Option<&str>, ignored: Option<&str>) -> Self {
+        Self {
+            glyphs: match glyphs {
+                Some("symbols") => Glyphs::Symbols,
+                _ => Glyphs::Letters,
+            },
+            hide_ignored: matches!(ignored, Some("false")),
+        }
+    }
+}
+
 impl State {
-    /// La celda que ve el usuario. `Clean` no pinta nada: una columna llena de
-    /// marcas iguales no dice nada.
+    /// La celda que ve el usuario, con las letras de siempre. `Clean` no
+    /// pinta nada: una columna llena de marcas iguales no dice nada.
     #[must_use]
     pub fn cell(self) -> Option<String> {
-        match self {
-            Self::Clean => None,
-            Self::Modified => Some("M".to_string()),
-            Self::Deleted => Some("D".to_string()),
-            Self::Untracked => Some("?".to_string()),
-            Self::Ignored => Some("!".to_string()),
-        }
+        self.cell_with(Style::default())
+    }
+
+    /// La celda que ve el usuario, con el estilo configurado.
+    #[must_use]
+    pub fn cell_with(self, style: Style) -> Option<String> {
+        let glyph = match (self, style.glyphs) {
+            (Self::Clean, _) => return None,
+            (Self::Ignored, _) if style.hide_ignored => return None,
+            (Self::Modified, Glyphs::Letters) => "M",
+            (Self::Deleted, Glyphs::Letters) => "D",
+            (Self::Untracked, Glyphs::Letters) => "?",
+            (Self::Ignored, Glyphs::Letters) => "!",
+            (Self::Modified, Glyphs::Symbols) => "●",
+            (Self::Deleted, Glyphs::Symbols) => "✖",
+            (Self::Untracked, Glyphs::Symbols) => "+",
+            (Self::Ignored, Glyphs::Symbols) => "·",
+        };
+        Some(glyph.to_string())
     }
 
     /// Cuál de dos estados manda al agregar un directorio. Lo más fuerte gana:
@@ -110,13 +156,54 @@ pub fn status_for(
     names: &[Vec<u8>],
     index_mtime_sec: i64,
 ) -> Vec<Option<String>> {
+    status_for_with(
+        index,
+        ignores,
+        loc,
+        prefix,
+        names,
+        index_mtime_sec,
+        Style::default(),
+    )
+}
+
+/// [`status_for`] con el estilo configurado (`[config] glyphs`/`ignored`).
+pub fn status_for_with(
+    index: &GitIndex,
+    ignores: &Ignores,
+    loc: &dyn Location,
+    prefix: &[u8],
+    names: &[Vec<u8>],
+    index_mtime_sec: i64,
+    style: Style,
+) -> Vec<Option<String>> {
     names
         .iter()
         .map(|name| {
             let rel = join(prefix, name);
-            state_of(index, ignores, loc, &rel, index_mtime_sec).cell()
+            state_of(index, ignores, loc, &rel, index_mtime_sec).cell_with(style)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+
+    #[test]
+    fn el_estilo_cambia_el_glifo_y_puede_callar_los_ignorados() {
+        assert_eq!(State::Modified.cell(), Some("M".to_string()));
+        let simbolos = Style::parse(Some("symbols"), Some("true"));
+        assert_eq!(State::Modified.cell_with(simbolos), Some("●".to_string()));
+        assert_eq!(State::Deleted.cell_with(simbolos), Some("✖".to_string()));
+        assert_eq!(State::Untracked.cell_with(simbolos), Some("+".to_string()));
+        assert_eq!(State::Ignored.cell_with(simbolos), Some("·".to_string()));
+        assert_eq!(State::Clean.cell_with(simbolos), None, "limpio no pinta");
+        let sin_ignorados = Style::parse(Some("letters"), Some("false"));
+        assert_eq!(State::Ignored.cell_with(sin_ignorados), None);
+        assert_eq!(State::Untracked.cell_with(sin_ignorados), Some("?".to_string()));
+        assert_eq!(Style::parse(None, None), Style::default(), "sin config, lo de siempre");
+    }
 }
 
 fn join(prefix: &[u8], name: &[u8]) -> Vec<u8> {

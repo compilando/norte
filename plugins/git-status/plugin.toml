@@ -2,7 +2,7 @@
 id = "org.norte.git-status"
 name = "Git status"
 publisher = "norte"
-version = "0.1.0"
+version = "0.2.0"
 category = "columns"
 description = "Marca en el panel qué ficheros cambiaron respecto al índice de git."
 
@@ -16,3 +16,18 @@ header = "S"
 # fuera de alcance (ADR 0057).
 location = "read"
 location-root-marker = ".git"
+
+# Las letras de `git status --short` (`M`, `D`, `?`, `!`) o símbolos de una
+# celda (`●`, `✖`, `+`, `·`), que se leen de un vistazo.
+[config.glyphs]
+type = "enum"
+values = ["letters", "symbols"]
+default = "letters"
+description = "Cómo se marca cada estado: letras de git, o símbolos."
+
+# Con `.gitignore` grandes la marca de ignorado se repite en media pantalla
+# y deja de decir nada: apágala y un ignorado se pinta como limpio.
+[config.ignored]
+type = "bool"
+default = true
+description = "Marcar también los ficheros ignorados."

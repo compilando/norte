@@ -1,0 +1,28 @@
+# `org.norte.size-bar`: the size of each file as a small bar in a column, so
+# the eye finds the big ones without reading numbers (spec 2026-09-11, V4).
+#
+# Not a workspace member, like every guest: own lockfile, own profile,
+# compiles to `wasm32-wasip2`. The bar in `lib.rs` is pure and has its own
+# tests on the host — hence `rlib` next to `cdylib`.
+[workspace]
+
+[package]
+name = "size-bar"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "File sizes as bars, a norte columns plugin"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Guest-side bindings from the same WIT the host serves (`wit` is a symlink
+# to `crates/norte-plugin-host/wit`).
+wit-bindgen = "0.46"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true

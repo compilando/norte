@@ -1,0 +1,43 @@
+[plugin]
+id = "org.norte.size-bar"
+name = "Size bar"
+publisher = "norte"
+version = "0.1.0"
+category = "columns"
+description = "Each file's size as a small bar, so the big ones stand out without reading numbers."
+
+# Add it to a listing as `plugin:org.norte.size-bar/bar` (the columns picker
+# offers it). One cell per row: `█` for the filled part, `░` for the rest.
+[[contributions.columns]]
+id = "bar"
+header = "Size"
+
+# It only asks the size of each entry (`stat`) under the directory being
+# listed, through the opaque token. It never reads a byte of content.
+[capabilities]
+location = "read"
+
+# `log` (the default) spreads sizes from bytes to gigabytes over the bar;
+# `linear` is proportional, so everything but the biggest file is a stub.
+[config.scale]
+type = "enum"
+values = ["log", "linear"]
+default = "log"
+description = "How a size maps to bar length: logarithmic, or proportional."
+
+# Cells in the bar.
+[config.width]
+type = "int"
+default = 5
+min = 3
+max = 8
+description = "Width of the bar, in cells."
+
+# `page`: the biggest file on the visible page fills the bar, so the bar
+# always says «relative to what you see». `absolute`: one gibibyte fills it,
+# so a bar means the same in every directory.
+[config.relative-to]
+type = "enum"
+values = ["page", "absolute"]
+default = "page"
+description = "What fills the bar: the biggest file on the page, or one gibibyte."

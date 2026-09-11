@@ -21,7 +21,7 @@ mod guest {
     };
     use norte::host::host_config;
 
-    use crate::icons::{Class, Style, icon_for};
+    use crate::icons::{Class, Style, icon_with};
 
     struct FileIcons;
 
@@ -32,8 +32,12 @@ mod guest {
             // then the least surprising answer, not a second default.
             let style = match host_config::get("style").as_deref() {
                 Some("ascii") => Style::Ascii,
+                Some("nerd") => Style::Nerd,
                 _ => Style::Emoji,
             };
+            // The two user overrides; empty (the default) means "none".
+            let dir_icon = host_config::get("dir-icon").unwrap_or_default();
+            let unknown = host_config::get("unknown-icon").unwrap_or_default();
             entries
                 .iter()
                 .map(|e| {
@@ -43,7 +47,8 @@ mod guest {
                         EntryKind::File | EntryKind::Other => Class::File,
                     };
                     Decoration {
-                        badge: icon_for(&e.name, class, style).map(str::to_owned),
+                        badge: icon_with(&e.name, class, style, &dir_icon, &unknown)
+                            .map(str::to_owned),
                         role: None,
                     }
                 })
