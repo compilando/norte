@@ -9,7 +9,9 @@ background       = { bg = "#100c04" }
 regular          = { fg = "#ffb000" }
 selection           = { fg = "#100c04", bg = "#ffb000" }
 selection-unfocused = { fg = "#ffe0a0", bg = "#4f3a13" }
-button              = { fg = "#100c04", bg = "#ffb000" }
+# Un ámbar más oscuro que la barra de estado: la fila de teclas va justo
+# encima de ella, y con el mismo par se leían como una sola franja.
+button              = { fg = "#100c04", bg = "#c47d00" }
 border-focus     = { fg = "#ffb000", bold = true }
 border-unfocused = { fg = "#8f6a1a", dim = true }
 modal-border     = { fg = "#e69a00" }

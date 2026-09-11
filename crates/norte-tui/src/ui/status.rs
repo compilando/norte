@@ -158,6 +158,27 @@ fn compose(app: &App, area: Rect) -> Composed {
     c
 }
 
+/// Una ruta de menos de tantas celdas no dice dónde estás: con un aviso
+/// persistente que la dejara más corta, el aviso se queda la línea entera,
+/// como hacía siempre.
+const RUTA_LEGIBLE: usize = 12;
+
+/// Las columnas del indicador de sesión cuando el aviso persistente acaba
+/// en la celda `fin` (exclusiva, relativa a la barra): el indicador cierra
+/// el aviso (`persistent_banner`), así que son sus últimas celdas. `None`
+/// si no hay indicador o no cabe ENTERO: media palabra no es un indicador.
+fn zona_de_sesion(app: &App, area: Rect, fin: usize) -> Option<(u16, u16)> {
+    let badge = app.session_banner()?;
+    let ancho = cells(&badge);
+    let x0 = area
+        .x
+        .saturating_add(u16::try_from(fin.saturating_sub(ancho)).unwrap_or(u16::MAX));
+    let x1 = area
+        .x
+        .saturating_add(u16::try_from(fin.saturating_sub(1)).unwrap_or(u16::MAX));
+    (x1 < area.x.saturating_add(area.width)).then_some((x0, x1))
+}
+
 /// La línea de estado sin la insignia, y las columnas del indicador de
 /// sesión si va en ella.
 #[expect(
@@ -262,31 +283,20 @@ fn compose_line(app: &App, area: Rect) -> Composed {
         }
     } else if let Some(lua) = &app.lua_status {
         format!(" {lua}{seq}")
-    } else if let Some(warn) = app.persistent_banner() {
+    } else {
         // #44: sesión remota degradada a texto plano, y #177: sesión que muta
         // sin quedar registrada en el journal. PERSISTENTES (como
         // `search-status-failed`): sobreviven a las teclas — sin `message`, sin
         // búsqueda viva y sin hook Lua siguen avisando en cada frame.
         // H3d: la frase se COMPONE aquí desde el valor estructurado (una
         // conexión: la nombra; varias: cuántas), en vez de guardarse ya escrita.
-        // El de la sesión cierra la línea (`persistent_banner`), así que sus
-        // columnas son las últimas del aviso: es lo que el ratón pulsa.
-        if let Some(badge) = app.session_banner() {
-            let ancho = cells(&badge);
-            let fin = 1 + cells(&warn);
-            let x0 = area
-                .x
-                .saturating_add(u16::try_from(fin - ancho).unwrap_or(u16::MAX));
-            let x1 = area
-                .x
-                .saturating_add(u16::try_from(fin - 1).unwrap_or(u16::MAX));
-            // Solo si cabe ENTERO: media palabra no es un indicador.
-            if x1 < area.x.saturating_add(area.width) {
-                session = Some((x0, x1));
-            }
-        }
-        format!(" {warn}{seq}")
-    } else {
+        //
+        // Desde el 2026-09-11 el aviso NO sustituye la línea: va a la DERECHA
+        // de la ruta y el contador, que siguen ahí. Sustituirla dejaba sin
+        // «fichero x/x» a quien tenía una sesión suelta todo el día. Solo si
+        // cabe con una ruta legible; si no, el aviso solo, como antes.
+        let warn = app.persistent_banner();
+        let reserva = warn.as_ref().map_or(0, |w| cells(w) + 2);
         // #93: el contenedor omitió entradas de su índice — el listado que
         // se ve NO es todo lo que el archivo contiene. Persistente mientras
         // el pane esté dentro (paralelo del badge hostil, jamás silencioso).
@@ -326,12 +336,33 @@ fn compose_line(app: &App, area: Rect) -> Composed {
         // dice dónde estás y el final dice qué carpeta es, y perder cualquiera
         // de los dos extremos es perder la mitad útil.
         let tail = format!("{pos_total}{omitidas}{nombres}{pruned}{ocultas}{marked}{seq}");
-        let room = usize::from(area.width)
+        let ancho = usize::from(area.width);
+        let room = ancho
             .saturating_sub(cells(&tail))
             .saturating_sub(cells(mark))
-            .saturating_sub(1); // el margen izquierdo
-        let dir_text = norte_frontend::middle_ellipsis(&dir_text, room);
-        format!(" {mark}{dir_text}{tail}")
+            .saturating_sub(1) // el margen izquierdo
+            .saturating_sub(reserva);
+        match warn {
+            Some(warn) if reserva > 0 && room < RUTA_LEGIBLE => {
+                // El de la sesión cierra la línea (`persistent_banner`), así
+                // que sus columnas son las últimas del aviso: es lo que el
+                // ratón pulsa. Solo si cabe ENTERO: media palabra no es un
+                // indicador.
+                session = zona_de_sesion(app, area, 1 + cells(&warn));
+                format!(" {warn}{seq}")
+            }
+            Some(warn) => {
+                let dir_text = norte_frontend::middle_ellipsis(&dir_text, room);
+                let base = format!(" {mark}{dir_text}{tail}");
+                let pad = ancho.saturating_sub(cells(&base) + cells(&warn) + 1);
+                session = zona_de_sesion(app, area, cells(&base) + pad + cells(&warn));
+                format!("{base}{}{warn} ", " ".repeat(pad))
+            }
+            None => {
+                let dir_text = norte_frontend::middle_ellipsis(&dir_text, room);
+                format!(" {mark}{dir_text}{tail}")
+            }
+        }
     };
     Composed {
         text,
@@ -463,6 +494,41 @@ mod tests {
         app.toggle_log();
         app.tick_notices();
         assert_eq!(app.notices_unread, 0);
+    }
+
+    /// Con la sesión suelta la barra sigue diciendo la ruta y el `x/x`, y el
+    /// aviso va a la derecha (2026-09-11: sustituía la línea entera y quien
+    /// tenía la sesión suelta todo el día perdía el contador). En una barra
+    /// estrecha, el aviso solo, como antes.
+    #[test]
+    fn el_aviso_persistente_no_tapa_la_ruta_ni_el_contador() {
+        use super::compose;
+        use crate::ui::text::cells;
+        let mut app = app_dos_panes();
+        app.session.detached = true;
+        let badge = app.session_banner().expect("hay indicador");
+        let area = ratatui::layout::Rect::new(0, 0, 70, 1);
+        let c = compose(&app, area);
+        assert!(c.text.contains("1/"), "el contador sigue: {:?}", c.text);
+        assert!(
+            c.text.trim_end().ends_with(&badge),
+            "el aviso cierra la línea: {:?}",
+            c.text
+        );
+        let (x0, x1) = c.session.expect("pulsable");
+        let byte = c.text.find(&badge).expect("está");
+        assert_eq!(
+            usize::from(x0),
+            cells(&c.text[..byte]),
+            "la zona empieza donde el indicador"
+        );
+        assert_eq!(usize::from(x1), cells(&c.text[..byte]) + cells(&badge) - 1);
+        // Sin sitio para una ruta legible: el aviso solo.
+        let corto =
+            ratatui::layout::Rect::new(0, 0, u16::try_from(cells(&badge) + 8).expect("cabe"), 1);
+        let c = compose(&app, corto);
+        assert!(!c.text.contains("1/"), "{:?}", c.text);
+        assert!(c.session.is_some());
     }
 
     /// En un terminal estrecho el indicador se recorta, y un indicador que no
