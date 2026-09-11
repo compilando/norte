@@ -45,6 +45,13 @@ import * as search from "./render/search";
 import * as menus from "./render/menus";
 import * as places from "./render/places";
 
+/**
+ * Cuánto separa dos clics para que sigan siendo UN doble clic, en ms. El
+ * intervalo del escritorio no se puede leer desde una webview; 400 ms es lo
+ * que usan de fábrica GNOME y KDE.
+ */
+const DOBLE_CLIC_MS = 400;
+
 /*
  * Los miembros son públicos a efectos de TypeScript porque los pintores de
  * `render/*` los alcanzan a través de `this: Screen`; fuera de `src/render*`
@@ -92,6 +99,10 @@ export class Screen {
   ultimaVista: ViewSnapshot | null = null;
   /** Aviso local de una orden rechazada en la frontera (`rejected`). */
   rechazo: string | null = null;
+  /** El último clic sobre una fila, para contar el doble clic aquí y no
+   *  depender del evento `dblclick` del motor (ver el `mousedown` de una
+   *  fila). `null` = no hay ninguno pendiente de pareja. */
+  ultimoClic: { slot: number; key: number; at: number } | null = null;
   /** La reserva cambió: el host tiene que oír el alto nuevo. */
   viewportSucio = false;
 
@@ -593,18 +604,27 @@ export class Screen {
         key: rowKey,
         generation: dom.generation,
       });
-    });
-    dom.scroller.addEventListener("dblclick", (e) => {
-      const target = e.target;
-      if (!(target instanceof Element)) {
-        return;
-      }
-      const rowEl = target.closest(".row");
-      if (!(rowEl instanceof HTMLElement)) {
-        return;
-      }
-      const rowKey = Number(rowEl.dataset["key"]);
-      if (!Number.isNaN(rowKey)) {
+      // El DOBLE clic se cuenta AQUÍ, y no se escucha el evento `dblclick`
+      // del motor: ese evento es la única puerta por la que se entraba en un
+      // directorio con el ratón, y depende de cómo el webview interprete una
+      // secuencia de clics sobre una fila que además se repinta entre uno y
+      // otro. Dos `mousedown` sobre la MISMA fila dentro de
+      // `DOBLE_CLIC_MS` son un doble clic, dígalo el motor o no; es lo mismo
+      // que hace el terminal, que también los cuenta él.
+      //
+      // Va después del `select_row` a propósito: el cursor se queda donde se
+      // hizo el doble clic, y el host recibe las dos acciones en orden.
+      const ahora = Date.now();
+      const previo = this.ultimoClic;
+      this.ultimoClic = { slot: slotId, key: rowKey, at: ahora };
+      if (
+        previo !== null &&
+        previo.slot === slotId &&
+        previo.key === rowKey &&
+        ahora - previo.at <= DOBLE_CLIC_MS
+      ) {
+        // El tercer clic de una ráfaga no vuelve a activar.
+        this.ultimoClic = null;
         this.send({
           action: "activate",
           slot_id: slotId,

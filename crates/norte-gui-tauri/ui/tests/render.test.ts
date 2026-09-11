@@ -435,7 +435,7 @@ describe("Screen", () => {
     expect(grid.getAttribute("aria-activedescendant")).toBe(seleccionada.id);
   });
 
-  it("un click señala la fila; un doble click la abre", () => {
+  it("un click señala la fila; dos seguidos sobre la misma la abren", () => {
     const { screen, enviadas, root } = montar();
     screen.paint(vista({}));
     const fila1 = root.querySelectorAll(".row")[1] as HTMLElement;
@@ -446,13 +446,49 @@ describe("Screen", () => {
       key: 1,
       generation: 1,
     });
-    fila1.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    // El SEGUNDO `mousedown` sobre la misma fila: se cuenta aquí, sin
+    // esperar al evento `dblclick` del motor — que es lo que fallaba.
+    fila1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     expect(enviadas.at(-1)).toEqual({
       action: "activate",
       slot_id: 1,
       key: 1,
       generation: 1,
     });
+  });
+
+  it("dos clics en filas DISTINTAS no abren nada, y el tercero de una ráfaga tampoco", () => {
+    const { screen, enviadas, root } = montar();
+    screen.paint(vista({ rows: [fila(0, "a.txt"), fila(1, "b.txt")] }));
+    const filas = root.querySelectorAll(".row");
+    (filas[0] as HTMLElement).dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true }),
+    );
+    (filas[1] as HTMLElement).dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true }),
+    );
+    expect(enviadas.some((a) => a.action === "activate")).toBe(false);
+    // Dos sobre la misma: abre UNA vez.
+    (filas[1] as HTMLElement).dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true }),
+    );
+    (filas[1] as HTMLElement).dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true }),
+    );
+    expect(enviadas.filter((a) => a.action === "activate")).toHaveLength(1);
+  });
+
+  it("dos clics separados en el tiempo son dos clics, no un doble", () => {
+    const { screen, enviadas, root } = montar();
+    screen.paint(vista({}));
+    const fila1 = root.querySelectorAll(".row")[1] as HTMLElement;
+    const reloj = vi.spyOn(Date, "now");
+    reloj.mockReturnValue(1_000);
+    fila1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    reloj.mockReturnValue(1_000 + 900);
+    fila1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    reloj.mockRestore();
+    expect(enviadas.some((a) => a.action === "activate")).toBe(false);
   });
 
   it("shift+click manda UN rango: quién entra en él lo decide el host", () => {

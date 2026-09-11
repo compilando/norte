@@ -397,6 +397,47 @@ async fn una_miga_lleva_al_ancestro_de_su_hueco() {
     );
 }
 
+/// Activar una fila del panel que NO tiene el foco lo enfoca y entra: es el
+/// doble clic del ratón, y el renderer manda el foco y la activación como
+/// dos mensajes. Si el primero no se aplicara, el segundo no puede quedarse
+/// mudo — antes `fila_de` lo rehusaba por «otro hueco» y el doble clic en el
+/// panel de al lado no hacía nada.
+#[tokio::test]
+async fn activar_una_fila_del_otro_panel_lo_enfoca_y_entra() {
+    let (h, snap) = crate::dos_paneles_con_destino_aparte(arbol()).await;
+    // El 1 está en `/casa` y tiene el directorio `docs`; el foco se lleva al
+    // 2 para que el 1 sea «el otro panel».
+    let a = listado_de(&snap, 1);
+    let (generation, key) = a
+        .rows
+        .iter()
+        .find(|r| r.display_name.contains("docs"))
+        .map(|r| (a.generation, r.key))
+        .expect("la fila del directorio");
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    let _ = sub.recv().await.expect("el host sigue vivo");
+
+    // Y ahora la activación del OTRO panel, sin `focus_slot` delante.
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    let f = esperar_foto(&h, &mut sub, "el hueco 1 entra en /casa/docs", |f| {
+        listado_de(f, 1).path_display.ends_with("/casa/docs")
+    })
+    .await;
+    assert!(
+        listado_de(&f, 2).path_display.ends_with("/casa/docs"),
+        "y el otro panel se queda donde estaba"
+    );
+}
+
 /// `pane.refresh` vuelve a pedir TODOS los listados que se ven, no solo el
 /// enfocado: lo que cambia un directorio por debajo es un cambio en el DISCO,
 /// y un cambio en el disco no respeta el foco.

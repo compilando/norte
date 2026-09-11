@@ -28,6 +28,15 @@ impl Estado {
                 generation,
             } => {
                 let (slot_id, key, generation) = (*slot_id, *key, *generation);
+                // Activar una fila de OTRO panel lo enfoca primero. El
+                // renderer manda `focus_slot` al pulsar y luego esta acción,
+                // así que casi siempre ya es el activo; pero si aquel foco no
+                // se aplicó —el reparto cambió, el hueco no estaba en el
+                // recorrido todavía—, `fila_de` rehusaba esto en silencio y
+                // un doble clic en el panel de al lado no hacía NADA. Una
+                // acción que nombra su hueco no puede depender de que otra
+                // llegara antes.
+                self.enfocar_para_actuar(slot_id);
                 let Some(i) = self.fila_de(slot_id, key, generation) else {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 };
@@ -193,6 +202,23 @@ impl Estado {
             state: Self::cargando_hacia(Some(&destino), enc),
         };
         vec![self.parche(vec![cambio])]
+    }
+
+    /// Enfoca `slot_id` si se puede, para que una acción que NOMBRA su hueco
+    /// no dependa de que el foco llegara antes por otro mensaje.
+    ///
+    /// El criterio es el mismo de `UiAction::FocusSlot`: el recorrido
+    /// compartido de foco y que el hueco se vea. Un hueco que no cumple se
+    /// deja como está, y quien llama lo rehusará por su cuenta.
+    pub(super) fn enfocar_para_actuar(&mut self, slot_id: u32) {
+        if slot_id == self.activo()
+            || !self.reparto.focus_order.contains(&SlotId(slot_id))
+            || self.oculto(slot_id)
+        {
+            return;
+        }
+        self.roles.set(RoleId::Active, SlotId(slot_id));
+        self.reconcilia_roles();
     }
 
     /// Una miga pulsada (puente 65): navega al ancestro con los primeros
