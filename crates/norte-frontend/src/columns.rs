@@ -871,6 +871,21 @@ mod settings_tests {
         assert_eq!((s.column, s.dir), (SortColumn::Mtime, SortDir::Desc));
     }
 
+    /// Las DOS tablas de anchos dicen lo mismo: la de serie
+    /// (`default_layout_items`) y la que usa `[ui.columns]` configurado
+    /// (`builtin_layout_item`). Se separaron una vez —12 y 10 para la fecha—
+    /// y la columna configurada salía cortada («09-10 20:», 2026-09-11).
+    #[test]
+    fn las_dos_tablas_de_anchos_coinciden() {
+        for (b, item) in default_layout_items() {
+            assert_eq!(
+                builtin_layout_item(b).policy,
+                item.policy,
+                "{b:?}: `builtin_layout_item` difiere de `default_layout_items`"
+            );
+        }
+    }
+
     #[test]
     fn layout_items_normaliza_name_al_frente() {
         let cfg = norte_config::ColumnsConfig {
@@ -1941,8 +1956,12 @@ pub fn builtin_layout_item(b: Builtin) -> LayoutItem {
             measured: 0,
             is_name: false,
         },
+        // 12 = «09-10 14:02» (11, el `smart` de este año) + separador. El
+        // MISMO número que `default_layout_items`: con `[ui.columns]`
+        // configurado se pasaba por aquí, y aquí seguía en 10 —la fecha
+        // salía «09-10 20:» (2026-09-11). Hay test que ata las dos tablas.
         Builtin::Mtime => LayoutItem {
-            policy: WidthPolicy::Fixed(10),
+            policy: WidthPolicy::Fixed(12),
             measured: 0,
             is_name: false,
         },
