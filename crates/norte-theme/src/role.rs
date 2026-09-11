@@ -165,6 +165,42 @@ impl Role {
         Role::Button,
     ];
 
+    /// Los roles que un PLUGIN puede nombrar en un span o en una decoración
+    /// (ADR 0037, y la enmienda de la spec 2026-09-11).
+    ///
+    /// El criterio es uno solo: **un plugin describe CONTENIDO**, así que
+    /// puede nombrar lo que un trozo de contenido SIGNIFICA —que es un
+    /// error, un aviso, un título, una coincidencia— y no puede nombrar
+    /// nada de lo que la ventana usa para decir en qué ESTADO está. Quedan
+    /// fuera, por tanto, dos familias:
+    ///
+    /// - El **cromo** (`hover`, `scrollbar-slider`, `widget-*`, `input-*`,
+    ///   `separator`, `focus-border`, `widget-shadow`): una insignia pintada
+    ///   con el color del deslizador de la barra de desplazamiento no
+    ///   significa nada.
+    /// - El **estado** (`selection`, `selection-unfocused`, `status-bar`,
+    ///   `mark`, `background`, `pane-*`, `border-*`, `modal-border`,
+    ///   `button`): dónde está el cursor, qué hay marcado y cuál es el panel
+    ///   con foco son cosas que el plugin no sabe y que, pintadas por él,
+    ///   mentirían.
+    ///
+    /// Esto ESTRECHA el vocabulario que ADR 0037 dejaba abierto a todo
+    /// [`Self::ALL`]. Un nombre no pedible degrada a `None` por
+    /// [`Self::from_kebab_requestable`] — la misma degradación que ya tenía
+    /// un nombre desconocido, y por el mismo motivo: un guest más nuevo no
+    /// puede romper el render de un norte más viejo.
+    pub const REQUESTABLE: &'static [Role] = &[
+        Role::Regular,
+        Role::Title,
+        Role::HostileBadge,
+        Role::Error,
+        Role::Warning,
+        Role::Info,
+        Role::Match,
+        Role::Badge,
+        Role::Muted,
+    ];
+
     /// Todos los roles, para iterar (p. ej. comprobar que los nombres kebab
     /// hacen ida y vuelta). Es [`Self::CORE`] más los diez de cromo.
     pub const ALL: &'static [Role] = &[
@@ -277,6 +313,26 @@ impl Role {
     #[must_use]
     pub fn from_kebab(s: &str) -> Option<Role> {
         serde_json::from_value(serde_json::Value::String(s.to_owned())).ok()
+    }
+
+    /// [`Self::from_kebab`] acotado a [`Self::REQUESTABLE`]: el punto de
+    /// entrada ÚNICO de un nombre de rol que viene de un plugin.
+    ///
+    /// Existe para que la restricción viva donde vive la lista, y no
+    /// repetida en cada frontend que valida un dato de un guest.
+    ///
+    /// ```
+    /// use norte_theme::Role;
+    /// // Un significado: pasa.
+    /// assert_eq!(Role::from_kebab_requestable("error"), Some(Role::Error));
+    /// // Cromo de la ventana: degrada, no es un error.
+    /// assert_eq!(Role::from_kebab_requestable("scrollbar-slider"), None);
+    /// // Y sigue existiendo para quien pregunte sin filtro.
+    /// assert!(Role::from_kebab("scrollbar-slider").is_some());
+    /// ```
+    #[must_use]
+    pub fn from_kebab_requestable(s: &str) -> Option<Role> {
+        Self::from_kebab(s).filter(|r| Self::REQUESTABLE.contains(r))
     }
 
     /// El nombre kebab de un rol: el inverso exacto de [`Self::from_kebab`].
@@ -394,6 +450,78 @@ mod tests {
         }
         assert_eq!(Role::CORE.len(), 18, "CORE son los dieciocho de siempre");
         assert_eq!(Role::ALL.len(), 28, "ALL son esos más los diez de cromo");
+    }
+
+    /// Lo PEDIBLE por un plugin es un subconjunto de lo que existe, y deja
+    /// fuera tanto el cromo como las superficies de ESTADO de la ventana
+    /// (ADR 0037 + spec 2026-09-11, F2).
+    #[test]
+    fn lo_pedible_deja_fuera_el_cromo_y_el_estado() {
+        for &r in Role::REQUESTABLE {
+            assert!(Role::ALL.contains(&r), "{r:?} es pedible y no existe");
+        }
+        // Cromo: el color del deslizador no significa nada en una insignia.
+        for r in [
+            Role::ScrollbarSlider,
+            Role::WidgetShadow,
+            Role::InputBorder,
+            Role::Separator,
+            Role::Hover,
+        ] {
+            assert!(!Role::REQUESTABLE.contains(&r), "{r:?} es cromo");
+        }
+        // Estado de la ventana: dónde está el cursor, qué hay marcado, cuál
+        // es el panel con foco. Un plugin describe CONTENIDO, y no sabe nada
+        // de eso.
+        for r in [
+            Role::Selection,
+            Role::SelectionUnfocused,
+            Role::StatusBar,
+            Role::Mark,
+            Role::Background,
+            Role::Button,
+        ] {
+            assert!(
+                !Role::REQUESTABLE.contains(&r),
+                "{r:?} es estado, no significado"
+            );
+        }
+        // Y las señales que un plugin SÍ necesita para decir algo.
+        for r in [
+            Role::Error,
+            Role::Warning,
+            Role::Info,
+            Role::Title,
+            Role::Match,
+            Role::Regular,
+            Role::HostileBadge,
+            Role::Badge,
+            Role::Muted,
+        ] {
+            assert!(
+                Role::REQUESTABLE.contains(&r),
+                "{r:?} tiene que ser pedible"
+            );
+        }
+    }
+
+    /// El punto de entrada de un nombre que viene de un plugin: un rol no
+    /// pedible degrada a `None`, igual que un nombre desconocido. No es un
+    /// error — un guest de un norte más nuevo no puede romper el render de
+    /// uno más viejo (ADR 0037).
+    #[test]
+    fn from_kebab_requestable_degrada_lo_no_pedible_a_none() {
+        assert_eq!(Role::from_kebab_requestable("warning"), Some(Role::Warning));
+        assert_eq!(Role::from_kebab_requestable("muted"), Some(Role::Muted));
+        assert_eq!(Role::from_kebab_requestable("scrollbar-slider"), None);
+        assert_eq!(Role::from_kebab_requestable("selection"), None);
+        assert_eq!(Role::from_kebab_requestable("no-existe"), None);
+        // Y siguen siendo roles de verdad para quien pregunte sin filtro.
+        assert_eq!(
+            Role::from_kebab("scrollbar-slider"),
+            Some(Role::ScrollbarSlider)
+        );
+        assert_eq!(Role::from_kebab("selection"), Some(Role::Selection));
     }
 
     /// Los diez roles de cromo NO están en CORE: se DERIVAN en la hoja de

@@ -345,7 +345,9 @@ impl Viewer {
     /// no depende de `norte-theme` — ver el rustdoc de
     /// `Backend::plugin_preview_styled`) y se valida AQUÍ, la frontera
     /// donde el frontend por fin conoce el tema
-    /// (`norte_theme::Role::from_kebab`): un nombre desconocido colapsa a
+    /// (`norte_theme::Role::from_kebab_requestable`): un nombre desconocido
+    /// —o uno del CROMO o del ESTADO de la ventana, que desde la spec
+    /// 2026-09-11 (F2) no son pedibles por un plugin— colapsa a
     /// `None` — jamás un panic ni una cadena libre que otra capa deba
     /// re-interpretar (ADR 0037, mismo criterio que un tema con datos
     /// parciales, ADR 0020). `fg` es el fallback RGB crudo, ya acotado por
@@ -364,7 +366,10 @@ impl Viewer {
                 line.iter()
                     .map(|span| crate::ansi::StyledSpan {
                         text: crate::display_name(span.text.as_bytes()).0,
-                        role: span.role.as_deref().and_then(norte_theme::Role::from_kebab),
+                        role: span
+                            .role
+                            .as_deref()
+                            .and_then(norte_theme::Role::from_kebab_requestable),
                         fg: span.fg.map(|[r, g, b]| (r, g, b)),
                         bg: span.bg.map(|[r, g, b]| (r, g, b)),
                     })

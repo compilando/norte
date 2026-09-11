@@ -59,9 +59,14 @@ impl Decoration {
 /// Sanea UNA [`DecorationWire`] cruda del wire: enmascara `badge`
 /// ([`crate::display_name`], mismo saneado que cualquier texto de plugin) y
 /// lo trunca a [`BADGE_MAX_CHARS`] caracteres TRAS enmascarar; valida `role`
-/// contra `norte_theme::Role::from_kebab` (un nombre desconocido colapsa a
-/// `None`, nunca un panic ni una cadena libre que otra capa deba
+/// contra `norte_theme::Role::from_kebab_requestable` (un nombre desconocido
+/// colapsa a `None`, nunca un panic ni una cadena libre que otra capa deba
 /// re-interpretar — mismo criterio que ADR 0037 aplica a `SpanWire::role`).
+///
+/// El vocabulario es el PEDIBLE y no todo `Role` (spec 2026-09-11, F2): un
+/// plugin describe contenido, así que nombra lo que un trozo SIGNIFICA y no
+/// el cromo de la ventana ni su estado. Un rol de esos degrada igual que un
+/// nombre desconocido, que es lo que ADR 0037 ya prometía.
 #[must_use]
 pub fn sanitize_decoration(w: &DecorationWire) -> Decoration {
     let mut badge_hostile = false;
@@ -75,7 +80,10 @@ pub fn sanitize_decoration(w: &DecorationWire) -> Decoration {
         badge_hostile = hostil && hay;
         hay.then_some(truncated)
     });
-    let role = w.role.as_deref().and_then(norte_theme::Role::from_kebab);
+    let role = w
+        .role
+        .as_deref()
+        .and_then(norte_theme::Role::from_kebab_requestable);
     Decoration {
         badge,
         badge_hostile,
