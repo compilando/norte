@@ -113,8 +113,10 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   padding: 0 4px;
-  background: var(--status-bg);
-  color: var(--status-fg, inherit);
+  /* `button`, no `status`: una celda es un botón, y la franja de estado
+     justo encima no puede leerse como la misma cosa. */
+  background: var(--button-bg);
+  color: var(--button-fg, inherit);
 }
 
 .keybar-cell[data-bound="false"] .keybar-label {

@@ -265,7 +265,11 @@ pub(crate) fn draw_key_bar(frame: &mut Frame<'_>, app: &App) {
     clear_themed(frame, bar, &app.theme);
     let cells = app.key_bar_cells();
     let numero = app.theme.role(Role::Regular);
-    let etiqueta = app.theme.role(Role::StatusBar);
+    // `Button` y no `StatusBar` (2026-09-11): en el tema de serie la barra de
+    // estado y el cursor llevan el mismo par de colores, y la fila de teclas
+    // encima de la de estado se leía como una sola franja. Una celda de esta
+    // barra es un botón, y ese rol ya existe para los de los modales.
+    let etiqueta = app.theme.role(Role::Button);
     let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
     for ((_, w), c) in norte_frontend::keybar::layout(usize::from(bar.width))
         .into_iter()

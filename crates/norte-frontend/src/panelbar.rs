@@ -213,17 +213,12 @@ fn buttons_con(
             attention: input.attention.contains(&id),
         });
     }
-    // Y AHORA se ordena, con las letras ya repartidas: primero lo que está en
-    // pantalla, en el orden en que está, y detrás lo cerrado tal y como lo
-    // declara el registro. `sort_by_key` es estable, así que los cerrados
-    // conservan ese orden entre ellos sin decir nada más.
-    out.sort_by_key(|b| {
-        input
-            .open
-            .iter()
-            .position(|k| *k == b.kind)
-            .unwrap_or(usize::MAX)
-    });
+    // El orden es el del REGISTRO, siempre, abiertos o no (decisión de Oscar
+    // el 2026-09-11). Antes los abiertos saltaban delante «en orden de
+    // pantalla», y eso hacía que pulsar un botón moviera los demás: una fila
+    // que se recoloca al pulsarla no se aprende con el dedo. El estado
+    // —abierto, con el teclado, con novedad— ya lo dice el color de cada
+    // botón; la posición no tiene que repetirlo.
     out
 }
 
@@ -360,15 +355,16 @@ mod tests {
         }
     }
 
-    /// Los ABIERTOS salen en el orden en que están en pantalla.
-    ///
-    /// La fila se lee de un vistazo si sigue a la pantalla: el botón del
-    /// panel de la izquierda, a la izquierda. Con el orden del registro había
-    /// que traducir entre dos listas cada vez que mirabas.
+    /// El orden NO cambia al abrir un panel: es el del registro, abiertos o
+    /// no (2026-09-11). Antes los abiertos saltaban delante y pulsar un botón
+    /// movía los demás; una fila que se recoloca al pulsarla no se aprende
+    /// con el dedo. El estado lo dice el color.
     #[test]
-    fn los_abiertos_salen_en_el_orden_de_la_pantalla() {
-        // `log` abajo del todo y `places` a la izquierda: en el registro van
-        // al revés, así que si se respetara aquél saldrían al revés.
+    fn abrir_un_panel_no_mueve_los_botones() {
+        let cerrados = buttons(&registro(), PanelBarInput::default());
+        let antes: Vec<&str> = cerrados.iter().map(|x| x.kind.as_str()).collect();
+        // `log` abajo del todo y `places` a la izquierda: en orden de pantalla
+        // irían delante y al revés; aquí nada se mueve.
         let abiertos = ["log", "places"];
         let b = buttons(
             &registro(),
@@ -377,19 +373,11 @@ mod tests {
                 ..PanelBarInput::default()
             },
         );
-        let kinds: Vec<&str> = b.iter().map(|x| x.kind.as_str()).collect();
-        assert_eq!(
-            &kinds[..2],
-            &["log", "places"],
-            "los abiertos van en el orden de la pantalla, no en el del registro"
-        );
-        // Y lo cerrado, detrás y en el orden del registro: no tiene posición
-        // que respetar, e inventarle una sería decir dónde está algo que no
-        // está en ninguna parte.
-        assert_eq!(
-            &kinds[2..],
-            &["viewer", "processes", "metadata", "tree"],
-            "los cerrados conservan el orden del registro: {kinds:?}"
+        let despues: Vec<&str> = b.iter().map(|x| x.kind.as_str()).collect();
+        assert_eq!(antes, despues, "abrir no reordena: {despues:?}");
+        assert!(
+            b.iter()
+                .any(|x| x.kind == "log" && x.state == PanelState::Open)
         );
     }
 
