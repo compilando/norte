@@ -148,6 +148,8 @@ mod tests {
             // — Se aplican en caliente: `reload_config` (paso 2 del cambio).
             preset: _,
             ui_theme: _,
+            ui_theme_light: _,
+            ui_theme_dark: _,
             quick_search: _,
             ui_confirm_quit: _,
             ui_columns: _,

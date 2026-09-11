@@ -83,8 +83,22 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
         skipped_note: "",
         hidden_note: "",
         columns: [
-          { id: "name", label: "Nombre", sort: "asc", sortable: true },
-          { id: "size", label: "Tamaño", sort: null, sortable: true },
+          {
+            id: "name",
+            label: "Nombre",
+            sort: "asc",
+            sortable: true,
+            width: null,
+            align: "left",
+          },
+          {
+            id: "size",
+            label: "Tamaño",
+            sort: null,
+            sortable: true,
+            width: 9,
+            align: "right",
+          },
         ],
         state: { state: "ready" },
         quick: null,
@@ -660,12 +674,121 @@ describe("la cabecera", () => {
     const v = vista({});
     const slot = v.slots[0];
     if (slot?.kind === "browser") {
-      slot.columns = [{ id: "plugin:x/y", label: "X", sort: null, sortable: false }];
+      slot.columns = [
+        {
+          id: "plugin:x/y",
+          label: "X",
+          sort: null,
+          sortable: false,
+          width: null,
+          align: "left",
+        },
+      ];
     }
     screen.paint(v);
     const col = root.querySelector(".slot-columns .col") as HTMLElement;
     col.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     expect(enviadas.some((a) => a.action === "sort_by")).toBe(false);
+  });
+
+  it("un ancho fijo se declara en la raíz del hueco y las celdas lo leen", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({ rows: [fila(1, "a.txt")] }));
+    const hueco = root.querySelector(".slot") as HTMLElement;
+    // `size` viene con 9 celdas y a la derecha; `name` no lleva variable.
+    expect(hueco.style.getPropertyValue("--colw-size")).toBe("calc(var(--cell-w) * 9)");
+    expect(hueco.style.getPropertyValue("--colw-size-align")).toBe("right");
+    expect(hueco.style.getPropertyValue("--colw-name")).toBe("");
+    const celda = root.querySelector(".row .cell") as HTMLElement;
+    expect(celda.style.width).toBe("var(--colw-size, auto)");
+    // El nombre no tiene tirador; el tamaño sí.
+    const cols = root.querySelectorAll(".slot-columns .col");
+    expect(cols[0]?.querySelector(".col-grip")).toBeNull();
+    expect(cols[1]?.querySelector(".col-grip")).not.toBeNull();
+  });
+
+  it("arrastrar el tirador manda el ancho en CELDAS al soltar, y no ordena", () => {
+    const { screen, enviadas, root } = montar();
+    document.documentElement.style.setProperty("--cell-w", "8px");
+    screen.paint(vista({}));
+    const grip = root.querySelector(".col-grip") as HTMLElement;
+    grip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
+    expect(enviadas.some((a) => a.action === "sort_by")).toBe(false);
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 140 }));
+    // Mientras se arrastra, solo cambia la variable: ningún envío.
+    const hueco = root.querySelector(".slot") as HTMLElement;
+    expect(hueco.style.getPropertyValue("--colw-size")).toBe("40px");
+    expect(enviadas.some((a) => a.action === "resize_column")).toBe(false);
+    document.dispatchEvent(new MouseEvent("mouseup"));
+    expect(enviadas.at(-1)).toEqual({
+      action: "resize_column",
+      slot_id: 1,
+      column: "size",
+      cells: 5,
+    });
+  });
+});
+
+describe("las migas, el indicador de espacio y el toast", () => {
+  it("cada tramo de la ruta es un botón que navega a su profundidad, salvo el actual", () => {
+    const { screen, enviadas, root } = montar();
+    screen.paint(
+      vista({
+        path_segments: ["⟨file⟩", "home", "oscar"],
+        path_display: "⟨file⟩/home/oscar",
+      }),
+    );
+    const migas = root.querySelectorAll(".title-path .crumb");
+    expect([...migas].map((m) => m.textContent)).toEqual(["⟨file⟩", "home", "oscar"]);
+    expect((migas[2] as HTMLButtonElement).disabled).toBe(true);
+    (migas[1] as HTMLButtonElement).click();
+    expect(enviadas.at(-1)).toEqual({
+      action: "breadcrumb_activate",
+      slot_id: 1,
+      depth: 1,
+      generation: 1,
+    });
+    // La ruta entera sigue disponible de una pieza.
+    expect(root.querySelector(".title-path")?.getAttribute("title")).toBe(
+      "⟨file⟩/home/oscar",
+    );
+  });
+
+  it("sin migas, la ruta va como texto, igual que antes", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({}));
+    expect(root.querySelector(".title-path")?.textContent).toBe("⟨file⟩/casa");
+    expect(root.querySelector(".crumb")).toBeNull();
+  });
+
+  it("el pie lleva el indicador solo con dato, y dice su nivel", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({ footer: "2 ficheros", used_ratio: 0.92 }));
+    const gauge = root.querySelector(".slot-footer .slot-gauge") as HTMLElement;
+    expect(gauge.getAttribute("aria-valuenow")).toBe("92");
+    expect(gauge.dataset["level"]).toBe("critical");
+    expect((gauge.firstElementChild as HTMLElement).style.width).toBe("92%");
+    screen.paint(vista({ footer: "2 ficheros", used_ratio: null }));
+    expect(root.querySelector(".slot-gauge")).toBeNull();
+  });
+
+  it("el mensaje efímero va en su nodo de toast", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({}));
+    expect(root.querySelector(".statusbar .status-message")?.textContent).toBe(
+      "2 entradas",
+    );
+  });
+});
+
+describe("la casilla de marca", () => {
+  it("cada fila lleva la casilla, dice si está marcada, y pulsarla alterna la marca", () => {
+    const { screen, enviadas, root } = montar();
+    screen.paint(vista({ rows: [fila(1, "a.txt"), fila(2, "b.txt", { marked: true })] }));
+    const casillas = root.querySelectorAll(".row .row-check");
+    expect([...casillas].map((c) => c.textContent)).toEqual(["☐", "☑"]);
+    casillas[0]?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(enviadas.at(-1)).toMatchObject({ action: "toggle_mark", slot_id: 1, key: 1 });
   });
 });
 

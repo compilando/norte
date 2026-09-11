@@ -2,7 +2,7 @@
 id = "org.norte.file-icons"
 name = "File icons"
 publisher = "norte"
-version = "0.1.0"
+version = "0.2.0"
 category = "decorator"
 description = "An icon on each row saying what it is: a folder, a link, or a kind of file from its name."
 
@@ -18,9 +18,25 @@ slot = "icon"
 # Nothing: the name is all this plugin needs.
 [capabilities]
 
-# Emoji by default; `ascii` for terminals without an emoji font.
+# Emoji by default; `ascii` for terminals without an emoji font; `nerd` for
+# one-cell Nerd Font glyphs — the window bundles them, a terminal needs a
+# patched font.
 [config.style]
 type = "enum"
-values = ["emoji", "ascii"]
+values = ["emoji", "ascii", "nerd"]
 default = "emoji"
-description = "Glyph set for the badges: emoji, or plain ASCII."
+description = "Glyph set for the icons: emoji, plain ASCII, or Nerd Font glyphs."
+
+# The glyph for a plain folder, when you want your own. Empty = the style's.
+# Folders whose name means more (`.git`) keep theirs.
+[config.dir-icon]
+type = "string"
+default = ""
+description = "Your own glyph for plain folders; empty for the style's."
+
+# The glyph for a file the table does not know. Empty = no icon on that
+# row; set it and every row gets one, so the column reads as a column.
+[config.unknown-icon]
+type = "string"
+default = ""
+description = "Glyph for files of no known kind; empty for none."

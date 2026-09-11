@@ -72,18 +72,26 @@
     "names_note": "nombres: cp866",
     "path_display": "⟨mem⟩/casa/caf�",
     "path_hostile": true,
+    "path_segments": [
+      "⟨mem⟩",
+      "casa",
+      "caf�"
+    ],
     "pruned_note": "2 marcas caídas, sus entradas ya no están",
     "skipped_note": "⚠ 2 entradas omitidas (nombres hostiles/límites)",
-    "slot_id": 1
+    "slot_id": 1,
+    "used_ratio": null
   },
   "columns": {
     "change": "columns",
     "columns": [
       {
+        "align": "right",
         "id": "size",
         "label": "Tamaño",
         "sort": "desc",
-        "sortable": true
+        "sortable": true,
+        "width": null
       }
     ],
     "slot_id": 1

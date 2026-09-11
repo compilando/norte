@@ -577,6 +577,49 @@ plugin-file-icons *ARGS:
     cp $origen/target/wasm32-wasip2/release/file_icons.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
+# La columna del tamaño como barra (`plugins/size-bar`, spec 2026-09-11 V4).
+plugin-size-bar *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flag=""; [ "{{ARGS}}" = "force" ] && flag="--force"
+    origen=plugins/size-bar
+    cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
+    stage=target/plugin-stage/size-bar
+    rm -rf "$stage" && mkdir -p "$stage"
+    cp $origen/plugin.toml "$stage/plugin.toml"
+    [ -f $origen/help.md ] && cp $origen/help.md "$stage/help.md" || true
+    cp $origen/target/wasm32-wasip2/release/size_bar.wasm "$stage/plugin.wasm"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
+
+# La columna de la edad de cada entrada (`plugins/age`, spec 2026-09-11 V4).
+plugin-age *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flag=""; [ "{{ARGS}}" = "force" ] && flag="--force"
+    origen=plugins/age
+    cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
+    stage=target/plugin-stage/age
+    rm -rf "$stage" && mkdir -p "$stage"
+    cp $origen/plugin.toml "$stage/plugin.toml"
+    [ -f $origen/help.md ] && cp $origen/help.md "$stage/help.md" || true
+    cp $origen/target/wasm32-wasip2/release/age.wasm "$stage/plugin.wasm"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
+
+# Las miniaturas de imagen para el visor de la ventana (`plugins/image-thumb`,
+# ADR 0107).
+plugin-image-thumb *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flag=""; [ "{{ARGS}}" = "force" ] && flag="--force"
+    origen=plugins/image-thumb
+    cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
+    stage=target/plugin-stage/image-thumb
+    rm -rf "$stage" && mkdir -p "$stage"
+    cp $origen/plugin.toml "$stage/plugin.toml"
+    [ -f $origen/help.md ] && cp $origen/help.md "$stage/help.md" || true
+    cp $origen/target/wasm32-wasip2/release/image_thumb.wasm "$stage/plugin.wasm"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
+
 # Las columnas de dimensiones y duración (`plugins/media-info`, demo D2).
 plugin-media-info *ARGS:
     #!/usr/bin/env bash
@@ -657,6 +700,9 @@ plugins *ARGS:
     just plugin-git-status "$@"
     just plugin-file-icons "$@"
     just plugin-media-info "$@"
+    just plugin-size-bar "$@"
+    just plugin-age "$@"
+    just plugin-image-thumb "$@"
     just plugin-markdown "$@"
     just plugin-image-ansi "$@"
     just plugin-date-prefix "$@"

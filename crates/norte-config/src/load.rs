@@ -452,6 +452,36 @@ fn nested_table_mut<'d>(
 /// `[ui.columns]` no es tabla, `spec` existe con otra forma, o falla el
 /// I/O.
 pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Result<PathBuf> {
+    persist_column_spec_field(dir, id, "format", toml_edit::value(format))
+}
+
+/// Persiste el ANCHO de una columna como `width = <celdas>` en su
+/// `[[ui.columns.spec]]` (spec 2026-09-11, V2: arrastrar el borde de una
+/// cabecera en la ventana). Misma mecánica y mismos guards que
+/// [`persist_column_format`]: reemplazo por id, los otros campos y los
+/// comentarios sobreviven, todas las entradas duplicadas se actualizan.
+///
+/// CONTRATO: `cells` ya está en `[1, 64]` —lo que el loader acepta— o el
+/// siguiente `load` lo rechazará entero; el caller (el host) acota antes.
+/// BLOQUEANTE: I/O de FS síncrono — envolver en `spawn_blocking` (regla 2).
+///
+/// # Errors
+/// Los de [`persist_column_format`].
+pub fn persist_column_width(dir: &Path, id: &str, cells: u16) -> std::io::Result<PathBuf> {
+    // La forma que el loader lee para un ancho fijo: `width = { fixed = N }`
+    // (`WidthSection::Fixed`); un entero a secas no es ninguna variante.
+    let mut fijo = toml_edit::InlineTable::new();
+    fijo.insert("fixed", toml_edit::Value::from(i64::from(cells)));
+    persist_column_spec_field(dir, id, "width", toml_edit::value(fijo))
+}
+
+/// El escritor común de UN campo de un `[[ui.columns.spec]]` por id.
+fn persist_column_spec_field(
+    dir: &Path,
+    id: &str,
+    key: &str,
+    value: toml_edit::Item,
+) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
     // #116: lock ANTES de leer — el RMW entero es la sección crítica.
@@ -482,13 +512,13 @@ pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Res
         .iter_mut()
         .filter(|tb| tb.get("id").and_then(|v| v.as_str()) == Some(id))
     {
-        tb["format"] = toml_edit::value(format);
+        tb[key] = value.clone();
         alguna = true;
     }
     if !alguna {
         let mut tb = toml_edit::Table::new();
         tb["id"] = toml_edit::value(id);
-        tb["format"] = toml_edit::value(format);
+        tb[key] = value;
         arr.push(tb);
     }
     write_config_file(&lock, &doc)?;
@@ -1425,6 +1455,13 @@ pub struct CommonConfig {
     pub ui_lang: Option<String>,
     /// `[ui] theme` (last-wins; None = default preset).
     pub ui_theme: Option<String>,
+    /// `[ui] theme_light` (last-wins; None = no light variant): the theme
+    /// the window paints when the desktop prefers a light scheme. The
+    /// terminal ignores it: a terminal has no scheme to ask.
+    pub ui_theme_light: Option<String>,
+    /// `[ui] theme_dark` (last-wins; None = no dark variant); see
+    /// [`Self::ui_theme_light`].
+    pub ui_theme_dark: Option<String>,
     /// `[ui] quick_search`, validated (invalid value = load error).
     pub quick_search: QuickSearch,
     /// `[ui] font` (last-wins; None = platform default). Honored from ALL
@@ -2246,6 +2283,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut preset: Option<String> = None;
     let mut ui_lang: Option<String> = None;
     let mut ui_theme: Option<String> = None;
+    let mut ui_theme_light: Option<String> = None;
+    let mut ui_theme_dark: Option<String> = None;
     let mut quick_search = QuickSearch::default();
     let mut ui_font: Option<String> = None;
     let mut ui_mono_font: Option<String> = None;
@@ -2333,6 +2372,12 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             if let Some(th) = parsed.ui.theme {
                 ui_theme = Some(th);
             }
+            if let Some(th) = parsed.ui.theme_light {
+                ui_theme_light = Some(th);
+            }
+            if let Some(th) = parsed.ui.theme_dark {
+                ui_theme_dark = Some(th);
+            }
             if let Some(qs) = &parsed.ui.quick_search {
                 quick_search =
                     merge_quick_search(quick_search, qs, &norte, *kind, &mut project_warnings)?;
@@ -2416,6 +2461,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         preset: preset.unwrap_or_else(|| schema::DEFAULT_PRESET.to_owned()),
         ui_lang,
         ui_theme,
+        ui_theme_light,
+        ui_theme_dark,
         quick_search,
         ui_font,
         ui_mono_font,
@@ -3833,6 +3880,61 @@ mod persist_columns_tests {
                 .and_then(|sp| sp.format.as_deref()),
             Some("iso")
         );
+    }
+
+    /// `[ui] theme_light` / `theme_dark` (spec 2026-09-11, V6): cargan como
+    /// `theme` —cadenas sin validar aquí, el frontend las resuelve— y una
+    /// capa superior gana por clave, sin arrastrar la otra.
+    #[test]
+    fn theme_light_y_theme_dark_cargan_y_la_capa_superior_gana_por_clave() {
+        let sistema = tempfile::tempdir().unwrap();
+        let usuario = tempfile::tempdir().unwrap();
+        std::fs::write(
+            sistema.path().join("norte.toml"),
+            "[ui]\ntheme = \"nord\"\ntheme_light = \"gruvbox-light\"\ntheme_dark = \"gruvbox-dark\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[ui]\ntheme_dark = \"catppuccin-mocha\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (sistema.path().to_path_buf(), Layer::System),
+                (usuario.path().to_path_buf(), Layer::User),
+            ],
+        };
+        let cfg = load(&layers).expect("load");
+        assert_eq!(cfg.ui_theme.as_deref(), Some("nord"));
+        assert_eq!(cfg.ui_theme_light.as_deref(), Some("gruvbox-light"));
+        assert_eq!(
+            cfg.ui_theme_dark.as_deref(),
+            Some("catppuccin-mocha"),
+            "la capa del usuario pisa solo la clave que escribe"
+        );
+    }
+
+    /// El ancho comparte escritor con el formato: entra en la MISMA entrada
+    /// del id (no nace una segunda), conserva el formato que había, y el
+    /// `load` real lo devuelve como `WidthChoice::Fixed`.
+    #[test]
+    fn persist_column_width_round_tripea_por_load_y_conserva_el_formato() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_column_format(dir.path(), "size", "si").expect("format");
+        persist_column_width(dir.path(), "size", 12).expect("width");
+        persist_column_width(dir.path(), "size", 14).expect("width otra vez");
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert_eq!(s.matches(r#"id = "size""#).count(), 1, "UNA entrada: {s}");
+        assert!(s.contains("fixed = 14"), "{s}");
+        assert!(!s.contains("fixed = 12"), "sin valor viejo: {s}");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("load");
+        let spec = cfg.ui_columns.specs.get("size").expect("spec");
+        assert_eq!(spec.width, Some(WidthChoice::Fixed(14)));
+        assert_eq!(spec.format.as_deref(), Some("si"));
     }
 
     /// MAJOR revisión 7b: con DOS entradas del mismo id editadas a mano, el

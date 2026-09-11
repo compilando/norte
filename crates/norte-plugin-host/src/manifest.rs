@@ -35,6 +35,12 @@ pub enum Category {
     /// `renamer` del paquete `norte:renamer`, world `norte-renamer`). El
     /// core los ejecuta por el mismo camino que el plan de la IA.
     Renamer,
+    /// Fabrica una MINIATURA de un fichero para el visor de la ventana (ADR
+    /// 0107, paquete `norte:thumbnail`, world `norte-thumbnail`). Los
+    /// mimetypes que atiende van en `[[contributions.thumbnail]]`, como los
+    /// de un previewer; recibe bytes acotados y devuelve un raster que el
+    /// host verifica antes de pintarlo.
+    Thumbnail,
 }
 
 impl Category {
@@ -49,6 +55,7 @@ impl Category {
             Category::Hook => "hook",
             Category::Decorator => "decorator",
             Category::Renamer => "renamer",
+            Category::Thumbnail => "thumbnail",
         }
     }
 
@@ -67,6 +74,8 @@ impl Category {
             Category::Decorator => 5,
             // Nuevo al final (ADR 0095), como `Decorator` en su día.
             Category::Renamer => 6,
+            // Y el siguiente detrás (ADR 0107): un tag es para siempre.
+            Category::Thumbnail => 7,
         }
     }
 }
@@ -112,6 +121,16 @@ pub struct ProviderContrib {
     /// el digest de aprobación como el scheme.
     #[serde(default, rename = "default-port")]
     pub default_port: Option<u16>,
+}
+
+/// Un fabricante de miniaturas declarado (ADR 0107): los mimetypes que
+/// sabe convertir en un raster, con las mismas reglas de casado que los de
+/// un previewer (exacto antes que comodín).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThumbnailContrib {
+    /// Mimetypes que atiende (`image/png`, `image/*`).
+    pub mimetypes: Vec<String>,
 }
 
 /// Un renamer declarado (C3, ADR 0095): un proponente de nombres con su id
@@ -266,6 +285,9 @@ pub struct Contributions {
     /// manifiestos anteriores no lo traen y su digest no se mueve.
     #[serde(default)]
     pub renamer: Vec<RenamerContrib>,
+    /// Fabricantes de miniaturas (ADR 0107).
+    #[serde(default)]
+    pub thumbnail: Vec<ThumbnailContrib>,
 }
 
 impl Contributions {
@@ -323,6 +345,18 @@ impl Contributions {
             for c in &self.renamer {
                 update_str(h, &c.id);
                 update_str(h, &c.title);
+            }
+        }
+        // Las miniaturas, con el mismo trato (ADR 0107): detrás y solo si
+        // hay, para que ningún manifiesto existente cambie de digest.
+        if !self.thumbnail.is_empty() {
+            h.update(b"thumbnail:\n");
+            h.update((self.thumbnail.len() as u64).to_le_bytes());
+            for c in &self.thumbnail {
+                h.update((c.mimetypes.len() as u64).to_le_bytes());
+                for m in &c.mimetypes {
+                    update_str(h, m);
+                }
             }
         }
     }

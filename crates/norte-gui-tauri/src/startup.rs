@@ -15,6 +15,8 @@ use norte_frontend::layout_picker::UserLayout;
 use norte_i18n::Lang;
 use norte_proto::VPath;
 use norte_proto::methods::ClientInfo;
+use std::collections::BTreeMap;
+
 use norte_theme::Theme;
 use norte_ui_host::pickers::HostTheme;
 use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
@@ -286,6 +288,12 @@ pub struct Boot {
     /// No hay `norte.toml` de usuario (spec 2026-09-10): el catálogo lo
     /// lleva y el renderer abre el asistente de primer arranque.
     pub first_run: bool,
+    /// `[ui] theme_light` / `theme_dark` ya resueltos a variables (spec
+    /// 2026-09-11, V6), o `None` cuando la clave no está o su tema no carga
+    /// — entonces la ventana pinta `theme` en ese esquema, y se avisa.
+    pub theme_light: Option<BTreeMap<String, String>>,
+    /// La variante oscura; ver [`Self::theme_light`].
+    pub theme_dark: Option<BTreeMap<String, String>>,
 }
 
 /// Las disposiciones que el usuario tiene guardadas, YA leídas.
@@ -646,6 +654,22 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     let lang = idioma(cfg.common.ui_lang.as_deref());
 
     let (theme, tema_resuelto) = tema(cfg.common.ui_theme.as_deref());
+    // Las variantes por esquema del escritorio (V6): cada una se resuelve
+    // como `theme` y viaja ya como variables. Una clave puesta cuyo tema no
+    // carga se queda SIN variante —no con el de fábrica—, para que la
+    // ventana pinte `theme` en ese lado y el fallo no se disfrace de tema.
+    let variante = |nombre: Option<&str>| -> Option<BTreeMap<String, String>> {
+        let n = nombre?;
+        match norte_frontend::theme::resolve_theme(Some(n)) {
+            Ok(t) => Some(crate::catalog::variables(&t)),
+            Err(e) => {
+                tracing::warn!(error = %e, tema = n, "la variante de tema no cargó: se ignora");
+                None
+            }
+        }
+    };
+    let theme_light = variante(cfg.common.ui_theme_light.as_deref());
+    let theme_dark = variante(cfg.common.ui_theme_dark.as_deref());
     // Fuera del runtime (regla 2): `metadata` sobre un NFS caído bloquea el
     // hilo de trabajo hasta que expire el montaje, y encima antes de que
     // exista ventana donde decirlo. La lectura de la configuración de arriba
@@ -822,6 +846,8 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         theme,
         appearance: crate::catalog::Appearance::de(&cfg.common),
         first_run,
+        theme_light,
+        theme_dark,
     })
 }
 

@@ -564,6 +564,9 @@ enum Mensaje {
     /// mensaje por cada Enter en una pantalla cuyo resultado ya se ve: los
     /// colores cambiaron.
     TemaPersistido(Option<&'static str>),
+    /// El ancho de una columna ya está (o no) en el `norte.toml` (puente
+    /// 64). Mismo trato que el tema: solo el fallo se dice.
+    AnchoPersistido(Option<&'static str>),
     /// Un `[ui] theme` que era una RUTA, ya leído fuera del actor.
     ///
     /// Lleva el spec para poder nombrarlo en el efecto nativo —quien hospeda
@@ -905,6 +908,9 @@ enum Fondo {
     Adornos(Box<Adornos>),
     /// Los bytes enteros de una imagen que el visor aceptó.
     Imagen(RequestToken, Result<Vec<u8>, Error>),
+    /// La MINIATURA que un plugin dio del fichero del visor (ADR 0107), o
+    /// `None` si ninguno casó o el que casó no supo.
+    Miniatura(RequestToken, Option<norte_proto::methods::PluginThumbnail>),
     /// La búsqueda de esta época ya tiene Task: este es su id.
     ///
     /// Llega por su cuenta y no dentro del primer lote porque puede no haber
@@ -1354,7 +1360,7 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::TemaPersistido(fallo) => {
+            Mensaje::TemaPersistido(fallo) | Mensaje::AnchoPersistido(fallo) => {
                 if let Some(clave) = fallo {
                     for u in estado.decir(clave) {
                         let _ = updates.send(u);
@@ -2749,6 +2755,10 @@ struct Estado {
     /// garantía de tamaño que `payload.rs` vigila. El renderer los pide
     /// aparte y hace un `blob:` con ellos (ADR 0069).
     imagen: Option<std::sync::Arc<Vec<u8>>>,
+    /// La miniatura que un plugin dio del fichero del visor (ADR 0107): lo
+    /// que la proyección anuncia como imagen y de quién es, mientras los
+    /// bytes van en `imagen`. `None` = el visor pinta lo suyo.
+    miniatura: Option<(crate::dto::ImageView, String)>,
     /// La búsqueda abierta, si la hay.
     busqueda: Option<Busqueda>,
     /// Cuántas búsquedas ha lanzado esta ventana. Es la identidad de la
@@ -3274,6 +3284,7 @@ impl Estado {
             gen_paleta: 0,
             gen_salida: 0,
             imagen: None,
+            miniatura: None,
             busqueda: None,
             epoca_busqueda: 0,
             disposiciones: user_layouts,
@@ -3573,6 +3584,10 @@ impl Estado {
             let stream = backend.list(dir.clone(), self.attrs_de(&dir)).await;
             let res = Self::primera_pagina(stream, id, token, buzon.clone()).await;
             self.aterriza_en(id, dir, res);
+            // El espacio libre del pie (spec 2026-09-10): también en el
+            // arranque, que no pasa por `aterrizar_listado`. Sin esto la
+            // ventana abría sin «libres» hasta la primera navegación.
+            self.pedir_volumenes_de_pie(backend_arc, buzon);
             // Lo mismo que hace el aterrizaje de una navegación, y que este
             // camino no hacía: el PRIMER directorio de un hueco se quedaba sin
             // capacidades hasta que el lector navegara a otro sitio. O sea que
@@ -3721,6 +3736,11 @@ impl Estado {
                 (self.aplicada(), vec![self.parche_filas_de(slot_id)])
             }
             UiAction::SortBy { slot_id, column } => self.ordenar_por(*slot_id, column),
+            UiAction::ResizeColumn {
+                slot_id,
+                column,
+                cells,
+            } => self.redimensionar_columna(*slot_id, column, *cells, buzon),
             UiAction::FocusSlot { slot_id } => {
                 let slot_id = *slot_id;
                 // Enfocar algo que no se ve, o que no recibe foco, es una
@@ -3766,9 +3786,10 @@ impl Estado {
                 self.hueco_mut().pane.mark_range(a, b);
                 (self.aplicada(), vec![self.parche_filas()])
             }
-            UiAction::Activate { .. } | UiAction::Parent { .. } | UiAction::History { .. } => {
-                self.navegacion(accion, backend, buzon)
-            }
+            UiAction::Activate { .. }
+            | UiAction::Parent { .. }
+            | UiAction::BreadcrumbActivate { .. }
+            | UiAction::History { .. } => self.navegacion(accion, backend, buzon),
             UiAction::SetViewport { width, height } => {
                 self.viewport = (*width, *height);
                 self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);

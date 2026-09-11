@@ -1,0 +1,40 @@
+[plugin]
+id = "org.norte.age"
+name = "Age"
+publisher = "norte"
+version = "0.1.0"
+category = "columns"
+description = "How long ago each entry changed: a glyph per bucket (today, this week, this month, older) and a short figure."
+
+# Add it to a listing as `plugin:org.norte.age/age` (the columns picker
+# offers it).
+[[contributions.columns]]
+id = "age"
+header = "Age"
+
+# It only asks the modification time of each entry (`stat`) under the
+# directory being listed, through the opaque token. It never reads content.
+[capabilities]
+location = "read"
+
+# The bucket edges, in days, ascending: `1,7,30` is «today, this week, this
+# month», and anything older is the last bucket.
+[config.thresholds]
+type = "string"
+default = "1,7,30"
+description = "Bucket edges in days, ascending, comma-separated."
+
+# One glyph per bucket, freshest first; the last one covers everything past
+# the last edge. Fewer glyphs than buckets: the last glyph repeats.
+[config.glyphs]
+type = "string"
+default = "●◐○·"
+description = "One glyph per bucket, freshest first."
+
+# `both` (the default): the glyph and a short figure (`3h`, `2d`, `5mo`).
+# `glyph` or `text` for one of them alone.
+[config.format]
+type = "enum"
+values = ["both", "glyph", "text"]
+default = "both"
+description = "What the cell shows: glyph and figure, or one of them."

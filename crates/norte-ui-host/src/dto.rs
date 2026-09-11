@@ -1971,6 +1971,17 @@ pub struct BrowserSlotView {
     /// marcas.
     #[serde(default)]
     pub marked_note: String,
+    /// Las MIGAS de la ruta (puente 65): la raíz (`⟨file⟩`, `⟨sftp⟩host`) y
+    /// un tramo por directorio, cada uno ya enmascarado. Pulsar el tramo
+    /// `depth` navega al directorio con esos `depth` tramos
+    /// (`breadcrumb_activate`). Vacío = la ruta va entera en `path_display`.
+    #[serde(default)]
+    pub path_segments: Vec<String>,
+    /// Cuánto del volumen está OCUPADO, en `0.0..=1.0` (puente 65): el
+    /// indicador de espacio del pie. `None` = no se sabe (sin volumen, o
+    /// un esquema que no lo dice).
+    #[serde(default)]
+    pub used_ratio: Option<f32>,
     /// El pie del listado (spec 2026-09-10): cuántos directorios y ficheros,
     /// cuánto pesan, lo marcado y el espacio libre del volumen, ya
     /// redactado. Vacío = `[ui] pane_footer` apagado.
@@ -2122,6 +2133,17 @@ pub struct ColumnHeader {
     pub sort: Option<String>,
     /// La columna ordena. Una que no, se pinta sin afordancia de click.
     pub sortable: bool,
+    /// Ancho FIJO en celdas, si `[ui.columns] spec.width` lo fija (puente
+    /// 64): la cabecera y las celdas de la columna lo siguen, y arrastrar el
+    /// borde de la cabecera lo cambia. `None` = a lo que mida su contenido.
+    /// Para la columna `name` es su SUELO (`columns::NAME_MIN`), no un ancho:
+    /// el nombre crece, y por debajo de eso el renderer descarta columnas.
+    #[serde(default)]
+    pub width: Option<u16>,
+    /// `left` o `right`: la alineación configurada de la columna, la misma
+    /// que aplica el terminal. Solo tiene efecto con un ancho fijo.
+    #[serde(default)]
+    pub align: String,
 }
 
 /// La clase de una entrada, en lo que al pintado le importa.
@@ -2870,6 +2892,12 @@ pub enum ViewChange {
         /// rellenar. Vacío = `[ui] pane_footer` apagado.
         #[serde(default)]
         footer: String,
+        /// Las migas de la ruta (puente 65); ver `BrowserSlotView`.
+        #[serde(default)]
+        path_segments: Vec<String>,
+        /// Cuánto del volumen está ocupado (puente 65); ver `BrowserSlotView`.
+        #[serde(default)]
+        used_ratio: Option<f32>,
         /// Cuántas entradas hay marcadas, en crudo.
         ///
         /// Sigue viajando al lado de [`Self::BrowserHeader::marked_note`] y

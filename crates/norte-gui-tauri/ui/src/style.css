@@ -2,7 +2,33 @@
    `applyTheme()` con lo que el host proyecta. Lo que hay aquí es geometría. */
 :root {
   --cell-w: 8px;
-  --cell-h: 20px;
+  --cell-h: 22px;
+  /* Tipografía EMPAQUETADA (spec 2026-09-11, V1): JetBrains Mono para lo
+     que se alinea en celdas —listados, visor, barra de teclas— e Inter para
+     el cromo —menús, diálogos, paleta—. Las dos van dentro del bundle
+     (`@fontsource`, OFL), así que la ventana se ve igual en una máquina sin
+     fuentes instaladas. `[ui] mono_font` y `[ui] font` siguen mandando: son
+     `--mono` y `--ui-font`, que `applyAppearance()` escribe en el raíz, y
+     aquí solo se les pone la pila de respaldo detrás. */
+  --font-mono: var(
+    --mono,
+    "JetBrains Mono",
+    ui-monospace,
+    "DejaVu Sans Mono",
+    "Cascadia Mono",
+    "Liberation Mono",
+    monospace
+  );
+  --font-ui: var(
+    --ui-font,
+    "Inter",
+    system-ui,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif
+  );
   --bg: #101216;
   --fg: #d8dee9;
   --panel-bg: #14171c;
@@ -35,18 +61,33 @@ body {
   overflow: hidden;
   background: var(--bg);
   color: var(--fg);
-  /* `[ui] font` y `[ui] font_size`, si la configuración los dice. El
-     fallback es la pila de siempre: una clave ausente no cambia nada. */
-  font-family: var(
-    --ui-font,
-    ui-monospace,
-    "DejaVu Sans Mono",
-    "Cascadia Mono",
-    "Liberation Mono",
-    monospace
-  );
-  font-size: var(--ui-font-size, 13px);
+  /* La base es la MONOESPACIADA: esta ventana se reparte en celdas, y todo
+     lo que no diga otra cosa se alinea con el listado. `[ui] font_size` si
+     la configuración lo dice; 14 px es lo que hoy usan los terminales que
+     la gente elige (WezTerm, Ghostty, Kitty) con una fila de 22 px. */
+  font-family: var(--font-mono);
+  font-size: var(--ui-font-size, 14px);
   line-height: var(--cell-h);
+  /* Numerales tabulares: un tamaño y una fecha con dígitos del mismo ancho
+     forman columna aunque la fuente elegida sea proporcional. Y sin
+     ligaduras en un listado: `->` o `!=` dentro de un nombre de fichero son
+     dos caracteres y tienen que verse como dos. */
+  font-variant-numeric: tabular-nums;
+  font-variant-ligatures: none;
+}
+
+/* El cromo lleva la proporcional: lo que se lee como texto, no lo que se
+   alinea en columnas. Los paneles, el visor, la barra de teclas y la salida
+   de un programa se quedan con la monoespaciada del cuerpo. */
+.menubar,
+.menu-items,
+.panelbar,
+.dialog,
+.palette,
+#whichkey,
+#fatal {
+  font-family: var(--font-ui);
+  font-variant-ligatures: normal;
 }
 
 #screen {
@@ -95,15 +136,29 @@ body {
   overflow: hidden;
   cursor: pointer;
   unicode-bidi: isolate;
+  /* Un `<button>` centra su contenido: el número quedaba pegado a la
+     izquierda y la etiqueta en medio, y se leía «Ayuda 2 Renombrar 3».
+     Todo a la izquierda, número y etiqueta juntos, como en mc. */
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .keybar-cell:disabled {
   cursor: default;
 }
 
+/* El número como TECLA (spec 2026-09-11, V2): una insignia con borde y
+   sombra de un píxel, que se lee como la tecla física que es. Los colores
+   son los del texto, así que vale para cualquier tema. */
 .keybar-num {
   flex: 0 0 auto;
-  padding: 0 2px;
+  margin: 0 4px 0 3px;
+  padding: 0 4px;
+  font-size: 0.8em;
+  line-height: 1.35;
+  border: 1px solid currentcolor;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 currentcolor;
   color: var(--fg);
 }
 
@@ -144,7 +199,12 @@ body {
 
 .panelbar-button {
   font: inherit;
-  color: var(--status-fg, inherit);
+  /* `--fg`, no `--status-fg`: el de la barra de estado es texto OSCURO
+     sobre fondo vivo, y aquí el fondo es el del panel — en los temas
+     ámbar/CRT los botones cerrados salían invisibles (2026-09-11). Cerrado
+     = atenuado, como en la TUI. */
+  color: var(--fg);
+  opacity: 0.7;
   background: none;
   border: 0;
   padding: 0 6px;
@@ -171,11 +231,13 @@ body {
    la mitad de lo que se pregunta al mirar la barra. */
 .panelbar-button[data-state="open"] {
   color: var(--title-fg, inherit);
+  opacity: 1;
 }
 
 .panelbar-button[data-state="focused"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
+  opacity: 1;
 }
 
 .panelbar-attention {
@@ -320,6 +382,8 @@ body {
    por el final si no cabe. Oculta cuando `[ui] pane_footer` está apagado. */
 .slot-footer {
   flex: 0 0 var(--cell-h);
+  /* Para el indicador de espacio, que se pega a su borde inferior. */
+  position: relative;
   padding: 0 6px;
   color: var(--border);
   white-space: nowrap;
@@ -346,16 +410,25 @@ body {
 .slot-columns {
   flex: 0 0 var(--cell-h);
   display: flex;
-  gap: 8px;
+  gap: var(--cell-w);
   padding: 0 6px;
   white-space: nowrap;
   color: var(--title-fg);
   border-bottom: 1px solid var(--border);
 }
 
+/* Las cabeceras en VERSALITAS con un poco de aire (spec 2026-09-11, V2):
+   se distinguen de las filas sin gastar color, y con un ancho fijo se
+   recortan con elipsis como las celdas. `position: relative` es para el
+   tirador del borde. */
 .col {
   flex: 0 0 auto;
   opacity: 0.85;
+  position: relative;
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.05em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .col[data-sortable="true"] {
@@ -364,13 +437,37 @@ body {
 
 .col-name {
   flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+/* El hueco de la casilla de marca, para que «Name» siga sobre los nombres
+   (ver `.row-check`). */
+.slot-columns::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 1.1em;
 }
 
 .sort-mark {
   margin-left: 4px;
+  font-size: 0.7em;
   color: var(--border-focus);
+}
+
+/* El tirador del borde derecho de una cabecera: seis píxeles que cambian el
+   cursor. Arrastrarlo fija el ancho de la columna (`resize_column`). */
+.col-grip {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+}
+
+.col-grip:hover,
+.col[data-resizing="true"] .col-grip {
+  background: var(--border-focus);
+  opacity: 0.6;
 }
 
 .scroller {
@@ -392,15 +489,23 @@ body {
   right: 0;
   height: var(--cell-h);
   display: flex;
-  gap: 8px;
+  /* Una CELDA entre columnas, como el separador del terminal: con anchos
+     fijos (puente 64) el hueco entre columnas es parte del reparto, y ocho
+     píxeles sueltos eran una celda que no cuadraba con nada. */
+  gap: var(--cell-w);
   padding: 0 6px;
   white-space: nowrap;
   cursor: default;
 }
 
+/* El cursor lleva un borde de ACENTO a la izquierda (spec 2026-09-11, V2)
+   además del fondo: en un tema donde selección y fondo se parecen, el
+   borde es lo que dice dónde está. Como sombra interior, no como borde:
+   un borde real movería el texto de esa fila tres píxeles. */
 .row[aria-selected="true"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
+  box-shadow: inset 3px 0 0 var(--border-focus);
 }
 
 /* El cursor de un panel SIN foco: presente pero apagado, para que dos
@@ -408,15 +513,46 @@ body {
 [aria-current="false"] .row[aria-selected="true"] {
   background: var(--selection-unfocused-bg);
   color: var(--selection-unfocused-fg);
+  box-shadow: inset 3px 0 0 var(--border);
 }
 
 .row[data-marked="true"] {
   background: var(--mark-bg);
 }
 
+/* Marcada Y bajo el cursor: el acento del cursor y, detrás, la franja de
+   la marca. Dos sombras interiores; la primera pinta encima. */
 .row[aria-selected="true"][data-marked="true"] {
   background: var(--selection-bg);
-  box-shadow: inset 3px 0 0 var(--mark-bg);
+  box-shadow:
+    inset 3px 0 0 var(--border-focus),
+    inset 6px 0 0 var(--mark-bg);
+}
+
+/* La casilla de marca (spec 2026-09-11, V2): un hueco reservado en cada
+   fila que solo se pinta al pasar el ratón o cuando la fila está marcada.
+   Pulsarla alterna la marca sin Ctrl, que es lo que quien viene del
+   escritorio busca. Reservado siempre, para que los nombres no salten. */
+.row-check {
+  flex: 0 0 auto;
+  width: 1.1em;
+  opacity: 0;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.row:hover .row-check,
+.row[data-marked="true"] .row-check {
+  opacity: 0.9;
+}
+
+/* Un cambio de cursor o de marca se desliza 80 ms; nada si el escritorio o
+   `[ui] reduce_motion` piden quietud (ver el bloque del final). */
+.row {
+  transition:
+    background-color 80ms ease-out,
+    box-shadow 80ms ease-out;
 }
 
 /* El nombre y lo que lo decora. Es el que CRECE, así que el nombre de dentro
@@ -425,7 +561,10 @@ body {
    que desaparece dice lo contrario de lo que hay. */
 .name-block {
   flex: 1 1 auto;
-  min-width: 0;
+  /* El suelo del nombre es el del reparto compartido (`NAME_MIN`, diez
+     celdas): por debajo, un listado no se lee. Quien no cabe es la columna
+     de la derecha, que la cabecera descarta (ver `paintHeader`). */
+  min-width: calc(var(--cell-w) * 10);
   display: flex;
   align-items: baseline;
   overflow: hidden;
@@ -445,6 +584,10 @@ body {
 .cell {
   flex: 0 0 auto;
   opacity: 0.75;
+  /* Con un ancho fijo (puente 64) la celda se recorta como el nombre. Sin
+     él, `width: auto` y nada de esto actúa. */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .kind-dir .cell-name::before {
@@ -462,6 +605,21 @@ body {
   overflow: hidden;
   white-space: nowrap;
   unicode-bidi: isolate;
+  /* Los glifos Nerd (`file-icons`, `style = nerd`) salen de la fuente de
+     símbolos empaquetada, que solo tiene esos codepoints privados: todo lo
+     demás —emoji, ASCII— cae a la pila del cuerpo. */
+  font-family: "Symbols Nerd Font Mono", var(--font-mono);
+}
+
+/* Symbols Nerd Font Mono (MIT), RECORTADA a los dieciocho glifos que el
+   plugin `file-icons` usa en su estilo `nerd` (3,8 KB en woff2, frente a los
+   2,6 MB de la fuente entera). Cómo se regenera está en
+   `ui/src/fonts/README.md`; añadir un glifo al plugin es añadirlo ahí. */
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("./fonts/symbols-nerd-mono-subset.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+E700-E7C5, U+F000-F2E0;
 }
 
 .empty,
@@ -861,6 +1019,9 @@ body {
   align-items: center;
   justify-content: center;
   background: rgb(0 0 0 / 45%);
+  /* `[effects] backdrop = "blur"` del tema (spec 2026-09-11, V6): el host
+     lo traduce a `--dialog-backdrop`; sin él, el velo de siempre. */
+  backdrop-filter: var(--dialog-backdrop, none);
 }
 
 .dialog {
@@ -1033,9 +1194,114 @@ body {
   color: var(--error-fg);
 }
 
+/* Un aviso persistente es una PÍLDORA (spec 2026-09-11, V5): fondo tenue
+   del color de aviso, borde redondeado y un ⚠ delante. Es estado, no un
+   mensaje: se queda mientras dure lo que avisa. */
 .banner {
+  display: inline-block;
   color: var(--hostile-fg);
   margin-right: 8px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--hostile-fg) 45%, transparent);
+  background: color-mix(in srgb, var(--hostile-fg) 12%, transparent);
+  line-height: calc(var(--cell-h) - 4px);
+}
+
+.banner::before {
+  content: "⚠ ";
+  opacity: 0.8;
+}
+
+/* El mensaje efímero es un TOAST: abajo a la derecha, sobre la barra de
+   teclas, con una entrada de 120 ms. El host lo caduca (`[ui]
+   notice_seconds`); vacío no se pinta. Un mensaje largo se recorta a
+   media pantalla y no tapa el listado entero. */
+.status-message:empty {
+  display: none;
+}
+
+.status-message {
+  position: fixed;
+  right: 12px;
+  bottom: calc(var(--keybar-h, 0px) + 10px);
+  max-width: 50vw;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+  border: 1px solid var(--border-focus);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: toast-in 120ms ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Las migas de la ruta (puente 65): botones sin cromo, el actual sin
+   afordancia, y un separador tenue. */
+.crumb {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  cursor: pointer;
+  border-radius: 3px;
+  unicode-bidi: isolate;
+}
+
+.crumb:hover:not(:disabled) {
+  background: var(--selection-unfocused-bg);
+  color: var(--fg);
+}
+
+.crumb:disabled {
+  cursor: default;
+  color: var(--fg);
+}
+
+.crumb-sep {
+  opacity: 0.5;
+  padding: 0 1px;
+}
+
+/* El indicador de espacio del pie (puente 65): dos píxeles al pie del
+   pie, llenos hasta lo ocupado. Del color del borde de foco; de aviso
+   pasado el 75 %, y de error pasado el 90 %, que es cuando importa. */
+.slot-gauge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.slot-gauge > i {
+  display: block;
+  height: 100%;
+  background: var(--border-focus);
+}
+
+.slot-gauge[data-level="high"] > i {
+  background: var(--warning-fg);
+}
+
+.slot-gauge[data-level="critical"] > i {
+  background: var(--error-fg);
 }
 
 /* Una orden rechazada en la frontera: error, no nombre hostil. */
@@ -2899,11 +3165,19 @@ body {
     opacity: 1;
     animation: none;
   }
+
+  .row {
+    transition: none;
+  }
 }
 
 :root[data-reduce-motion="true"] .slot-busy {
   opacity: 1;
   animation: none;
+}
+
+:root[data-reduce-motion="true"] .row {
+  transition: none;
 }
 
 /* --- El selector de columnas ------------------------------------------- */

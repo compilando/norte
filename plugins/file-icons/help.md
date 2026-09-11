@@ -11,5 +11,13 @@ their own (`Makefile`, `Cargo.toml`, `.gitignore`, `Dockerfile`, `LICENSE`,
 It decides from the name and from what the listing says the entry is. It
 never opens the file and never learns where you are.
 
-The `style` setting switches between emoji and plain ASCII glyphs, for
-terminals whose font has no emoji.
+The `style` setting picks the glyph set: `emoji` (the default), `ascii` for
+terminals whose font has no emoji, or `nerd` for one-cell Nerd Font glyphs —
+the window carries the ones it needs, a terminal needs a Nerd-patched font
+or it paints a box.
+
+Two more settings shape the column: `dir-icon` is your own glyph for plain
+folders (folders whose name means more, like `.git`, keep theirs), and
+`unknown-icon` is the glyph for a file the table does not know — set it and
+every row gets an icon, so the column reads as a column. Both are empty by
+default.

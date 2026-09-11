@@ -30,6 +30,7 @@ pub const SERVED_WIT: &[(&str, &str)] = &[
     ("norte:location", "0.2.0"),
     ("norte:renamer", "0.1.0"),
     ("norte:hook", "0.2.0"),
+    ("norte:thumbnail", "0.1.0"),
 ];
 
 /// Un guest compilado contra una versión de un paquete que el host sirve a

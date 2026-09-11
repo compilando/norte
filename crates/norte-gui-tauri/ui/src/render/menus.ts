@@ -4,6 +4,7 @@
 import type { Screen } from "../render";
 import type {
   BrowserSlotView,
+  ColumnHeader,
   MenuView,
   KeyBarView,
   PanelBarView,
@@ -12,7 +13,7 @@ import type {
   TabGroupView,
   WhichKeyView,
 } from "../types";
-import { badge } from "./dom";
+import { badge, colVar } from "./dom";
 import type { SlotDom } from "./dom";
 
 /**
@@ -464,7 +465,14 @@ export function paintTabs(
   dom.tabs.replaceChildren(lista);
 }
 
-/** La cabecera: etiquetas y marca de orden, ambas resueltas en Rust. */
+/**
+ * La cabecera: etiquetas y marca de orden, ambas resueltas en Rust.
+ *
+ * El ancho fijo y la alineación de cada columna (puente 64) se escriben como
+ * variables en la RAÍZ del hueco, no en cada celda: las filas ya pintadas
+ * las leen sin repintarse, y arrastrar el tirador solo cambia una variable.
+ * La del nombre nunca: es la que crece.
+ */
 export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): void {
   const nodes = slot.columns.map((c) => {
     const el = document.createElement("span");
@@ -484,7 +492,78 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
       el.dataset["sortable"] = "true";
       el.setAttribute("tabindex", "-1");
     }
+    const v = colVar(c.id);
+    if (c.id === "name") {
+      dom.root.style.removeProperty(v);
+      dom.root.style.removeProperty(`${v}-align`);
+      return el;
+    }
+    if (c.width === null) {
+      dom.root.style.removeProperty(v);
+    } else {
+      dom.root.style.setProperty(v, `calc(var(--cell-w) * ${String(c.width)})`);
+    }
+    dom.root.style.setProperty(`${v}-align`, c.align === "right" ? "right" : "left");
+    el.style.width = `var(${v}, auto)`;
+    el.style.textAlign = `var(${v}-align, left)`;
+    el.style.display = `var(${v}-show, block)`;
+    // Se vuelve a decidir en cada pintado: un hueco que se ensanchó recupera
+    // la columna que descartó cuando era estrecho.
+    dom.root.style.removeProperty(`${v}-show`);
+    const grip = document.createElement("span");
+    grip.className = "col-grip";
+    grip.dataset["grip"] = c.id;
+    el.append(grip);
     return el;
   });
   dom.header.replaceChildren(...nodes);
+  descartarLasQueNoCaben(dom, slot, this.cell().w);
+}
+
+/**
+ * La regla 2 del reparto compartido (`columns::layout`): si las columnas
+ * no dejan al nombre su suelo, se descartan desde la MÁS A LA DERECHA hasta
+ * que quepan. Se hace aquí y no en el host porque el ancho útil del hueco
+ * en píxeles —bordes, relleno, tiradores— solo lo sabe quien pinta.
+ *
+ * El suelo del nombre viene del HOST en la propia cabecera (`width` de la
+ * columna `name` es `NAME_MIN`, no un ancho): un número que viviera aquí
+ * también se separaría del de Rust sin que nadie lo viera. Y cuenta TODAS
+ * las columnas, no solo las fijas: una `auto` o `flex` pesa lo que mide su
+ * cabecera ya pintada. Sin medida (un documento sin layout, como el de los
+ * tests) no se descarta nada: mejor una columna de más que un listado sin
+ * columnas.
+ */
+function descartarLasQueNoCaben(
+  dom: SlotDom,
+  slot: BrowserSlotView,
+  cellW: number,
+): void {
+  const total = dom.root.clientWidth;
+  if (total <= 0 || cellW <= 0) {
+    return;
+  }
+  const suelo = slot.columns.find((c) => c.id === "name")?.width ?? 10;
+  const cabeceras = [...dom.header.querySelectorAll<HTMLElement>(".col")];
+  const anchoDe = (c: ColumnHeader, i: number): number =>
+    c.width === null
+      ? (cabeceras[i]?.getBoundingClientRect().width ?? 0)
+      : c.width * cellW;
+  // Relleno de la fila (6 px a cada lado), el borde del hueco, la casilla
+  // de marca (1,1 em ≈ una celda y media) y una celda de separación por
+  // columna.
+  let libre = total - 14 - cellW * 1.5 - cellW * slot.columns.length;
+  const otras = slot.columns.map((c, i) => ({ c, i })).filter(({ c }) => c.id !== "name");
+  for (const { c, i } of otras) {
+    libre -= anchoDe(c, i);
+  }
+  const minimo = suelo * cellW;
+  for (let k = otras.length - 1; k >= 0 && libre < minimo; k -= 1) {
+    const entrada = otras[k];
+    if (entrada === undefined) {
+      break;
+    }
+    dom.root.style.setProperty(`${colVar(entrada.c.id)}-show`, "none");
+    libre += anchoDe(entrada.c, entrada.i) + cellW;
+  }
 }

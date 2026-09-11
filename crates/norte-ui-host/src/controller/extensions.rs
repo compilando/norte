@@ -157,6 +157,9 @@ impl Estado {
                 .into_iter()
                 .collect(),
             Fondo::Imagen(token, leido) => self.aplicar_imagen(token, leido).into_iter().collect(),
+            Fondo::Miniatura(token, thumb) => {
+                self.aplicar_miniatura(token, thumb).into_iter().collect()
+            }
             Fondo::BusquedaViva(epoca, id) => {
                 if let Some(b) = self.busqueda.as_mut()
                     && b.epoca == epoca

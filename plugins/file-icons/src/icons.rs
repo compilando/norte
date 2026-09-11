@@ -17,6 +17,16 @@ pub enum Style {
     Emoji,
     /// One to two ASCII characters per class, for fonts without emoji.
     Ascii,
+    /// One Nerd Font glyph per class (private-use codepoints from the
+    /// Font Awesome and Devicons ranges, stable since Nerd Fonts v2). One
+    /// cell wide. The window bundles the glyphs it needs; a terminal needs a
+    /// patched font, or it paints a box.
+    Nerd,
+}
+
+impl Style {
+    /// Every style, for tests that sweep the table.
+    pub const ALL: &'static [Style] = &[Style::Emoji, Style::Ascii, Style::Nerd];
 }
 
 /// What the host says an entry is. A name cannot tell a folder from a
@@ -90,6 +100,28 @@ impl Kind {
             (Kind::Git, Style::Emoji) => "🐙",
             (Kind::Container, Style::Emoji) => "🐳",
             (Kind::Config | Kind::Build | Kind::Git | Kind::Container, Style::Ascii) => "#",
+            // Nerd Fonts: `nf-fa-*` (U+F000–F2E0) and `nf-dev-*` (U+E700–E7C5),
+            // the two ranges v3 did not move. The window's subset font
+            // (`ui/src/fonts/`) carries exactly these eighteen glyphs: add
+            // one here and it has to be added there too.
+            (Kind::Folder, Style::Nerd) => "\u{f07b}",
+            (Kind::Link, Style::Nerd) => "\u{f0c1}",
+            (Kind::Rust, Style::Nerd) => "\u{e7a8}",
+            (Kind::Code, Style::Nerd) => "\u{f121}",
+            (Kind::Script, Style::Nerd) => "\u{f120}",
+            (Kind::Doc, Style::Nerd) => "\u{f0f6}",
+            (Kind::Sheet, Style::Nerd) => "\u{f0ce}",
+            (Kind::Slides, Style::Nerd) => "\u{f1c4}",
+            (Kind::Readme, Style::Nerd) => "\u{f02d}",
+            (Kind::Image, Style::Nerd) => "\u{f1c5}",
+            (Kind::Audio, Style::Nerd) => "\u{f001}",
+            (Kind::Video, Style::Nerd) => "\u{f008}",
+            (Kind::Archive, Style::Nerd) => "\u{f1c6}",
+            (Kind::Config, Style::Nerd) => "\u{f013}",
+            (Kind::Build, Style::Nerd) => "\u{f0ad}",
+            (Kind::Git, Style::Nerd) => "\u{e702}",
+            (Kind::Container, Style::Nerd) => "\u{e7b0}",
+            (Kind::Licence, Style::Nerd) => "\u{f24e}",
         }
     }
 
@@ -286,6 +318,30 @@ pub fn icon_for(name: &[u8], class: Class, style: Style) -> Option<&'static str>
     }
 }
 
+/// [`icon_for`] with the two user overrides from `[config]`:
+///
+/// - `dir_icon`, when not empty, replaces the glyph of a PLAIN folder — the
+///   few folders whose name means more (`.git`) keep theirs;
+/// - `unknown`, when not empty, is the glyph for a file whose name says
+///   nothing, so every row gets one and the column reads as a column.
+///
+/// Both are the user's text: the host masks and caps them like any badge.
+pub fn icon_with<'a>(
+    name: &[u8],
+    class: Class,
+    style: Style,
+    dir_icon: &'a str,
+    unknown: &'a str,
+) -> Option<&'a str> {
+    match (class, icon_for(name, class, style)) {
+        (Class::Dir, Some(g)) if !dir_icon.is_empty() && g == Kind::Folder.glyph(style) => {
+            Some(dir_icon)
+        }
+        (Class::File, None) if !unknown.is_empty() => Some(unknown),
+        (_, found) => found,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,7 +382,7 @@ mod tests {
     fn office_files_have_their_own_icons() {
         assert_eq!(badge_for(b"cuentas.xlsx", Style::Emoji), Some("📊"));
         assert_eq!(badge_for(b"datos.csv", Style::Emoji), Some("📊"));
-        assert_eq!(badge_for(b"charla.pptx", Style::Emoji), Some("📽"));
+        assert_eq!(badge_for(b"charla.pptx", Style::Emoji), Some("📽\u{fe0f}"));
         assert_eq!(badge_for(b"informe.docx", Style::Emoji), Some("📄"));
     }
 
@@ -338,7 +394,7 @@ mod tests {
             Some("🦀"),
             "special before .toml"
         );
-        assert_eq!(badge_for(b"config.toml", Style::Emoji), Some("⚙"));
+        assert_eq!(badge_for(b"config.toml", Style::Emoji), Some("⚙\u{fe0f}"));
         assert_eq!(
             badge_for(b".bashrc", Style::Emoji),
             None,
@@ -351,7 +407,7 @@ mod tests {
         );
         assert_eq!(
             badge_for(b"PHOTO.JPG", Style::Emoji),
-            Some("🖼"),
+            Some("🖼\u{fe0f}"),
             "case-insensitive"
         );
         assert_eq!(
@@ -376,13 +432,60 @@ mod tests {
     #[test]
     fn every_glyph_is_short_and_printable() {
         for k in Kind::ALL {
-            for style in [Style::Emoji, Style::Ascii] {
-                let g = k.glyph(style);
+            for style in Style::ALL {
+                let g = k.glyph(*style);
                 assert!(!g.is_empty());
                 assert!(g.chars().count() <= 2, "{g:?}");
                 assert!(!g.chars().any(char::is_control), "{g:?}");
             }
         }
+    }
+
+    /// Every Nerd glyph is ONE private-use codepoint, one cell wide, and
+    /// from one of the two ranges Nerd Fonts v3 kept in place — anything
+    /// else would paint a box in a terminal with an older patched font.
+    #[test]
+    fn every_nerd_glyph_is_one_stable_private_use_codepoint() {
+        use unicode_width::UnicodeWidthStr;
+        for k in Kind::ALL {
+            let g = k.glyph(Style::Nerd);
+            let mut chars = g.chars();
+            let c = chars.next().expect("a glyph") as u32;
+            assert!(chars.next().is_none(), "{k:?}: one codepoint");
+            assert!(
+                (0xE700..=0xE7C5).contains(&c) || (0xF000..=0xF2E0).contains(&c),
+                "{k:?}: U+{c:04X} is outside nf-dev / nf-fa"
+            );
+            assert_eq!(g.width(), 1, "{k:?}");
+        }
+    }
+
+    #[test]
+    fn the_overrides_replace_only_the_plain_folder_and_the_unknown_file() {
+        let plain = icon_with(b"src", Class::Dir, Style::Ascii, "»", "?");
+        assert_eq!(plain, Some("»"), "a plain folder takes the user's glyph");
+        let git = icon_with(b".git", Class::Dir, Style::Ascii, "»", "?");
+        assert_eq!(git, Some("#"), "a folder that means more keeps its own");
+        assert_eq!(
+            icon_with(b"x", Class::File, Style::Ascii, "»", "?"),
+            Some("?"),
+            "a file the table does not know gets the unknown glyph"
+        );
+        assert_eq!(
+            icon_with(b"x", Class::File, Style::Ascii, "»", ""),
+            None,
+            "and none when the override is empty"
+        );
+        assert_eq!(
+            icon_with(b"main.rs", Class::File, Style::Ascii, "»", "?"),
+            Some("{}"),
+            "a known file is not touched"
+        );
+        assert_eq!(
+            icon_with(b"src", Class::Dir, Style::Ascii, "", "?"),
+            Some("/"),
+            "an empty dir_icon means the style's own"
+        );
     }
 
     /// Every emoji glyph measures TWO cells with the measure the terminal

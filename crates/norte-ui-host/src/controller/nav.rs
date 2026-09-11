@@ -71,6 +71,11 @@ impl Estado {
                     self.navegar(&destino, Trail::Record, backend, buzon),
                 )
             }
+            UiAction::BreadcrumbActivate {
+                slot_id,
+                depth,
+                generation,
+            } => self.ir_a_miga(*slot_id, *depth, *generation, backend, buzon),
             UiAction::Parent { slot_id } => {
                 if *slot_id != self.activo() {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
@@ -188,6 +193,49 @@ impl Estado {
             state: Self::cargando_hacia(Some(&destino), enc),
         };
         vec![self.parche(vec![cambio])]
+    }
+
+    /// Una miga pulsada (puente 65): navega al ancestro con los primeros
+    /// `depth` tramos de la ruta del hueco. Por profundidad y no por nombre:
+    /// los tramos viajaron enmascarados. La miga del directorio ACTUAL no
+    /// navega —ya se está ahí— y se contesta aplicada sin mover nada.
+    pub(super) fn ir_a_miga(
+        &mut self,
+        slot_id: u32,
+        depth: u32,
+        generation: u64,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let Some(hueco) = self.huecos.get(&slot_id) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        // Una miga de un listado que ya no está: la profundidad hablaba de
+        // otra ruta. Rancia, como una fila de otra generación.
+        if hueco.pane.listing_epoch() != generation {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let actual = hueco.pane.dir().clone();
+        let profundidad = usize::try_from(depth).unwrap_or(usize::MAX);
+        if profundidad >= actual.segments().count() {
+            return (self.aplicada(), Vec::new());
+        }
+        // Recortar por detrás hasta la profundidad pedida, con la misma
+        // operación que `..`: un ancestro es padres encadenados.
+        let mut destino = actual;
+        while destino.segments().count() > profundidad {
+            let Some(padre) = destino.parent() else {
+                break;
+            };
+            destino = padre;
+        }
+        (
+            self.aplicada(),
+            self.navegar_hueco(slot_id, &destino, Trail::Record, backend, buzon),
+        )
     }
 
     /// El índice de una fila, si la clave es de ESTA generación y existe.

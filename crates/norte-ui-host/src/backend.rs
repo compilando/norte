@@ -598,6 +598,16 @@ pub trait HostBackend: Send + Sync + 'static {
         columns: Option<u32>,
     ) -> BoxFuture<'static, Result<Option<methods::PluginPreviewStyled>, Error>>;
 
+    /// La MINIATURA de un fichero por un plugin (ADR 0107): una imagen ya
+    /// verificada por el plugin-host, o `None` si ningún plugin consentido
+    /// casa o el que casa no supo. Cosmética y fail-soft como la preview:
+    /// sin miniatura, el visor se queda con lo que tenía.
+    fn plugin_thumbnail(
+        &self,
+        path: VPath,
+        max_edge: u32,
+    ) -> BoxFuture<'static, Result<Option<methods::PluginThumbnail>, Error>>;
+
     /// Las DECORACIONES que los plugins ponen sobre un lote de rutas.
     ///
     /// Cosmético y fail-soft por contrato: sin decoradores consentidos, con
@@ -1003,6 +1013,15 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<Option<methods::PluginPreviewStyled>, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.plugin_preview_styled(&path, columns).await })
+    }
+
+    fn plugin_thumbnail(
+        &self,
+        path: VPath,
+        max_edge: u32,
+    ) -> BoxFuture<'static, Result<Option<methods::PluginThumbnail>, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugin_thumbnail(&path, max_edge).await })
     }
 
     fn plugin_decorate(

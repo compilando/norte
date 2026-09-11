@@ -18,7 +18,7 @@ wit_bindgen::generate!({
 });
 
 use exports::norte::plugin::columns::{Guest as ColumnsGuest, LocationRef};
-use norte::host::host_log;
+use norte::host::{host_config, host_log};
 use norte::location::location;
 
 /// La ubicación del host, vista como [`Location`].
@@ -78,7 +78,22 @@ impl ColumnsGuest for GitStatus {
         // limpio.
         let index_mtime = host.stat(b".git/index").map_or(0, |m| m.mtime_sec);
         let ignores = crate::load_ignores(&host, &loc.prefix);
-        crate::status::status_for(&index, &ignores, &host, &loc.prefix, &entries, index_mtime)
+        // El estilo configurado: el host resuelve los defaults del manifiesto
+        // antes de llamar, así que un `None` es un manifiesto cambiado bajo
+        // los pies y las letras de siempre son la respuesta menos rara.
+        let style = crate::status::Style::parse(
+            host_config::get("glyphs").as_deref(),
+            host_config::get("ignored").as_deref(),
+        );
+        crate::status::status_for_with(
+            &index,
+            &ignores,
+            &host,
+            &loc.prefix,
+            &entries,
+            index_mtime,
+            style,
+        )
     }
 }
 

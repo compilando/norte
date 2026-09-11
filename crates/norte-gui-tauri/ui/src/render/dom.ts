@@ -248,9 +248,36 @@ export function updateRow(
     cell.className = "cell";
     cell.setAttribute("role", "gridcell");
     cell.textContent = c.text ?? "";
+    // El ancho y la alineación los DECLARA la cabecera del hueco como
+    // variables en su raíz (puente 64); una celda solo las lee. Sin
+    // variable, `auto` y `left`: lo de siempre.
+    const v = colVar(c.column);
+    cell.style.width = `var(${v}, auto)`;
+    cell.style.textAlign = `var(${v}-align, left)`;
+    // Una columna que la cabecera DESCARTÓ por no caber (`${v}-show: none`)
+    // se va de todas las filas a la vez, sin repintarlas.
+    cell.style.display = `var(${v}-show, block)`;
     nodes.push(cell);
   }
-  el.replaceChildren(...nodes);
+  // La casilla de marca va la PRIMERA: un hueco reservado que se pinta al
+  // pasar el ratón o cuando la fila está marcada (ver `.row-check`).
+  const check = document.createElement("span");
+  check.className = "row-check";
+  check.setAttribute("aria-hidden", "true");
+  check.textContent = row.marked ? "☑" : "☐";
+  el.replaceChildren(check, ...nodes);
+}
+
+/**
+ * El nombre de la variable CSS que lleva el ancho de una columna en la raíz
+ * de su hueco (`--colw-<id>`), y con el sufijo `-align`, su alineación. El
+ * id de una columna es un conjunto abierto (`attr:posix.mode`,
+ * `plugin:git-status`) y un nombre de variable no admite `:` ni `.`: se
+ * sustituyen. Dos ids que colisionen tras eso comparten ancho, y es un caso
+ * que la configuración no produce.
+ */
+export function colVar(id: string): string {
+  return `--colw-${id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
 }
 
 /** Una etiqueta pequena de cabecera (nivel, filtro, origen del registro). */
@@ -367,7 +394,13 @@ export function statusNodes(
     el.textContent = connection;
     nodes.push(el);
   }
+  // El mensaje efímero es un TOAST (spec 2026-09-11, V5): con clase
+  // propia, la hoja de estilos lo saca de la barra a la esquina inferior
+  // derecha mientras dure; el host lo caduca (`[ui] notice_seconds`) y
+  // entonces el nodo queda vacío y no se pinta. Sigue dentro de la región
+  // viva de la barra, así que un lector de pantalla lo anuncia igual.
   const msg = document.createElement("span");
+  msg.className = "status-message";
   msg.textContent = status.message ?? "";
   nodes.push(msg);
   // Los avisos caducados sin leer (puente 63): una insignia `!n` que abre

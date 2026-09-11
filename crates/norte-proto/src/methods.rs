@@ -1157,7 +1157,16 @@ use crate::{
 /// carpetas van sin icono; y no lee `slot`, así que pinta el icono a la
 /// derecha, como una insignia, y el primer plugin que conteste tapa al otro.
 /// Un cliente 0.72 contra un daemon 0.71 no negocia.
-pub const PROTOCOL_VERSION: &str = "0.72.0";
+///
+/// # 0.73.0 — `plugin.thumbnail` (ADR 0107)
+///
+/// Un método nuevo: la miniatura de un fichero por el primer plugin
+/// `thumbnail` consentido cuyo mimetype casa ([`PluginThumbnailParams`],
+/// [`PluginThumbnailResult`]). Aditivo: ningún mensaje que existía cambia.
+/// Un **cliente 0.73 contra un daemon 0.72** recibe `MethodNotFound` y lo
+/// trata como «sin miniatura», que es lo que había. Un cliente 0.72 contra
+/// un daemon 0.73 no lo pide.
+pub const PROTOCOL_VERSION: &str = "0.73.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2089,6 +2098,13 @@ pub const PLUGIN_PREVIEW: &str = "plugin.preview";
 /// daemon 0.27 sin el handler aún cableado, T3/T4); el cliente cae a
 /// [`PLUGIN_PREVIEW`] igual en ambos casos.
 pub const PLUGIN_PREVIEW_STYLED: &str = "plugin.preview_styled";
+/// `plugin.thumbnail` (0.73.0, ADR 0107): una MINIATURA de un fichero por
+/// el primer plugin `thumbnail` consentido cuyo mimetype casa. Como
+/// `plugin.preview`, el daemon lee los bytes bajo el mismo gate de lectura
+/// y los acota; lo que vuelve es una imagen codificada con sus dimensiones,
+/// verificadas por el plugin-host antes de cruzar. Sin plugin que case,
+/// `null`: la ventana se queda con lo que tenía. Abierto, como su gemelo.
+pub const PLUGIN_THUMBNAIL: &str = "plugin.thumbnail";
 /// `plugin.decorate` — decoraciones tipo git-status por entrada, aportadas
 /// por plugins `decorator` APROBADOS y ACTIVADOS (0.27.0, G3, ADR 0037):
 /// batched sobre una página visible, POSICIONAL 1:1 con `params.paths`
@@ -7837,6 +7853,85 @@ pub struct PluginPreviewStyledResult {
     /// La preview con estilo, o `None` si ningún previewer aplicó.
     #[serde(flatten)]
     pub preview: Option<PluginPreviewStyled>,
+}
+
+/// Parámetros de [`PLUGIN_THUMBNAIL`] (0.73.0, ADR 0107).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginThumbnailParams {
+    /// El fichero.
+    pub path: VPath,
+    /// El lado mayor que la miniatura no debe superar, en píxeles. El
+    /// plugin-host lo acota a su propio techo antes de llamar al guest.
+    pub max_edge: u32,
+}
+
+/// Una miniatura (0.73.0, ADR 0107): una imagen codificada, ya verificada
+/// por el plugin-host —encoding entre los que la ventana pinta, magia y
+/// dimensiones que casan— con el plugin que la hizo.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginThumbnail {
+    /// Id del plugin que la hizo.
+    pub plugin_id: String,
+    /// Nombre del plugin, TEXTO DEL PLUGIN: el frontend lo enmascara.
+    pub plugin_name: String,
+    /// `image/png`, `image/jpeg` o `image/webp`.
+    pub mimetype: String,
+    /// Los bytes de la imagen, en base64 en el wire. Acotados a
+    /// [`THUMBNAIL_WIRE_MAX_BYTES`] al deserializar: por encima, el mensaje
+    /// entero es inválido.
+    #[serde(with = "thumb_wire")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "String", extend("contentEncoding" = "base64"))
+    )]
+    pub bytes: Vec<u8>,
+    /// Ancho en píxeles, el que dice la cabecera del raster.
+    pub width: u32,
+    /// Alto en píxeles, el que dice la cabecera del raster.
+    pub height: u32,
+}
+
+/// Techo de una miniatura en el wire (ADR 0107): 4 MiB, el mismo que el
+/// plugin-host aplica al valor que devuelve un guest.
+pub const THUMBNAIL_WIRE_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+/// Resultado de [`PLUGIN_THUMBNAIL`]: la miniatura, o nada (`null`) si
+/// ningún plugin consentido casa o el que casa no supo.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginThumbnailResult {
+    /// La miniatura, o `None`.
+    #[serde(flatten)]
+    pub thumbnail: Option<PluginThumbnail>,
+}
+
+/// Los bytes de una miniatura como base64 (0.73.0), con techo al leer.
+mod thumb_wire {
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    use crate::attrs::{decode_bytes_b64_lenient, encode_bytes_b64};
+
+    #[expect(
+        clippy::ptr_arg,
+        reason = "serde `with` fija la firma con el tipo del campo, `&Vec<u8>`"
+    )]
+    pub(super) fn serialize<S: Serializer>(v: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&encode_bytes_b64(v))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let raw = String::deserialize(d)?;
+        let bytes = decode_bytes_b64_lenient(&raw)
+            .ok_or_else(|| serde::de::Error::custom("thumbnail bytes: base64 inválido"))?;
+        if bytes.len() > super::THUMBNAIL_WIRE_MAX_BYTES {
+            return Err(serde::de::Error::custom(
+                "thumbnail bytes: por encima del techo del wire",
+            ));
+        }
+        Ok(bytes)
+    }
 }
 
 /// Una decoración tipo git-status de UNA entrada (elemento de

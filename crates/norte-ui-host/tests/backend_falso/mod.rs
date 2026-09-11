@@ -216,6 +216,8 @@ pub struct Falso {
     /// La preview con estilo que contesta un previewer, por wire. Ausente =
     /// ningún previewer aplica, que NO es un error.
     pub previews: HashMap<String, norte_proto::methods::PluginPreviewStyled>,
+    /// Las MINIATURAS que un plugin daría por ruta de wire (ADR 0107).
+    pub thumbnails: HashMap<String, norte_proto::methods::PluginThumbnail>,
     /// El ancho que cada petición de preview con estilo dijo (0.66.0), en
     /// orden. Es lo que permite comprobar que el viewport CRUZA.
     pub anchos_de_preview: std::sync::Mutex<Vec<Option<u32>>>,
@@ -978,6 +980,15 @@ impl HostBackend for Falso {
             .push(columns);
         let p = self.previews.get(&path.to_wire()).cloned();
         Box::pin(async move { Ok(p) })
+    }
+
+    fn plugin_thumbnail(
+        &self,
+        path: VPath,
+        _max_edge: u32,
+    ) -> BoxFuture<'static, Result<Option<norte_proto::methods::PluginThumbnail>, Error>> {
+        let t = self.thumbnails.get(&path.to_wire()).cloned();
+        Box::pin(async move { Ok(t) })
     }
 
     fn plugin_decorate(

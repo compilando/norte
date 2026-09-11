@@ -89,6 +89,21 @@ pub enum UiAction {
         /// Hueco.
         slot_id: u32,
     },
+    /// Pulsa una miga de la ruta (puente 65): navega al directorio con los
+    /// primeros `depth` tramos de la ruta actual. `0` es la raíz.
+    ///
+    /// Por PROFUNDIDAD y no por nombre: los tramos ya viajaron enmascarados,
+    /// y un nombre enmascarado no vuelve a ser un nombre.
+    BreadcrumbActivate {
+        /// Hueco.
+        slot_id: u32,
+        /// Cuántos tramos conservar.
+        depth: u32,
+        /// La generación del listado que pintó esas migas. Si el hueco ya
+        /// navegó a otro sitio, la profundidad se refiere a una ruta que
+        /// ya no está: la miga es rancia y no se reinterpreta sobre la nueva.
+        generation: u64,
+    },
     /// Atrás y adelante en el rastro de navegación.
     History {
         /// Hueco.
@@ -118,6 +133,22 @@ pub enum UiAction {
         slot_id: u32,
         /// Id de la columna, tal como viajó en su cabecera.
         column: String,
+    },
+    /// Fija el ancho de una columna (arrastrar el borde de su cabecera,
+    /// puente 64).
+    ///
+    /// El ancho es de la COLUMNA, no del hueco: `[ui.columns] spec.width`
+    /// es global, así que todos los huecos que la pintan cambian a la vez,
+    /// y el terminal la lee igual en su siguiente carga. `cells` llega en
+    /// celdas de la rejilla; el host lo acota a lo que la configuración
+    /// acepta.
+    ResizeColumn {
+        /// Hueco donde se arrastró.
+        slot_id: u32,
+        /// Id de la columna, tal como viajó en su cabecera.
+        column: String,
+        /// Ancho pedido, en celdas.
+        cells: u16,
     },
     /// Cambia el foco de teclado de hueco.
     FocusSlot {

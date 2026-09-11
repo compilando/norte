@@ -86,3 +86,18 @@ pub mod hook_world {
         },
     });
 }
+
+/// El world de un plugin de MINIATURAS (ADR 0107, paquete
+/// `norte:thumbnail`): exporta `thumbnail` e importa `host-log` y
+/// `host-config`, las mismas del world principal y servidas por el mismo
+/// `HostState`. Sin `location`: recibe los bytes, no una ruta.
+pub mod thumbnail_world {
+    wasmtime::component::bindgen!({
+        world: "norte:thumbnail/norte-thumbnail",
+        path: "wit",
+        with: {
+            "norte:host/host-log": crate::bindings::norte::host::host_log,
+            "norte:host/host-config": crate::bindings::norte::host::host_config,
+        },
+    });
+}

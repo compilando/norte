@@ -143,14 +143,44 @@ pub fn free_for(
     path: &norte_proto::VPath,
     volumes: &[norte_proto::methods::Volume],
 ) -> Option<u64> {
+    volume_for(path, volumes)?.free_bytes
+}
+
+/// Cuánto del volumen de `path` está OCUPADO, en `0.0..=1.0` (spec
+/// 2026-09-11 V5: el indicador de espacio del pie de la ventana). `None`
+/// cuando no se sabe el total o lo libre, o el esquema no es local — el
+/// mismo criterio que [`free_for`].
+#[must_use]
+pub fn used_ratio_for(
+    path: &norte_proto::VPath,
+    volumes: &[norte_proto::methods::Volume],
+) -> Option<f32> {
+    let v = volume_for(path, volumes)?;
+    let total = v.total_bytes.filter(|t| *t > 0)?;
+    let free = v.free_bytes?.min(total);
+    // Precisión de f32 de sobra para una barra: el cociente cabe en 24 bits
+    // mucho antes de que un píxel lo note.
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "un cociente en [0, 1] para una barra de dos píxeles"
+    )]
+    let ratio = (1.0 - (free as f64 / total as f64)).clamp(0.0, 1.0) as f32;
+    Some(ratio)
+}
+
+/// El volumen MÁS PROFUNDO que contiene a `path`, solo para rutas locales.
+fn volume_for<'a>(
+    path: &norte_proto::VPath,
+    volumes: &'a [norte_proto::methods::Volume],
+) -> Option<&'a norte_proto::methods::Volume> {
     if path.scheme() != "file" || path.authority().is_some() {
         return None;
     }
     volumes
         .iter()
         .filter(|v| norte_proto::methods::RelPath::under(&v.mount, path).is_some())
-        .max_by_key(|v| v.mount.segments().count())?
-        .free_bytes
+        .max_by_key(|v| v.mount.segments().count())
 }
 
 #[cfg(test)]

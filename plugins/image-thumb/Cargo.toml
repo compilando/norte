@@ -1,0 +1,40 @@
+# `org.norte.image-thumb`: a downscaled raster of an image file for the
+# window's viewer — the first `thumbnail` guest (ADR 0107).
+#
+# Not a workspace member, like every guest: own lockfile, own profile,
+# compiles to `wasm32-wasip2`. The downscale in `lib.rs` is pure and has its
+# own tests on the host — hence `rlib` next to `cdylib`.
+[workspace]
+
+[package]
+name = "image-thumb"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Image thumbnails for norte's viewer, a WASM thumbnail plugin"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Guest-side bindings from the same WIT the host serves (`wit` is a symlink
+# to `crates/norte-plugin-host/wit`).
+wit-bindgen = "0.46"
+# Decoders for what a listing usually holds, and the two encoders the host
+# accepts back. Pure Rust, so it compiles to the component target as is.
+# `default-features = false`: the default set drags in every format and a
+# rayon that has no threads to run on.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "webp",
+    "bmp",
+    "tiff",
+] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true

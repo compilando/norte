@@ -1,13 +1,25 @@
 // El arranque del renderer: engancha el bridge, pinta lo que llega y manda lo
 // que el usuario hace. Nada más vive aquí.
 
+// Las dos fuentes EMPAQUETADAS (spec 2026-09-11, V1). Solo los subconjuntos
+// latinos y los pesos que se usan: cada fichero son ~24 KB de woff2, y Vite
+// los mete en `dist/assets`, que Tauri incrusta en el binario. La `@font-face`
+// de cada uno lleva `font-display: swap`, así que la pila del sistema pinta
+// mientras cargan y nada se queda en blanco.
+import "@fontsource/jetbrains-mono/latin-400.css";
+import "@fontsource/jetbrains-mono/latin-ext-400.css";
+import "@fontsource/jetbrains-mono/latin-700.css";
+import "@fontsource/inter/latin-400.css";
+import "@fontsource/inter/latin-ext-400.css";
+import "@fontsource/inter/latin-600.css";
+
 import { invokeMetrics, tauriPort } from "./bridge";
 import type { HostPort } from "./bridge";
 import { esParaElCampo, keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
 import { Session } from "./session";
 import { BRIDGE_VERSION } from "./types";
-import type { Appearance, UiAction } from "./types";
+import type { Appearance, HostCatalog, UiAction } from "./types";
 
 /** Medidas del spike: latencia tecla→pintado. Las lee el arnés de la 3.6. */
 export interface Metrics {
@@ -71,8 +83,18 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const metrics: Metrics = { keyToPaint: [], scrollToPaint: [], updates: 0, resyncs: 0 };
   const session = new Session();
   const catalog = await port.catalog();
-  applyTheme(doc, catalog.theme);
+  let catalogoActual = catalog;
+  applyThemeFor(doc, catalog);
   applyAppearance(doc, catalog.appearance);
+  // El escritorio cambia de claro a oscuro y la ventana le sigue (V6): el
+  // catálogo ya trae las dos variantes resueltas, así que no hay que pedir
+  // nada al host, solo enchufar el otro juego de variables.
+  const w = doc.defaultView;
+  if (w !== null && typeof w.matchMedia === "function") {
+    w.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+      applyTheme(doc, themeFor(catalogoActual, e.matches));
+    });
+  }
   // El umbral de «te estoy haciendo esperar» viene del host, que lo saca del
   // crate compartido con el terminal. Aquí solo se enchufa como variable CSS:
   // escribirlo en la hoja de estilos sería un tercer sitio donde vive el
@@ -214,7 +236,8 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     void port
       .catalog()
       .then((cat) => {
-        applyTheme(doc, cat.theme);
+        catalogoActual = cat;
+        applyThemeFor(doc, cat);
         applyAppearance(doc, cat.appearance);
       })
       .catch((e: unknown) => {
@@ -395,10 +418,35 @@ function applyTheme(doc: Document, theme: Record<string, string>): void {
   }
 }
 
-/** La proporción alto/tamaño de una fila. 20px de fila para 13px de letra es
- *  lo que la hoja de estilos lleva desde el principio; se conserva al escalar
- *  para que una fila siga teniendo el mismo aire con cualquier tamaño. */
-const FILA_POR_TAMANO = 20 / 13;
+/**
+ * El tema que toca según el escritorio (spec 2026-09-11, V6): la variante
+ * clara u oscura de `[ui] theme_light` / `theme_dark` si la hay para ese
+ * lado, y `[ui] theme` si no. Las tres llegan ya resueltas a variables: aquí
+ * no se sabe qué es un tema, solo cuál de los tres juegos enchufar.
+ */
+export function themeFor(cat: HostCatalog, dark: boolean): Record<string, string> {
+  const variante = dark ? cat.theme_dark : cat.theme_light;
+  return variante ?? cat.theme;
+}
+
+/** Si el escritorio pide oscuro. Sin `matchMedia` (un test), no. */
+function escritorioOscuro(doc: Document): boolean {
+  const w = doc.defaultView;
+  if (w === null || typeof w.matchMedia !== "function") {
+    return false;
+  }
+  return w.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function applyThemeFor(doc: Document, cat: HostCatalog): void {
+  applyTheme(doc, themeFor(cat, escritorioOscuro(doc)));
+}
+
+/** La proporción alto/tamaño de una fila. 22px de fila para 14px de letra es
+ *  lo que la hoja de estilos dice desde la tipografía empaquetada (V1); se
+ *  conserva al escalar para que una fila siga teniendo el mismo aire con
+ *  cualquier tamaño. */
+export const FILA_POR_TAMANO = 22 / 14;
 
 /**
  * Fuentes y movimiento (`[ui] font`, `mono_font`, `font_size`,
@@ -415,7 +463,7 @@ const FILA_POR_TAMANO = 20 / 13;
  * familia, y una columna calculada con el ancho equivocado desalinea el
  * listado entero.
  */
-function applyAppearance(doc: Document, ap: Appearance | undefined): void {
+export function applyAppearance(doc: Document, ap: Appearance | undefined): void {
   if (ap === undefined) {
     return;
   }
@@ -459,7 +507,10 @@ function medirCelda(doc: Document): void {
   const regla = doc.createElement("span");
   regla.textContent = "M".repeat(50);
   regla.style.cssText =
-    "position:absolute;visibility:hidden;white-space:pre;font-family:var(--mono, monospace);font-size:var(--ui-font-size, 13px)";
+    // La MISMA pila que el cuerpo (`--font-mono`), no `--mono` a secas: si
+    // la configuración no dice fuente, el cuerpo pinta con la empaquetada y
+    // medir con `monospace` daría el avance de otra familia.
+    "position:absolute;visibility:hidden;white-space:pre;font-family:var(--font-mono, monospace);font-size:var(--ui-font-size, 14px)";
   doc.body.append(regla);
   const ancho = regla.getBoundingClientRect().width / 50;
   regla.remove();

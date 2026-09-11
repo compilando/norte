@@ -75,6 +75,14 @@ title = "Say hello"            # ≤ 120 chars; at most 32 commands
 [[contributions.decorator]]
 slot = "icon"
 
+# thumbnail (ADR 0107): which files you can turn into a small raster for the
+# window's viewer, by mimetype like a previewer. You get the file's bytes
+# (capped at 8 MiB) and the longest edge allowed; you answer PNG, JPEG or
+# WebP bytes with their dimensions, and the host checks all three before
+# painting. The terminal ignores this kind.
+[[contributions.thumbnail]]
+mimetypes = ["image/png", "image/jpeg"]
+
 # columns: each column the user can add, by id, with its header
 [[contributions.columns]]
 id = "dims"

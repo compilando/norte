@@ -83,5 +83,40 @@ preguntar. `ntc --setup` vuelve a preguntar; `NORTE_NO_WIZARD=1` lo mantiene
 cerrado. F9 abre el menú en todos los presets menos el de Krusader, donde
 sigue siendo el terminal.
 
+La ventana
+----------
+
+La ventana lleva su propia tipografía: JetBrains Mono para todo lo que se
+alinea en celdas e Inter para menús y diálogos, 14 px en filas de 22 px,
+empaquetadas para que se vea igual en cualquier máquina. `font`,
+`mono_font` y `font_size` bajo `[ui]` siguen mandando cuando están.
+
+Las cabeceras de columna van en versalitas, y arrastrar el borde derecho de
+una fija el ancho de esa columna: se escribe en `[ui.columns]` como
+`width`, que el terminal también lee. Cuando las columnas fijas dejarían al
+nombre menos de diez celdas, la ventana descarta columnas desde la derecha
+hasta que quepan, como hace el terminal.
+
+El título del panel es una fila de migas — cada tramo es un botón que va
+allí — y el pie lleva un indicador de dos píxeles con lo ocupado del
+volumen, en aviso pasado el 75 % y en error pasado el 90 %. Un aviso sale
+como un toast abajo a la derecha durante `notice_seconds`; los avisos
+persistentes son píldoras.
+
+`theme_light` y `theme_dark` nombran el tema que la ventana pinta cuando el
+escritorio prefiere un esquema claro u oscuro; `theme` cubre el que no esté
+puesto. Un tema puede pedir `backdrop = "blur"` bajo `[effects]` para
+desenfocar lo que hay detrás de un diálogo; el terminal ignora ese bloque.
+
+Cada fila enseña una casilla de marca al pasar el ratón; pulsarla alterna la
+marca sin Ctrl. La extensión `file-icons` puede pintar glifos Nerd Font de
+una celda (`style = "nerd"`): la ventana lleva los glifos que necesita, un
+terminal necesita una fuente Nerd parcheada.
+
+Cuando el visor no tiene imagen propia — una foto que no cabe en su tope, un
+formato que la ventana no decodifica — una extensión `thumbnail` puede
+dársela: `image-thumb` lo hace con los ficheros de imagen, y el visor dice
+«via» de quién es.
+
 > 💡 Cada fila de la pantalla de ajustes dice qué hace y aplica al momento.
 > El fichero es la interfaz de verdad; la pantalla es una forma de editarlo.

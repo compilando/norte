@@ -263,7 +263,23 @@ use serde::{Deserialize, Serialize};
 ///   y `wizard_activate_row`: el asistente de primer arranque, que el
 ///   renderer pide cuando el catálogo dice `first_run` y el host escribe
 ///   por el camino de los ajustes.
-pub const BRIDGE_VERSION: u32 = 63;
+/// - **64**: anchos de columna (spec 2026-09-11, V2). `ColumnHeader` gana
+///   `width` —el ancho FIJO en celdas que `[ui.columns] spec.width`
+///   configura, `None` para `auto`/`flex`— y `align`, la alineación
+///   configurada, la misma que el terminal aplica. Llega `resize_column`:
+///   arrastrar el borde de una cabecera fija el ancho de esa columna en
+///   memoria y en el `norte.toml`, y vuelve la cabecera de todos los
+///   huecos, porque el ancho es de la columna y no del hueco.
+/// - **65**: migas e indicador de espacio (spec 2026-09-11, V5).
+///   `BrowserSlotView` y `BrowserHeader` ganan `path_segments` —la raíz y
+///   un tramo por directorio, cada uno enmascarado— y `used_ratio`, cuánto
+///   del volumen está ocupado. Llega `breadcrumb_activate { slot_id,
+///   depth, generation }`: navega al directorio con los primeros `depth`
+///   tramos, por profundidad y no por nombre, porque un tramo enmascarado
+///   no vuelve a ser un nombre; con la generación del listado que pintó
+///   las migas, para que una miga rancia no se reinterprete sobre otra
+///   ruta. `ColumnHeader.width` de la columna `name` pasa a ser su suelo.
+pub const BRIDGE_VERSION: u32 = 65;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///
