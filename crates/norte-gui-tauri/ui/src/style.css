@@ -2607,7 +2607,10 @@ body {
 }
 
 .log-line[data-level="warn"] {
-  color: var(--warn-fg, #fc6);
+  /* `warning-fg`, que es como se llama lo que el host proyecta: escrito
+     `warn-fg`, esta línea llevaba desde que se escribió cayendo al #fc6 de
+     respaldo e ignorando el tema. Lo guarda `tests/variables_de_tema.rs`. */
+  color: var(--warning-fg, #fc6);
 }
 
 .log-line[data-level="debug"],

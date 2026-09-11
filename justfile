@@ -789,6 +789,19 @@ gui-build:
 gui-test-ui:
     cd {{gui_dir}}/ui && npm run test
 
+# Los tests de RUST de la ventana, solos: el bucle RED→GREEN de este crate.
+#
+# Existe porque `just t norte-gui-tauri` no corre NADA —`core_pkgs` excluye
+# este paquete del gate portable— y la alternativa era `just gui-ci`, que
+# arrastra npm y el bundle de Vite para ver si un test de Rust pasa. Usa el
+# MISMO `gui_features` que `gui-ci`, que es lo que hace que comparta sus
+# artefactos en vez de compilar un universo aparte (ver el comentario de esa
+# variable).
+# Sin filtro a propósito: compilar domina el reloj y la suite entera de este
+# crate son segundos, así que `-E 'test(...)'` no compraría nada.
+gui-test:
+    CARGO_INCREMENTAL=0 cargo nextest run -p norte-gui-tauri {{gui_features}} --no-tests=pass
+
 # Formato y lint del renderer.
 gui-lint-ui:
     cd {{gui_dir}}/ui && npm run fmt:check && npm run lint && npm run typecheck
