@@ -398,6 +398,10 @@ impl Estado {
                         .iter()
                         .find(|(c, _)| c == id)
                         .and_then(|(_, item)| match item.policy {
+                            // El NOMBRE no lleva ancho fijo: lleva su SUELO, el
+                            // del reparto compartido, para que el renderer no
+                            // tenga que repetir el número.
+                            _ if item.is_name => Some(norte_frontend::columns::NAME_MIN),
                             norte_frontend::columns::WidthPolicy::Fixed(n) => Some(n),
                             norte_frontend::columns::WidthPolicy::Auto
                             | norte_frontend::columns::WidthPolicy::Flex { .. } => None,

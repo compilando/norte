@@ -4,6 +4,7 @@
 import type { Screen } from "../render";
 import type {
   BrowserSlotView,
+  ColumnHeader,
   MenuView,
   KeyBarView,
   PanelBarView,
@@ -519,16 +520,19 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
   descartarLasQueNoCaben(dom, slot, this.cell().w);
 }
 
-/** El suelo del nombre, en celdas: `norte_frontend::columns::NAME_MIN`. */
-const NOMBRE_MIN = 10;
-
 /**
  * La regla 2 del reparto compartido (`columns::layout`): si las columnas
- * fijas no dejan al nombre su suelo, se descartan desde la MÁS A LA DERECHA
- * hasta que quepan. Se hace aquí y no en el host porque el ancho útil del
- * hueco en píxeles —bordes, relleno, tiradores— solo lo sabe quien pinta.
- * Sin medida (un documento sin layout, como el de los tests) no se descarta
- * nada: mejor una columna de más que un listado sin columnas.
+ * no dejan al nombre su suelo, se descartan desde la MÁS A LA DERECHA hasta
+ * que quepan. Se hace aquí y no en el host porque el ancho útil del hueco
+ * en píxeles —bordes, relleno, tiradores— solo lo sabe quien pinta.
+ *
+ * El suelo del nombre viene del HOST en la propia cabecera (`width` de la
+ * columna `name` es `NAME_MIN`, no un ancho): un número que viviera aquí
+ * también se separaría del de Rust sin que nadie lo viera. Y cuenta TODAS
+ * las columnas, no solo las fijas: una `auto` o `flex` pesa lo que mide su
+ * cabecera ya pintada. Sin medida (un documento sin layout, como el de los
+ * tests) no se descarta nada: mejor una columna de más que un listado sin
+ * columnas.
  */
 function descartarLasQueNoCaben(
   dom: SlotDom,
@@ -539,21 +543,27 @@ function descartarLasQueNoCaben(
   if (total <= 0 || cellW <= 0) {
     return;
   }
+  const suelo = slot.columns.find((c) => c.id === "name")?.width ?? 10;
+  const cabeceras = [...dom.header.querySelectorAll<HTMLElement>(".col")];
+  const anchoDe = (c: ColumnHeader, i: number): number =>
+    c.width === null
+      ? (cabeceras[i]?.getBoundingClientRect().width ?? 0)
+      : c.width * cellW;
   // Relleno de la fila (6 px a cada lado), el borde del hueco, la casilla
   // de marca (1,1 em ≈ una celda y media) y una celda de separación por
   // columna.
-  const fijas = slot.columns.filter((c) => c.id !== "name" && c.width !== null);
   let libre = total - 14 - cellW * 1.5 - cellW * slot.columns.length;
-  for (const c of fijas) {
-    libre -= (c.width ?? 0) * cellW;
+  const otras = slot.columns.map((c, i) => ({ c, i })).filter(({ c }) => c.id !== "name");
+  for (const { c, i } of otras) {
+    libre -= anchoDe(c, i);
   }
-  const minimo = NOMBRE_MIN * cellW;
-  for (let i = fijas.length - 1; i >= 0 && libre < minimo; i -= 1) {
-    const c = fijas[i];
-    if (c === undefined) {
+  const minimo = suelo * cellW;
+  for (let k = otras.length - 1; k >= 0 && libre < minimo; k -= 1) {
+    const entrada = otras[k];
+    if (entrada === undefined) {
       break;
     }
-    dom.root.style.setProperty(`${colVar(c.id)}-show`, "none");
-    libre += (c.width ?? 0) * cellW + cellW;
+    dom.root.style.setProperty(`${colVar(entrada.c.id)}-show`, "none");
+    libre += anchoDe(entrada.c, entrada.i) + cellW;
   }
 }

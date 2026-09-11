@@ -71,9 +71,11 @@ impl Estado {
                     self.navegar(&destino, Trail::Record, backend, buzon),
                 )
             }
-            UiAction::BreadcrumbActivate { slot_id, depth } => {
-                self.ir_a_miga(*slot_id, *depth, backend, buzon)
-            }
+            UiAction::BreadcrumbActivate {
+                slot_id,
+                depth,
+                generation,
+            } => self.ir_a_miga(*slot_id, *depth, *generation, backend, buzon),
             UiAction::Parent { slot_id } => {
                 if *slot_id != self.activo() {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
@@ -201,6 +203,7 @@ impl Estado {
         &mut self,
         slot_id: u32,
         depth: u32,
+        generation: u64,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -210,6 +213,11 @@ impl Estado {
         let Some(hueco) = self.huecos.get(&slot_id) else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
+        // Una miga de un listado que ya no está: la profundidad hablaba de
+        // otra ruta. Rancia, como una fila de otra generación.
+        if hueco.pane.listing_epoch() != generation {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
         let actual = hueco.pane.dir().clone();
         let profundidad = usize::try_from(depth).unwrap_or(usize::MAX);
         if profundidad >= actual.segments().count() {

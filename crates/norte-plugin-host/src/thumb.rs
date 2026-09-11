@@ -1,9 +1,80 @@
-//! Lo que el host comprueba de una miniatura ANTES de que cruce (ADR 0107,
-//! decisión 3): un guest devuelve bytes de imagen, y esos bytes acaban en
-//! un `blob:` de la webview. Aquí se lee solo la cabecera —magia y
-//! dimensiones— de los tres encodings que la ventana pinta, y nada más: un
-//! decodificador entero en el host sería justo la superficie que el sandbox
-//! existe para no tener.
+//! Lo que el host hace con una miniatura ANTES de que cruce (ADR 0107,
+//! decisión 3): un guest devuelve bytes de imagen, y esos bytes acabarían
+//! en un `blob:` de la webview, donde los decodifica libpng/libjpeg/libwebp
+//! nativos —fuera de cualquier sandbox de norte—. Dos puertas:
+//!
+//! 1. [`sniff`]: solo la cabecera —magia y dimensiones— de los tres
+//!    encodings que la ventana pinta. Barata, y basta para rechazar lo que
+//!    ni siquiera dice ser una imagen o miente sobre lo que es.
+//! 2. [`reencode`]: se DECODIFICA en el host con el crate `image` (Rust
+//!    seguro, con límites de tamaño) y se vuelve a codificar. Lo que llega
+//!    al `blob:` es un raster hecho aquí; los bytes del guest no salen del
+//!    proceso. Una cabecera veraz sobre un flujo comprimido malformado —el
+//!    poliglota que pasa la puerta 1— muere en un decodificador de Rust,
+//!    no en uno de C con el escritorio detrás.
+
+use std::io::Cursor;
+
+/// El lado mayor que se le pide a un guest, como mucho (espejo de
+/// `runtime::THUMB_MAX_EDGE`, aquí para los límites del decodificador).
+const MAX_EDGE: u32 = 2048;
+
+/// Memoria que el decodificador del host puede pedir por miniatura: un
+/// 2048×2048 RGBA son 16 MiB; el doble deja sitio a las tablas del códec.
+const MAX_DECODE_ALLOC: u64 = 32 * 1024 * 1024;
+
+/// Re-codifica `bytes` (ya pasados por [`sniff`]) en el host: decodifica con
+/// límites, comprueba que las dimensiones decodificadas son `w`×`h`, y
+/// escribe PNG — o JPEG de calidad 85 si el PNG no cabe en `max_bytes` (una
+/// foto de 2048 px en PNG son diez megas; el mismo raster en JPEG, uno).
+/// Devuelve el mimetype del raster que sale y sus bytes.
+///
+/// # Errors
+/// El mensaje del decodificador o del codificador, para el registro del
+/// host; la miniatura entonces no cruza.
+pub fn reencode(
+    bytes: &[u8],
+    w: u32,
+    h: u32,
+    max_bytes: usize,
+) -> Result<(&'static str, Vec<u8>), String> {
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| format!("cabecera: {e}"))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_EDGE);
+    limits.max_image_height = Some(MAX_EDGE);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC);
+    reader.limits(limits);
+    let img = reader.decode().map_err(|e| format!("decodificar: {e}"))?;
+    if (img.width(), img.height()) != (w, h) {
+        return Err(format!(
+            "la cabecera decía {w}x{h} y el raster es {}x{}",
+            img.width(),
+            img.height()
+        ));
+    }
+    let mut png = Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| format!("codificar png: {e}"))?;
+    let png = png.into_inner();
+    if png.len() <= max_bytes {
+        return Ok(("image/png", png));
+    }
+    let rgb = img.to_rgb8();
+    let mut jpeg = Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85)
+        .encode_image(&rgb)
+        .map_err(|e| format!("codificar jpeg: {e}"))?;
+    let jpeg = jpeg.into_inner();
+    if jpeg.len() > max_bytes {
+        return Err(format!(
+            "ni en JPEG cabe: {} bytes con un techo de {max_bytes}",
+            jpeg.len()
+        ));
+    }
+    Ok(("image/jpeg", jpeg))
+}
 
 /// Los encodings que la ventana pinta, con su mimetype.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +194,10 @@ fn webp_dims(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "rásteres de juguete: los píxeles se generan con aritmética modular"
+)]
 mod tests {
     use super::*;
 
@@ -176,6 +251,54 @@ mod tests {
         ext.extend_from_slice(&[0, 0, 0, 0]);
         ext.extend_from_slice(&[99, 0, 0, 49, 0, 0]);
         assert_eq!(sniff(&ext), Some((ThumbKind::Webp, 100, 50)));
+    }
+
+    /// Un PNG de verdad, hecho con el mismo crate: la puerta 2 tiene que
+    /// DECODIFICAR, y una cabecera sola no basta.
+    fn png_real(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(w, h, |x, y| {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, 7, 255])
+        });
+        let mut out = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .expect("png");
+        out.into_inner()
+    }
+
+    #[test]
+    fn reencode_makes_a_host_png_and_refuses_a_lying_header_or_a_broken_stream() {
+        let bytes = png_real(64, 32);
+        let (mime, out) = reencode(&bytes, 64, 32, 4 * 1024 * 1024).expect("re-codifica");
+        assert_eq!(mime, "image/png");
+        assert!(out.starts_with(b"\x89PNG"));
+        assert_eq!(sniff(&out), Some((ThumbKind::Png, 64, 32)));
+        // Cabecera veraz sobre un flujo roto: pasa `sniff`, muere aquí.
+        let mut roto = bytes.clone();
+        for b in roto.iter_mut().skip(40) {
+            *b = 0xAA;
+        }
+        assert_eq!(sniff(&roto).map(|(k, _, _)| k), Some(ThumbKind::Png));
+        assert!(reencode(&roto, 64, 32, 4 * 1024 * 1024).is_err());
+        // Dimensiones que no son las decodificadas.
+        assert!(reencode(&bytes, 32, 64, 4 * 1024 * 1024).is_err());
+    }
+
+    #[test]
+    fn reencode_falls_back_to_jpeg_when_png_does_not_fit() {
+        // Ruido: PNG no comprime, y un techo pequeño lo echa a JPEG.
+        let img = image::RgbaImage::from_fn(256, 256, |x, y| {
+            let v = (x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)) as u8;
+            image::Rgba([v, v.wrapping_mul(3), v.wrapping_mul(7), 255])
+        });
+        let mut out = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .expect("png");
+        let (mime, bytes) =
+            reencode(&out.into_inner(), 256, 256, 120 * 1024).expect("cabe en jpeg");
+        assert_eq!(mime, "image/jpeg");
+        assert_eq!(sniff(&bytes), Some((ThumbKind::Jpeg, 256, 256)));
     }
 
     #[test]

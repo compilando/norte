@@ -887,7 +887,15 @@ export class Screen {
         miga.disabled = actual;
         if (!actual) {
           miga.addEventListener("click", () => {
-            this.send({ action: "breadcrumb_activate", slot_id: slot.slot_id, depth: i });
+            // Con la generación del listado que pintó estas migas: si el
+            // hueco navegó mientras tanto, la profundidad hablaba de otra
+            // ruta y el host la rechaza en vez de reinterpretarla.
+            this.send({
+              action: "breadcrumb_activate",
+              slot_id: slot.slot_id,
+              depth: i,
+              generation: slot.generation,
+            });
           });
         }
         ruta.append(miga);

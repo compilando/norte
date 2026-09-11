@@ -86,9 +86,17 @@ pub struct Thumb {
 /// had.
 pub fn thumbnail(content: &[u8], max_edge: u32, p: &Params) -> Result<Thumb, String> {
     let max_edge = max_edge.max(1);
-    let reader = ImageReader::new(Cursor::new(content))
+    let mut reader = ImageReader::new(Cursor::new(content))
         .with_guessed_format()
         .map_err(|e| format!("cannot read header: {e}"))?;
+    // The bytes come from any provider — untrusted. Refuse from the header
+    // what would not fit the sandbox anyway (the store has 64 MiB), instead
+    // of paying the allocations up to that ceiling and trapping.
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(40 * 1024 * 1024);
+    reader.limits(limits);
     let decoded = reader.decode().map_err(|e| format!("cannot decode: {e}"))?;
     let (w, h) = (decoded.width(), decoded.height());
     let small: DynamicImage = if w <= max_edge && h <= max_edge {

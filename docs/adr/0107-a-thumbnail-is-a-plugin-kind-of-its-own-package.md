@@ -46,14 +46,25 @@ The window then paints the thumbnail through the very channel of ADR 0069
 (`image_bytes`, a `blob:` the renderer revokes), labelled «via ‹plugin›».
 The terminal ignores the kind: it has no pixels to put a raster on.
 
-**3. What comes back is hostile until proven otherwise.** The plugin-host
-caps the returned bytes (`THUMB_MAX_BYTES`, 4 MiB), accepts only the three
-encodings the webview paints (PNG, JPEG, WebP) and only when the magic
-bytes agree with the declared mimetype, and requires the declared
-dimensions to match the raster's header and to stay within `max_edge`. A
-thumbnail that fails any of these is a guest error, logged and dropped; the
-viewer keeps what it had. A guest describes an image; it does not get to
-put arbitrary bytes into a `blob:` URL.
+**3. What comes back is hostile until proven otherwise, and never reaches
+the webview as the guest wrote it.** Two gates in the plugin-host. First,
+the header: the returned bytes are capped (`THUMB_MAX_BYTES`, 4 MiB), only
+the three encodings the webview paints (PNG, JPEG, WebP) pass, and only
+when the magic bytes agree with the declared mimetype and the declared
+dimensions match the raster's header and stay within `max_edge`. Second,
+the host DECODES the raster itself with the `image` crate — pure Rust, with
+`Limits` on dimensions and allocation — and re-encodes it (PNG, or JPEG
+when the PNG would not fit the cap). What goes into the `blob:` URL is a
+raster the host made; the guest's bytes never meet libpng, libjpeg or
+libwebp in the webview, which sit outside every sandbox norte controls. A
+truthful header over a malformed compressed stream — the polyglot that
+passes the first gate — dies in a Rust decoder, not in a C one with the
+desktop behind it. Anything that fails either gate is logged (the guest's
+own message capped like a log line) and dropped; the viewer keeps what it
+had. A guest describes an image; it does not get to put bytes into a
+`blob:` URL. The dependency this buys: `image` 0.25 in `norte-plugin-host`
+with `default-features = false` and the three decoders only (MIT/Apache-2.0,
+maintained, the same crate `image-thumb` uses).
 
 ## Consequences
 

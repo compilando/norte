@@ -2136,6 +2136,8 @@ pub struct ColumnHeader {
     /// Ancho FIJO en celdas, si `[ui.columns] spec.width` lo fija (puente
     /// 64): la cabecera y las celdas de la columna lo siguen, y arrastrar el
     /// borde de la cabecera lo cambia. `None` = a lo que mida su contenido.
+    /// Para la columna `name` es su SUELO (`columns::NAME_MIN`), no un ancho:
+    /// el nombre crece, y por debajo de eso el renderer descarta columnas.
     #[serde(default)]
     pub width: Option<u16>,
     /// `left` o `right`: la alineación configurada de la columna, la misma

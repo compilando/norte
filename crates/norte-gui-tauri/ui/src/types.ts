@@ -1300,7 +1300,7 @@ export type UiAction =
   | { action: "focus_slot"; slot_id: number }
   | { action: "sort_by"; slot_id: number; column: string }
   | { action: "resize_column"; slot_id: number; column: string; cells: number }
-  | { action: "breadcrumb_activate"; slot_id: number; depth: number }
+  | { action: "breadcrumb_activate"; slot_id: number; depth: number; generation: number }
   | {
       action: "dialog";
       id: ModalId;

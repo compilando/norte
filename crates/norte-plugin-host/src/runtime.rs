@@ -1608,7 +1608,19 @@ impl ThumbnailInstance {
             .norte_thumbnail_thumbnail()
             .call_render(&mut self.store, &input)
             .map_err(|e| map_call_error(&e))?
-            .map_err(RuntimeError::Guest)?;
+            // El motivo del guest es texto suyo y va al registro: acotado
+            // como cualquier línea de `host-log`, o un guest lo haría de
+            // megas.
+            .map_err(|mut m| {
+                if m.len() > MAX_LOG_CHARS {
+                    let corte = (0..=MAX_LOG_CHARS)
+                        .rev()
+                        .find(|i| m.is_char_boundary(*i))
+                        .unwrap_or(0);
+                    m.truncate(corte);
+                }
+                RuntimeError::Guest(m)
+            })?;
         if out.bytes.len() > THUMB_MAX_BYTES {
             return Err(RuntimeError::ReturnTooLarge {
                 len: out.bytes.len(),
@@ -1638,9 +1650,15 @@ impl ThumbnailInstance {
                 "{w}x{h} no cabe en el lado pedido ({max_edge})"
             )));
         }
+        // La segunda puerta (ADR 0107 decisión 3): se decodifica AQUÍ, en
+        // Rust seguro y con límites, y lo que cruza es un raster hecho por el
+        // host. Los bytes del guest no llegan a los decodificadores nativos
+        // de la webview.
+        let (mimetype, bytes) = crate::thumb::reencode(&out.bytes, w, h, THUMB_MAX_BYTES)
+            .map_err(RuntimeError::ThumbnailRejected)?;
         Ok(Thumbnail {
-            mimetype: kind.mimetype(),
-            bytes: out.bytes,
+            mimetype,
+            bytes,
             width: w,
             height: h,
         })

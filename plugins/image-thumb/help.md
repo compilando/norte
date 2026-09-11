@@ -8,8 +8,11 @@ window cannot decode (TIFF). It reads the bytes the host hands it — never
 the disk — decodes PNG, JPEG, GIF, WebP, BMP and TIFF, and answers a raster
 no larger than the edge the viewer asked for.
 
-Two settings. `format` picks the encoding of the thumbnail: `jpeg` (the
+Two settings. `format` picks what this extension hands back: `jpeg` (the
 default, a tenth the size for a photo) or `png` (exact, with transparency).
-`quality` is the JPEG quality, 30 to 95, 80 by default.
+`quality` is the JPEG quality, 30 to 95, 80 by default. norte decodes and
+re-encodes the picture itself before showing it — no extension's bytes ever
+reach the window's image decoder — so what these two settle is how much
+quality the picture keeps on its way there, not the file the window paints.
 
 The terminal ignores this extension: it has no pixels to put a picture on.

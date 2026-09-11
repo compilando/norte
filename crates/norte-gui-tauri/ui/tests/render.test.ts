@@ -746,6 +746,7 @@ describe("las migas, el indicador de espacio y el toast", () => {
       action: "breadcrumb_activate",
       slot_id: 1,
       depth: 1,
+      generation: 1,
     });
     // La ruta entera sigue disponible de una pieza.
     expect(root.querySelector(".title-path")?.getAttribute("title")).toBe(

@@ -99,6 +99,10 @@ pub enum UiAction {
         slot_id: u32,
         /// Cuántos tramos conservar.
         depth: u32,
+        /// La generación del listado que pintó esas migas. Si el hueco ya
+        /// navegó a otro sitio, la profundidad se refiere a una ruta que
+        /// ya no está: la miga es rancia y no se reinterpreta sobre la nueva.
+        generation: u64,
     },
     /// Atrás y adelante en el rastro de navegación.
     History {

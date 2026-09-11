@@ -352,11 +352,13 @@ async fn una_miga_lleva_al_ancestro_de_su_hueco() {
         "la raíz y un tramo por directorio"
     );
     let mut sub = h.subscribe();
+    let generation = listado_de(&snap, 2).generation;
 
     // La miga del directorio actual: aplicada, y nada se mueve.
     h.dispatch(UiAction::BreadcrumbActivate {
         slot_id: 2,
         depth: 2,
+        generation,
     })
     .await
     .expect("host vivo");
@@ -364,9 +366,23 @@ async fn una_miga_lleva_al_ancestro_de_su_hueco() {
     let igual = siguiente_foto(&mut sub).await;
     assert!(listado_de(&igual, 2).path_display.ends_with("/casa/docs"));
 
+    // Una miga de OTRA generación —el hueco navegó entre el pintado y el
+    // clic— es rancia: no se reinterpreta sobre la ruta nueva.
     h.dispatch(UiAction::BreadcrumbActivate {
         slot_id: 2,
         depth: 1,
+        generation: generation + 1,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let rancia = siguiente_foto(&mut sub).await;
+    assert!(listado_de(&rancia, 2).path_display.ends_with("/casa/docs"));
+
+    h.dispatch(UiAction::BreadcrumbActivate {
+        slot_id: 2,
+        depth: 1,
+        generation,
     })
     .await
     .expect("host vivo");

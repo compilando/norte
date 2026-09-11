@@ -17,6 +17,7 @@
   "breadcrumb_activate": {
     "action": "breadcrumb_activate",
     "depth": 1,
+    "generation": 4,
     "slot_id": 1
   },
   "cancel_task": {

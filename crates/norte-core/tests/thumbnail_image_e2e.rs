@@ -161,16 +161,17 @@ fn image_thumb_is_resolved_for_images_and_answers_a_verified_raster() {
     let t = inst
         .render_thumbnail("image/png", &png(640, 320), 160)
         .expect("a thumbnail");
-    assert_eq!(t.mimetype, "image/jpeg", "the default encoding");
     assert_eq!(
         (t.width, t.height),
         (160, 80),
         "scaled to the edge, ratio kept"
     );
-    assert!(
-        t.bytes.starts_with(&[0xFF, 0xD8]),
-        "and the bytes ARE a JPEG"
-    );
+    // The guest answers JPEG by default, but what comes OUT of the host is
+    // what the host itself encoded (ADR 0107 decision 3, second gate): a
+    // small raster fits as PNG, so PNG is what reaches the viewer, and the
+    // guest's bytes never do.
+    assert_eq!(t.mimetype, "image/png");
+    assert!(t.bytes.starts_with(b"\x89PNG"), "re-encoded by the host");
 
     // Garbage in: the guest says no, and that is a guest error, not a raster.
     let err = inst

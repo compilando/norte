@@ -549,6 +549,7 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             UiAction::BreadcrumbActivate {
                 slot_id: 1,
                 depth: 1,
+                generation: 4,
             },
         ),
         (
