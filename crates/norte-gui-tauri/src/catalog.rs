@@ -72,9 +72,10 @@ pub struct HostCatalog {
     /// 2026-09-11, V6): el renderer aplica el que casa con
     /// `prefers-color-scheme`, y `theme` cuando no hay variante para ese
     /// lado. `None` = solo `theme`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme_light: Option<BTreeMap<String, String>>,
-    #[serde(default)]
+    /// La variante oscura; ver [`Self::theme_light`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme_dark: Option<BTreeMap<String, String>>,
 }
 

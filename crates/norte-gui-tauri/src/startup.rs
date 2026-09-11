@@ -292,6 +292,7 @@ pub struct Boot {
     /// 2026-09-11, V6), o `None` cuando la clave no está o su tema no carga
     /// — entonces la ventana pinta `theme` en ese esquema, y se avisa.
     pub theme_light: Option<BTreeMap<String, String>>,
+    /// La variante oscura; ver [`Self::theme_light`].
     pub theme_dark: Option<BTreeMap<String, String>>,
 }
 
