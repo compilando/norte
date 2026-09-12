@@ -103,9 +103,9 @@ pub fn nombres_de_tema() -> Vec<&'static str> {
 }
 
 /// Los roles del tema con su color, en el orden en que se nombran. Un rol que
-/// el tema NO define se omite: la hoja de estilos lo deriva (ver
-/// [`CORRESPONDENCIA`]), y mandar un color inventado desde aquí le quitaría
-/// esa posibilidad.
+/// el tema NO define se omite: la hoja de estilos lo deriva (ver la tabla
+/// `CORRESPONDENCIA` de este módulo), y mandar un color inventado desde aquí
+/// le quitaría esa posibilidad.
 ///
 /// La correspondencia es EXPLÍCITA y no automática: una variable de la hoja
 /// de estilos que nadie alimenta se ve (queda el valor por defecto), pero un
