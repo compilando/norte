@@ -24,8 +24,18 @@ theme = "catppuccin-mocha"
 
 The value may be either:
 
-- A bundled preset: `default`, `catppuccin-mocha`, `gruvbox-dark`, `nord`,
-  `gruvbox-light`, or `catppuccin-latte`.
+- A bundled preset. There are ten:
+
+  | preset | |
+  | --- | --- |
+  | `default` | neutral dark, tied to no brand |
+  | `vscode-dark` | Visual Studio Code's Dark Modern |
+  | `vscode-light` | Visual Studio Code's Light Modern |
+  | `catppuccin-mocha`, `catppuccin-latte` | dark and light |
+  | `gruvbox-dark`, `gruvbox-light` | dark and light |
+  | `nord` | dark |
+  | `retro-crt`, `retro-crt-amber` | dark, and they declare GPU `[effects]` the terminal ignores |
+
 - A path to a custom TOML theme.
 
 When the setting is absent, norte uses the neutral `default` preset. If a theme

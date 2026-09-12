@@ -9,6 +9,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`vscode-dark` and `vscode-light` presets** (spec 2026-09-11),
+  transcribed from Visual Studio Code's Dark Modern and Light Modern and
+  from the editor's built-in colour registry — a VSCode theme JSON is not
+  a complete palette, so `list.*` and `scrollbarSlider.*` come from the
+  registry, not from any file in the `include` chain. Each preset's header
+  records where every role came from and where it diverges: on white,
+  VSCode's own `error` (3.35:1) and `warning` (3.12:1) fall under the
+  4.5:1 that norte requires of a signal you have to read when something
+  has gone wrong, so both are darkened and the original values are named.
+- **Ten chrome roles** — `hover`, `input-background`, `input-border`,
+  `widget-background`, `widget-shadow`, `badge`, `scrollbar-slider`,
+  `separator`, `focus-border` and `muted` — for the surfaces a modern
+  editor separates by elevation rather than by borders. A preset is not
+  required to define them (`Role::CORE` is what completeness asserts):
+  the window's stylesheet derives each from a colour the theme already
+  has, so the eight existing presets gain nothing and change nowhere.
+
 - **The window, polished** (spec 2026-09-11). Bundled typography —
   JetBrains Mono for cells, Inter for chrome, 14 px on 22 px rows — with
   `[ui] font`/`mono_font`/`font_size` still in charge; column widths by

@@ -25,6 +25,12 @@ const PRESETS: &[(&str, &str)] = &[
         "catppuccin-latte",
         include_str!("../presets/catppuccin-latte.toml"),
     ),
+    // VSCode (spec 2026-09-11): transcripciones de Dark/Light Modern, con los
+    // valores por defecto del registro de colores del editor para los ids que
+    // NINGÚN fichero de la cadena `include` define. Cada fichero lleva en su
+    // cabecera de dónde sale cada rol y en qué diverge.
+    ("vscode-dark", include_str!("../presets/vscode-dark.toml")),
+    ("vscode-light", include_str!("../presets/vscode-light.toml")),
     // Retro (G1): [effects] interpretados por la GUI (ADR 0036).
     ("retro-crt", include_str!("../presets/retro-crt.toml")),
     (

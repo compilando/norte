@@ -21,6 +21,8 @@ fn cada_preset_parsea_y_es_completo() {
     assert!(names.contains(&"catppuccin-mocha"));
     assert!(names.contains(&"gruvbox-dark"));
     assert!(names.contains(&"nord"));
+    assert!(names.contains(&"vscode-dark"));
+    assert!(names.contains(&"vscode-light"));
 
     for name in names {
         let src = preset_source(name).expect("fuente del preset");

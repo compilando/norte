@@ -625,7 +625,7 @@
         },
         "theme": {
           "default": null,
-          "description": "Theme preset name (`default`, `catppuccin-mocha`, `gruvbox-dark`,\n`nord`, `gruvbox-light`, or `catppuccin-latte`) or a path to a custom\nTOML theme (ADR 0020). When absent, use `default`.",
+          "description": "Theme preset name or a path to a custom TOML theme (ADR 0020). When\nabsent, use `default`.\n\nThe bundled presets are `default`, `vscode-dark`, `vscode-light`,\n`catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`,\n`gruvbox-light`, `nord`, `retro-crt` and `retro-crt-amber`.\n`norte_theme::preset_names()` is the source of truth; this list is a\ncopy for readers of the schema, and it had gone stale before (it named\nsix of the eight that existed).",
           "type": [
             "string",
             "null"

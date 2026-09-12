@@ -1,0 +1,129 @@
+name = "vscode-dark"
+
+# Dark Modern, el tema por defecto de Visual Studio Code desde la 1.75.
+#
+# Es una TRANSCRIPCIÓN, no una imitación a ojo. Las fuentes, en el orden en
+# que se resuelve cada id de color:
+#
+#   1. extensions/theme-defaults/themes/dark_modern.json
+#   2. su `include`: dark_plus.json, y el de este: dark_vs.json
+#   3. lo que ninguno de los tres define: los valores por defecto del REGISTRO
+#      de colores del editor (src/vs/platform/theme/common/colors/), que es
+#      donde viven de verdad `list.*`, `scrollbarSlider.*` y compañía.
+#
+# El punto 3 no es un detalle: un tema de VSCode NO es una paleta completa.
+# Ninguno de los tres ficheros de la cadena define el fondo de la fila
+# seleccionada. Quien copie solo el JSON se queda sin la mitad de la ventana.
+#
+# --- De dónde sale cada rol -------------------------------------------------
+#
+#   background            editor.background            (dark_modern)
+#   regular               foreground                   (dark_modern)
+#   pane-background       sideBar.background           (dark_modern)
+#   pane-focus-background editor.background            (dark_modern)
+#   selection             list.activeSelection*        (REGISTRO)
+#   selection-unfocused   list.inactiveSelectionBackground (REGISTRO)
+#   hover                 list.hoverBackground         (REGISTRO)
+#   border-focus          focusBorder                  (dark_modern)
+#   border-unfocused      panel.border                 (dark_modern)
+#   separator             panel.border                 (dark_modern)
+#   modal-border          widget.border                (dark_modern)
+#   status-bar            statusBar.background/.foreground (dark_modern)
+#   title                 sideBarTitle.foreground      (dark_modern)
+#   button                button.background/.foreground (dark_modern)
+#   badge                 badge.background/.foreground (dark_modern)
+#   muted                 descriptionForeground        (dark_modern)
+#   input-background      input.background             (dark_modern)
+#   input-border          input.border                 (dark_modern)
+#   widget-background     editorWidget.background      (dark_modern)
+#   focus-border          focusBorder                  (dark_modern)
+#   match                 editor.findMatchBackground   (dark_modern)
+#   error                 errorForeground              (dark_modern)
+#   warning               editorWarning.foreground     (REGISTRO)
+#   info                  editorInfo.foreground        (REGISTRO)
+#   scrollbar-slider      scrollbarSlider.background   (REGISTRO, aplanado)
+#
+# --- Divergencias y omisiones, que es lo que un lector viene a buscar -------
+#
+# `scrollbar-slider` está APLANADO. El registro lo da como #797979 al 40 % de
+# opacidad, y el modelo de tema de norte es RGB de 24 bits sin canal alfa
+# (ADR 0020). #434343 es ese 40 % compuesto sobre #1F1F1F, que es el fondo
+# real contra el que se ve.
+#
+# `widget-shadow` NO se define, y es la única de las veintiocho que falta.
+# Una sombra es alfa por naturaleza y aquí no hay alfa: un #000000 sólido con
+# 16 px de desenfoque pesa mucho más que el rgba(0,0,0,.36) del original. Sin
+# definirla, la hoja de estilos de la ventana usa su propio respaldo
+# translúcido, que es exactamente lo que se quiere.
+#
+# `hostile-badge`, `mark`, `[files.kind]` y `[files.ext]` son DERIVADOS. VSCode
+# no colorea una lista de ficheros por tipo de nodo, así que no hay id que
+# transcribir. Se derivan de colores que este tema sí atesta (textLink,
+# editorGutter.*, chat.editedFileForeground) y se dice aquí en vez de
+# presentarlos como si vinieran del original.
+#
+# --- Tipografía -------------------------------------------------------------
+#
+# Un tema NO lleva fuentes, a propósito: son dos elecciones independientes.
+# El juego tipográfico de VSCode se pide desde `[ui]` de norte.toml:
+#
+#   [ui]
+#   font_size = 13
+#
+# `font` y `mono_font` mandan sobre las empaquetadas si quieres las suyas.
+
+[roles]
+background            = { bg = "#1f1f1f" }
+regular               = { fg = "#cccccc" }
+pane-background       = { bg = "#181818" }
+pane-focus-background = { bg = "#1f1f1f" }
+selection             = { fg = "#ffffff", bg = "#04395e" }
+selection-unfocused   = { fg = "#cccccc", bg = "#37373d" }
+border-focus          = { fg = "#0078d4" }
+border-unfocused      = { fg = "#2b2b2b" }
+modal-border          = { fg = "#313131" }
+status-bar            = { fg = "#cccccc", bg = "#181818" }
+title                 = { fg = "#cccccc", bold = true }
+button                = { fg = "#ffffff", bg = "#0078d4" }
+match                 = { fg = "#ffffff", bg = "#9e6a03" }
+error                 = { fg = "#f85149" }
+warning               = { fg = "#cca700" }
+info                  = { fg = "#59a4f9" }
+# Derivado: ningún id de VSCode nombra un fichero enmascarado. Naranja fuerte,
+# separado del rojo de `error` para que no se confundan, y a 8,5:1 sobre el
+# fondo — esta es la marca que hay que poder leer cuando algo va mal.
+hostile-badge         = { fg = "#ffa657", bold = true }
+# Derivado: el ámbar de aviso rebajado a fondo.
+mark                  = { bg = "#4a3b14" }
+
+# Cromo de la ventana (spec 2026-09-11, F2). Los ocho presets de siempre los
+# callan y la hoja los deriva; este los dice, porque para él son el asunto.
+hover                 = { bg = "#2a2d2e" }
+input-background      = { bg = "#313131" }
+input-border          = { fg = "#3c3c3c" }
+widget-background     = { bg = "#202020" }
+badge                 = { fg = "#f8f8f8", bg = "#616161" }
+scrollbar-slider      = { bg = "#434343" }
+separator             = { fg = "#2b2b2b" }
+focus-border          = { fg = "#0078d4" }
+muted                 = { fg = "#9d9d9d" }
+
+# Derivados, todos: ver el bloque de divergencias de arriba.
+[files.kind]
+dir          = { fg = "#4daafc", bold = true }  # textLink.foreground
+symlink      = { fg = "#56b6c2" }
+executable   = { fg = "#2ea043", bold = true }  # editorGutter.addedBackground
+fifo         = { fg = "#cca700" }               # editorWarning.foreground
+socket       = { fg = "#c586c0" }
+block-device = { fg = "#e2c08d" }               # chat.editedFileForeground
+char-device  = { fg = "#e2c08d" }
+
+[files.ext]
+zip  = { fg = "#f85149" }
+tar  = { fg = "#f85149" }
+gz   = { fg = "#f85149" }
+rs   = { fg = "#e2c08d" }
+toml = { fg = "#cca700" }
+md   = { fg = "#cccccc" }
+png  = { fg = "#c586c0" }
+jpg  = { fg = "#c586c0" }

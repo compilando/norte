@@ -177,9 +177,15 @@ pub struct UiSection {
     /// Language (`es` or `en`). When absent, negotiate from the environment.
     #[serde(default)]
     pub lang: Option<String>,
-    /// Theme preset name (`default`, `catppuccin-mocha`, `gruvbox-dark`,
-    /// `nord`, `gruvbox-light`, or `catppuccin-latte`) or a path to a custom
-    /// TOML theme (ADR 0020). When absent, use `default`.
+    /// Theme preset name or a path to a custom TOML theme (ADR 0020). When
+    /// absent, use `default`.
+    ///
+    /// The bundled presets are `default`, `vscode-dark`, `vscode-light`,
+    /// `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`,
+    /// `gruvbox-light`, `nord`, `retro-crt` and `retro-crt-amber`.
+    /// `norte_theme::preset_names()` is the source of truth; this list is a
+    /// copy for readers of the schema, and it had gone stale before (it named
+    /// six of the eight that existed).
     #[serde(default)]
     pub theme: Option<String>,
     /// The theme the WINDOW paints when the desktop prefers a light colour

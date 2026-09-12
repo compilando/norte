@@ -1,0 +1,102 @@
+name = "vscode-light"
+
+# Light Modern, el tema claro por defecto de Visual Studio Code desde la 1.75.
+#
+# TRANSCRIPCIÓN, con las mismas fuentes y el mismo orden que `vscode-dark`:
+#
+#   1. extensions/theme-defaults/themes/light_modern.json
+#   2. su `include`: light_plus.json, y el de este: light_vs.json
+#   3. lo que ninguno define: el REGISTRO de colores del editor
+#      (src/vs/platform/theme/common/colors/)
+#
+# Light Modern sí declara `list.activeSelection*` y `list.hoverBackground` por
+# su cuenta; el que sale del registro es `list.inactiveSelectionBackground`.
+#
+# --- Divergencias, y aquí son TRES, no una ---------------------------------
+#
+# Las tres son el mismo problema: sobre fondo blanco, los colores de señal de
+# VSCode no llegan al 4,5:1 que la suite de norte exige a `error`, `warning` y
+# `hostile-badge` (`las_senales_semanticas_llegan_a_wcag_aa_en_todo_preset`).
+# Son justo los colores que hay que poder leer cuando algo ha ido mal, así que
+# se oscurecen y se anota. Medido contra `background` = #ffffff:
+#
+#   error    #f85149 (errorForeground de light_modern)  daba 3,35:1  → #e51400
+#            #e51400 es editorError.foreground del registro para claro: 4,75:1,
+#            o sea que no es una invención, es el otro valor que VSCode ya
+#            tiene para lo mismo.
+#   warning  #bf8803 (editorWarning.foreground claro)   daba 3,12:1  → #9a6d00
+#            Este sí es un oscurecimiento propio del mismo tono: 4,60:1.
+#   hostile  sin id que transcribir                     → #a83a00 (6,4:1)
+#
+# `muted` es la cuarta anotación, y no es de contraste. Light Modern fija
+# `descriptionForeground` a #3b3b3b, que es EXACTAMENTE su `foreground`: un
+# texto «atenuado» idéntico al normal no atenúa nada. Se usa #616161, que el
+# propio light_modern atesta para los primeros planos inactivos
+# (`activityBar.inactiveForeground`, `tab.inactiveForeground`).
+#
+# `scrollbar-slider` aplanado: el registro da #646464 al 40 %, que compuesto
+# sobre el blanco del fondo es #c1c1c1. El modelo no tiene alfa (ADR 0020).
+#
+# `widget-shadow` no se define, por la misma razón que en `vscode-dark`: una
+# sombra es alfa, y sin alfa la hoja de estilos hace mejor trabajo con su
+# propio respaldo.
+#
+# `hostile-badge`, `mark`, `[files.kind]` y `[files.ext]`: DERIVADOS. VSCode no
+# colorea una lista de ficheros por tipo de nodo.
+#
+# --- Tipografía -------------------------------------------------------------
+#
+#   [ui]
+#   font_size = 13
+
+[roles]
+background            = { bg = "#ffffff" }
+regular               = { fg = "#3b3b3b" }
+pane-background       = { bg = "#f8f8f8" }
+pane-focus-background = { bg = "#ffffff" }
+selection             = { fg = "#000000", bg = "#e8e8e8" }
+selection-unfocused   = { fg = "#3b3b3b", bg = "#e4e6f1" }
+border-focus          = { fg = "#005fb8" }
+border-unfocused      = { fg = "#e5e5e5" }
+modal-border          = { fg = "#e5e5e5" }
+status-bar            = { fg = "#3b3b3b", bg = "#f8f8f8" }
+title                 = { fg = "#3b3b3b", bold = true }
+button                = { fg = "#ffffff", bg = "#005fb8" }
+match                 = { fg = "#000000", bg = "#a8ac94" }
+# Oscurecidos respecto al original: ver el bloque de divergencias.
+error                 = { fg = "#e51400" }
+warning               = { fg = "#9a6d00" }
+hostile-badge         = { fg = "#a83a00", bold = true }
+info                  = { fg = "#0063d3" }
+mark                  = { bg = "#fff4ce" }
+
+# Cromo de la ventana (spec 2026-09-11, F2).
+hover                 = { bg = "#f2f2f2" }
+input-background      = { bg = "#ffffff" }
+input-border          = { fg = "#cecece" }
+widget-background     = { bg = "#f8f8f8" }
+badge                 = { fg = "#3b3b3b", bg = "#cccccc" }
+scrollbar-slider      = { bg = "#c1c1c1" }
+separator             = { fg = "#e5e5e5" }
+focus-border          = { fg = "#005fb8" }
+muted                 = { fg = "#616161" }
+
+# Derivados, todos.
+[files.kind]
+dir          = { fg = "#005fb8", bold = true }  # textLink.foreground
+symlink      = { fg = "#0598bc" }
+executable   = { fg = "#1a7f37", bold = true }
+fifo         = { fg = "#9a6d00" }
+socket       = { fg = "#8250df" }
+block-device = { fg = "#895503" }               # chat.editedFileForeground
+char-device  = { fg = "#895503" }
+
+[files.ext]
+zip  = { fg = "#e51400" }
+tar  = { fg = "#e51400" }
+gz   = { fg = "#e51400" }
+rs   = { fg = "#895503" }
+toml = { fg = "#9a6d00" }
+md   = { fg = "#3b3b3b" }
+png  = { fg = "#8250df" }
+jpg  = { fg = "#8250df" }
