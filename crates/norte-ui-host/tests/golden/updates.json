@@ -168,6 +168,8 @@
             "key": 41,
             "kind": "file",
             "marked": false,
+            "name_bold": false,
+            "name_color": "",
             "selected": false
           }
         ],
@@ -946,6 +948,8 @@
             "key": 1,
             "kind": "file",
             "marked": false,
+            "name_bold": false,
+            "name_color": "",
             "selected": false
           },
           {
@@ -965,6 +969,8 @@
             "key": 2,
             "kind": "file",
             "marked": false,
+            "name_bold": false,
+            "name_color": "",
             "selected": false
           },
           {
@@ -984,6 +990,8 @@
             "key": 3,
             "kind": "file",
             "marked": false,
+            "name_bold": false,
+            "name_color": "",
             "selected": false
           }
         ],

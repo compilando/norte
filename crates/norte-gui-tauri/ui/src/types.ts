@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 65;
+export const BRIDGE_VERSION = 66;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -102,6 +102,18 @@ export interface RowView {
   icon: string;
   /** El icono se pinta distinto de lo que es: lo escribe un plugin. */
   icon_hostile: boolean;
+  /**
+   * El color `#rrggbb` con que el TEMA pinta el nombre de esta entrada, por
+   * `[files.ext]` (gana) o `[files.kind]` (puente 66). Vacío = el tema no
+   * dice nada de ella y vale el color normal del listado.
+   *
+   * Viaja RESUELTO, al revés que `badge_role`: las extensiones son un
+   * conjunto ABIERTO —un tema colorea las que quiera— así que no hay clases
+   * que este renderer pudiera conocer de antemano.
+   */
+  name_color: string;
+  /** El nombre va en negrita (un directorio, un ejecutable). */
+  name_bold: boolean;
 }
 
 export type SlotState =

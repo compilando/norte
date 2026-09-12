@@ -795,6 +795,8 @@
         "key": 41,
         "kind": "file",
         "marked": false,
+        "name_bold": false,
+        "name_color": "",
         "selected": false
       }
     ],

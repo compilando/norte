@@ -104,6 +104,8 @@ fn fila(key: u64, nombre: &str, hostile: bool) -> RowView {
         badge_role: String::new(),
         icon: String::new(),
         icon_hostile: false,
+        name_color: String::new(),
+        name_bold: false,
     }
 }
 
@@ -2429,8 +2431,9 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    // Puente 65: migas e indicador de espacio (spec 2026-09-11, V5).
-    const FORMA: u64 = 1_308_015_479_219_455_546;
+    // Puente 66: el tema colorea las entradas (`RowView.name_color` y
+    // `name_bold`, spec 2026-09-11).
+    const FORMA: u64 = 7_917_131_003_710_928_316;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

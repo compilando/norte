@@ -143,6 +143,16 @@ pub struct HostTheme {
     /// Los efectos que el tema declara. TODOS son «no soportados» hoy: este
     /// renderer es una webview y no interpreta ninguno.
     pub effects: Vec<String>,
+    /// El tema ENTERO, no solo sus roles.
+    ///
+    /// Hace falta porque `[files.kind]` y `[files.ext]` no se pueden proyectar
+    /// como variables CSS: los roles son un conjunto CERRADO y las extensiones
+    /// son ABIERTO —un tema puede colorear `.rs`, `.parquet` o lo que le
+    /// apetezca—, así que no hay lista de nombres que declarar por adelantado.
+    /// El color de UNA entrada se resuelve aquí, contra los bytes de su
+    /// nombre, y viaja en su fila; que es lo que el terminal hace desde
+    /// siempre (`norte_tui::theme`).
+    pub resuelto: norte_theme::Theme,
 }
 
 impl HostTheme {
@@ -165,7 +175,34 @@ impl HostTheme {
                 .into_iter()
                 .filter(|e| !EFECTOS_DE_LA_VENTANA.contains(&e.as_str()))
                 .collect(),
+            resuelto: theme.clone(),
         }
+    }
+
+    /// El color y el peso con que se pinta el NOMBRE de una entrada, según
+    /// `[files.ext]` (gana) y `[files.kind]` del tema.
+    ///
+    /// `name` son los BYTES del nombre (regla 1): la extensión se casa contra
+    /// bytes, nunca contra una cadena, porque un nombre no tiene por qué ser
+    /// UTF-8 y el enmascarado para pintar no es inyectivo — dos nombres
+    /// distintos pueden pintarse igual y no comparten extensión por ello.
+    ///
+    /// `("", false)` = el tema no dice nada de esta entrada y el renderer usa
+    /// el color normal del listado. No se devuelve el `regular` resuelto a
+    /// propósito: mandarlo en cada fila serían seis bytes por entrada para
+    /// repetir lo que la hoja de estilos ya sabe.
+    #[must_use]
+    pub fn estilo_de_entrada(&self, name: &[u8], kind: norte_theme::FileKind) -> (String, bool) {
+        let propio = self.resuelto.files.style_for(name, kind);
+        propio.map_or_else(
+            || (String::new(), false),
+            |s| {
+                (
+                    s.fg.map(norte_theme::Color::to_hex).unwrap_or_default(),
+                    s.bold,
+                )
+            },
+        )
     }
 
     /// La proyección.

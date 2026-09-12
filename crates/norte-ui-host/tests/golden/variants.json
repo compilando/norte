@@ -94,6 +94,8 @@
     "key": 1,
     "kind": "dir",
     "marked": false,
+    "name_bold": false,
+    "name_color": "",
     "selected": false
   },
   "row_kind_file": {
@@ -113,6 +115,8 @@
     "key": 1,
     "kind": "file",
     "marked": false,
+    "name_bold": false,
+    "name_color": "",
     "selected": false
   },
   "row_kind_other": {
@@ -132,6 +136,8 @@
     "key": 1,
     "kind": "other",
     "marked": false,
+    "name_bold": false,
+    "name_color": "",
     "selected": false
   },
   "row_kind_symlink": {
@@ -151,6 +157,8 @@
     "key": 1,
     "kind": "symlink",
     "marked": false,
+    "name_bold": false,
+    "name_color": "",
     "selected": false
   },
   "slot_state_error": {

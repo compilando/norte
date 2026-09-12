@@ -455,6 +455,22 @@ impl Estado {
         // Lo sirve el PANE, que re-enmascara al servir: el host acumula pero
         // no es quien decide qué se pinta.
         let adorno = hueco.pane.decoration_for(&e.path);
+        // El color del tema para ESTA entrada (`[files.ext]` / `[files.kind]`).
+        // Contra los bytes CRUDOS, no contra `texto`: ese va enmascarado y
+        // reinterpretado para pintar, y el enmascarado no es inyectivo — una
+        // extensión casada sobre él sería la extensión de otro nombre.
+        let (name_color, name_bold) = self.tema.estilo_de_entrada(
+            bytes,
+            match e.kind {
+                EntryKind::Dir => norte_theme::FileKind::Dir,
+                EntryKind::Symlink => norte_theme::FileKind::Symlink,
+                // `Other` es lo que el protocolo no distingue (fifo, socket,
+                // dispositivo…). El tema sí los separa, pero sin el dato no
+                // se puede elegir, así que cae al regular igual que en el
+                // terminal.
+                EntryKind::File | EntryKind::Other => norte_theme::FileKind::Regular,
+            },
+        );
         RowView {
             key: RowKey(i as u64),
             display_name: clamp_display(texto),
@@ -481,6 +497,8 @@ impl Estado {
                 .map(clamp_display)
                 .unwrap_or_default(),
             icon_hostile: adorno.is_some_and(|d| d.icon_hostile),
+            name_color,
+            name_bold,
         }
     }
 

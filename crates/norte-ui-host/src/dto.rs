@@ -2108,6 +2108,20 @@ pub struct RowView {
     pub icon: String,
     /// El icono se pinta distinto de lo que es. Misma razón que la insignia.
     pub icon_hostile: bool,
+    /// El color `#rrggbb` con que el TEMA pinta el nombre de esta entrada,
+    /// por `[files.ext]` (gana) o `[files.kind]`. Vacío = el tema no dice
+    /// nada de ella y el renderer usa el color normal del listado.
+    ///
+    /// Viaja RESUELTO y no como nombre de regla porque las extensiones son un
+    /// conjunto ABIERTO: un tema colorea las que quiera, así que no hay lista
+    /// de clases que el renderer pudiera conocer de antemano. Es lo contrario
+    /// que [`RowView::badge_role`], que sí es vocabulario cerrado.
+    #[serde(default)]
+    pub name_color: String,
+    /// El nombre va en NEGRITA (un directorio, un ejecutable). Del mismo
+    /// estilo que `name_color`.
+    #[serde(default)]
+    pub name_bold: bool,
 }
 
 /// La cabecera de UNA columna.

@@ -195,6 +195,22 @@ export function updateRow(
   name.className = row.hostile ? "cell-name hostile" : "cell-name";
   name.setAttribute("role", "gridcell");
   name.textContent = row.display_name;
+  // El color que el TEMA da a esta entrada (puente 66). Se aplica en línea
+  // porque el valor viene resuelto del host: `[files.ext]` es un conjunto
+  // abierto y no hay clase CSS que pudiera representarlo.
+  //
+  // Bajo el CURSOR no se pinta, y eso replica al terminal: allí el estilo de
+  // la fila seleccionada se aplica con `highlight_style`, que PISA el del
+  // item cuando el tema le da primer plano a `selection` — y los diez presets
+  // se lo dan. Sin esta salvedad, un directorio azul oscuro sobre el
+  // #04395e de vscode-dark se quedaría ilegible justo en la fila que el
+  // lector está mirando.
+  if (row.name_color !== "" && !row.selected) {
+    name.style.color = row.name_color;
+  }
+  if (row.name_bold) {
+    name.style.fontWeight = "bold";
+  }
   // El nombre y lo que lo decora, juntos y a la IZQUIERDA; las celdas de las
   // columnas siguen a la derecha. El bloque es quien crece, así que el nombre
   // se puede recortar con elipsis SIN llevarse por delante la insignia: el

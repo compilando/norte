@@ -279,7 +279,17 @@ use serde::{Deserialize, Serialize};
 ///   no vuelve a ser un nombre; con la generación del listado que pintó
 ///   las migas, para que una miga rancia no se reinterprete sobre otra
 ///   ruta. `ColumnHeader.width` de la columna `name` pasa a ser su suelo.
-pub const BRIDGE_VERSION: u32 = 65;
+/// - **66**: el tema colorea las ENTRADAS (spec 2026-09-11). `RowView` gana
+///   `name_color` —el `#rrggbb` que `[files.ext]` (gana) o `[files.kind]`
+///   dan al nombre, vacío si el tema no dice nada— y `name_bold`. Viajan
+///   RESUELTOS y no como nombre de regla porque las extensiones son un
+///   conjunto ABIERTO: un tema colorea las que quiera, así que el renderer
+///   no puede tener clases para ellas, al revés que con `badge_role`. Cierra
+///   una divergencia con el terminal que llevaba desde que existe la
+///   ventana: `[files.kind]` y `[files.ext]` —la mitad de lo que declara un
+///   fichero de tema— no se pintaban, y un listado monocromo no se lee como
+///   un tema pobre, se lee como un tema roto.
+pub const BRIDGE_VERSION: u32 = 66;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

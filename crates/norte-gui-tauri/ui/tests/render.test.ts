@@ -52,6 +52,8 @@ function fila(key: number, nombre: string, extra: Partial<RowView> = {}): RowVie
     badge_role: "",
     icon: "",
     icon_hostile: false,
+    name_color: "",
+    name_bold: false,
     ...extra,
   };
 }
@@ -401,6 +403,52 @@ describe("Screen", () => {
     const name = root.querySelector(".cell-name") as HTMLElement;
     expect(name.querySelector("img")).toBeNull();
     expect(name.textContent).toBe("<img src=x onerror=alert(1)>");
+  });
+
+  it("el tema colorea el nombre de una entrada", () => {
+    const { screen, root } = montar();
+    screen.paint(
+      vista({
+        rows: [fila(0, "src", { kind: "dir", name_color: "#4daafc", name_bold: true })],
+      }),
+    );
+    const name = root.querySelector(".cell-name") as HTMLElement;
+    // El navegador normaliza a rgb(): se compara lo que de verdad computa.
+    expect(name.style.color).toBe("rgb(77, 170, 252)");
+    expect(name.style.fontWeight).toBe("bold");
+  });
+
+  it("bajo el CURSOR manda el color de la selección, no el del fichero", () => {
+    // Réplica del terminal, donde `highlight_style` pisa el estilo del item
+    // cuando el tema da primer plano a `selection` — y los diez presets se lo
+    // dan. Sin esto, un directorio azul oscuro sobre el #04395e de
+    // vscode-dark sería ilegible justo en la fila que se está mirando.
+    const { screen, root } = montar();
+    screen.paint(
+      vista({
+        rows: [
+          fila(0, "src", {
+            kind: "dir",
+            selected: true,
+            name_color: "#4daafc",
+            name_bold: true,
+          }),
+        ],
+      }),
+    );
+    const name = root.querySelector(".cell-name") as HTMLElement;
+    expect(name.style.color).toBe("");
+    // La negrita SÍ se conserva: dice qué ES la entrada, no de qué color, y
+    // no compite con el fondo de la selección.
+    expect(name.style.fontWeight).toBe("bold");
+  });
+
+  it("un tema que no dice nada de una entrada no le pone color", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({ rows: [fila(0, "notas.txt")] }));
+    const name = root.querySelector(".cell-name") as HTMLElement;
+    expect(name.style.color).toBe("");
+    expect(name.style.fontWeight).toBe("");
   });
 
   it("un listado vacío lo dice", () => {

@@ -339,6 +339,10 @@ fn tema_visto(spec: Option<&str>, theme: &Theme) -> HostTheme {
         name: spec.unwrap_or("default").to_owned(),
         roles: crate::catalog::variables(theme).into_iter().collect(),
         effects: efectos_declarados(theme),
+        // El tema ENTERO, que es lo que hace falta para colorear una entrada
+        // por su extensión (puente 66): eso no se puede proyectar como
+        // variables CSS porque las extensiones son un conjunto abierto.
+        resuelto: theme.clone(),
     }
 }
 
