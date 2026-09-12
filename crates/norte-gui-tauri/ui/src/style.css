@@ -414,7 +414,12 @@ body {
   /* Para el indicador de espacio, que se pega a su borde inferior. */
   position: relative;
   padding: 0 6px;
-  color: var(--border);
+  /* `muted`, no `--border` (spec 2026-09-11, F3). Esto es TEXTO —las cuentas
+     del panel y el espacio libre— y llevaba el color de un FILETE, que es
+     otra cosa: un tema cuyo borde es discreto contra su fondo, que es lo que
+     se le pide a un borde, hacía ilegible el pie. En `vscode-dark` eran
+     #2b2b2b sobre #1f1f1f. Atenuado sí, invisible no. */
+  color: var(--muted, var(--title-fg));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
