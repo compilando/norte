@@ -48,6 +48,34 @@
   --error-fg: #e06c75;
   --warning-fg: #e5c07b;
   --info-fg: #61afef;
+
+  /* El CROMO (spec 2026-09-11, F2) no se declara aquí: se DERIVA en el sitio
+     donde se gasta, con `var(--hover, var(--panel-focus-bg))`.
+
+     Es a propósito, y el motivo es que estos diez roles no están en
+     `Role::CORE`: un tema puede callarlos, y los ocho presets de siempre los
+     callan. Su valor sensato no se puede escribir como literal —un `hover`
+     correcto es «el fondo del panel con foco de ESTE tema»— así que un
+     `:root` con un defecto fijo se lo impondría a las ocho paletas. Derivado
+     en el punto de uso, un tema que no los nombra sigue pintando exactamente
+     lo que pintaba.
+
+     La tabla, para que esté en UN sitio:
+
+       --separator         → --border
+       --hover             → --panel-focus-bg
+       --scrollbar-slider  → --border
+       --input-bg          → --panel-bg
+       --widget-bg         → --panel-bg
+       --input-border      → --border
+       --focus-border      → --border-focus
+       --muted             → --title-fg
+       --badge-bg          → --selection-bg
+       --badge-fg          → --selection-fg
+       --widget-shadow     → rgb(0 0 0 / 35%)
+
+     `tests/variables_de_tema.rs` comprueba que cada nombre existe en el
+     acuerdo del host y que ninguno se queda sin gastar. */
 }
 
 * {
@@ -1125,7 +1153,7 @@ body {
 
 .ai-rename-more,
 .ai-rename-hint {
-  color: var(--dim-fg, var(--title-fg));
+  color: var(--muted, var(--title-fg));
 }
 
 .dialog-destination {
@@ -2621,7 +2649,7 @@ body {
 /* Una línea del DAEMON se marca al margen (#328). Un filete y no un color: el
    color ya lo tiene tomado el nivel, que es lo que se busca de un vistazo. */
 .log-line[data-source="daemon"] {
-  border-left: 2px solid var(--chip-bg, rgb(128 128 128 / 40%));
+  border-left: 2px solid var(--badge-bg, var(--selection-bg));
   padding-left: 4px;
 }
 
@@ -2629,19 +2657,26 @@ body {
    forma de etiqueta, para que se vea que se puede pulsar sin meter otro mando
    en una cabecera que ya lleva cinco. */
 .log-source {
-  border: 1px solid var(--chip-bg, rgb(128 128 128 / 40%));
+  border: 1px solid var(--badge-bg, var(--selection-bg));
   color: inherit;
   font: inherit;
   font-size: 0.85em;
   cursor: pointer;
 }
 
-/* Una etiqueta pequeña de cabecera: el nivel, el filtro, el origen. */
+/* Una etiqueta pequeña de cabecera: el nivel, el filtro, el origen.
+
+   Lleva el rol `badge`, que es lo que es. Antes pedía un `--chip-bg` que
+   NADIE alimentaba, así que se quedaba en un gris translúcido cosido al CSS
+   y era la misma etiqueta gris en los ocho temas. El primer plano no es
+   opcional con un fondo sólido: sin él, el texto hereda el color de la
+   cabecera y un acento oscuro se lo traga. */
 .chip {
   margin-left: 1ch;
   padding: 0 4px;
   border-radius: 3px;
-  background: var(--chip-bg, rgb(128 128 128 / 20%));
+  background: var(--badge-bg, var(--selection-bg));
+  color: var(--badge-fg, var(--selection-fg));
   font-size: 0.85em;
 }
 

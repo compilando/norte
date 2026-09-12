@@ -34,11 +34,27 @@ const NO_SON_COLOR: &[&str] = &[
     "dialog-backdrop",
 ];
 
-/// Huérfanas CONOCIDAS, con dueño y fecha: las alimenta la tarea 4 del plan
-/// `2026-09-11-vscode-theme.md` (los roles `muted` y `badge`). Esta lista se
-/// VACÍA allí, y vaciarla es lo que impide que se olviden. Una lista de
-/// excepciones sin dueño no es un plan, es una fuga.
-const HUERFANAS_CONOCIDAS: &[&str] = &["dim-fg", "chip-bg"];
+/// Huérfanas CONOCIDAS, con dueño y fecha. Vacía desde que los roles `muted`
+/// y `badge` alimentan lo que eran `--dim-fg` y `--chip-bg`. Se queda como
+/// constante —y no se borra— porque el mecanismo tiene que existir para la
+/// siguiente: una lista de excepciones con dueño es un plan, una sin dueño es
+/// una fuga, y no tener lista obliga a elegir entre las dos cosas peores
+/// (apagar el test, o dejar la variable sin escribir).
+const HUERFANAS_CONOCIDAS: &[&str] = &[];
+
+/// Nombres que el acuerdo tiene y la hoja aún no GASTA, con dueño: los
+/// gastan las tareas 6 (barra de desplazamiento) y 7 (hover, elevación,
+/// widgets) del plan `2026-09-11-vscode-theme.md`. Se vacía allí.
+const PENDIENTES_DE_GASTAR: &[&str] = &[
+    "hover",
+    "input-bg",
+    "input-border",
+    "widget-bg",
+    "widget-shadow",
+    "scrollbar-slider",
+    "separator",
+    "focus-border",
+];
 
 /// Los nombres de `var(--…)` que aparecen en la hoja.
 ///
@@ -63,22 +79,28 @@ fn variables_de_la_hoja() -> BTreeSet<String> {
     out
 }
 
-/// El conjunto de claves POSIBLE: las que `roles_de_tema` produce para un
-/// tema que da color a todos sus roles.
-fn proyectadas() -> BTreeSet<String> {
-    let tema = norte_theme::Theme::preset_default();
-    norte_ui_host::pickers::roles_de_tema(&tema)
+/// El ACUERDO: los nombres de variable que el host conoce, exista o no el
+/// color en un tema concreto.
+///
+/// Es `nombres_de_tema` y no `roles_de_tema(preset_default())` por un motivo
+/// que costó un test mal escrito: los diez roles de cromo no están en
+/// `Role::CORE`, así que el preset por defecto los CALLA y la hoja los deriva
+/// — preguntarle a un tema concreto habría leído ese silencio como «nadie
+/// alimenta esa variable» y habría declarado huérfanas las nueve que la spec
+/// acaba de añadir.
+fn acordadas() -> BTreeSet<String> {
+    norte_ui_host::pickers::nombres_de_tema()
         .into_iter()
-        .map(|(k, _)| k)
+        .map(str::to_owned)
         .collect()
 }
 
 #[test]
 fn cada_variable_de_color_la_alimenta_el_tema() {
-    let proyectadas = proyectadas();
+    let acordadas = acordadas();
     let huerfanas: Vec<String> = variables_de_la_hoja()
         .into_iter()
-        .filter(|v| !proyectadas.contains(v))
+        .filter(|v| !acordadas.contains(v))
         .filter(|v| !NO_SON_COLOR.contains(&v.as_str()))
         .filter(|v| !HUERFANAS_CONOCIDAS.contains(&v.as_str()))
         .collect();
@@ -89,11 +111,12 @@ fn cada_variable_de_color_la_alimenta_el_tema() {
 }
 
 #[test]
-fn cada_color_proyectado_lo_gasta_la_hoja() {
+fn cada_color_acordado_lo_gasta_la_hoja() {
     let usadas = variables_de_la_hoja();
-    let sin_gastar: Vec<String> = proyectadas()
+    let sin_gastar: Vec<String> = acordadas()
         .into_iter()
         .filter(|k| !usadas.contains(k))
+        .filter(|k| !PENDIENTES_DE_GASTAR.contains(&k.as_str()))
         .collect();
     assert!(
         sin_gastar.is_empty(),

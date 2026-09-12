@@ -26,7 +26,86 @@ use crate::dto::{PickerRowView, PickerView, ThemeRoleView, ThemeView};
 /// V6). Todo lo demás se enseña en la vista del tema como «sin soporte».
 pub const EFECTOS_DE_LA_VENTANA: &[&str] = &["backdrop"];
 
-/// Los roles del tema con su color, en el orden en que se nombran.
+/// La CORRESPONDENCIA: nombre de variable CSS, rol que lo llena, y si toma
+/// el fondo (`true`) o el frente (`false`) de ese rol.
+///
+/// Es una tabla y no una secuencia de llamadas porque hacen falta las dos
+/// preguntas por separado, y antes se respondían a la vez: **qué nombres
+/// existen** (independiente de todo tema, ver [`nombres_de_tema`]) y **qué
+/// colores tiene ESTE tema** (ver [`roles_de_tema`], que omite lo que el tema
+/// calla). Mezcladas, un tema que no define un rol hacía desaparecer su
+/// nombre de la lista, y el guardián de variables huérfanas del renderer leía
+/// esa ausencia como «nadie alimenta esa variable».
+///
+/// Un rol puede aparecer DOS veces, una por lado: `Role::Selection` llena
+/// `selection-bg` y `selection-fg`, y el terminal lo usa como estilo entero.
+const CORRESPONDENCIA: &[(&str, norte_theme::Role, bool)] = {
+    use norte_theme::Role;
+    &[
+        ("bg", Role::Background, true),
+        ("fg", Role::Regular, false),
+        ("panel-bg", Role::PaneBackground, true),
+        ("panel-focus-bg", Role::PaneFocusBackground, true),
+        ("border", Role::BorderUnfocused, false),
+        ("border-focus", Role::BorderFocus, false),
+        ("selection-bg", Role::Selection, true),
+        ("selection-fg", Role::Selection, false),
+        // El cursor del panel SIN foco y los botones de diálogo (spec
+        // 2026-09-10): dos roles nuevos, dos parejas nuevas.
+        ("selection-unfocused-bg", Role::SelectionUnfocused, true),
+        ("selection-unfocused-fg", Role::SelectionUnfocused, false),
+        ("button-bg", Role::Button, true),
+        ("button-fg", Role::Button, false),
+        ("mark-bg", Role::Mark, true),
+        ("hostile-fg", Role::HostileBadge, false),
+        ("status-bg", Role::StatusBar, true),
+        // Y su primer plano. Faltaba, y `Role::StatusBar` es una PAREJA: el
+        // terminal lo usa como estilo entero. Mandando solo el fondo, todo lo
+        // que la ventana pinte encima tiene que adivinar el texto — la
+        // cabecera del visor adivinaba `title-fg`, y con un tema cuya barra de
+        // estado es clara eso es claro sobre claro: la ruta, el encoding, el
+        // EOL y las pérdidas salían INVISIBLES. Un visor que no dice qué mira
+        // miente por omisión.
+        ("status-fg", Role::StatusBar, false),
+        ("title-fg", Role::Title, false),
+        ("error-fg", Role::Error, false),
+        // Los dos roles que una DECORACIÓN de plugin puede pedir además de
+        // `error`. Sin ellos, una insignia `warning` caía al color del título
+        // y era indistinguible de una `info`: el rol es vocabulario cerrado
+        // justamente para que signifique algo en pantalla.
+        ("warning-fg", Role::Warning, false),
+        ("info-fg", Role::Info, false),
+        // El cromo de la ventana (spec 2026-09-11, F2). Los diez NO están en
+        // `Role::CORE`, así que un tema puede callarlos —y los ocho presets
+        // de siempre los callan— y entonces la hoja de estilos los DERIVA de
+        // un color que el tema sí tiene: `var(--hover, var(--panel-focus-bg))`.
+        // Por eso su nombre existe aquí aunque su color no llegue.
+        ("hover", Role::Hover, true),
+        ("input-bg", Role::InputBackground, true),
+        ("input-border", Role::InputBorder, false),
+        ("widget-bg", Role::WidgetBackground, true),
+        ("widget-shadow", Role::WidgetShadow, false),
+        ("badge-bg", Role::Badge, true),
+        ("badge-fg", Role::Badge, false),
+        ("scrollbar-slider", Role::ScrollbarSlider, true),
+        ("separator", Role::Separator, false),
+        ("focus-border", Role::FocusBorder, false),
+        ("muted", Role::Muted, false),
+    ]
+};
+
+/// Los nombres de variable CSS que la ventana conoce, existan o no en un tema
+/// concreto. Es el ACUERDO con `style.css`, y lo comprueba el guardián de
+/// variables huérfanas del renderer (`tests/variables_de_tema.rs`).
+#[must_use]
+pub fn nombres_de_tema() -> Vec<&'static str> {
+    CORRESPONDENCIA.iter().map(|(n, _, _)| *n).collect()
+}
+
+/// Los roles del tema con su color, en el orden en que se nombran. Un rol que
+/// el tema NO define se omite: la hoja de estilos lo deriva (ver
+/// [`CORRESPONDENCIA`]), y mandar un color inventado desde aquí le quitaría
+/// esa posibilidad.
 ///
 /// La correspondencia es EXPLÍCITA y no automática: una variable de la hoja
 /// de estilos que nadie alimenta se ve (queda el valor por defecto), pero un
@@ -40,48 +119,14 @@ pub const EFECTOS_DE_LA_VENTANA: &[&str] = &["backdrop"];
 /// comentario original decía que no podía pasar. Quien hospeda la consume.
 #[must_use]
 pub fn roles_de_tema(theme: &norte_theme::Theme) -> Vec<(String, String)> {
-    use norte_theme::Role;
-    let mut out = Vec::new();
-    let mut poner = |nombre: &str, role: Role, fondo: bool| {
-        let style = theme.style(role);
-        let color = if fondo { style.bg } else { style.fg };
-        if let Some(c) = color {
-            out.push((nombre.to_owned(), c.to_hex()));
-        }
-    };
-    poner("bg", Role::Background, true);
-    poner("fg", Role::Regular, false);
-    poner("panel-bg", Role::PaneBackground, true);
-    poner("panel-focus-bg", Role::PaneFocusBackground, true);
-    poner("border", Role::BorderUnfocused, false);
-    poner("border-focus", Role::BorderFocus, false);
-    poner("selection-bg", Role::Selection, true);
-    poner("selection-fg", Role::Selection, false);
-    // El cursor del panel SIN foco y los botones de diálogo (spec
-    // 2026-09-10): dos roles nuevos, dos parejas nuevas.
-    poner("selection-unfocused-bg", Role::SelectionUnfocused, true);
-    poner("selection-unfocused-fg", Role::SelectionUnfocused, false);
-    poner("button-bg", Role::Button, true);
-    poner("button-fg", Role::Button, false);
-    poner("mark-bg", Role::Mark, true);
-    poner("hostile-fg", Role::HostileBadge, false);
-    poner("status-bg", Role::StatusBar, true);
-    // Y su primer plano. Faltaba, y `Role::StatusBar` es una PAREJA: el
-    // terminal lo usa como estilo entero. Mandando solo el fondo, todo lo que
-    // la ventana pinte encima tiene que adivinar el texto — la cabecera del
-    // visor adivinaba `title-fg`, y con un tema cuya barra de estado es clara
-    // eso es claro sobre claro: la ruta, el encoding, el EOL y las pérdidas
-    // salían INVISIBLES. Un visor que no dice qué mira miente por omisión.
-    poner("status-fg", Role::StatusBar, false);
-    poner("title-fg", Role::Title, false);
-    poner("error-fg", Role::Error, false);
-    // Los dos roles que una DECORACIÓN de plugin puede pedir además de
-    // `error`. Sin ellos, una insignia `warning` caía al color del título y
-    // era indistinguible de una `info`: el rol es vocabulario cerrado
-    // justamente para que signifique algo en pantalla.
-    poner("warning-fg", Role::Warning, false);
-    poner("info-fg", Role::Info, false);
-    out
+    CORRESPONDENCIA
+        .iter()
+        .filter_map(|&(nombre, role, fondo)| {
+            let style = theme.style(role);
+            let color = if fondo { style.bg } else { style.fg };
+            color.map(|c| (nombre.to_owned(), c.to_hex()))
+        })
+        .collect()
 }
 
 /// El tema que esta ventana tiene puesto.
@@ -529,7 +574,7 @@ fn detalle_de(v: &norte_proto::methods::Volume, lang: Lang) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::roles_de_tema;
+    use super::{nombres_de_tema, roles_de_tema};
 
     /// **Un rol de PAREJA cruza con sus dos mitades.**
     ///
@@ -582,9 +627,45 @@ mod tests {
                 "warning-fg",
                 "info-fg",
             ],
-            "la lista es el acuerdo con `style.css`: si cambia, cambia también \
-             la hoja"
+            "lo que el preset por defecto PROYECTA: calla los diez de cromo, \
+             que la hoja deriva"
         );
+
+        // El acuerdo con `style.css` es `nombres_de_tema`, no lo de arriba:
+        // los nombres existen aunque el tema no los llene, y confundir las
+        // dos cosas es lo que hacía que el guardián de huérfanas del renderer
+        // leyera «nadie alimenta esto» donde en realidad ponía «este tema no
+        // lo dice».
+        let nombres_todos = nombres_de_tema();
+        for n in &nombres {
+            assert!(
+                nombres_todos.contains(n),
+                "`{n}` se proyecta y no está en el acuerdo"
+            );
+        }
+        for cromo in [
+            "hover",
+            "input-bg",
+            "input-border",
+            "widget-bg",
+            "widget-shadow",
+            "badge-bg",
+            "badge-fg",
+            "scrollbar-slider",
+            "separator",
+            "focus-border",
+            "muted",
+        ] {
+            assert!(
+                nombres_todos.contains(&cromo),
+                "falta `{cromo}` en el acuerdo con la hoja"
+            );
+            assert!(
+                !nombres.contains(&cromo),
+                "`{cromo}` no debería proyectarse: el preset por defecto no \
+                 lo define, y la hoja lo deriva"
+            );
+        }
 
         // Y cada uno lleva un color de verdad, no una cadena vacía que la
         // hoja aceptaría en silencio.
