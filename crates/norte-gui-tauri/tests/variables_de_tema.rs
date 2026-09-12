@@ -51,7 +51,6 @@ const PENDIENTES_DE_GASTAR: &[&str] = &[
     "input-border",
     "widget-bg",
     "widget-shadow",
-    "scrollbar-slider",
     "separator",
     "focus-border",
 ];

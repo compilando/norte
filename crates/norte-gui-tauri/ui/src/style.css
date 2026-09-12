@@ -498,6 +498,54 @@ body {
   opacity: 0.6;
 }
 
+/* --- La barra de desplazamiento (spec 2026-09-11, F3) ------------------
+
+   Superpuesta y sin flechas, como la del editor que estos temas imitan.
+   Hasta ahora no la estilizaba NADIE, así que la ventana enseñaba la de
+   WebKitGTK: el delator visual más ruidoso de todos, porque es cromo del
+   sistema metido en una ventana que por lo demás se pinta entera.
+
+   La regla es GLOBAL y no una lista de selectores a propósito. Hay catorce
+   superficies con scroll en esta hoja (`.scroller`, `.tasks`,
+   `.palette-rows`, `.help-topics`, `.help-body`, `.settings-rows`,
+   `.extensions-rows`, `.extensions-pane`, `.profiles-rows`, `.metadata`,
+   `.processes`, `.tree`, `.places`, `.search-rows`) y enumerarlas garantiza
+   que la decimoquinta nazca con la barra del sistema y que nadie se entere:
+   un fallo que no se ve no se arregla.
+
+   El canal mide 14 px y el deslizador 8: los 3 px de cada lado son un borde
+   TRANSPARENTE con `background-clip: padding-box`, no un `width` menor. Con
+   `width` el resto del canal dejaría de ser zona de arrastre, y arrastrar el
+   borde de la barra es justo lo que hace todo el mundo. */
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-slider, var(--border));
+  /* Cuadrado a propósito: el del editor no tiene radio. */
+  border-radius: 0;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 80ms ease-out;
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  /* Al pasar por encima manda el acento del panel con foco, que es el
+     color que este tema ya usa para «esto responde». */
+  background: var(--border-focus);
+  background-clip: padding-box;
+}
+
+/* Ni flechas ni esquina: ocupan sitio y no existen en lo que esto imita. */
+::-webkit-scrollbar-button,
+::-webkit-scrollbar-corner {
+  display: none;
+}
+
 .scroller {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -3215,6 +3263,10 @@ body {
 }
 
 :root[data-reduce-motion="true"] .row {
+  transition: none;
+}
+
+:root[data-reduce-motion="true"] ::-webkit-scrollbar-thumb {
   transition: none;
 }
 
