@@ -145,7 +145,7 @@ body {
   display: flex;
   height: var(--cell-h);
   background: var(--panel-bg);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--separator, var(--border));
   overflow: hidden;
   white-space: nowrap;
 }
@@ -220,7 +220,7 @@ body {
   align-items: center;
   padding: 0 4px;
   background: var(--panel-bg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
   overflow: hidden;
   white-space: nowrap;
 }
@@ -295,7 +295,7 @@ body {
   height: var(--cell-h);
   align-items: center;
   background: var(--panel-bg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
 }
 
 .menubar-title {
@@ -341,8 +341,9 @@ body {
   min-width: 32ch;
   max-height: 70vh;
   overflow: auto;
-  background: var(--panel-bg);
+  background: var(--widget-bg, var(--panel-bg));
   border: 1px solid var(--border-focus);
+  box-shadow: 0 4px 16px var(--widget-shadow, rgb(0 0 0 / 35%));
 }
 
 .menu-item {
@@ -417,7 +418,7 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--separator, var(--border));
   unicode-bidi: isolate;
 }
 
@@ -442,7 +443,7 @@ body {
   padding: 0 6px;
   white-space: nowrap;
   color: var(--title-fg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
 }
 
 /* Las cabeceras en VERSALITAS con un poco de aire (spec 2026-09-11, V2):
@@ -572,6 +573,19 @@ body {
   padding: 0 6px;
   white-space: nowrap;
   cursor: default;
+}
+
+/* La fila bajo el PUNTERO (spec 2026-09-11, F3). Hasta ahora solo reaccionaba
+   la casilla de marca, y una lista que no responde al ratón se siente muerta
+   en una ventana.
+
+   Va ANTES del cursor y de la marca a propósito: `.row:hover` y
+   `.row[aria-selected="true"]` tienen la MISMA especificidad (0,2,0), así que
+   decide el orden de aparición. Puesto después, el ratón taparía al cursor y
+   la ventana dejaría de decir a dónde van las teclas — que es lo único que
+   esa fila está ahí para decir. */
+.row:hover {
+  background: var(--hover, var(--panel-focus-bg));
 }
 
 /* El cursor lleva un borde de ACENTO a la izquierda (spec 2026-09-11, V2)
@@ -819,15 +833,18 @@ body {
   max-height: 70vh;
   display: flex;
   flex-direction: column;
-  background: var(--panel-bg);
+  /* Un WIDGET flotante, no un panel: se apoya sobre el fondo base y por eso
+     lleva su propia superficie (spec 2026-09-11, F3). */
+  background: var(--widget-bg, var(--panel-bg));
   border: 1px solid var(--border-focus);
+  box-shadow: 0 4px 16px var(--widget-shadow, rgb(0 0 0 / 35%));
   overflow: hidden;
 }
 
 .palette-query {
   flex: 0 0 var(--cell-h);
   padding: 0 6px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -1103,8 +1120,9 @@ body {
 .dialog {
   min-width: 380px;
   max-width: 70vw;
-  background: var(--panel-bg);
+  background: var(--widget-bg, var(--panel-bg));
   border: 1px solid var(--border-focus);
+  box-shadow: 0 4px 16px var(--widget-shadow, rgb(0 0 0 / 35%));
   padding: 12px;
 }
 
@@ -1210,7 +1228,7 @@ body {
   align-items: baseline;
   margin: 0 0 8px;
   padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
 }
 
 .dialog-destination-label {
@@ -1242,11 +1260,23 @@ body {
 
 .dialog input {
   width: 100%;
-  background: var(--bg);
+  background: var(--input-bg, var(--panel-bg));
   color: var(--fg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--input-border, var(--border));
   padding: 4px;
   font: inherit;
+}
+
+/* El anillo de foco de un CONTROL (spec 2026-09-11, F3). Es `focus-border` y
+   no `border-focus`: aquel dice qué PANEL recibe las teclas de navegación,
+   este dice qué campo o botón recibe lo que teclees dentro de un diálogo.
+   `:focus-visible` y no `:focus` para que un clic del ratón no deje el
+   anillo puesto — quien pulsa con el ratón ya sabe dónde pulsó. */
+.dialog input:focus-visible,
+.choices button:focus-visible,
+.dialog button:focus-visible {
+  outline: 1px solid var(--focus-border, var(--border-focus));
+  outline-offset: 1px;
 }
 
 .choices {
@@ -1307,7 +1337,7 @@ body {
   background: var(--selection-bg);
   color: var(--selection-fg);
   border: 1px solid var(--border-focus);
-  box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
+  box-shadow: 0 4px 16px var(--widget-shadow, rgb(0 0 0 / 35%));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1428,7 +1458,7 @@ body {
 
 .help-topics {
   grid-row: 1;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--separator, var(--border));
   overflow: auto;
   /* Un nombre de página puede venir de un plugin: se aísla para que una
      marca de dirección no reordene lo que hay a su alrededor. */
@@ -1486,7 +1516,7 @@ body {
   padding-bottom: 4px;
   font-size: 1.35em;
   color: var(--title-fg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
 }
 
 .help-body h2,
@@ -1522,7 +1552,7 @@ body {
 /* Sin esto, una tabla del corpus y la hoja de teclado que va debajo se leen
    como una sola: dos rejillas pegadas, con anchos de columna distintos. */
 .help-keys {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--separator, var(--border));
 }
 
 .help-table th,
@@ -1613,7 +1643,7 @@ body {
   margin: 8px 0 0;
   padding: 0;
   list-style: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--separator, var(--border));
 }
 
 .help-action {
@@ -1654,7 +1684,7 @@ body {
   grid-column: 1 / -1;
   padding: 0 6px;
   background: var(--status-bg);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--separator, var(--border));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1691,7 +1721,7 @@ body {
   padding-bottom: 4px;
   font-size: 1.35em;
   color: var(--title-fg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
 }
 
 .settings-rows {
@@ -1794,7 +1824,7 @@ body {
   align-items: baseline;
   gap: 12px;
   padding: 8px 12px 6px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
   background: var(--status-bg);
 }
 
@@ -1848,7 +1878,7 @@ body {
   padding: 4px 0;
   list-style: none;
   overflow: auto;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--separator, var(--border));
 }
 
 .extensions-rows > .extensions-note {
@@ -1982,7 +2012,7 @@ body {
 
 .extensions-pane-head {
   padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
 }
 
 .extensions-pane-name {
@@ -2317,7 +2347,7 @@ body {
   margin: 0;
   padding: 0 12px 8px calc(12px + 2ch);
   color: var(--error-fg);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--separator, var(--border));
 }
 
 .extensions-error-reason {
@@ -2360,7 +2390,7 @@ body {
   padding-bottom: 4px;
   font-size: 1.35em;
   color: var(--title-fg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
 }
 
 .theme h2 {
@@ -2875,7 +2905,7 @@ body {
   padding-bottom: 4px;
   font-size: 1.35em;
   color: var(--title-fg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
 }
 
 .layouts-body {
@@ -2981,7 +3011,7 @@ body {
   padding-bottom: 4px;
   font-size: 1.35em;
   color: var(--title-fg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
   unicode-bidi: isolate;
 }
 
@@ -3301,7 +3331,7 @@ body {
   padding-bottom: 4px;
   font-size: 1.35em;
   color: var(--title-fg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator, var(--border));
   /* El título lleva el ALCANCE dentro y ese trozo sale de un esquema, así
      que es su propia corrida bidi. */
   unicode-bidi: isolate;
@@ -3375,7 +3405,7 @@ body {
   flex: 0 0 auto;
   padding-top: 4px;
   color: var(--title-fg);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--separator, var(--border));
 }
 
 /* Lo que enseña el visor lo produjo un PLUGIN. Su propio color, y aislado:

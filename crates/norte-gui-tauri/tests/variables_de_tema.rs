@@ -42,18 +42,12 @@ const NO_SON_COLOR: &[&str] = &[
 /// (apagar el test, o dejar la variable sin escribir).
 const HUERFANAS_CONOCIDAS: &[&str] = &[];
 
-/// Nombres que el acuerdo tiene y la hoja aún no GASTA, con dueño: los
-/// gastan las tareas 6 (barra de desplazamiento) y 7 (hover, elevación,
-/// widgets) del plan `2026-09-11-vscode-theme.md`. Se vacía allí.
-const PENDIENTES_DE_GASTAR: &[&str] = &[
-    "hover",
-    "input-bg",
-    "input-border",
-    "widget-bg",
-    "widget-shadow",
-    "separator",
-    "focus-border",
-];
+/// Nombres que el acuerdo tiene y la hoja aún no GASTA. **Vacía**: desde la
+/// tarea 7 del plan `2026-09-11-vscode-theme.md` no queda ninguno, y las dos
+/// direcciones del guardián están vivas sin más excepción que la geometría.
+/// Se queda por el mismo motivo que `HUERFANAS_CONOCIDAS`: el mecanismo tiene
+/// que existir para el siguiente que llegue con dueño y fecha.
+const PENDIENTES_DE_GASTAR: &[&str] = &[];
 
 /// Los nombres de `var(--…)` que aparecen en la hoja.
 ///
