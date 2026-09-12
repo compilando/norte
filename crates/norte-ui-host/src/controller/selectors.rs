@@ -367,7 +367,12 @@ impl Estado {
                 self.tema = previo;
                 self.nativo(crate::dto::NativeEffect::ThemeChanged { name: nombre });
                 let cambio = ViewChange::Theme { theme: None };
-                return (self.aplicada(), vec![self.parche(vec![cambio])]);
+                // Y las filas: el preview en vivo dejó los nombres con los
+                // colores del tema que el cursor rozó, y volver atrás tiene
+                // que devolverlos también (puente 66).
+                let mut fuera = vec![self.parche(vec![cambio])];
+                fuera.extend(self.parches_de_filas_de_todos());
+                return (self.aplicada(), fuera);
             }
             "ArrowUp" | "up" => sel.cursor = sel.cursor.saturating_sub(1),
             "ArrowDown" | "down" => {
@@ -385,7 +390,9 @@ impl Estado {
                 // (ADR 0079 D1).
                 self.persistir_tema(&elegido, buzon);
                 let cambio = ViewChange::Theme { theme: None };
-                return (self.aplicada(), vec![self.parche(vec![cambio])]);
+                let mut fuera = vec![self.parche(vec![cambio])];
+                fuera.extend(self.parches_de_filas_de_todos());
+                return (self.aplicada(), fuera);
             }
             _ => return (self.aplicada(), Vec::new()),
         }
@@ -397,7 +404,14 @@ impl Estado {
         let cambio = ViewChange::Theme {
             theme: self.vista_tema(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        // El preview mueve los colores de las ENTRADAS igual que los del
+        // cromo (puente 66): sin esto, recorrer la lista cambiaba el fondo y
+        // los bordes bajo el cursor pero dejaba los nombres del tema
+        // anterior, que es la mitad de la comparación que el selector existe
+        // para ofrecer.
+        let mut fuera = vec![self.parche(vec![cambio])];
+        fuera.extend(self.parches_de_filas_de_todos());
+        (self.aplicada(), fuera)
     }
 
     /// Pone un tema por su nombre: el del host, y el de quien lo hospeda.
@@ -447,6 +461,32 @@ impl Estado {
         self.nativo(crate::dto::NativeEffect::ThemeChanged {
             name: nombre.to_owned(),
         });
+    }
+
+    /// Los parches de FILAS de todos los huecos, para después de un cambio de
+    /// tema.
+    ///
+    /// Desde el puente 66 el color de una entrada va COCIDO en su fila
+    /// (`RowView::name_color`), así que cambiar de tema y no repintar las
+    /// filas deja los nombres con los colores del tema anterior hasta que el
+    /// lector se mueva, marque algo o cambie de directorio. El resto de la
+    /// pantalla —fondo, bordes, paleta, barra de estado— sí cambia, que es lo
+    /// que hace el fallo tan raro de leer: media ventana obedece y la otra
+    /// media no.
+    ///
+    /// De TODOS los huecos y no solo del activo: `filas_visibles` mira
+    /// `self.hueco()`, y el panel de al lado también tiene nombres.
+    ///
+    /// Vive aquí, junto a `tema_puesto`, porque los dos caminos que ponen un
+    /// tema pasan por él: el de preset, que resuelve en el sitio, y el de
+    /// fichero, que llega por `Mensaje::TemaResuelto`. Es el mismo error que
+    /// `readornar_todo` arregló para los iconos.
+    pub(super) fn parches_de_filas_de_todos(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let slots: Vec<u32> = self.huecos.keys().copied().collect();
+        slots
+            .into_iter()
+            .map(|slot| self.parche_filas_de(slot))
+            .collect()
     }
 
     /// Guarda el tema elegido en la capa que toca, FUERA del actor.

@@ -95,9 +95,23 @@ violation, never trusting a daemon blindly):
 | Badge length, POST-masking | ≤ 8 chars |
 | `decorations` / `values` | POSITIONAL 1:1 with the input `paths` — never keyed, never reordered, never sparse |
 
-`role` names are validated HOST-SIDE against `norte_theme::Role`'s closed
-set (`crates/norte-theme/src/role.rs`). An unknown role string degrades to
-`None` (unstyled) plus a warning — never a hard error, matching ADR 0020's
+`role` names are validated HOST-SIDE against `norte_theme::Role::REQUESTABLE`
+(`crates/norte-theme/src/role.rs`), via `Role::from_kebab_requestable`.
+
+> **Amended 2026-09-12** (spec `2026-09-11-vscode-theme-design.md`). This
+> originally said "`Role`'s closed set", and at the time the two were the same
+> thing. They no longer are: `Role` gained ten CHROME roles — `hover`,
+> `scrollbar-slider`, `widget-*`, `input-*`, `separator`, `focus-border` — and
+> those are not requestable. The criterion is that a plugin describes
+> CONTENT, so it may name what a piece of content MEANS (`error`, `warning`,
+> `info`, `title`, `match`, `regular`, `hostile-badge`, `badge`, `muted`) and
+> may not name what the window uses to say what STATE it is in — neither the
+> chrome nor `selection`, `status-bar`, `mark` or the pane backgrounds. A
+> badge painted with the scrollbar slider's colour means nothing; one painted
+> with the cursor's colour would lie about where the cursor is.
+
+An unknown role string — or a real role that is not requestable — degrades to
+`None` (unstyled) — never a hard error, matching ADR 0020's
 established lenient-theme-data precedent (a newer plugin, or one from a
 different norte fork, must not break rendering). This validation applies
 wherever `role: Option<String>` crosses the wire (`SpanWire`,

@@ -411,11 +411,40 @@ function sendViewport(send: (a: UiAction) => void, screen: Screen, doc: Document
   });
 }
 
-/** Los colores salen del tema resuelto EN RUST; aquí solo se enchufan. */
-function applyTheme(doc: Document, theme: Record<string, string>): void {
-  for (const [name, value] of Object.entries(theme)) {
-    doc.documentElement.style.setProperty(`--${name}`, value);
+/**
+ * Las variables que el tema ANTERIOR dejó puestas en el raíz.
+ *
+ * Hace falta porque el host manda solo lo que el tema DICE: desde los roles
+ * de cromo (spec 2026-09-11, F2), un tema que no define `hover` no manda
+ * `--hover`, y la hoja lo deriva con `var(--hover, var(--panel-focus-bg))` —
+ * derivación que solo actúa mientras la variable esté SIN PONER. Antes ese
+ * mecanismo no existía y todo nombre proyectado era un rol que cualquier
+ * preset define, así que cada cambio pisaba el juego entero y bastaba con
+ * asignar.
+ */
+let variablesPuestas: string[] = [];
+
+/**
+ * Los colores salen del tema resuelto EN RUST; aquí solo se enchufan.
+ *
+ * Se BORRA lo del tema anterior antes de poner lo del nuevo. Sin eso, pasar
+ * de `vscode-dark` a `gruvbox-light` dejaba la paleta clara en todo lo que
+ * sale de un rol CORE y la oscura en todo lo que sale de uno de cromo: la
+ * paleta de comandos y los menús en #202020, el hover de fila en #2a2d2e y
+ * las migas en #9d9d9d, sobre fondo claro y sin forma de arreglarlo salvo
+ * reiniciar. `removeProperty` devuelve la variable a lo que diga `:root`,
+ * que para las de cromo es «sin poner», que es justo lo que la derivación
+ * necesita.
+ */
+export function applyTheme(doc: Document, theme: Record<string, string>): void {
+  const raiz = doc.documentElement;
+  for (const name of variablesPuestas) {
+    raiz.style.removeProperty(`--${name}`);
   }
+  for (const [name, value] of Object.entries(theme)) {
+    raiz.style.setProperty(`--${name}`, value);
+  }
+  variablesPuestas = Object.keys(theme);
 }
 
 /**

@@ -54,6 +54,9 @@ function fila(key: number, nombre: string, extra: Partial<RowView> = {}): RowVie
     icon_hostile: false,
     name_color: "",
     name_bold: false,
+    name_dim: false,
+    name_italic: false,
+    name_underline: false,
     ...extra,
   };
 }
@@ -441,6 +444,42 @@ describe("Screen", () => {
     // La negrita SÍ se conserva: dice qué ES la entrada, no de qué color, y
     // no compite con el fondo de la selección.
     expect(name.style.fontWeight).toBe("bold");
+  });
+
+  it("los atributos del tema llegan, no solo el color", () => {
+    // `retro-crt` atenúa zip/tar/gz con `dim = true`: llevando solo `fg`
+    // salían apagados en el terminal y a plena luz aquí.
+    const { screen, root } = montar();
+    screen.paint(
+      vista({
+        rows: [
+          fila(0, "backup.zip", {
+            name_color: "#d75f5f",
+            name_dim: true,
+            name_italic: true,
+            name_underline: true,
+          }),
+        ],
+      }),
+    );
+    const name = root.querySelector(".cell-name") as HTMLElement;
+    expect(name.style.opacity).toBe("0.6");
+    expect(name.style.fontStyle).toBe("italic");
+    expect(name.style.textDecoration).toBe("underline");
+  });
+
+  it("el icono lleva el color de su entrada (ADR 0105)", () => {
+    // Un icono dice qué ES la fila, no en qué estado está: sigue al color de
+    // su nombre, como en el terminal.
+    const { screen, root } = montar();
+    screen.paint(
+      vista({
+        icon_column: true,
+        rows: [fila(0, "src", { kind: "dir", icon: "📁", name_color: "#4daafc" })],
+      }),
+    );
+    const icono = root.querySelector(".cell-icon") as HTMLElement;
+    expect(icono.style.color).toBe("rgb(77, 170, 252)");
   });
 
   it("un tema que no dice nada de una entrada no le pone color", () => {

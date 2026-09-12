@@ -281,14 +281,22 @@ use serde::{Deserialize, Serialize};
 ///   ruta. `ColumnHeader.width` de la columna `name` pasa a ser su suelo.
 /// - **66**: el tema colorea las ENTRADAS (spec 2026-09-11). `RowView` gana
 ///   `name_color` —el `#rrggbb` que `[files.ext]` (gana) o `[files.kind]`
-///   dan al nombre, vacío si el tema no dice nada— y `name_bold`. Viajan
-///   RESUELTOS y no como nombre de regla porque las extensiones son un
-///   conjunto ABIERTO: un tema colorea las que quiera, así que el renderer
-///   no puede tener clases para ellas, al revés que con `badge_role`. Cierra
-///   una divergencia con el terminal que llevaba desde que existe la
-///   ventana: `[files.kind]` y `[files.ext]` —la mitad de lo que declara un
-///   fichero de tema— no se pintaban, y un listado monocromo no se lee como
-///   un tema pobre, se lee como un tema roto.
+///   dan al nombre, vacío si el tema no dice nada— y `name_bold`,
+///   `name_dim`, `name_italic`, `name_underline`. Viajan RESUELTOS y no como
+///   nombre de regla porque las extensiones son un conjunto ABIERTO: un tema
+///   colorea las que quiera, así que el renderer no puede tener clases para
+///   ellas, al revés que con `badge_role`. Cierra una divergencia con el
+///   terminal que llevaba desde que existe la ventana: `[files.kind]` y
+///   `[files.ext]` —la mitad de lo que declara un fichero de tema— no se
+///   pintaban, y un listado monocromo no se lee como un tema pobre, se lee
+///   como un tema roto.
+///
+///   De los seis atributos de `norte_theme::Style` cruzan CUATRO. `bg` y
+///   `reverse` se quedan fuera a propósito: el fondo de una fila ya lo
+///   disputan el cursor, el hover y la marca, y un quinto dueño dejaría que
+///   el tema tapase dónde está el cursor. Un tema que pinte `bg` en
+///   `[files.ext]` lo verá en el terminal y no aquí, y eso está escrito
+///   también en `docs/theming.md`.
 pub const BRIDGE_VERSION: u32 = 66;
 
 /// Tope de una cadena que cruza al renderer, en bytes.

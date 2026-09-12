@@ -66,11 +66,26 @@ warning          = { fg = "#d7af5f" }
 info             = { fg = "#5fafd7" }
 match            = { fg = "#1c1c1c", bg = "#d7af5f" }
 
+# Chrome roles. The window paints these; the terminal ignores them.
+[roles]
+hover             = { bg = "#2a2d2e" }
+input-background  = { bg = "#313131" }
+input-border      = { fg = "#3c3c3c" }
+widget-background = { bg = "#202020" }
+widget-shadow     = { fg = "#000000" }
+badge             = { fg = "#f8f8f8", bg = "#616161" }
+scrollbar-slider  = { bg = "#434343" }
+separator         = { fg = "#2b2b2b" }
+focus-border      = { fg = "#0078d4" }
+muted             = { fg = "#9d9d9d" }
+
 # Styles by node type
 [files.kind]
 dir     = { fg = "#5fafd7", bold = true }
 symlink = { fg = "#5fafaf" }
 # Other keys include executable, fifo, socket, block-device, and char-device.
+# Those five are DORMANT: the protocol's `Entry` carries no mode yet, so no
+# frontend can select them. Extension rules still apply to such files.
 
 # Styles by file extension. These take precedence over node types.
 [files.ext]
@@ -82,8 +97,47 @@ png = { fg = "#af87d7" }
 Colours accept `#rrggbb` and shorthand `#rgb` values. Styles support the
 boolean attributes `bold`, `dim`, `italic`, `underline`, and `reverse`.
 
-Defining a role replaces its fallback completely. Omitting it keeps the
-default monochrome style for that role.
+Defining a role replaces its fallback completely.
+
+## Omitting a role
+
+Omitting one of the **eighteen core roles** keeps its monochrome fallback —
+the look norte had before it grew themes.
+
+Omitting one of the **ten chrome roles** in the table above is different, and
+better: the window derives it from a colour your theme already has, so a theme
+that never mentions them still looks coherent. The derivations are
+
+| role | derives from |
+| --- | --- |
+| `separator`, `input-border`, `scrollbar-slider` | `border-unfocused` |
+| `hover` | `pane-focus-background` |
+| `input-background`, `widget-background` | `pane-background` |
+| `focus-border` | `border-focus` |
+| `muted` | `title` |
+| `badge` | `selection` |
+| `widget-shadow` | a translucent black the stylesheet supplies |
+
+Define one only when the derived value is wrong for your palette. The terminal
+ignores all ten, so a theme meant for both frontends loses nothing by setting
+them.
+
+## What each frontend paints
+
+Not every part of a theme reaches every frontend, and the gaps are deliberate:
+
+- The **ten chrome roles** are the window's. A terminal has no scrollbar
+  slider and no pointer hover.
+- `[effects]` is the window's too (see below).
+- `[files.kind]` and `[files.ext]` reach both, but the window carries only
+  `fg`, `bold`, `dim`, `italic` and `underline` from them. It deliberately
+  drops `bg` and `reverse`: a row's background is already spoken for by the
+  cursor, the hover and the mark, and a fourth claimant would let a theme hide
+  where the cursor is.
+- An extension is matched against the filename's **raw bytes**, always. If a
+  panel is reinterpreting names in a legacy encoding
+  (`pane.names-encoding`), the extension you see on screen is not
+  necessarily the one `[files.ext]` matches — the bytes are.
 
 ## Terminal colour support
 

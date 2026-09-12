@@ -2122,6 +2122,17 @@ pub struct RowView {
     /// estilo que `name_color`.
     #[serde(default)]
     pub name_bold: bool,
+    /// Atenuado. Los presets retro atenúan así los archivos comprimidos, y
+    /// sin este campo salían apagados en el terminal y a plena luz en la
+    /// ventana.
+    #[serde(default)]
+    pub name_dim: bool,
+    /// Cursiva.
+    #[serde(default)]
+    pub name_italic: bool,
+    /// Subrayado.
+    #[serde(default)]
+    pub name_underline: bool,
 }
 
 /// La cabecera de UNA columna.

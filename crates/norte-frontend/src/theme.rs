@@ -57,6 +57,37 @@ pub fn is_preset(spec: Option<&str>) -> bool {
     }
 }
 
+/// `EntryKind` del protocolo → `FileKind` del tema.
+///
+/// El protocolo no distingue aún ejecutable/fifo/socket/dispositivo —el
+/// `Entry` no lleva modo— así que todo lo que no es directorio ni enlace cae a
+/// `Regular`; el color por EXTENSIÓN sigue aplicando encima. Como consecuencia,
+/// las claves `executable`, `fifo`, `socket`, `block-device` y `char-device`
+/// que los presets traen en `[files.kind]` están DORMIDAS: ningún frontend
+/// puede seleccionarlas todavía.
+///
+/// Vive aquí y no en cada frontend porque los dos la necesitan y son la misma
+/// decisión (ADR 0077): escrita dos veces, diverge en silencio — y el día que
+/// `Entry` lleve modo, un frontend lo aprovecharía y el otro no.
+///
+/// ```
+/// use norte_frontend::theme::file_kind_of;
+/// use norte_proto::EntryKind;
+/// use norte_theme::FileKind;
+/// assert_eq!(file_kind_of(EntryKind::Dir), FileKind::Dir);
+/// assert_eq!(file_kind_of(EntryKind::Other), FileKind::Regular);
+/// ```
+#[must_use]
+pub fn file_kind_of(kind: norte_proto::EntryKind) -> norte_theme::FileKind {
+    use norte_proto::EntryKind;
+    use norte_theme::FileKind;
+    match kind {
+        EntryKind::Dir => FileKind::Dir,
+        EntryKind::Symlink => FileKind::Symlink,
+        EntryKind::File | EntryKind::Other => FileKind::Regular,
+    }
+}
+
 /// Resolves the `[ui].theme` spec: an embedded preset name or a path to a
 /// `.toml` theme file. `None` = the default preset. SYNC (startup):
 /// wrap in `spawn_blocking` from async contexts.

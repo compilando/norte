@@ -96,6 +96,9 @@
     "marked": false,
     "name_bold": false,
     "name_color": "",
+    "name_dim": false,
+    "name_italic": false,
+    "name_underline": false,
     "selected": false
   },
   "row_kind_file": {
@@ -117,6 +120,9 @@
     "marked": false,
     "name_bold": false,
     "name_color": "",
+    "name_dim": false,
+    "name_italic": false,
+    "name_underline": false,
     "selected": false
   },
   "row_kind_other": {
@@ -138,6 +144,9 @@
     "marked": false,
     "name_bold": false,
     "name_color": "",
+    "name_dim": false,
+    "name_italic": false,
+    "name_underline": false,
     "selected": false
   },
   "row_kind_symlink": {
@@ -159,6 +168,9 @@
     "marked": false,
     "name_bold": false,
     "name_color": "",
+    "name_dim": false,
+    "name_italic": false,
+    "name_underline": false,
     "selected": false
   },
   "slot_state_error": {

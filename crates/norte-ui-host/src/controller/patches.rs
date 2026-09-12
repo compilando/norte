@@ -459,18 +459,12 @@ impl Estado {
         // Contra los bytes CRUDOS, no contra `texto`: ese va enmascarado y
         // reinterpretado para pintar, y el enmascarado no es inyectivo — una
         // extensión casada sobre él sería la extensión de otro nombre.
-        let (name_color, name_bold) = self.tema.estilo_de_entrada(
-            bytes,
-            match e.kind {
-                EntryKind::Dir => norte_theme::FileKind::Dir,
-                EntryKind::Symlink => norte_theme::FileKind::Symlink,
-                // `Other` es lo que el protocolo no distingue (fifo, socket,
-                // dispositivo…). El tema sí los separa, pero sin el dato no
-                // se puede elegir, así que cae al regular igual que en el
-                // terminal.
-                EntryKind::File | EntryKind::Other => norte_theme::FileKind::Regular,
-            },
-        );
+        // El mapeo es de `norte-frontend` y no de aquí: lo necesitan los dos
+        // frontends y es la MISMA decisión, que escrita dos veces diverge en
+        // silencio (ADR 0077).
+        let estilo = self
+            .tema
+            .estilo_de_entrada(bytes, norte_frontend::theme::file_kind_of(e.kind));
         RowView {
             key: RowKey(i as u64),
             display_name: clamp_display(texto),
@@ -497,8 +491,11 @@ impl Estado {
                 .map(clamp_display)
                 .unwrap_or_default(),
             icon_hostile: adorno.is_some_and(|d| d.icon_hostile),
-            name_color,
-            name_bold,
+            name_color: estilo.color,
+            name_bold: estilo.bold,
+            name_dim: estilo.dim,
+            name_italic: estilo.italic,
+            name_underline: estilo.underline,
         }
     }
 

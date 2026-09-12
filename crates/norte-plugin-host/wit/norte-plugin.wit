@@ -148,9 +148,13 @@ interface previewer {
 
     /// Un fragmento de texto con estilo OPCIONAL (ADR 0037 decisión 2): el
     /// host pinta, el guest solo describe. `role` es un nombre semántico
-    /// (validado por el HOST consumidor contra `norte_theme::Role` — este
-    /// paquete WIT no conoce ese conjunto cerrado, un guest puede mandar
-    /// cualquier string); `fg` es un RGB crudo de respaldo para spans sin rol
+    /// (validado por el HOST consumidor contra `norte_theme::Role::REQUESTABLE`
+    /// — este paquete WIT no conoce ese conjunto cerrado, un guest puede
+    /// mandar cualquier string). Los roles pedibles son los de SIGNIFICADO
+    /// (`error`, `warning`, `info`, `title`, `match`, `regular`,
+    /// `hostile-badge`, `badge`, `muted`); el CROMO de la ventana y el ESTADO
+    /// (`selection`, `status-bar`, `mark`…) no lo son, y degradan a `none`
+    /// igual que un nombre desconocido. `fg` es un RGB crudo de respaldo
     /// (un highlighter con su propia paleta fija). Cuando un span trae AMBOS,
     /// el rol gana en el host (el tema del usuario manda sobre el color fijo
     /// del plugin) — decisión de pintado, no de este WIT.
@@ -216,7 +220,8 @@ interface decorator {
     /// `badge` = texto corto (el HOST lo acota a 8 chars TRAS enmascarar,
     /// ADR 0037 tabla de decisión 1; este WIT no impone esa longitud) o
     /// `none` = sin badge para esa entrada. `role` = nombre semántico
-    /// (validado host-side, igual que `span::role`). En qué HUECO de la
+    /// (validado host-side contra `Role::REQUESTABLE`, igual que
+    /// `span::role`). En qué HUECO de la
     /// fila se pinta —icono a la izquierda del nombre, o insignia a la
     /// derecha— lo dice el manifiesto (`[[contributions.decorator]] slot`),
     /// no el guest: es una decisión de pantalla, no de dato.

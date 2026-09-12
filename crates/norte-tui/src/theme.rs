@@ -90,15 +90,14 @@ impl TuiTheme {
     }
 }
 
-/// `EntryKind` del protocolo → `FileKind` del tema. El protocolo no distingue
-/// aún ejecutable/fifo/… (el `Entry` no lleva modo): todo lo que no es dir ni
-/// symlink cae a `Regular`; el color por EXTENSIÓN sigue aplicando.
+/// `EntryKind` del protocolo → `FileKind` del tema.
+///
+/// Delega en `norte_frontend::theme::file_kind_of`, que es de los DOS
+/// frontends: la ventana necesita el mismo mapeo desde el puente 66, y la
+/// misma decisión escrita dos veces diverge en silencio (ADR 0077). El porqué
+/// —que el `Entry` no lleva modo— está allí.
 fn map_kind(kind: EntryKind) -> FileKind {
-    match kind {
-        EntryKind::Dir => FileKind::Dir,
-        EntryKind::Symlink => FileKind::Symlink,
-        EntryKind::File | EntryKind::Other => FileKind::Regular,
-    }
+    norte_frontend::theme::file_kind_of(kind)
 }
 
 /// Detecta la profundidad de color del terminal (heurística — no hay API

@@ -3171,8 +3171,19 @@ body {
   color: var(--hostile-fg);
 }
 
-.viewer-span[data-role="selection"] {
-  color: var(--selection-fg);
+/* `selection` NO está: desde `Role::REQUESTABLE` (spec 2026-09-11, F2) un
+   plugin no puede pedirlo —dice dónde está el cursor, que es estado de la
+   ventana y no significado del contenido— así que ese nombre degrada a
+   `None` antes de llegar al DOM y la regla no podía casar nunca.
+
+   Los dos roles que SÍ se hicieron pedibles y necesitan el suyo: */
+.viewer-span[data-role="badge"] {
+  background: var(--badge-bg, var(--selection-bg));
+  color: var(--badge-fg, var(--selection-fg));
+}
+
+.viewer-span[data-role="muted"] {
+  color: var(--muted, var(--title-fg));
 }
 
 /* Lo que el provider se saltó al listar. En la cabecera del hueco, con el

@@ -155,6 +155,34 @@ pub struct HostTheme {
     pub resuelto: norte_theme::Theme,
 }
 
+/// Cómo pinta el TEMA el nombre de una entrada (`[files.ext]`, que gana, o
+/// `[files.kind]`).
+///
+/// Todo a cero = el tema no dice nada de ella. Son los cuatro atributos que
+/// una webview sabe pintar; ver [`HostTheme::estilo_de_entrada`] para por qué
+/// `bg` y `reverse` no están.
+// Cuatro banderas INDEPENDIENTES de estilo de terminal, no un enum ni flags
+// empaquetadas: son un subconjunto literal de `norte_theme::Style`, que lleva
+// este mismo `expect` por la misma razón. Empaquetarlas aquí obligaría a
+// desempaquetarlas en la frontera del wire, que es donde vuelven a ser cuatro.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "subconjunto de norte_theme::Style: cuatro atributos independientes"
+)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EstiloDeEntrada {
+    /// `#rrggbb`, o vacío. Ya validado.
+    pub color: String,
+    /// Negrita (un directorio, un ejecutable).
+    pub bold: bool,
+    /// Atenuado (los archivos comprimidos de los presets retro).
+    pub dim: bool,
+    /// Cursiva.
+    pub italic: bool,
+    /// Subrayado.
+    pub underline: bool,
+}
+
 impl HostTheme {
     /// El tema que se llama así, resuelto.
     ///
@@ -187,22 +215,39 @@ impl HostTheme {
     /// UTF-8 y el enmascarado para pintar no es inyectivo — dos nombres
     /// distintos pueden pintarse igual y no comparten extensión por ello.
     ///
-    /// `("", false)` = el tema no dice nada de esta entrada y el renderer usa
-    /// el color normal del listado. No se devuelve el `regular` resuelto a
+    /// Todo a cero = el tema no dice nada de esta entrada y el renderer usa el
+    /// color normal del listado. No se devuelve el `regular` resuelto a
     /// propósito: mandarlo en cada fila serían seis bytes por entrada para
     /// repetir lo que la hoja de estilos ya sabe.
+    ///
+    /// Van los CUATRO atributos que una webview sabe pintar, no solo el
+    /// color: `retro-crt` y `retro-crt-amber` atenúan `zip`/`tar`/`gz` con
+    /// `dim = true`, así que llevar solo `fg` dejaba esos ficheros
+    /// apagados en el terminal y a plena luz en la ventana — el tipo de
+    /// divergencia silenciosa que ADR 0077 existe para evitar. `bg` y
+    /// `reverse` se quedan fuera y eso SÍ es una decisión: el fondo de una
+    /// fila ya lo disputan el cursor, el hover y la marca, y meter un quinto
+    /// dueño haría que el tema tapara dónde está el cursor.
     #[must_use]
-    pub fn estilo_de_entrada(&self, name: &[u8], kind: norte_theme::FileKind) -> (String, bool) {
-        let propio = self.resuelto.files.style_for(name, kind);
-        propio.map_or_else(
-            || (String::new(), false),
-            |s| {
-                (
-                    s.fg.map(norte_theme::Color::to_hex).unwrap_or_default(),
-                    s.bold,
-                )
-            },
-        )
+    pub fn estilo_de_entrada(&self, name: &[u8], kind: norte_theme::FileKind) -> EstiloDeEntrada {
+        self.resuelto
+            .files
+            .style_for(name, kind)
+            .map_or_else(EstiloDeEntrada::default, |s| EstiloDeEntrada {
+                // Por `color_valido` como cualquier otro color que acabe en
+                // una propiedad CSS: hoy `to_hex` es total y no puede dar otra
+                // cosa, pero ese invariante lo sostenían los llamantes y no el
+                // tipo, y este es el tercero.
+                color: s
+                    .fg
+                    .map(norte_theme::Color::to_hex)
+                    .map(|c| color_valido(&c))
+                    .unwrap_or_default(),
+                bold: s.bold,
+                dim: s.dim,
+                italic: s.italic,
+                underline: s.underline,
+            })
     }
 
     /// La proyección.
@@ -611,7 +656,7 @@ fn detalle_de(v: &norte_proto::methods::Volume, lang: Lang) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{nombres_de_tema, roles_de_tema};
+    use super::{EstiloDeEntrada, HostTheme, nombres_de_tema, roles_de_tema};
 
     /// **Un rol de PAREJA cruza con sus dos mitades.**
     ///
@@ -712,5 +757,72 @@ mod tests {
                 "`{nombre}` no es un color: {color:?}"
             );
         }
+    }
+
+    /// Un tema de prueba con una regla de extensión y otra de tipo.
+    fn tema_con_ficheros() -> HostTheme {
+        let t = norte_theme::Theme::from_toml(
+            "name = \"t\"\n\
+             [files.kind]\n\
+             dir = { fg = \"#5fafd7\", bold = true }\n\
+             [files.ext]\n\
+             rs = { fg = \"#d7875f\" }\n\
+             zip = { fg = \"#d75f5f\", dim = true }\n",
+        )
+        .expect("parsea");
+        HostTheme::de("t", &t)
+    }
+
+    /// La extensión se casa contra BYTES, y por eso un nombre que no es UTF-8
+    /// válido conserva su color.
+    ///
+    /// Es el invariante que sostenía un comentario y nada más. El fixture es
+    /// `lossy_collapse_ff` del corpus canónico (`\xFF.rs`): quien refactorice
+    /// esto a decodificar el nombre ENTERO —que es la llamada más cómoda,
+    /// porque `texto` ya está construido ahí al lado— verá pasar todos los
+    /// tests, porque todos los nombres de todos los tests son ASCII, y
+    /// romperá en silencio cada fichero cuyo nombre no lo sea.
+    ///
+    /// `norte_theme::FileColors::style_for` valida con `from_utf8` SOLO el
+    /// trozo de la extensión, y el byte separador (`.`, 0x2E) no puede
+    /// aparecer dentro de una secuencia UTF-8 multibyte: por eso el corte es
+    /// seguro y por eso esto funciona.
+    #[test]
+    fn la_extension_se_casa_contra_bytes_y_sobrevive_a_un_nombre_no_utf8() {
+        let tema = tema_con_ficheros();
+        let valido = tema.estilo_de_entrada(b"main.rs", norte_theme::FileKind::Regular);
+        assert_eq!(valido.color, "#d7875f");
+
+        // `\xFF.rs`: byte inválido en solitario. La extensión sigue siendo
+        // `rs` y el color tiene que ser el MISMO.
+        let hostil = tema.estilo_de_entrada(b"\xff.rs", norte_theme::FileKind::Regular);
+        assert_eq!(
+            hostil.color, valido.color,
+            "un nombre no-UTF8 perdió el color de su extensión: alguien está \
+             decodificando el nombre entero"
+        );
+    }
+
+    /// Los CUATRO atributos que la ventana sabe pintar cruzan, no solo el
+    /// color: `retro-crt` atenúa los comprimidos con `dim`, y llevando solo
+    /// `fg` salían apagados en el terminal y a plena luz en la ventana.
+    #[test]
+    fn los_atributos_del_estilo_cruzan_y_no_solo_el_color() {
+        let tema = tema_con_ficheros();
+        let zip = tema.estilo_de_entrada(b"backup.zip", norte_theme::FileKind::Regular);
+        assert_eq!(zip.color, "#d75f5f");
+        assert!(zip.dim, "`dim = true` del tema no llegó a la fila");
+
+        let dir = tema.estilo_de_entrada(b"src", norte_theme::FileKind::Dir);
+        assert!(dir.bold, "un directorio va en negrita");
+    }
+
+    /// Un tema que no dice nada de una entrada no inventa un color: el
+    /// renderer usa el normal del listado, que la hoja de estilos ya sabe.
+    #[test]
+    fn sin_regla_no_hay_color() {
+        let tema = tema_con_ficheros();
+        let nada = tema.estilo_de_entrada(b"notas.txt", norte_theme::FileKind::Regular);
+        assert_eq!(nada, EstiloDeEntrada::default());
     }
 }

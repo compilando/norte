@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { FILA_POR_TAMANO, applyAppearance, themeFor } from "../src/main";
+import { FILA_POR_TAMANO, applyAppearance, applyTheme, themeFor } from "../src/main";
 import type { HostCatalog } from "../src/types";
 
 const CSS = readFileSync(resolve(__dirname, "../src/style.css"), "utf8");
@@ -57,6 +57,28 @@ describe("la tipografía empaquetada y la configuración", () => {
     });
     expect(raiz.style.getPropertyValue("--mono")).toBe("Fira Code");
     expect(raiz.style.getPropertyValue("--cell-h")).toBe("22px");
+  });
+
+  it("cambiar de tema BORRA lo que dejó el anterior", () => {
+    // El host manda solo lo que el tema DICE: desde los roles de cromo (spec
+    // 2026-09-11, F2) un tema que no define `hover` no manda `--hover`, y la
+    // hoja lo deriva con `var(--hover, var(--panel-focus-bg))` — derivación
+    // que SOLO actúa mientras la variable esté sin poner.
+    //
+    // Sin el borrado, pasar de un tema que sí define el cromo a uno que no
+    // dejaba media ventana con la paleta anterior: la paleta de comandos y
+    // los menús oscuros sobre un tema claro, y sin forma de arreglarlo salvo
+    // reiniciar. Antes no podía pasar porque todo nombre proyectado era un
+    // rol que cualquier preset define.
+    const raiz = document.documentElement;
+    applyTheme(document, { bg: "#1f1f1f", hover: "#2a2d2e", "widget-bg": "#202020" });
+    expect(raiz.style.getPropertyValue("--hover")).toBe("#2a2d2e");
+
+    // Un tema que calla el cromo.
+    applyTheme(document, { bg: "#fbf1c7" });
+    expect(raiz.style.getPropertyValue("--bg")).toBe("#fbf1c7");
+    expect(raiz.style.getPropertyValue("--hover")).toBe("");
+    expect(raiz.style.getPropertyValue("--widget-bg")).toBe("");
   });
 
   it("el tema por esquema: la variante si la hay, y `theme` si no", () => {

@@ -170,6 +170,9 @@
             "marked": false,
             "name_bold": false,
             "name_color": "",
+            "name_dim": false,
+            "name_italic": false,
+            "name_underline": false,
             "selected": false
           }
         ],
@@ -950,6 +953,9 @@
             "marked": false,
             "name_bold": false,
             "name_color": "",
+            "name_dim": false,
+            "name_italic": false,
+            "name_underline": false,
             "selected": false
           },
           {
@@ -971,6 +977,9 @@
             "marked": false,
             "name_bold": false,
             "name_color": "",
+            "name_dim": false,
+            "name_italic": false,
+            "name_underline": false,
             "selected": false
           },
           {
@@ -992,6 +1001,9 @@
             "marked": false,
             "name_bold": false,
             "name_color": "",
+            "name_dim": false,
+            "name_italic": false,
+            "name_underline": false,
             "selected": false
           }
         ],

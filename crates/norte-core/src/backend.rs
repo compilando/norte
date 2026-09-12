@@ -2617,8 +2617,11 @@ impl Backend {
     /// donde un nombre desconocido tiene un significado operable (`None`,
     /// sin color) en vez de un dato inerte. Un `role` no reconocido nunca
     /// debe usarse por un frontend como clave de lookup sin pasar antes por
-    /// `norte_theme::Role::from_kebab` (ver `norte-frontend::viewer::
-    /// Viewer::with_plugin_preview_styled`, que es donde eso ocurre).
+    /// `norte_theme::Role::from_kebab_requestable` (ver `norte-frontend::
+    /// viewer::Viewer::with_plugin_preview_styled`, que es donde eso ocurre).
+    /// `_requestable` y no `from_kebab` a secas: desde la spec 2026-09-11 el
+    /// vocabulario que un plugin puede nombrar es el de SIGNIFICADO, no el
+    /// cromo ni el estado de la ventana.
     ///
     /// # Errors
     /// Igual que [`Self::plugin_preview`] para resolución/lectura; jamás por

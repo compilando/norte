@@ -211,6 +211,19 @@ export function updateRow(
   if (row.name_bold) {
     name.style.fontWeight = "bold";
   }
+  // `dim` es el atributo de terminal, no una opacidad del tema: 0.6 es lo que
+  // ratatui pinta para `Modifier::DIM` en la práctica. Los presets retro
+  // atenúan así `zip`/`tar`/`gz`, y sin esto salían apagados en `ntc` y a
+  // plena luz aquí.
+  if (row.name_dim) {
+    name.style.opacity = "0.6";
+  }
+  if (row.name_italic) {
+    name.style.fontStyle = "italic";
+  }
+  if (row.name_underline) {
+    name.style.textDecoration = "underline";
+  }
   // El nombre y lo que lo decora, juntos y a la IZQUIERDA; las celdas de las
   // columnas siguen a la derecha. El bloque es quien crece, así que el nombre
   // se puede recortar con elipsis SIN llevarse por delante la insignia: el
@@ -224,6 +237,15 @@ export function updateRow(
     // icono, que es lo que mantiene la columna.
     const icono = document.createElement("span");
     icono.className = "cell-icon";
+    // Con el color de LA ENTRADA, que es la decisión de ADR 0105: un icono
+    // dice qué ES la fila, no en qué estado está, así que sigue al mismo
+    // color que su nombre. El terminal lo hace desde entonces
+    // (`norte-tui/src/ui/pane.rs`); aquí no había color de entrada que
+    // seguir hasta el puente 66, y dejarlo suelto ahora habría separado las
+    // dos superficies justo al darles color.
+    if (row.name_color !== "" && !row.selected) {
+      icono.style.color = row.name_color;
+    }
     icono.dataset["hostile"] = String(row.icon_hostile);
     icono.textContent = row.icon;
     if (row.icon_hostile) {

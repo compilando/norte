@@ -11,6 +11,12 @@
 //! webview, y ADR 0066 prohíbe que `norte-ui-host` conozca un toolkit de
 //! pintado. Que el renderer contraste su propia hoja contra lo que el host le
 //! proyecta es la dirección correcta del conocimiento.
+//!
+//! **Este test NO lo corre `just ci` ni `just ci-fast`**: `core_pkgs` excluye
+//! `norte-gui-tauri` del gate portable porque compilarlo exige `WebKitGTK`. Lo
+//! corren `just gui-test` (el bucle) y `just gui-ci` (su gate, que es el que
+//! ejecuta `.github/workflows/gui.yml`). Se dice aquí porque el valor de este
+//! test es cazar la errata del siguiente, y el siguiente correrá `just ci`.
 
 use std::collections::BTreeSet;
 

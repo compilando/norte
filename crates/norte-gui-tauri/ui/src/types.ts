@@ -114,6 +114,12 @@ export interface RowView {
   name_color: string;
   /** El nombre va en negrita (un directorio, un ejecutable). */
   name_bold: boolean;
+  /** Atenuado: así pintan los presets retro los archivos comprimidos. */
+  name_dim: boolean;
+  /** Cursiva. */
+  name_italic: boolean;
+  /** Subrayado. */
+  name_underline: boolean;
 }
 
 export type SlotState =
