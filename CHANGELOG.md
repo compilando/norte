@@ -18,6 +18,20 @@ independently through `PROTOCOL_VERSION`.
   VSCode's own `error` (3.35:1) and `warning` (3.12:1) fall under the
   4.5:1 that norte requires of a signal you have to read when something
   has gone wrong, so both are darkened and the original values are named.
+- **The window paints a theme's file colours** (ADR 0108, bridge 66).
+  `[files.kind]` and `[files.ext]` — half of what a theme file declares —
+  had never reached the window: every entry came out the same colour,
+  which reads as a broken theme rather than a plain one. An entry's
+  colour is resolved by the host against the filename's raw bytes and
+  travels in its row, because extensions are an open set and no CSS class
+  could name them. Four of `Style`'s six attributes cross; `bg` and
+  `reverse` stay behind so a theme cannot hide where the cursor is. The
+  scrollbar, row hover, widget surfaces and control focus rings now come
+  from the theme too, and the pane footer stops painting its text with a
+  border colour.
+- **Entry colours follow the desktop's colour scheme** (bridge 67). With
+  `theme_light`/`theme_dark` set, flipping the desktop repainted the
+  chrome from one variant and left the file names coloured by the other.
 - **Ten chrome roles** — `hover`, `input-background`, `input-border`,
   `widget-background`, `widget-shadow`, `badge`, `scrollbar-slider`,
   `separator`, `focus-border` and `muted` — for the surfaces a modern
@@ -79,7 +93,15 @@ independently through `PROTOCOL_VERSION`.
   Total Commander; the theme picker moves to `Alt+9`. Krusader keeps F9 as
   the terminal, as its source attests.
 - **The mtime column is 12 cells** (was 10), to fit `09-10 14:02`.
-- The window's bridge is version 63.
+- **A plugin may name a meaning, not a piece of chrome** (ADR 0108,
+  amending ADR 0037). `role` on a span or a decoration is validated
+  against `Role::REQUESTABLE` — what a piece of content MEANS — rather
+  than against every `Role`. The window's chrome and its state
+  (`selection`, `status-bar`, `mark`…) are no longer requestable: a badge
+  in the cursor's colour would lie about where the cursor is. A
+  non-requestable name degrades to `None`, exactly as an unknown one
+  already did. No WIT bump; the twelve bundled plugins are unaffected.
+- The window's bridge is version 67.
 
 ### Fixed
 

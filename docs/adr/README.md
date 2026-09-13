@@ -111,3 +111,6 @@ edits.
 | [0103](0103-a-modal-line-declares-its-role-and-the-default-scheme-goes-unsaid.md) | A modal line declares its ROLE, and the default scheme goes unsaid | accepted |
 | [0104](0104-an-extension-is-uninstalled-from-the-manager-and-the-manager-has-buttons.md) | An extension is uninstalled from the manager, and the manager has buttons | accepted |
 | [0105](0105-an-icon-is-a-column-left-of-the-name-and-a-decorator-says-what-it-is.md) | An icon is a column left of the name, and a decorator is told what an entry is | accepted |
+| [0106](0106-the-chrome-is-derived-from-the-keymap-and-the-catalogue-not-drawn.md) | The chrome is derived from the keymap and the catalogue, not drawn | accepted |
+| [0107](0107-a-thumbnail-is-a-plugin-kind-of-its-own-package.md) | A thumbnail is a plugin kind, in a WIT package of its own | accepted |
+| [0108](0108-a-plugin-names-a-meaning-and-the-window-derives-its-chrome.md) | A plugin names a meaning, and the window derives its chrome | accepted |
