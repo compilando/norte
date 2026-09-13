@@ -20,6 +20,26 @@ nextest, insta snapshots.
 
 **Spec:** `docs/superpowers/specs/2026-09-11-vscode-theme-design.md`
 
+## Estado: F0–F3 cerrados (2026-09-13), ADR 0108
+
+Tareas 1–8 hechas y fusionadas a `main` en la rama `feat/vscode-theme`. Lo
+que la ejecución cambió respecto a lo planeado, para quien retome esto:
+
+- **F2 fue antes que F1**, para transcribir cada preset una vez y no dos.
+- **Task 4 partió `roles_de_tema` en dos preguntas** (`nombres_de_tema`, el
+  acuerdo con la hoja; `roles_de_tema`, lo que este tema dice). El plan las
+  confundía, y el guardián de huérfanas habría leído el silencio de un tema
+  como «nadie alimenta esta variable».
+- **Dos huecos salieron mirando la ventana, no de la suite**: `[files.kind]`
+  y `[files.ext]` nunca se pintaron en la ventana (puente 66), y el esquema
+  del escritorio no llegaba al host (puente 67). Los dos están en ADR 0108.
+- **Dos BLOCKER de revisión**, ambos causados por el diseño de F2: el cromo
+  del tema anterior se quedaba puesto al cambiar de tema, y elegir un preset
+  no repintaba las filas.
+- **`just gui-test` es nuevo**: `just t norte-gui-tauri` no corría nada.
+
+Quedan las tareas 9–12 (importador) y el plan aparte de F4 (iconos).
+
 ## Global Constraints
 
 - **Branch:** `feat/vscode-theme` for Tasks 1–8, `feat/theme-import` for
