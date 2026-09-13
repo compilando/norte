@@ -189,6 +189,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::CompareToggleFilter { .. } => "compare_toggle_filter",
         UiAction::CompareSetVisibleRange { .. } => "compare_set_visible_range",
         UiAction::SetViewport { .. } => "set_viewport",
+        UiAction::SetColorScheme { .. } => "set_color_scheme",
         UiAction::Key(_) => "key",
         UiAction::SetViewerRows { .. } => "set_viewer_rows",
         UiAction::SetViewerCols { .. } => "set_viewer_cols",
@@ -534,6 +535,7 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
                 height: 40,
             },
         ),
+        ("set_color_scheme", UiAction::SetColorScheme { dark: true }),
         (
             "sort_by",
             UiAction::SortBy {

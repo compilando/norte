@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 66;
+export const BRIDGE_VERSION = 67;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -1351,6 +1351,13 @@ export type UiAction =
   | { action: "compare_toggle_filter"; category: string }
   | { action: "compare_set_visible_range"; first: number; count: number }
   | { action: "set_viewport"; width: number; height: number }
+  /**
+   * El esquema que pide el escritorio (`prefers-color-scheme`). Las variables
+   * CSS de la variante las enchufa este lado; esto es para que el HOST
+   * resuelva contra la misma variante el color de las entradas, que desde el
+   * puente 66 va cocido en la fila.
+   */
+  | { action: "set_color_scheme"; dark: boolean }
   | ({ action: "key" } & KeyInput)
   | { action: "set_viewer_rows"; rows: number }
   | { action: "set_viewer_cols"; cols: number }

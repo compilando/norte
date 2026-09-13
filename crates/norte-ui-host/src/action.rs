@@ -383,6 +383,20 @@ pub enum UiAction {
         /// Alto en celdas.
         height: u16,
     },
+    /// El escritorio pide esquema claro u oscuro (`prefers-color-scheme`).
+    ///
+    /// Lo manda el renderer al arrancar y cada vez que cambia. El host la
+    /// necesita —y no le basta con que el renderer enchufe las variables CSS
+    /// de la variante— porque desde el puente 66 el color de una entrada va
+    /// COCIDO en su fila: con `theme_dark = "vscode-dark"` y `theme_light =
+    /// "vscode-light"`, pasar el escritorio a claro repintaba toda la
+    /// pantalla con la paleta clara y dejaba los NOMBRES con los colores del
+    /// tema oscuro — azul #4daafc sobre blanco, 2,6:1, por debajo del suelo
+    /// que los propios presets prometen en su cabecera.
+    SetColorScheme {
+        /// `true` = el escritorio pide oscuro.
+        dark: bool,
+    },
     /// Una tecla.
     ///
     /// El renderer manda la tecla NORMALIZADA y nada más: quién resuelve un

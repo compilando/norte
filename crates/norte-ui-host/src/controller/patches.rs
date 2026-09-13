@@ -462,9 +462,11 @@ impl Estado {
         // El mapeo es de `norte-frontend` y no de aquí: lo necesitan los dos
         // frontends y es la MISMA decisión, que escrita dos veces diverge en
         // silencio (ADR 0077).
-        let estilo = self
-            .tema
-            .estilo_de_entrada(bytes, norte_frontend::theme::file_kind_of(e.kind));
+        let estilo = self.tema.estilo_de_entrada(
+            bytes,
+            norte_frontend::theme::file_kind_of(e.kind),
+            self.esquema_oscuro,
+        );
         RowView {
             key: RowKey(i as u64),
             display_name: clamp_display(texto),

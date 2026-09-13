@@ -297,7 +297,27 @@ use serde::{Deserialize, Serialize};
 ///   el tema tapase dónde está el cursor. Un tema que pinte `bg` en
 ///   `[files.ext]` lo verá en el terminal y no aquí, y eso está escrito
 ///   también en `docs/theming.md`.
-pub const BRIDGE_VERSION: u32 = 66;
+/// - **67**: el esquema del escritorio cruza. Llega `set_color_scheme {
+///   dark }`, que el renderer manda al arrancar y en cada cambio de
+///   `prefers-color-scheme`.
+///
+///   Hace falta por el puente 66 y no antes: las VARIABLES CSS de la
+///   variante (V6) las enchufa el renderer por su cuenta y de forma
+///   síncrona, para no parpadear con la paleta equivocada, así que hasta
+///   ahora el host no necesitaba saber el esquema. Con el color de la
+///   entrada cocido en la fila sí: con `theme_dark = "vscode-dark"` y
+///   `theme_light = "vscode-light"`, pasar el escritorio a claro repintaba
+///   el cromo con la variante clara y dejaba los NOMBRES con los colores de
+///   la oscura — `dir` en #4daafc sobre blanco, 2,6:1, por debajo del suelo
+///   que esos presets prometen en su cabecera.
+///
+///   La regla «la variante de ese lado si la hay, y `theme` si no» queda
+///   escrita en los dos lados (`themeFor` en `ui/src/main.ts`,
+///   `HostTheme::para_esquema` en Rust) porque cada uno necesita una cosa
+///   distinta —variables el renderer, `Theme` entero el host, que es el
+///   único que puede resolver `[files.ext]`—. Lo que impide que diverjan es
+///   `la_regla_de_variante_es_la_del_renderer`, que pinea los tres casos.
+pub const BRIDGE_VERSION: u32 = 67;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

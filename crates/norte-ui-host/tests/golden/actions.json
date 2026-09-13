@@ -251,6 +251,10 @@
     "action": "select_tab",
     "slot_id": 3
   },
+  "set_color_scheme": {
+    "action": "set_color_scheme",
+    "dark": true
+  },
   "set_viewer_cols": {
     "action": "set_viewer_cols",
     "cols": 110

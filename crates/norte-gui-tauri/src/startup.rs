@@ -332,8 +332,17 @@ fn disposiciones_del_usuario(capas: &norte_config::Layers) -> Vec<UserLayout> {
 /// vista enseña es literalmente lo que pinta. Los efectos se nombran uno a
 /// uno como NO soportados, porque este renderer es una webview y no
 /// interpreta ninguno — y un tema retro que se ve idéntico se lee como roto.
-fn tema_visto(spec: Option<&str>, theme: &Theme) -> HostTheme {
+fn tema_visto(
+    spec: Option<&str>,
+    theme: &Theme,
+    variante_clara: Option<Theme>,
+    variante_oscura: Option<Theme>,
+) -> HostTheme {
     HostTheme {
+        // En `Box`: `HostTheme` viaja dentro del futuro de arranque, y dos
+        // `Theme` inline lo cruzaban el umbral de `large_futures`.
+        variante_clara: variante_clara.map(Box::new),
+        variante_oscura: variante_oscura.map(Box::new),
         // El RESUELTO, que es el de `theme`. `spec` es lo que se pidió, y con
         // un fichero roto los dos no coinciden.
         name: spec.unwrap_or("default").to_owned(),
@@ -662,18 +671,29 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // como `theme` y viaja ya como variables. Una clave puesta cuyo tema no
     // carga se queda SIN variante —no con el de fábrica—, para que la
     // ventana pinte `theme` en ese lado y el fallo no se disfrace de tema.
-    let variante = |nombre: Option<&str>| -> Option<BTreeMap<String, String>> {
+    //
+    // Se guarda el `Theme` ENTERO además de sus variables: las variables las
+    // enchufa el renderer, pero el color de una entrada por `[files.ext]`
+    // (puente 66) lo resuelve el HOST, y no cabe en variables porque las
+    // extensiones son un conjunto abierto. Resolviendo siempre contra `[ui]
+    // theme`, un escritorio en claro pintaba el cromo con la variante clara y
+    // los NOMBRES con los colores de la oscura.
+    let variante = |nombre: Option<&str>| -> Option<Theme> {
         let n = nombre?;
         match norte_frontend::theme::resolve_theme(Some(n)) {
-            Ok(t) => Some(crate::catalog::variables(&t)),
+            Ok(t) => Some(t),
             Err(e) => {
                 tracing::warn!(error = %e, tema = n, "la variante de tema no cargó: se ignora");
                 None
             }
         }
     };
-    let theme_light = variante(cfg.common.ui_theme_light.as_deref());
-    let theme_dark = variante(cfg.common.ui_theme_dark.as_deref());
+    let tema_claro = variante(cfg.common.ui_theme_light.as_deref());
+    let tema_oscuro = variante(cfg.common.ui_theme_dark.as_deref());
+    let theme_light: Option<BTreeMap<String, String>> =
+        tema_claro.as_ref().map(crate::catalog::variables);
+    let theme_dark: Option<BTreeMap<String, String>> =
+        tema_oscuro.as_ref().map(crate::catalog::variables);
     // Fuera del runtime (regla 2): `metadata` sobre un NFS caído bloquea el
     // hilo de trabajo hasta que expire el montaje, y encima antes de que
     // exista ventana donde decirlo. La lectura de la configuración de arriba
@@ -817,7 +837,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         effects: EFECTOS,
         settings: cfg.clone(),
         paths,
-        theme: tema_visto(tema_resuelto.as_deref(), &theme),
+        theme: tema_visto(tema_resuelto.as_deref(), &theme, tema_claro, tema_oscuro),
         user_layouts,
         // Ya está APLICADO en `settings` (sus capas entraron arriba); esto es
         // para que el host lo sepa y el selector lo marque puesto (#307).

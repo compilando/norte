@@ -2664,6 +2664,15 @@ impl Lote {
 }
 
 /// El estado semántico. Solo el actor lo toca.
+// Cuatro banderas INDEPENDIENTES entre sí: si la ventana tiene el foco, si el
+// escritorio pide oscuro, si el journal se rehusó… Son estados de cosas
+// distintas que coexisten, no los valores de una sola máquina, que es lo que
+// el lint propone y aquí sería falso — plegarlas en enums de dos variantes
+// daría cuatro enums, no uno.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "estado del controlador: banderas de cosas distintas, no una máquina"
+)]
 struct Estado {
     instance: InstanceId,
     sequence: u64,
@@ -2744,6 +2753,17 @@ struct Estado {
 
     /// El tema, tal como lo resolvió el arranque.
     tema: crate::pickers::HostTheme,
+    /// El escritorio pide esquema OSCURO (`prefers-color-scheme`).
+    ///
+    /// Lo dice el renderer con [`UiAction::SetColorScheme`], al arrancar y
+    /// cada vez que cambia. Elige contra qué variante de tema se resuelve el
+    /// color de una entrada (puente 66): sin este dato, la ventana pintaba
+    /// el cromo con la variante correcta y los NOMBRES con la otra.
+    ///
+    /// Arranca en `false` y no en «lo que diga el sistema» porque el host no
+    /// tiene escritorio al que preguntar: lo corrige el primer mensaje del
+    /// renderer, que llega antes de que se pinte nada.
+    esquema_oscuro: bool,
     /// Se está mirando el tema por dentro.
     /// El selector de tema, si está abierto.
     tema_elegido: Option<SeleccionDeTema>,
@@ -3282,6 +3302,7 @@ impl Estado {
             enfocada: true,
             destino_pendiente: None,
             tema: theme,
+            esquema_oscuro: false,
             tema_elegido: None,
             menu_ultimo: 0,
             // Lo que `--profile` nombró ya está APLICADO en `settings`; lo que
@@ -3829,6 +3850,20 @@ impl Estado {
                 // aparece sin listado se queda cargando para siempre.
                 self.despertar_visibles(backend, buzon);
                 self.responde_con_foto()
+            }
+            UiAction::SetColorScheme { dark } => {
+                // Lo mismo, no es nada: el renderer la manda al arrancar y en
+                // cada cambio, y repintar todas las filas por un mensaje que
+                // no cambia nada es trabajo por nada.
+                if self.esquema_oscuro == *dark {
+                    return (self.aplicada(), Vec::new());
+                }
+                self.esquema_oscuro = *dark;
+                // Solo las FILAS: las variables CSS de la variante las
+                // enchufa el renderer por su cuenta, síncronamente, para no
+                // parpadear. Lo que el host tiene que rehacer es lo que va
+                // cocido en la fila (puente 66).
+                (self.aplicada(), self.parches_de_filas_de_todos())
             }
             UiAction::Key(k) => self.tecla(k, backend, buzon),
             UiAction::SetViewerRows { rows } => self.fijar_filas_del_visor(*rows),

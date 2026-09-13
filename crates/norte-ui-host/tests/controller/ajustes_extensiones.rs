@@ -913,6 +913,8 @@ async fn el_tema_se_ve_por_dentro_y_dice_lo_que_no_pinta() {
         ],
         effects: vec!["crt".to_owned(), "scanlines".to_owned()],
         resuelto: norte_theme::Theme::default(),
+        variante_clara: None,
+        variante_oscura: None,
     })
     .await;
     let mut sub = h.subscribe();
@@ -944,6 +946,8 @@ async fn un_tema_sin_efectos_no_dice_nada_de_ellos() {
         roles: vec![("fg".to_owned(), "#d4d8de".to_owned())],
         effects: Vec::new(),
         resuelto: norte_theme::Theme::default(),
+        variante_clara: None,
+        variante_oscura: None,
     })
     .await;
     let mut sub = h.subscribe();

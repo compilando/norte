@@ -153,6 +153,20 @@ pub struct HostTheme {
     /// nombre, y viaja en su fila; que es lo que el terminal hace desde
     /// siempre (`norte_tui::theme`).
     pub resuelto: norte_theme::Theme,
+    /// La variante de `[ui] theme_light`, ya resuelta, si la hay.
+    ///
+    /// Las variantes existen desde V6 y hasta ahora solo viajaban como
+    /// VARIABLES CSS, que el renderer enchufa según `prefers-color-scheme`.
+    /// Con el color de las entradas cocido en la fila (puente 66) eso deja de
+    /// bastar: el host tiene que resolver contra la MISMA variante que el
+    /// renderer está pintando, o la mitad de la pantalla sale del otro tema.
+    /// En `Box` porque `HostTheme` viaja DENTRO del futuro de arranque, y dos
+    /// `Theme` inline lo cruzaban el umbral de `clippy::large_futures` — que
+    /// no es capricho del lint: ese futuro se mueve entero entre `await`s.
+    /// Son datos fríos, se leen una vez por fila.
+    pub variante_clara: Option<Box<norte_theme::Theme>>,
+    /// La de `[ui] theme_dark`. Ver [`HostTheme::variante_clara`].
+    pub variante_oscura: Option<Box<norte_theme::Theme>>,
 }
 
 /// Cómo pinta el TEMA el nombre de una entrada (`[files.ext]`, que gana, o
@@ -204,7 +218,31 @@ impl HostTheme {
                 .filter(|e| !EFECTOS_DE_LA_VENTANA.contains(&e.as_str()))
                 .collect(),
             resuelto: theme.clone(),
+            // Las pone quien arranca, que es el único que lee la
+            // configuración; `de` construye el tema BASE.
+            variante_clara: None,
+            variante_oscura: None,
         }
+    }
+
+    /// El tema con el que pintar, según el esquema que pide el escritorio.
+    ///
+    /// **La misma regla que `themeFor` del renderer** (`ui/src/main.ts`), y
+    /// que está escrita dos veces por una razón concreta: el renderer
+    /// necesita las variables CSS de forma SÍNCRONA al arrancar —pasar por
+    /// el host le costaría un parpadeo con el tema equivocado— y el host
+    /// necesita el `Theme` entero para resolver `[files.ext]`, que no cabe
+    /// en variables. Lo que impide que diverjan es
+    /// `la_regla_de_variante_es_la_del_renderer`, que las pinea contra los
+    /// mismos tres casos.
+    #[must_use]
+    pub fn para_esquema(&self, oscuro: bool) -> &norte_theme::Theme {
+        let variante = if oscuro {
+            self.variante_oscura.as_ref()
+        } else {
+            self.variante_clara.as_ref()
+        };
+        variante.map_or(&self.resuelto, Box::as_ref)
     }
 
     /// El color y el peso con que se pinta el NOMBRE de una entrada, según
@@ -214,6 +252,13 @@ impl HostTheme {
     /// bytes, nunca contra una cadena, porque un nombre no tiene por qué ser
     /// UTF-8 y el enmascarado para pintar no es inyectivo — dos nombres
     /// distintos pueden pintarse igual y no comparten extensión por ello.
+    ///
+    /// `oscuro` es el esquema que pide el escritorio: se resuelve contra la
+    /// VARIANTE que el renderer está pintando (ver [`Self::para_esquema`]) y
+    /// no contra `[ui] theme` a secas. Con `theme_light`/`theme_dark` puestos,
+    /// resolver contra el base dejaba los nombres con los colores del OTRO
+    /// tema — y un `dir` azul de un tema oscuro sobre el blanco del claro da
+    /// 2,6:1.
     ///
     /// Todo a cero = el tema no dice nada de esta entrada y el renderer usa el
     /// color normal del listado. No se devuelve el `regular` resuelto a
@@ -229,8 +274,13 @@ impl HostTheme {
     /// fila ya lo disputan el cursor, el hover y la marca, y meter un quinto
     /// dueño haría que el tema tapara dónde está el cursor.
     #[must_use]
-    pub fn estilo_de_entrada(&self, name: &[u8], kind: norte_theme::FileKind) -> EstiloDeEntrada {
-        self.resuelto
+    pub fn estilo_de_entrada(
+        &self,
+        name: &[u8],
+        kind: norte_theme::FileKind,
+        oscuro: bool,
+    ) -> EstiloDeEntrada {
+        self.para_esquema(oscuro)
             .files
             .style_for(name, kind)
             .map_or_else(EstiloDeEntrada::default, |s| EstiloDeEntrada {
@@ -790,12 +840,12 @@ mod tests {
     #[test]
     fn la_extension_se_casa_contra_bytes_y_sobrevive_a_un_nombre_no_utf8() {
         let tema = tema_con_ficheros();
-        let valido = tema.estilo_de_entrada(b"main.rs", norte_theme::FileKind::Regular);
+        let valido = tema.estilo_de_entrada(b"main.rs", norte_theme::FileKind::Regular, false);
         assert_eq!(valido.color, "#d7875f");
 
         // `\xFF.rs`: byte inválido en solitario. La extensión sigue siendo
         // `rs` y el color tiene que ser el MISMO.
-        let hostil = tema.estilo_de_entrada(b"\xff.rs", norte_theme::FileKind::Regular);
+        let hostil = tema.estilo_de_entrada(b"\xff.rs", norte_theme::FileKind::Regular, false);
         assert_eq!(
             hostil.color, valido.color,
             "un nombre no-UTF8 perdió el color de su extensión: alguien está \
@@ -809,12 +859,70 @@ mod tests {
     #[test]
     fn los_atributos_del_estilo_cruzan_y_no_solo_el_color() {
         let tema = tema_con_ficheros();
-        let zip = tema.estilo_de_entrada(b"backup.zip", norte_theme::FileKind::Regular);
+        let zip = tema.estilo_de_entrada(b"backup.zip", norte_theme::FileKind::Regular, false);
         assert_eq!(zip.color, "#d75f5f");
         assert!(zip.dim, "`dim = true` del tema no llegó a la fila");
 
-        let dir = tema.estilo_de_entrada(b"src", norte_theme::FileKind::Dir);
+        let dir = tema.estilo_de_entrada(b"src", norte_theme::FileKind::Dir, false);
         assert!(dir.bold, "un directorio va en negrita");
+    }
+
+    /// El color de una entrada sale de la VARIANTE que el escritorio pide,
+    /// no de `[ui] theme` a secas.
+    ///
+    /// Con `theme_dark`/`theme_light` puestos, el renderer enchufa las
+    /// variables de la variante y el host resolvía contra el base: el cromo
+    /// salía de un tema y los NOMBRES del otro. Con el par `vscode-*` eso
+    /// dejaba directorios azules del oscuro sobre el blanco del claro, a
+    /// 2,6:1 — por debajo del suelo que esos mismos presets prometen en su
+    /// cabecera.
+    #[test]
+    fn el_color_de_una_entrada_sale_de_la_variante_del_escritorio() {
+        let claro =
+            norte_theme::Theme::from_toml("name = \"c\"\n[files.ext]\nrs = { fg = \"#895503\" }\n")
+                .expect("parsea");
+        let oscuro =
+            norte_theme::Theme::from_toml("name = \"o\"\n[files.ext]\nrs = { fg = \"#e2c08d\" }\n")
+                .expect("parsea");
+        let mut tema = tema_con_ficheros();
+        tema.variante_clara = Some(Box::new(claro));
+        tema.variante_oscura = Some(Box::new(oscuro));
+
+        let kind = norte_theme::FileKind::Regular;
+        assert_eq!(
+            tema.estilo_de_entrada(b"main.rs", kind, true).color,
+            "#e2c08d",
+            "el escritorio pide oscuro"
+        );
+        assert_eq!(
+            tema.estilo_de_entrada(b"main.rs", kind, false).color,
+            "#895503",
+            "el escritorio pide claro"
+        );
+    }
+
+    /// La regla de variante es LA MISMA que la de `themeFor` del renderer
+    /// (`ui/src/main.ts`): la variante de ese lado si la hay, y `theme` si no.
+    ///
+    /// Está escrita dos veces —el renderer necesita las variables CSS de
+    /// forma síncrona para no parpadear, el host necesita el `Theme` entero
+    /// para `[files.ext]`— así que lo que impide que diverjan es esto: los
+    /// tres casos, pineados. Si alguien cambia una de las dos, este test
+    /// tiene que cambiar, y al cambiarlo se ve la otra.
+    #[test]
+    fn la_regla_de_variante_es_la_del_renderer() {
+        let base = tema_con_ficheros();
+        // Sin variantes: manda el base en los dos lados.
+        assert_eq!(base.para_esquema(true).name.as_deref(), Some("t"));
+        assert_eq!(base.para_esquema(false).name.as_deref(), Some("t"));
+
+        // Solo la oscura: el lado claro sigue con el base.
+        let mut solo_oscura = tema_con_ficheros();
+        solo_oscura.variante_oscura = Some(Box::new(
+            norte_theme::Theme::from_toml("name = \"o\"\n").expect("parsea"),
+        ));
+        assert_eq!(solo_oscura.para_esquema(true).name.as_deref(), Some("o"));
+        assert_eq!(solo_oscura.para_esquema(false).name.as_deref(), Some("t"));
     }
 
     /// Un tema que no dice nada de una entrada no inventa un color: el
@@ -822,7 +930,7 @@ mod tests {
     #[test]
     fn sin_regla_no_hay_color() {
         let tema = tema_con_ficheros();
-        let nada = tema.estilo_de_entrada(b"notas.txt", norte_theme::FileKind::Regular);
+        let nada = tema.estilo_de_entrada(b"notas.txt", norte_theme::FileKind::Regular, false);
         assert_eq!(nada, EstiloDeEntrada::default());
     }
 }

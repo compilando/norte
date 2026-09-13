@@ -86,15 +86,8 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   let catalogoActual = catalog;
   applyThemeFor(doc, catalog);
   applyAppearance(doc, catalog.appearance);
-  // El escritorio cambia de claro a oscuro y la ventana le sigue (V6): el
-  // catálogo ya trae las dos variantes resueltas, así que no hay que pedir
-  // nada al host, solo enchufar el otro juego de variables.
-  const w = doc.defaultView;
-  if (w !== null && typeof w.matchMedia === "function") {
-    w.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
-      applyTheme(doc, themeFor(catalogoActual, e.matches));
-    });
-  }
+  // (El seguimiento del esquema del escritorio se engancha más abajo, en
+  // cuanto existe `send`: desde el puente 66 no basta con enchufar variables.)
   // El umbral de «te estoy haciendo esperar» viene del host, que lo saca del
   // crate compartido con el terminal. Aquí solo se enchufa como variable CSS:
   // escribirlo en la hoja de estilos sería un tercer sitio donde vive el
@@ -259,6 +252,27 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   }
   repaint();
   sendViewport(send, screen, doc);
+  // El escritorio cambia de claro a oscuro y la ventana le sigue (V6).
+  //
+  // Dos cosas, no una. Las VARIABLES CSS las enchufa este lado, en el acto:
+  // el catálogo ya trae las dos variantes resueltas y pasar por el host
+  // costaría un parpadeo con la paleta equivocada. Pero desde el puente 66 el
+  // color de una entrada va COCIDO en su fila y lo resuelve el host, que no
+  // tiene escritorio al que preguntar: hay que decírselo, o pinta el cromo
+  // con una variante y los NOMBRES con la otra.
+  //
+  // Se manda también AHORA, no solo al cambiar: el host arranca suponiendo
+  // claro porque no puede saberlo, y este primer mensaje es lo que lo corrige
+  // antes de que nadie mire.
+  const w = doc.defaultView;
+  if (w !== null && typeof w.matchMedia === "function") {
+    const consulta = w.matchMedia("(prefers-color-scheme: dark)");
+    send({ action: "set_color_scheme", dark: consulta.matches });
+    consulta.addEventListener("change", (e) => {
+      applyTheme(doc, themeFor(catalogoActual, e.matches));
+      send({ action: "set_color_scheme", dark: e.matches });
+    });
+  }
   // Sin `norte.toml` de usuario, el asistente de primer arranque (spec
   // 2026-09-10): lo abre el host, que es quien lo escribe; aquí solo se le
   // dice que este arranque es el primero.
