@@ -1,0 +1,18 @@
+{
+	// Escrito a mano para `theme_import.rs`: la forma de un tema del
+	// marketplace, con lo que rompe a un lector de JSON estricto.
+	"$schema": "vscode://schemas/color-theme",
+	"name": "Mi Tema: Noche",
+	"include": "./padre.json",
+	"colors": {
+		"editor.background": "#101820",
+		/* un color con alfa, compuesto sobre el fondo */
+		"scrollbarSlider.background": "#ffffff40",
+		"focusBorder": "#ff8800",
+		"foreground": "#E0E0E0",
+		"badge.background": "no es un color",
+	},
+	"tokenColors": [
+		{ "scope": "comment", "settings": { "foreground": "#666666" } }, // se ignora
+	],
+}

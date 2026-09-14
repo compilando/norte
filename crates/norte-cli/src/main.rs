@@ -19,6 +19,7 @@ use norte_vfs_local::LocalProvider;
 mod doctor;
 mod help;
 mod paths;
+mod theme;
 
 /// Ruta del binario de frontend a lanzar: el HERMANO de `exe` si existe,
 /// si no el nombre pelado (que el `PATH` resolverá). Puro para poder
@@ -265,6 +266,11 @@ enum Cmd {
         /// Salida JSON (para agentes y goldens)
         #[arg(long)]
         json: bool,
+    },
+    /// Temas: importa uno de VS Code a `<config>/themes/`. Sin engine ni daemon
+    Theme {
+        #[command(subcommand)]
+        cmd: theme::ThemeCmd,
     },
     /// Prints the cd-on-quit wrapper for a shell, to be `eval`ed (bash/zsh)
     /// or `source`d (fish) from the shell's rc file (S3, shell-integration)
@@ -730,6 +736,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Cmd::ShellInit { ref shell } = cli.cmd {
         return Ok(shell_init_cmd(shell));
     }
+    // `theme import` lee un JSON y escribe un TOML en el dir de config: ni
+    // engine ni daemon, y todo síncrono, así que a `spawn_blocking` (regla 2).
+    if let Cmd::Theme { ref cmd } = cli.cmd {
+        let cmd = cmd.clone();
+        return tokio::task::spawn_blocking(move || theme::run(&cmd)).await?;
+    }
 
     // Índice de búsqueda (M4, ADR 0034): el MISMO fichero que el daemon
     // (config_dir/index.db), así `norte index build` en embebido persiste y una
@@ -958,6 +970,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         | Cmd::Paths { .. }
         | Cmd::Help { .. }
         | Cmd::ShellInit { .. }
+        | Cmd::Theme { .. }
         | Cmd::Tui { .. } => unreachable!("manejado arriba"),
         #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {

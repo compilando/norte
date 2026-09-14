@@ -5098,12 +5098,14 @@ dependencies = [
  "norte-mcp",
  "norte-proto",
  "norte-testkit",
+ "norte-theme",
  "norte-vfs",
  "norte-vfs-local",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "toml_edit 0.25.13+spec-1.1.0",
 ]
 
 [[package]]

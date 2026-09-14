@@ -36,11 +36,15 @@ norte-help.workspace = true
 norte-mcp.workspace = true
 norte-i18n.workspace = true
 norte-proto.workspace = true
+# `norte theme import`: el parser de temas de VSCode y el escritor de TOML.
+norte-theme.workspace = true
 norte-vfs.workspace = true
 norte-vfs-local.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+# `toml_edit::Value` es el tipo de `norte_config::persist_set` (`--use`).
+toml_edit.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
