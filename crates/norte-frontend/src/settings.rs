@@ -164,6 +164,15 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
+        // Solo TUI, como `ui.mouse`. En el catálogo porque apagada por
+        // defecto nadie la encontraría, y quien la busca es quien acaba de
+        // pulsar Alt en el terminal y no ha pasado nada.
+        id: "ui.alt-menu",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
         // La barra de menú fijada. Está en el catálogo por lo mismo que
         // `ui.mouse`: es la clave que alguien va a buscar en cuanto quiera
         // recuperar esa fila, y un ajuste del que solo te enteras leyendo un
@@ -388,6 +397,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         // Absent = captured: the row shows `true`, which is what the TUI
         // actually does, rather than an empty cell for a real behavior.
         "ui.mouse" => cfg.common.ui_mouse.unwrap_or(true).to_string(),
+        "ui.alt-menu" => cfg.common.ui_alt_menu.unwrap_or(false).to_string(),
         // Ausente = FIJADA, igual que `ui.mouse`: la fila enseña lo que el
         // frontend hace de verdad. Faltaba, y la consecuencia no era cosmética
         // — con la celda vacía, alternar leía «no es true» y escribía `true`

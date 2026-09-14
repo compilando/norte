@@ -3,6 +3,7 @@
 //! `norte-core`; aquí solo estado de UI y render.
 #![forbid(unsafe_code)]
 
+pub mod alt_menu;
 pub mod app;
 pub mod config;
 pub mod config_reload;

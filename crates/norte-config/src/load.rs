@@ -1503,6 +1503,10 @@ pub struct CommonConfig {
     /// `[ui]` scalars above: capturing (or not capturing) the pointer
     /// cannot launch, write, or redirect anything.
     pub ui_mouse: Option<bool>,
+    /// `[ui] alt_menu` (last-wins; None = off). Presentación-solo, todas las
+    /// capas: pedirle al terminal un protocolo de teclado no lanza, escribe
+    /// ni redirige nada.
+    pub ui_alt_menu: Option<bool>,
     /// `[ui] menu_bar` (last-wins; None = FIJADA). Presentación-solo, todas
     /// las capas: una barra de menú no lanza, escribe ni redirige nada.
     ///
@@ -1785,9 +1789,14 @@ fn merge_ui_fonts(
 /// A function of its own for the same reason as [`merge_ui_fonts`]: [`load`]
 /// is a single pass over the layers and clippy caps its length, so each new
 /// key has to bring its own merge rather than another line in the loop.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "un acumulador por clave de `[ui]`: plegarlos en un struct movería el problema a `load`"
+)]
 fn merge_ui_flags(
     ui_show_hidden: &mut Option<bool>,
     ui_mouse: &mut Option<bool>,
+    ui_alt_menu: &mut Option<bool>,
     ui_menu_bar: &mut Option<bool>,
     ui_panel_bar: &mut Option<bool>,
     ui_parent_entry: &mut Option<bool>,
@@ -1796,6 +1805,7 @@ fn merge_ui_flags(
 ) {
     *ui_show_hidden = ui.show_hidden.or(*ui_show_hidden);
     *ui_mouse = ui.mouse.or(*ui_mouse);
+    *ui_alt_menu = ui.alt_menu.or(*ui_alt_menu);
     *ui_menu_bar = ui.menu_bar.or(*ui_menu_bar);
     *ui_panel_bar = ui.panel_bar.or(*ui_panel_bar);
     *ui_parent_entry = ui.parent_entry.or(*ui_parent_entry);
@@ -2294,6 +2304,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let (mut ui_show_hidden, mut ui_mouse, mut ui_menu_bar, mut ui_panel_bar) =
         (None, None, None, None);
     let mut ui_parent_entry = None;
+    let mut ui_alt_menu = None;
     let mut ui_editor: Option<Vec<String>> = None;
     let mut ui_editor_detached: Option<bool> = None;
     let mut ui_diff: Option<Vec<String>> = None;
@@ -2344,6 +2355,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             merge_ui_flags(
                 &mut ui_show_hidden,
                 &mut ui_mouse,
+                &mut ui_alt_menu,
                 &mut ui_menu_bar,
                 &mut ui_panel_bar,
                 &mut ui_parent_entry,
@@ -2472,6 +2484,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_show_hidden,
         ui_layout,
         ui_mouse,
+        ui_alt_menu,
         ui_menu_bar,
         ui_panel_bar,
         ui_parent_entry,

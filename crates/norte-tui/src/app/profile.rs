@@ -156,6 +156,9 @@ mod tests {
             hotlist: _,
             // — El bucle de eventos lo re-aplica justo detrás de la recarga.
             ui_mouse: _,
+            // — Igual: el bucle pide o retira el protocolo de teclado de kitty
+            //   detrás de la recarga.
+            ui_alt_menu: _,
             // — Se aplica en caliente: el reparto de cada frame lee la config
             //   vigente, así que la barra aparece o desaparece en el
             //   siguiente pintado sin nada más.

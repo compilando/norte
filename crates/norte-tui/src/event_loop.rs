@@ -251,6 +251,9 @@ pub async fn run(
     >,
 ) -> Result<(), RunError> {
     let mut events = EventStream::new();
+    // Alt solo abre el menú (`[ui] alt_menu`). Solo llega a ver un Alt
+    // suelto si el protocolo de kitty está pedido; sin él no le entra nada.
+    let mut alt_solo = crate::alt_menu::AltSolo::default();
     // Tick del panel de tasks: copia snapshots del watch (jamás bloquea).
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -915,6 +918,15 @@ pub async fn run(
                     tracing::warn!(error = %e, "no se pudo cambiar la captura de ratón");
                     app.message = Some(t("msg-mouse-capture-failed"));
                 }
+                // `[ui] alt_menu` en caliente, con la misma exención. La
+                // pregunta al terminal solo se hace al ENCENDER.
+                if let Err(e) = crate::alt_menu::set(
+                    cfg.common.ui_alt_menu.unwrap_or(false),
+                    crate::alt_menu::soportado,
+                    terminal.backend_mut(),
+                ) {
+                    tracing::warn!(error = %e, "no se pudo cambiar el protocolo de teclado");
+                }
                 if pane_attr_ids(app) != attrs_before {
                     let refreshed =
                         refresh_panes(app, backend, &mut Console::new(&mut events, terminal)).await;
@@ -948,6 +960,7 @@ pub async fn run(
                 // transferir) vive en `norte-frontend` (regla 7); aquí solo
                 // se resuelve la celda y se aplica.
                 if let Event::Mouse(me) = event {
+                    alt_solo.soltar();
                     mouse::on_mouse(
                         app,
                         backend,
@@ -989,8 +1002,22 @@ pub async fn run(
                         .await;
                     }
                 } else if let Event::Key(key) = event
-                    && key.kind == crossterm::event::KeyEventKind::Press
+                    && crate::alt_menu::es_modificador(&key)
                 {
+                    // Una modificadora sola no es una tecla para el keymap:
+                    // solo alimenta el gesto. Con el menú abierto lo pliega;
+                    // con otro overlay delante no hace nada, como F9 allí.
+                    if alt_solo.tecla(&key) && (app.menu.is_some() || !mouse::overlay_open(app)) {
+                        app.toggle_menu();
+                    }
+                } else if let Event::Key(key) = event
+                    // `Repeat` cuenta como pulsación: con el protocolo de
+                    // kitty pedido, una flecha mantenida llega así, y
+                    // filtrando solo `Press` avanzaría una fila. Sin él,
+                    // crossterm lo manda todo como `Press`.
+                    && key.kind != crossterm::event::KeyEventKind::Release
+                {
+                    alt_solo.tecla(&key);
                     on_key(
                         app,
                         backend,

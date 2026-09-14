@@ -361,6 +361,9 @@ pub fn suspend_terminal(
     use crossterm::event::DisableBracketedPaste;
     use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
     mouse::release_for_suspend(capture, terminal.backend_mut())?;
+    // El protocolo de teclado de kitty (`[ui] alt_menu`), por lo mismo que la
+    // captura: el shell no lo pidió y leería escapes en vez de letras.
+    crate::alt_menu::ceder(terminal.backend_mut())?;
     disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),
@@ -406,6 +409,7 @@ pub fn resume_terminal(
     )?;
     enable_raw_mode()?;
     mouse::restore_after_suspend(capture, mouse_on, terminal.backend_mut())?;
+    crate::alt_menu::recuperar(terminal.backend_mut())?;
     // NO `Terminal::clear()`, y esto no es una preferencia de estilo: en
     // ratatui 0.30 esa función pregunta por la posición del cursor
     // (`get_cursor_position` → `crossterm::cursor::position`), que emite el
