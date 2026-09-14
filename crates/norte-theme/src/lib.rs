@@ -29,6 +29,7 @@ mod presets;
 mod role;
 mod style;
 mod theme;
+pub mod vscode;
 
 pub use color::{Color, ColorDepth, ColorParseError, ResolvedColor};
 pub use files::{FileColors, FileKind, extension_of};
