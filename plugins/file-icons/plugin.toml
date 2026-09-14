@@ -19,13 +19,14 @@ slot = "icon"
 [capabilities]
 
 # Emoji by default; `ascii` for terminals without an emoji font; `nerd` for
-# one-cell Nerd Font glyphs — the window bundles them, a terminal needs a
-# patched font.
+# one-cell Nerd Font glyphs; `seti` for VSCode's Seti file icons, one per
+# language, from the same Nerd font — the window bundles both sets, a
+# terminal needs a patched font.
 [config.style]
 type = "enum"
-values = ["emoji", "ascii", "nerd"]
+values = ["emoji", "ascii", "nerd", "seti"]
 default = "emoji"
-description = "Glyph set for the icons: emoji, plain ASCII, or Nerd Font glyphs."
+description = "Glyph set for the icons: emoji, plain ASCII, Nerd Font glyphs, or VSCode's Seti icons."
 
 # The glyph for a plain folder, when you want your own. Empty = the style's.
 # Folders whose name means more (`.git`) keep theirs.

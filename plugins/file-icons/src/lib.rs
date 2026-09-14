@@ -33,6 +33,7 @@ mod guest {
             let style = match host_config::get("style").as_deref() {
                 Some("ascii") => Style::Ascii,
                 Some("nerd") => Style::Nerd,
+                Some("seti") => Style::Seti,
                 _ => Style::Emoji,
             };
             // The two user overrides; empty (the default) means "none".
