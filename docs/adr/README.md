@@ -114,3 +114,4 @@ edits.
 | [0106](0106-the-chrome-is-derived-from-the-keymap-and-the-catalogue-not-drawn.md) | The chrome is derived from the keymap and the catalogue, not drawn | accepted |
 | [0107](0107-a-thumbnail-is-a-plugin-kind-of-its-own-package.md) | A thumbnail is a plugin kind, in a WIT package of its own | accepted |
 | [0108](0108-a-plugin-names-a-meaning-and-the-window-derives-its-chrome.md) | A plugin names a meaning, and the window derives its chrome | accepted |
+| [0109](0109-a-theme-name-can-be-a-file-and-a-vscode-theme-imports-over-a-base.md) | A theme name can be a file you own, and a VSCode theme imports over a base | accepted |

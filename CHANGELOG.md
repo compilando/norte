@@ -16,6 +16,21 @@ independently through `PROTOCOL_VERSION`.
   preset first — a stale `themes/nord.toml` cannot change what `nord`
   means — then your themes directory, then the value as a path. A file that
   does not parse is left out of the list rather than breaking the picker.
+- **`norte theme import`** turns a Visual Studio Code colour theme into one
+  of yours: `norte theme import OneDark-Pro.json --use` writes
+  `themes/one-dark-pro.toml` and sets `[ui] theme`. It follows the theme's
+  `include` chain, paints it over `vscode-dark` or `vscode-light` so what the
+  theme leaves undefined is not monochrome, flattens translucent colours over
+  the editor background, and refuses a name that a bundled preset would
+  shadow. Comments and trailing commas in the JSON are fine;
+  `tokenColors` is ignored. See `docs/theming.md`.
+- **Seti file icons.** The `file-icons` extension has a fourth style,
+  `seti`: the icons Visual Studio Code shows by default, one per language
+  where `nerd` has one per class, so a Python file and a Go file no longer
+  look alike. They come from the same Nerd font, so the window's bundled
+  subset grew from 18 to 73 glyphs (16 KB) and a Nerd-patched terminal font
+  already has them. Twenty more extensions are recognised in every style
+  (`html`, `css`, `vue`, `svelte`, `dart`, `scala`, `tex`, `xml`…).
 
 - **Alt on its own opens the menu bar.** In the window always (bridge 68):
   press and release Alt with nothing in between, as on any desktop; Alt+F4,

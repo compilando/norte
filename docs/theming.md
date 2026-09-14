@@ -136,6 +136,69 @@ Define one only when the derived value is wrong for your palette. The terminal
 ignores all ten, so a theme meant for both frontends loses nothing by setting
 them.
 
+## Import a VSCode theme
+
+```sh
+norte theme import ~/Downloads/OneDark-Pro.json          # → themes/one-dark-pro.toml
+norte theme import dracula.json --name dracula --use     # and set [ui] theme
+```
+
+`norte theme import` reads a Visual Studio Code colour theme — the JSON inside
+a `.vsix`, comments and trailing commas allowed — and writes
+`~/.config/norte/themes/<name>.toml`, which the picker then offers by name.
+The name is `--name`, else the theme's own `"name"` made into one
+(`One Dark Pro` → `one-dark-pro`), else the file name. `--use` also sets
+`[ui] theme`, keeping the comments in `norte.toml`; `--force` replaces a theme
+of that name. A name that is a bundled preset is refused, because the preset
+would always win and the file would never be read.
+
+What the importer does with the file, so the result is not a surprise:
+
+- **It follows `include`**, relative to the file that names it, up to eight
+  deep. A chain that loops back is an error.
+- **It paints over `vscode-dark` or `vscode-light`**, chosen by the theme's
+  `"type"`. A VSCode theme is not a complete palette — even Dark Modern leaves
+  the list selection and the scrollbar to the editor's built-in defaults — so
+  whatever the theme does not define comes from that preset rather than from
+  the monochrome fallback. `[files.kind]`, `[files.ext]`, `mark` and
+  `hostile-badge` always come from it: VSCode has no colour for a file list by
+  node type.
+- **Translucent colours are flattened** over the theme's editor background,
+  because a norte theme has no alpha channel. `widget.shadow` is not imported
+  at all; the window's own translucent shadow looks better than a solid one.
+- **Only `colors` is read.** `tokenColors` and `semanticTokenColors` are
+  syntax colouring, which norte does not do. A colour value that does not
+  parse is skipped and named on stderr.
+
+The file it writes is an ordinary theme with a header saying where it came
+from; edit it like any other. The mapping, VSCode id → role:
+
+| role | VSCode colour ids (the later one wins when both are set) |
+| --- | --- |
+| `background`, `pane-focus-background` | `editor.background` |
+| `regular` | `editor.foreground`, `foreground` |
+| `pane-background` | `sideBar.background` |
+| `selection` | `list.activeSelectionBackground` / `…Foreground` |
+| `selection-unfocused` | `list.inactiveSelectionBackground` / `…Foreground` |
+| `hover` | `list.hoverBackground` |
+| `border-focus`, `focus-border` | `focusBorder` |
+| `border-unfocused`, `separator` | `panel.border` |
+| `modal-border` | `widget.border` |
+| `status-bar` | `statusBar.background` / `.foreground` |
+| `title` | `sideBarSectionHeader.foreground`, `sideBarTitle.foreground` |
+| `button` | `button.background` / `.foreground` |
+| `match` | `editor.findMatchBackground` |
+| `error` | `editorError.foreground`, `errorForeground` |
+| `warning`, `info` | `editorWarning.foreground`, `editorInfo.foreground` |
+| `muted` | `descriptionForeground` |
+| `badge` | `badge.background` / `.foreground` |
+| `input-background`, `input-border` | `input.background`, `input.border` |
+| `widget-background` | `editorWidget.background` |
+| `scrollbar-slider` | `scrollbarSlider.background` |
+
+A theme carries no fonts. For VSCode's type sizes, set `font_size = 13` under
+`[ui]`; `font` and `mono_font` choose the faces.
+
 ## What each frontend paints
 
 Not every part of a theme reaches every frontend, and the gaps are deliberate:

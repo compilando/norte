@@ -108,9 +108,15 @@ escritorio prefiere un esquema claro u oscuro; `theme` cubre el que no esté
 puesto. Un tema puede pedir `backdrop = "blur"` bajo `[effects]` para
 desenfocar lo que hay detrás de un diálogo; el terminal ignora ese bloque.
 
+Un tema propio es un fichero en `themes/` dentro del directorio de
+configuración, y se ofrece por su nombre allí donde se elige un tema.
+`norte theme import` hace uno a partir de un tema de colores de Visual Studio
+Code.
+
 Cada fila enseña una casilla de marca al pasar el ratón; pulsarla alterna la
 marca sin Ctrl. La extensión `file-icons` puede pintar glifos Nerd Font de
-una celda (`style = "nerd"`): la ventana lleva los glifos que necesita, un
+una celda (`style = "nerd"`), o los iconos Seti de Visual Studio Code, uno
+por lenguaje (`style = "seti"`): la ventana lleva los glifos que necesita, un
 terminal necesita una fuente Nerd parcheada.
 
 Cuando el visor no tiene imagen propia — una foto que no cabe en su tope, un
