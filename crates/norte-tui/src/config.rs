@@ -6,9 +6,9 @@
 pub use norte_config::{
     ConfigError, ConfirmQuit, DEFAULT_PRESET, DaemonMode, HotlistItem, KeymapList, KeymapWrite,
     Layer, Layers, NorteToml, PersistSort, Watch, WatchMode, persist_column_format,
-    persist_columns, persist_hotlist_add, persist_hotlist_remove, persist_keymap_bind,
-    persist_keymap_unbind, persist_set, persist_ui_theme, persist_ui_theme_to, standard_layers,
-    standard_layers_with_profile, user_config_dir, watch, watch_polling,
+    persist_column_width, persist_columns, persist_hotlist_add, persist_hotlist_remove,
+    persist_keymap_bind, persist_keymap_unbind, persist_set, persist_ui_theme, persist_ui_theme_to,
+    standard_layers, standard_layers_with_profile, user_config_dir, watch, watch_polling,
 };
 pub use norte_frontend::config::{FrontendConfig as LoadedConfig, load};
 

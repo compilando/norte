@@ -17,6 +17,7 @@ longer select text.
 - shift and a click mark the range between the cursor and the row you clicked, and add to what was already marked
 - dragging across rows marks what it sweeps, and pulling back gives those rows up again
 - a right click opens a menu of the operations you already have keys for
+- dragging the edge of a column header resizes that column, and the width is saved on its own. In the window the edge is on the right of each header; in the terminal it is the separator that opens each column after the name, since the name is the one that grows. A click on an edge without moving changes nothing
 
 A click never marks on its own. Marking is either a modifier or a drag, so
 clicking around a listing to see what is in it cannot change what the next

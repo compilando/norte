@@ -156,6 +156,84 @@ fn ev_con(kind: MouseEventKind, col: u16, row: u16, modifiers: KeyModifiers) -> 
     }
 }
 
+/// El borde que ABRE la segunda columna del pane izquierdo, en un terminal
+/// de `ancho` columnas ya pintado: `(celda, fila de la cabecera, id, ancho)`.
+///
+/// Sale del MISMO reparto que pinta la cabecera, sobre el ancho interior de
+/// la geometría pintada: un borde calculado con otra aritmética pasaría con
+/// el reparto roto.
+fn borde_de_la_segunda_columna(app: &App) -> (u16, u16, norte_frontend::columns::ColumnId, u16) {
+    let g = &app.mouse.geometry().expect("hay geometría")[0];
+    let (x0, interior, cabecera) = (g.x + 1, g.width - 2, g.first_list_row - 1);
+    let cols =
+        norte_frontend::columns::column_widths(&app.columns, app.panes[0].dir().scheme(), interior);
+    assert!(cols.len() >= 2, "hay más columnas que el nombre: {cols:?}");
+    (x0 + cols[0].1, cabecera, cols[1].0.clone(), cols[1].1)
+}
+
+/// El ancho que el reparto le da AHORA a la columna `id` del pane izquierdo.
+fn ancho_de(app: &App, id: &norte_frontend::columns::ColumnId) -> u16 {
+    let g = &app.mouse.geometry().expect("hay geometría")[0];
+    norte_frontend::columns::column_widths(&app.columns, app.panes[0].dir().scheme(), g.width - 2)
+        .into_iter()
+        .find(|(c, _)| c == id)
+        .expect("la columna sigue")
+        .1
+}
+
+/// Arrastrar el borde de una columna le cambia el ancho, EN VIVO, y soltar
+/// pide guardarlo: el ancho persiste solo (lo mismo que ya hacía la ventana).
+#[test]
+fn arrastrar_el_borde_de_una_columna_cambia_su_ancho_y_pide_guardarlo() {
+    let dir = vp("file:///casa");
+    let mut app = App::new(
+        Pane::new(dir.clone(), entradas(&dir, 3)),
+        Pane::new(dir.clone(), entradas(&dir, 3)),
+    );
+    let _ = pintar_en(&mut app, 120, H);
+    let (borde, cabecera, id, ancho) = borde_de_la_segunda_columna(&app);
+
+    assert_eq!(
+        mouse::handle(&mut app, ev(ABAJO, borde, cabecera)),
+        After::Nothing
+    );
+    assert_eq!(
+        mouse::handle(&mut app, ev(ARRASTRE, borde - 3, cabecera)),
+        After::Nothing
+    );
+    assert_eq!(ancho_de(&app, &id), ancho + 3, "el borde sigue al puntero");
+    assert_eq!(
+        mouse::handle(&mut app, ev(ARRIBA, borde - 3, cabecera)),
+        After::ColumnWidth
+    );
+    assert_eq!(
+        app.mouse.take_column_width(),
+        Some((id.to_string(), ancho + 3))
+    );
+    assert_eq!(app.mouse.take_column_width(), None, "se consume al leerlo");
+}
+
+/// Un CLIC en el borde, sin arrastrar, no escribe nada: agarrar la celda de
+/// antes del separador cambiaría el ancho en uno y lo guardaría sin que el
+/// lector hubiera movido nada.
+#[test]
+fn un_clic_en_el_borde_de_una_columna_no_guarda_nada() {
+    let dir = vp("file:///casa");
+    let mut app = App::new(
+        Pane::new(dir.clone(), entradas(&dir, 3)),
+        Pane::new(dir.clone(), entradas(&dir, 3)),
+    );
+    let _ = pintar_en(&mut app, 120, H);
+    let (borde, cabecera, id, ancho) = borde_de_la_segunda_columna(&app);
+    mouse::handle(&mut app, ev(ABAJO, borde - 1, cabecera));
+    assert_eq!(
+        mouse::handle(&mut app, ev(ARRIBA, borde - 1, cabecera)),
+        After::Nothing
+    );
+    assert_eq!(app.mouse.take_column_width(), None);
+    assert_eq!(ancho_de(&app, &id), ancho);
+}
+
 /// Botón izquierdo abajo.
 const ABAJO: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
 /// Botón izquierdo arriba.

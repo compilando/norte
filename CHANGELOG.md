@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Alt on its own opens the menu bar.** In the window always (bridge 68):
+  press and release Alt with nothing in between, as on any desktop; Alt+F4,
+  Alt+Tab, an Alt-drag and AltGr do not count, and a dialog in front keeps
+  the keyboard as it does for F9. In the terminal behind `[ui] alt_menu`,
+  off by default: a lone modifier can only be reported under the kitty
+  keyboard protocol (kitty, foot, WezTerm, Ghostty — not tmux, xterm or
+  GNOME Terminal), and in that mode a letter typed with a dead key can
+  arrive without its accent.
+- **Column widths by dragging in the terminal too.** Drag the separator
+  that opens a column in the header; the width follows the pointer and is
+  written to `[ui.columns]` when you let go, the same key the window writes.
+- **Scrolling the window no longer flickers.** Every update rebuilt the
+  menu, panel and key bars, the tabs, the title, the column header and
+  every visible row even when only the rows at the edge had changed; what
+  paints the same now stays the same node. The overscan grew from 8 to 24
+  rows, so a quick wheel gesture no longer shows blank rows at the edge
+  while the new ones travel.
+
 - **`vscode-dark` and `vscode-light` presets** (spec 2026-09-11),
   transcribed from Visual Studio Code's Dark Modern and Light Modern and
   from the editor's built-in colour registry — a VSCode theme JSON is not

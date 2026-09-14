@@ -17,6 +17,7 @@ no puedes seleccionar texto.
 - mayús y un click marcan el rango entre el cursor y la fila pulsada, y suman a lo que ya estuviera marcado
 - arrastrar por encima de varias filas marca lo que barre, y volver sobre tus pasos las suelta otra vez
 - un click derecho abre un menú con las operaciones para las que ya tienes teclas
+- arrastrar el borde de la cabecera de una columna cambia su ancho, y el ancho se guarda solo. En la ventana el borde está a la derecha de cada cabecera; en el terminal es el separador que abre cada columna detrás del nombre, porque el nombre es el que crece. Un click en el borde sin moverte no cambia nada
 
 Un click a secas nunca marca. Marcar es siempre un modificador o un arrastre,
 así que pasearse por un listado a ver qué hay no puede cambiar sobre qué va a
