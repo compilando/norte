@@ -153,4 +153,21 @@ impl Estado {
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
+
+    /// Alt pulsado y soltado solo (puente 68): pliega el menú abierto o lo
+    /// abre como `app.menu`.
+    ///
+    /// Con una pantalla que se queda las teclas delante no hace nada, que es
+    /// lo que haría la tecla de `app.menu` allí: el diálogo o la ayuda se la
+    /// comen. Abrir el menú por encima de una pregunta pendiente dejaría dos
+    /// superficies peleando por el teclado.
+    pub(super) fn alternar_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.menu.is_some() {
+            return self.cerrar_menu();
+        }
+        if self.algo_se_queda_las_teclas() {
+            return (self.aplicada(), Vec::new());
+        }
+        self.abrir_menu()
+    }
 }

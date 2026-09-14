@@ -3914,6 +3914,40 @@ async fn el_menu_se_reabre_por_donde_iba() {
     assert_eq!(siguiente_foto(&mut sub).await.menu.open, Some(2));
 }
 
+/// Alt solo (puente 68) abre el menú como `app.menu`, y otra vez lo pliega.
+#[tokio::test]
+async fn alt_solo_abre_y_pliega_el_menu() {
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::MenuToggle).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert_eq!(siguiente_foto(&mut sub).await.menu.open, Some(0), "abierto");
+
+    h.dispatch(UiAction::MenuToggle).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert_eq!(siguiente_foto(&mut sub).await.menu.open, None, "plegado");
+}
+
+/// Con un diálogo delante, Alt solo no abre nada: F9 allí se lo come el
+/// diálogo, y un menú encima de una pregunta pendiente pelearía con ella
+/// por el teclado.
+#[tokio::test]
+async fn alt_solo_no_abre_el_menu_encima_de_un_dialogo() {
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.mkdir").await;
+    foto_hasta(&h, &mut sub, "el diálogo está abierto", |s| {
+        (!s.dialogs.is_empty()).then_some(())
+    })
+    .await;
+
+    h.dispatch(UiAction::MenuToggle).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(foto.menu.open, None, "el menú no se abre");
+    assert!(!foto.dialogs.is_empty(), "el diálogo sigue");
+}
+
 /// Elegir en el menú corre el comando, y el menú se cierra ANTES.
 ///
 /// El orden importa: el comando puede abrir otra pantalla, y hacerlo por

@@ -3880,6 +3880,7 @@ impl Estado {
             UiAction::MenuPointRow { row } => self.apuntar_en_menu(*row),
             UiAction::MenuActivateRow { row } => self.activar_del_menu(*row, backend, buzon),
             UiAction::MenuClose => self.cerrar_menu(),
+            UiAction::MenuToggle => self.alternar_menu(),
             UiAction::WizardOpen => self.abrir_asistente(),
             UiAction::WizardActivateRow { row } => {
                 self.activar_fila_de_asistente(*row, backend, buzon)

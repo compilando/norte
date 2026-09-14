@@ -317,7 +317,11 @@ use serde::{Deserialize, Serialize};
 ///   distinta —variables el renderer, `Theme` entero el host, que es el
 ///   único que puede resolver `[files.ext]`—. Lo que impide que diverjan es
 ///   `la_regla_de_variante_es_la_del_renderer`, que pinea los tres casos.
-pub const BRIDGE_VERSION: u32 = 67;
+/// - **68**: llega `menu_toggle`, el Alt pulsado y soltado solo. Pliega el
+///   menú abierto o lo abre como `app.menu`, y no hace nada con una pantalla
+///   que se queda las teclas delante. Cruza como acción propia porque un
+///   modificador solo no es un chord del keymap.
+pub const BRIDGE_VERSION: u32 = 68;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

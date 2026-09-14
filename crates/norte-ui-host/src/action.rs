@@ -605,6 +605,16 @@ pub enum UiAction {
     },
     /// Cierra el menú desplegado sin ejecutar nada (un click fuera).
     MenuClose,
+    /// Alt pulsado y soltado SOLO, sin otra tecla por medio (puente 68).
+    ///
+    /// Es el gesto de escritorio para ir a la barra de menús: pliega el menú
+    /// si está abierto y, si no, lo abre como `app.menu`. No es una tecla
+    /// porque un modificador solo no es un chord que el keymap pueda
+    /// nombrar, y no lleva comando porque un id que viniera del renderer
+    /// sería un despachador paralelo al keymap (ADR 0069). Con una pantalla
+    /// que se queda las teclas delante —un diálogo, la ayuda— no hace nada,
+    /// igual que F9 allí.
+    MenuToggle,
     /// Abre el asistente de primer arranque (spec 2026-09-10, puente 63).
     /// Lo manda el renderer al arrancar cuando el catálogo dice
     /// `first_run`: no hay `norte.toml` de usuario todavía.

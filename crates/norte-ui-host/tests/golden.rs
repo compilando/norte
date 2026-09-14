@@ -211,6 +211,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::MenuPointRow { .. } => "menu_point_row",
         UiAction::MenuActivateRow { .. } => "menu_activate_row",
         UiAction::MenuClose => "menu_close",
+        UiAction::MenuToggle => "menu_toggle",
         UiAction::WizardOpen => "wizard_open",
         UiAction::WizardActivateRow { .. } => "wizard_activate_row",
         UiAction::PanelBarActivate { .. } => "panel_bar_activate",
@@ -469,6 +470,7 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
         ("menu_point_row", UiAction::MenuPointRow { row: 3 }),
         ("menu_activate_row", UiAction::MenuActivateRow { row: 3 }),
         ("menu_close", UiAction::MenuClose),
+        ("menu_toggle", UiAction::MenuToggle),
         ("wizard_open", UiAction::WizardOpen),
         (
             "wizard_activate_row",
