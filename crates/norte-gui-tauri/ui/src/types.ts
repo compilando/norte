@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 67;
+export const BRIDGE_VERSION = 68;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -1392,6 +1392,8 @@ export type UiAction =
   | { action: "menu_point_row"; row: number }
   | { action: "menu_activate_row"; row: number }
   | { action: "menu_close" }
+  /** Alt pulsado y soltado solo: pliega o abre el menú (puente 68). */
+  | { action: "menu_toggle" }
   | { action: "wizard_open" }
   | { action: "wizard_activate_row"; row: number }
   | { action: "panel_bar_activate"; button: number }

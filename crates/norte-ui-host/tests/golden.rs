@@ -211,6 +211,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::MenuPointRow { .. } => "menu_point_row",
         UiAction::MenuActivateRow { .. } => "menu_activate_row",
         UiAction::MenuClose => "menu_close",
+        UiAction::MenuToggle => "menu_toggle",
         UiAction::WizardOpen => "wizard_open",
         UiAction::WizardActivateRow { .. } => "wizard_activate_row",
         UiAction::PanelBarActivate { .. } => "panel_bar_activate",
@@ -536,6 +537,10 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("set_color_scheme", UiAction::SetColorScheme { dark: true }),
+        // Aquí y no junto a las demás del menú: `acciones_de_overlay` está en
+        // el tope de líneas de clippy, y el orden de esta lista no cuenta —
+        // el corpus se escribe por nombre.
+        ("menu_toggle", UiAction::MenuToggle),
         (
             "sort_by",
             UiAction::SortBy {

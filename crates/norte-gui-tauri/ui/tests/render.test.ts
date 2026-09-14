@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
+import { OVERSCAN } from "../src/render/dom";
 import { catalogoReal } from "./fixtures";
 import { BRIDGE_VERSION } from "../src/types";
 import type {
@@ -158,6 +159,56 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     locale: "es",
   };
 }
+
+describe("repintar sin cambios (el parpadeo al desplazarse)", () => {
+  // Cada respuesta a un scroll trae la vista ENTERA. Rehacer los nodos que no
+  // cambiaron se veía como un parpadeo sutil en WebKitGTK: lo que se pinta
+  // igual tiene que quedarse siendo el MISMO nodo.
+  it("la misma foto conserva barras, título, cabecera y filas", () => {
+    const { screen, root } = montar();
+    const v = vista({});
+    screen.paint(v);
+    const antes = {
+      columna: root.querySelector(".slot-columns .col"),
+      ruta: root.querySelector(".title-path"),
+      celda: root.querySelector(".row .cell-name"),
+      paneles: document.querySelector(".panelbar"),
+      menu: document.querySelector(".menubar"),
+    };
+    expect(antes.columna).not.toBeNull();
+    expect(antes.celda).not.toBeNull();
+    screen.paint(JSON.parse(JSON.stringify(v)) as ViewSnapshot);
+    expect(root.querySelector(".slot-columns .col")).toBe(antes.columna);
+    expect(root.querySelector(".title-path")).toBe(antes.ruta);
+    expect(root.querySelector(".row .cell-name")).toBe(antes.celda);
+    expect(document.querySelector(".panelbar")).toBe(antes.paneles);
+    expect(document.querySelector(".menubar")).toBe(antes.menu);
+  });
+
+  it("pero lo que SÍ cambió se repinta", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({}));
+    screen.paint(
+      vista({
+        rows: [fila(0, "a.txt", { marked: true }), fila(1, "c.txt")],
+        path_display: "⟨file⟩/otra",
+      }),
+    );
+    const filas = root.querySelectorAll<HTMLElement>(".row");
+    expect(filas[0]?.dataset["marked"]).toBe("true");
+    expect(root.textContent).toContain("c.txt");
+    expect(root.querySelector(".title-path")?.textContent).toContain("otra");
+  });
+
+  it("el aviso de espera sigue dentro del título aunque el título no se rehaga", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({}));
+    screen.paint(vista({ state: { state: "loading" } }));
+    const busy = root.querySelector(".slot-busy");
+    expect(busy?.parentElement?.classList.contains("slot-title")).toBe(true);
+    expect((busy as HTMLElement | null)?.hidden).toBe(false);
+  });
+});
 
 function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   screen: Screen;
@@ -617,8 +668,11 @@ describe("Screen", () => {
     const ultima = enviadas.at(-1);
     expect(ultima?.action).toBe("set_visible_range");
     if (ultima?.action === "set_visible_range") {
-      expect(ultima.first).toBe(12); // 400/20 = 20, menos 8 de overscan
-      expect(ultima.count).toBe(26); // 200/20 = 10, más 16 de overscan
+      // 400/20 = fila 20 arriba y 200/20 = 10 visibles, con el margen por
+      // cada lado. De la constante: con el 8 escrito aquí, subir el margen
+      // rompía el test sin que el comportamiento cambiara.
+      expect(ultima.first).toBe(Math.max(0, 20 - OVERSCAN));
+      expect(ultima.count).toBe(10 + OVERSCAN * 2);
     }
   });
 

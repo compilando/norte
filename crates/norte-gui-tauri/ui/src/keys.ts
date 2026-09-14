@@ -74,3 +74,45 @@ export function esParaElCampo(k: KeyInput, hayCampo: boolean): boolean {
 export function keyAction(k: KeyInput): UiAction {
   return { action: "key", ...k };
 }
+
+/** La forma mínima de un evento de teclado que mira [`AltSolo`]. */
+export interface TeclaCruda {
+  key: string;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  metaKey: boolean;
+}
+
+/**
+ * Alt pulsado y soltado SOLO: el gesto de escritorio para ir a la barra de
+ * menús (puente 68).
+ *
+ * Se arma al bajar Alt sin otro modificador y se desarma con CUALQUIER otra
+ * cosa en medio —otra tecla, un clic, perder el foco—, así que `Alt+F4`,
+ * `Alt+Tab` o arrastrar con Alt no abren el menú al soltar. `AltGraph` no es
+ * Alt: con un teclado español escribe `@` y `#`, y abrir el menú ahí
+ * rompería la mitad de lo que se teclea.
+ *
+ * Solo detecta. Qué pasa después —plegar, abrir, nada si hay un diálogo— lo
+ * decide el host.
+ */
+export class AltSolo {
+  private armado = false;
+
+  /** Un `keydown`. La repetición de Alt mantenido no desarma. */
+  abajo(e: TeclaCruda): void {
+    this.armado = e.key === "Alt" && !e.ctrlKey && !e.shiftKey && !e.metaKey;
+  }
+
+  /** Un `keyup`: `true` si cierra un Alt solo. */
+  arriba(e: TeclaCruda): boolean {
+    const fue = this.armado && e.key === "Alt";
+    this.armado = false;
+    return fue;
+  }
+
+  /** Algo que no es teclado se metió en medio (clic, rueda, foco). */
+  soltar(): void {
+    this.armado = false;
+  }
+}

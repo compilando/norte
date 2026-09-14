@@ -154,6 +154,9 @@
     "action": "menu_point_row",
     "row": 3
   },
+  "menu_toggle": {
+    "action": "menu_toggle"
+  },
   "move_cursor": {
     "action": "move_cursor",
     "delta": -1,

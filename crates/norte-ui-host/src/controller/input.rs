@@ -155,6 +155,37 @@ impl Estado {
             .unwrap_or_default()
     }
 
+    /// ¿Hay delante una pantalla que se quedaría una tecla antes que el
+    /// listado? Las MISMAS que [`Self::tecla_de_un_overlay`] atiende, salvo
+    /// el menú, que es de quien pregunta.
+    ///
+    /// Es una segunda lista a propósito y no un desvío por aquella función:
+    /// esa ATIENDE la tecla (cancela un visor en vuelo, abandona un plan), y
+    /// preguntar no puede tener efectos. Quien añada un overlay allí lo añade
+    /// aquí; `alt_solo_no_abre_el_menu_encima_de_un_dialogo` pinea el caso
+    /// que importa.
+    pub(super) fn algo_se_queda_las_teclas(&self) -> bool {
+        !self.dialogos.is_empty()
+            || self.asistente.is_some()
+            || self.escritorio.salida.is_some()
+            || self.escritorio.programa.is_some()
+            || self.ayuda.is_some()
+            || self.sincronizacion.is_some()
+            || self.comparacion.is_some()
+            || self.revision_ia.is_some()
+            || self.busqueda.is_some()
+            || self.selector_disposicion.is_some()
+            || self.selector_columnas.is_some()
+            || self.selector.is_some()
+            || self.selector_perfil.is_some()
+            || self.tema_elegido.is_some()
+            || self.extensiones.is_some()
+            || self.agencia.panel
+            || self.ajustes.is_some()
+            || self.visor.is_some()
+            || self.paleta.is_some()
+    }
+
     pub(super) fn tecla_de_un_overlay(
         &mut self,
         k: &crate::keys::KeyInput,

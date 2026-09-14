@@ -430,6 +430,15 @@ async fn main() -> Result<()> {
     let (tty_out, mut mouse_out) = open_terminal_or_exit()?;
     let mut terminal = tty::init(tty_out)?;
     let mut capture = arm_mouse(&cfg, &mut app, &mut mouse_out);
+    // `[ui] alt_menu`: un terminal sin el protocolo no recibe nada, y un fallo
+    // al escribir deja la TUI sin el gesto, no sin arrancar.
+    if let Err(e) = norte_tui::alt_menu::set(
+        cfg.common.ui_alt_menu.unwrap_or(false),
+        norte_tui::alt_menu::soportado,
+        &mut mouse_out,
+    ) {
+        tracing::warn!(error = %e, "no se pudo pedir el protocolo de teclado de kitty");
+    }
     let res = run(
         &mut terminal,
         &mut capture,

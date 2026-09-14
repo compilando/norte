@@ -119,8 +119,39 @@ export function viewerBody(viewer: ViewerView): HTMLElement {
   return body;
 }
 
-/** Filas de más que se piden por arriba y por abajo del hueco visible. */
-export const OVERSCAN = 8;
+/**
+ * Filas de más que se piden por arriba y por abajo del hueco visible.
+ *
+ * El scroll lo mueve el motor en el acto y las filas nuevas llegan del host
+ * un viaje después: lo que quede fuera de este margen asoma EN BLANCO durante
+ * ese viaje, y con la rueda o el panel táctil eso es un parpadeo en el borde.
+ * Ocho filas se agotaban con dos muescas de rueda; veinticuatro cubren un
+ * gesto normal por unos pocos KB más por respuesta.
+ */
+export const OVERSCAN = 24;
+
+/** La última firma con la que se pintó cada nodo. */
+const firmas = new WeakMap<object, string>();
+
+/**
+ * ¿Se pintó ya `nodo` con exactamente estos datos? Si no, apunta la firma
+ * nueva y contesta `false`, y quien pregunta repinta.
+ *
+ * Existe porque el host manda la vista ENTERA en cada actualización y
+ * `paint()` la vuelca entera: cada respuesta a un scroll rehacía la barra de
+ * menús, la de paneles, la de teclas, las pestañas, el título, la cabecera y
+ * todas las filas visibles, aunque solo hubieran cambiado las filas del
+ * borde. Rehacer un nodo idéntico no es gratis ni invisible: se recalcula la
+ * maqueta, el `:hover` se pierde y vuelve, y en WebKitGTK se ve como un
+ * parpadeo sutil mientras se desplaza.
+ */
+export function sinCambios(nodo: object, firma: string): boolean {
+  if (firmas.get(nodo) === firma) {
+    return true;
+  }
+  firmas.set(nodo, firma);
+  return false;
+}
 
 export type Send = (action: UiAction) => void;
 
@@ -186,6 +217,12 @@ export function updateRow(
   // los nombres sigan alineados. Lo decide quien pinta el hueco, no la fila.
   iconColumn = false,
 ): void {
+  // Todo lo que esta función lee está en la firma: la fila entera, su
+  // posición, el alto y la columna de iconos. Si nada cambió, el nodo ya
+  // dice lo que tiene que decir.
+  if (sinCambios(el, JSON.stringify([row, index, rowH, iconColumn]))) {
+    return;
+  }
   el.style.setProperty("top", `${index * rowH}px`);
   el.setAttribute("aria-rowindex", String(index + 1));
   el.setAttribute("aria-selected", String(row.selected));

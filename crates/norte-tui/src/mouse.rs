@@ -273,6 +273,13 @@ pub struct MouseState {
     /// es un arrastre— y volver a preguntar «qué borde hay aquí» acabaría
     /// agarrando el de al lado en cuanto uno pasara por encima del otro.
     resizing: Option<ResizeBorder>,
+    /// La columna cuyo ancho se está arrastrando AHORA, congelada al
+    /// agarrarla por lo mismo que `resizing`.
+    columna: Option<ColumnDrag>,
+    /// Lo que dejó el último arrastre de columna al soltar —`(id, celdas)`—,
+    /// para que el run loop lo guarde. [`After`] es `Copy` y no puede
+    /// llevarlo dentro.
+    ancho_soltado: Option<(String, u16)>,
     /// La máquina de gestos compartida (`norte-frontend`).
     drag: Drag,
     /// `(cuándo, dónde)` del último click izquierdo, para el doble.
@@ -297,6 +304,12 @@ impl MouseState {
     #[must_use]
     pub fn geometry(&self) -> Option<&[PaneGeometry]> {
         self.geometry.as_deref()
+    }
+
+    /// El ancho que dejó el último arrastre de columna, `(id, celdas)`, para
+    /// guardarlo. Se consume al leerlo: un ancho se escribe una vez.
+    pub fn take_column_width(&mut self) -> Option<(String, u16)> {
+        self.ancho_soltado.take()
     }
 
     /// El rectángulo con el que se pintó el hueco `id` en el último frame, si
@@ -329,6 +342,10 @@ impl MouseState {
     fn invalidate(&mut self) {
         self.drag.cancel();
         self.last_click = None;
+        // Un arrastre de columna sobre un listado que ya no es el que se
+        // agarró movería el ancho desde un borde que no está donde el lector
+        // lo ve. Lo aplicado se queda, como las marcas de un barrido.
+        self.columna = None;
     }
 }
 
@@ -491,6 +508,11 @@ pub enum After {
     /// resolvers a mano. Un clic ahí ES pulsar la tecla; no hay un segundo
     /// despacho que pueda divergir.
     SynthKey,
+    /// Se soltó el borde de una columna tras arrastrarlo: el ancho ya está
+    /// aplicado y pintado, y el run loop lo guarda con lo que dejó en
+    /// [`MouseState::take_column_width`]. Aquí no se puede: escribir
+    /// `norte.toml` es trabajo de disco y va fuera del bucle (regla 2).
+    ColumnWidth,
 }
 
 /// El índice ABSOLUTO en `entries` de una posición PINTADA del pane.
@@ -795,6 +817,101 @@ fn resize_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
     }
 }
 
+/// Un arrastre de columna en vuelo.
+#[derive(Debug, Clone)]
+struct ColumnDrag {
+    /// El id de la columna, con la forma que escribe `persist_column_width`
+    /// y que usa la ventana (`ColumnId` en texto).
+    column: String,
+    /// La celda donde TERMINA la columna. No se mueve durante el gesto: el
+    /// nombre, que es quien crece, absorbe la diferencia, así que el ancho es
+    /// la distancia del puntero a este borde.
+    fin: u16,
+    /// Hubo movimiento. Sin él, soltar no es un ancho nuevo sino un clic.
+    movido: bool,
+}
+
+/// El borde de columna bajo `(col, row)`, si lo hay.
+///
+/// Se agarra el borde que ABRE cada columna salvo el nombre —la celda del
+/// separador y la de antes, dos como en los bordes de panel—, y no el que la
+/// cierra: el nombre crece hacia la derecha y la última columna acaba en el
+/// marco del panel, que ya es el borde que reparte paneles.
+///
+/// Los anchos salen de `column_widths` con el ancho interior de la geometría
+/// PINTADA, la misma llamada que la cabecera: dos repartos son un borde que
+/// se agarra en un sitio y se mueve desde otro.
+fn column_border_at(app: &App, col: u16, row: u16) -> Option<ColumnDrag> {
+    let geometry = app.mouse.geometry()?;
+    for (i, g) in geometry.iter().enumerate() {
+        let cabecera = g.first_list_row.checked_sub(1);
+        if g.list_rows == 0
+            || cabecera != Some(row)
+            || col < g.x
+            || col >= g.x.saturating_add(g.width)
+        {
+            continue;
+        }
+        let pane = app.panes.get(i)?;
+        let anchos = norte_frontend::columns::column_widths(
+            &app.columns,
+            pane.dir().scheme(),
+            g.width.saturating_sub(2),
+        );
+        let mut x = g.x.saturating_add(1);
+        for (k, (id, w)) in anchos.iter().enumerate() {
+            if k > 0 && (col == x || col.saturating_add(1) == x) {
+                return Some(ColumnDrag {
+                    column: id.to_string(),
+                    fin: x.saturating_add(*w),
+                    movido: false,
+                });
+            }
+            x = x.saturating_add(*w);
+        }
+    }
+    None
+}
+
+/// El arrastre del borde de una columna, en los tres tiempos del gesto, como
+/// [`resize_gesture`].
+///
+/// Mientras dura, el ancho se aplica EN MEMORIA en cada movimiento —la
+/// cabecera y las filas lo pintan en el frame siguiente— y solo al soltar se
+/// pide guardarlo: escribir `norte.toml` en cada celda que cruza el puntero
+/// sería el fichero reescrito cuarenta veces por gesto.
+fn column_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
+    match ev.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            let agarre = column_border_at(app, ev.column, ev.row)?;
+            app.mouse.drag.cancel();
+            app.mouse.last_click = None;
+            app.mouse.columna = Some(agarre);
+            Some(After::Nothing)
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            let agarre = app.mouse.columna.as_mut()?;
+            agarre.movido = true;
+            let cells = agarre.fin.saturating_sub(ev.column);
+            let column = agarre.column.clone();
+            app.columns.apply_width(&column, cells);
+            Some(After::Nothing)
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            let agarre = app.mouse.columna.take()?;
+            if !agarre.movido {
+                return Some(After::Nothing);
+            }
+            let cells = app
+                .columns
+                .apply_width(&agarre.column, agarre.fin.saturating_sub(ev.column));
+            app.mouse.ancho_soltado = Some((agarre.column, cells));
+            Some(After::ColumnWidth)
+        }
+        _ => None,
+    }
+}
+
 /// Lo que se atiende ANTES de los paneles: el menú, el visor, el gestor de
 /// extensiones y el cerrojo de los demás overlays. `Some` = el evento ya
 /// tiene dueño y los listados no lo ven.
@@ -942,6 +1059,12 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     // tiempos del gesto: mientras dura, el puntero se sale del borde y no por
     // eso deja de arrastrarlo.
     if let Some(after) = resize_gesture(app, ev) {
+        return after;
+    }
+    // Y el de un borde de COLUMNA, por lo mismo: la cabecera es cromo para el
+    // listado, y el puntero sale de la celda del borde en el primer
+    // movimiento.
+    if let Some(after) = column_gesture(app, ev) {
         return after;
     }
     // Pulsar un panel le da el TECLADO, y va ANTES que todos los caminos
@@ -1482,6 +1605,39 @@ async fn despachar_clic(
     crate::event_loop::launch_pending(app, events, capture).await;
 }
 
+/// Escribe en `[ui.columns]` el ancho que dejó el último arrastre.
+///
+/// Fuera del bucle (`spawn_blocking`, regla 2) y al PERFIL activo si lo hay,
+/// como el selector de columnas: escribirlo en la capa de usuario con un
+/// perfil que también fija el ancho lo dejaría guardado y sin efecto. Solo el
+/// fallo se dice; un ancho que se guarda bien ya se está viendo.
+async fn guardar_ancho_de_columna(app: &mut crate::app::App) {
+    let Some((column, cells)) = app.mouse.take_column_width() else {
+        return;
+    };
+    let Some(dir) = app.config_write_dir() else {
+        app.message = Some(norte_i18n::t("msg-settings-no-config-dir"));
+        return;
+    };
+    let res = tokio::task::spawn_blocking(move || {
+        crate::config::persist_column_width(&dir, &column, cells)
+    })
+    .await;
+    match res {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            app.message = Some(norte_i18n::ta(
+                "msg-settings-save-failed",
+                &[("error", &crate::app::io_error_category(&e))],
+            ));
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "la tarea que guarda el ancho de columna no terminó");
+            app.message = Some(norte_i18n::t("msg-settings-save-crashed"));
+        }
+    }
+}
+
 /// Aplica un evento de ratón y remata lo que el gesto deje pedido.
 ///
 /// La semántica del gesto —qué marca, qué barre, qué transfiere— vive en
@@ -1514,6 +1670,9 @@ pub async fn on_mouse(
         // `on_key`, justo después de este gesto — aquí no están los tres
         // resolvers. Nada que hacer, como con `Nothing`.
         self::After::Nothing | self::After::SynthKey => {}
+        // Soltar el borde de una columna: el ancho ya está en memoria y
+        // pintado; queda escribirlo con la MISMA función que usa la ventana.
+        self::After::ColumnWidth => guardar_ancho_de_columna(app).await,
         // El indicador de sesión suelta: la explicación está en la ayuda, y
         // se abre por el MISMO constructor que `F1` sobre una fila de la
         // paleta — una página en mano, no un contexto que resolver.

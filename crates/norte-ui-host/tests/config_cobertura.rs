@@ -88,6 +88,10 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         //     `daemon_mode`: la ventana SIEMPRE habla con un daemon
         //     (ADR 0066, D10), así que no hay modo que elegir.
         ui_mouse: _,
+        //     `ui_alt_menu`: el Alt solo lo tiene SIEMPRE una ventana; la
+        //     clave existe porque en un terminal cuesta un protocolo de
+        //     teclado que se come las tildes de tecla muerta.
+        ui_alt_menu: _,
         daemon_mode: _,
 
         // ─── Del DAEMON: las aplica el proceso que sirve, no el que pinta.

@@ -267,6 +267,18 @@ pub struct UiSection {
     /// share the pointer with.
     #[serde(default)]
     pub mouse: Option<bool>,
+    /// Whether pressing and releasing Alt on its own opens the menu bar in
+    /// the TUI. Absent = `false`.
+    ///
+    /// Off by default because the terminal can only report a lone modifier
+    /// under the kitty keyboard protocol's "report all keys" mode, and in
+    /// that mode a character composed with a dead key (`é` on a Spanish
+    /// layout) arrives as its base key rather than as text. Only terminals
+    /// that implement the protocol honour it (kitty, foot, `WezTerm`, Ghostty);
+    /// tmux, xterm and VTE-based terminals cannot, and there it does
+    /// nothing. The GUI ignores this key: a window always has the gesture.
+    #[serde(default)]
+    pub alt_menu: Option<bool>,
     /// Whether the menu bar is pinned to the top row. Absent = `true`.
     ///
     /// On by default because the menu was the only way to reach several

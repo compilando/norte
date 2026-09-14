@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { esParaElCampo, keyInputOf } from "../src/keys";
+import { AltSolo, esParaElCampo, keyInputOf } from "../src/keys";
 
 function ev(init: KeyboardEventInit): KeyboardEvent {
   return new KeyboardEvent("keydown", init);
@@ -106,5 +106,62 @@ describe("un campo de texto abierto", () => {
   it("y sin campo abierto no se queda nada", () => {
     expect(esParaElCampo(k("a"), false)).toBe(false);
     expect(esParaElCampo(k("Backspace"), false)).toBe(false);
+  });
+});
+
+describe("Alt SOLO (puente 68)", () => {
+  const t = (
+    key: string,
+    mods: Partial<{ ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }> = {},
+  ) => ({
+    key,
+    ctrlKey: false,
+    shiftKey: false,
+    metaKey: false,
+    ...mods,
+  });
+
+  it("bajar y soltar Alt sin nada en medio es el gesto", () => {
+    const a = new AltSolo();
+    a.abajo(t("Alt"));
+    expect(a.arriba(t("Alt"))).toBe(true);
+  });
+
+  it("Alt mantenido que se repite sigue siendo el gesto", () => {
+    const a = new AltSolo();
+    a.abajo(t("Alt"));
+    a.abajo(t("Alt"));
+    expect(a.arriba(t("Alt"))).toBe(true);
+  });
+
+  it("Alt+otra tecla NO lo es, aunque Alt se suelte el último", () => {
+    const a = new AltSolo();
+    a.abajo(t("Alt"));
+    a.abajo(t("F4"));
+    expect(a.arriba(t("F4"))).toBe(false);
+    expect(a.arriba(t("Alt"))).toBe(false);
+  });
+
+  it("AltGraph no es Alt: escribe @ y # en un teclado español", () => {
+    const a = new AltSolo();
+    a.abajo(t("AltGraph"));
+    expect(a.arriba(t("AltGraph"))).toBe(false);
+  });
+
+  it("con otro modificador bajado no se arma", () => {
+    const a = new AltSolo();
+    a.abajo(t("Alt", { ctrlKey: true }));
+    expect(a.arriba(t("Alt"))).toBe(false);
+  });
+
+  it("un clic o perder el foco en medio lo desarma", () => {
+    const a = new AltSolo();
+    a.abajo(t("Alt"));
+    a.soltar();
+    expect(a.arriba(t("Alt"))).toBe(false);
+  });
+
+  it("un soltar suelto no dispara nada", () => {
+    expect(new AltSolo().arriba(t("Alt"))).toBe(false);
   });
 });

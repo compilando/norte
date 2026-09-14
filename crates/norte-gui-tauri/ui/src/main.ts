@@ -15,7 +15,7 @@ import "@fontsource/inter/latin-600.css";
 
 import { invokeMetrics, tauriPort } from "./bridge";
 import type { HostPort } from "./bridge";
-import { esParaElCampo, keyAction, keyInputOf } from "./keys";
+import { AltSolo, esParaElCampo, keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
 import { Session } from "./session";
 import { BRIDGE_VERSION } from "./types";
@@ -280,7 +280,23 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     send({ action: "wizard_open" });
   }
 
+  // Alt solo va a la barra de menús (puente 68). Se mira ANTES del filtro de
+  // modificadores: para `keyInputOf` un Alt solo no es una tecla, y no lo es
+  // para el keymap; es un gesto aparte.
+  const altSolo = new AltSolo();
+  doc.addEventListener("keyup", (e) => {
+    if (altSolo.arriba(e)) {
+      // Sin esto WebKitGTK puede llevarse el foco a su propia barra.
+      e.preventDefault();
+      send({ action: "menu_toggle" });
+    }
+  });
+  doc.addEventListener("mousedown", () => altSolo.soltar(), true);
+  doc.addEventListener("wheel", () => altSolo.soltar(), { capture: true, passive: true });
+  (doc.defaultView ?? window).addEventListener("blur", () => altSolo.soltar());
+
   doc.addEventListener("keydown", (e) => {
+    altSolo.abajo(e);
     const k = keyInputOf(e);
     if (k === null) {
       return;
