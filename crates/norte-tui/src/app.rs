@@ -484,6 +484,10 @@ pub struct App {
     /// La siembra el arranque desde `[ui.columns]`; el render y los hooks
     /// de cd la consultan.
     pub columns: norte_frontend::columns::ColumnsSettings,
+    /// Los temas del usuario (`<config>/themes/*.toml`) que cargó la config,
+    /// ya parseados. Los siembran el arranque y la recarga; el selector, el
+    /// asistente y los ajustes los listan y los previsualizan sin tocar disco.
+    pub user_themes: Vec<norte_frontend::theme::UserTheme>,
     /// `now` para las celdas de tiempo RELATIVO (#108 L5): `None` = reloj
     /// real; los tests de snapshot fijan `Some(ms)` para render estable.
     pub render_now_ms: Option<i64>,
@@ -1095,6 +1099,7 @@ impl App {
             caps: std::collections::HashMap::new(),
             caps_order: std::collections::VecDeque::new(),
             columns: norte_frontend::columns::ColumnsSettings::default(),
+            user_themes: Vec::new(),
             focus: 0,
             quit: false,
             confirm_quit: crate::config::ConfirmQuit::default(),

@@ -54,6 +54,14 @@ pub struct FrontendConfig {
     pub quick_search_mode: nav::Mode,
     /// Merged declarative openers (#28): System/User only, fail-closed.
     pub openers: OpenersConfig,
+    /// Los temas del USUARIO, `<config>/themes/*.toml`, ya parseados
+    /// ([`crate::theme::load_user_themes`]).
+    ///
+    /// Solo de la capa de usuario. Un tema no lanza nada, pero la lista es lo
+    /// que ofrecen los selectores, y un `./.norte` ajeno no tiene por qué
+    /// poner nombres en ella. Viajan con la config para que un selector los
+    /// liste y los previsualice sin leer disco en una tecla.
+    pub user_themes: Vec<crate::theme::UserTheme>,
 }
 
 /// Loads the `keymap.toml` layer from `dir` (ADR 0006/0007); `None` if it
@@ -160,6 +168,12 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
         QuickSearch::Filter => nav::Mode::Filter,
         QuickSearch::Jump => nav::Mode::Jump,
     };
+    let user_themes = layers
+        .dirs
+        .iter()
+        .find(|(_, kind)| *kind == Layer::User)
+        .map(|(dir, _)| crate::theme::load_user_themes(dir))
+        .unwrap_or_default();
     Ok(FrontendConfig {
         common,
         keymap_layers,
@@ -167,6 +181,7 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
         keymap_layer_dirs,
         quick_search_mode,
         openers,
+        user_themes,
     })
 }
 

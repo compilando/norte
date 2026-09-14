@@ -8,8 +8,8 @@ decision.
 
 ### Use the theme picker
 
-Press **F9** to open the picker. Moving the cursor previews each bundled theme
-immediately. Press **Enter** to apply the selected theme and save it to the
+Press **F9** to open the picker. Moving the cursor previews each bundled theme,
+and each of your own in the themes directory (below), immediately. Press **Enter** to apply the selected theme and save it to the
 `[ui].theme` key in your user `norte.toml`; comments and formatting in the file
 are preserved. Press **Esc** to restore the previous theme without saving.
 
@@ -36,7 +36,15 @@ The value may be either:
   | `nord` | dark |
   | `retro-crt`, `retro-crt-amber` | dark, and they declare GPU `[effects]` the terminal ignores |
 
+- The name of one of your own themes: `theme = "mine"` loads
+  `~/.config/norte/themes/mine.toml` (`%APPDATA%\norte\themes\` on Windows).
 - A path to a custom TOML theme.
+
+A name is looked up in that order and the order is fixed: a bundled preset
+always wins, so a stale `themes/nord.toml` cannot change what `nord` means,
+and such a file is not offered in the picker either. Only a plain name — letters,
+digits, `-`, `_` and `.`, not starting with a dot — is looked up in the themes
+directory; anything else is taken as a path.
 
 When the setting is absent, norte uses the neutral `default` preset. If a theme
 cannot be loaded because its path does not exist or its TOML is invalid, norte
@@ -47,6 +55,12 @@ reloaded, so saving the file applies changes to a running application.
 
 All three sections in a theme file are optional. Missing values inherit a
 readable monochrome fallback.
+
+Save it as `~/.config/norte/themes/<name>.toml` and it appears by that name in
+the theme picker, the first-run wizard and the settings screen of both
+frontends, with a live preview. The list is read with the configuration, so a
+new file shows up on the next reload. A file that does not parse is left out of
+the list rather than breaking the picker; set it by path to see why it fails.
 
 ```toml
 name = "my-theme"

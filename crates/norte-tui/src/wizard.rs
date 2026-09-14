@@ -39,7 +39,8 @@ pub async fn should_open(setup: bool, pick: bool) -> bool {
 /// vigente.
 pub fn open(app: &mut App, cfg: &config::LoadedConfig) {
     let presets = norte_frontend::keymap::presets::NAMES;
-    let temas = norte_theme::preset_names();
+    let nombres = norte_frontend::theme::theme_names(&cfg.user_themes);
+    let temas: Vec<&str> = nombres.iter().map(String::as_str).collect();
     let tema = cfg.common.ui_theme.as_deref().unwrap_or("default");
     app.wizard = Some(Wizard::new(presets, &temas, &cfg.common.preset, tema));
 }
@@ -89,7 +90,8 @@ fn preview(app: &mut App) {
     let Some(name) = app.wizard.as_ref().and_then(Wizard::preview_theme) else {
         return;
     };
-    if let Ok(Some(theme)) = norte_theme::Theme::preset(name) {
+    // Un preset o un tema del usuario ya cargado: sin disco en una tecla.
+    if let Some(theme) = norte_frontend::theme::theme_by_name(name, &app.user_themes) {
         app.theme = crate::theme::TuiTheme::new(theme, app.theme.depth());
     }
 }

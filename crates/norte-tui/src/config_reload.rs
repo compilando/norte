@@ -118,6 +118,10 @@ pub async fn reload_config(
                 for i in 0..app.panes.len() {
                     app.apply_scheme_sort(i);
                 }
+                // Los temas del usuario, por lo mismo: un tema recién puesto en
+                // `themes/` sale en el selector sin reiniciar. La recarga ya
+                // corre donde se puede leer disco; el selector solo lee esto.
+                app.user_themes.clone_from(&cfg.user_themes);
                 // Bindings `lua:` descartados del keymap de PROYECTO
                 // (seguridad — mismo aviso que en el arranque; máximo
                 // porque `global` se fusiona en las tres pantallas, H1 T2

@@ -8,10 +8,7 @@ impl App {
     /// Abre el popup selector de tema (ADR 0020): lista de presets, cursor en el
     /// tema vigente, con preview EN VIVO desde ya.
     pub fn open_theme_picker(&mut self) {
-        let names: Vec<String> = norte_theme::preset_names()
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let names = norte_frontend::theme::theme_names(&self.user_themes);
         let current = self.theme.name().map(String::from);
         let cursor = current
             .as_ref()
@@ -203,9 +200,11 @@ impl App {
         else {
             return;
         };
+        // Sin disco: un preset o un tema del usuario que ya cargó la config.
+        // Resolver aquí leería un fichero dentro de una tecla (regla 2).
         let depth = crate::theme::detect_depth();
-        if let Ok(theme) = crate::theme::resolve(Some(&name), depth) {
-            self.theme = theme;
+        if let Some(theme) = norte_frontend::theme::theme_by_name(&name, &self.user_themes) {
+            self.theme = crate::theme::TuiTheme::new(theme, depth);
         }
     }
 

@@ -122,10 +122,7 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
                     // criterio que `App::open_theme_picker`): resueltas aquí,
                     // no `&'static` — el tema/keymap efectivo puede cambiar
                     // en caliente.
-                    let theme_names: Vec<String> = norte_theme::preset_names()
-                        .into_iter()
-                        .map(String::from)
-                        .collect();
+                    let theme_names = norte_frontend::theme::theme_names(&app.user_themes);
                     let all_presets = presets();
                     let preset_names: Vec<&str> = all_presets.iter().map(|(n, _)| *n).collect();
                     match settings.activate(&theme_names, &preset_names) {

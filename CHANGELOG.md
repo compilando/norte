@@ -9,6 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Your own themes by name.** A theme saved as
+  `~/.config/norte/themes/<name>.toml` is offered by the theme picker, the
+  first-run wizard and the settings screen in both frontends, previews live,
+  and can be set as `[ui] theme = "<name>"`. The order is fixed: a bundled
+  preset first — a stale `themes/nord.toml` cannot change what `nord`
+  means — then your themes directory, then the value as a path. A file that
+  does not parse is left out of the list rather than breaking the picker.
+
 - **Alt on its own opens the menu bar.** In the window always (bridge 68):
   press and release Alt with nothing in between, as on any desktop; Alt+F4,
   Alt+Tab, an Alt-drag and AltGr do not count, and a dialog in front keeps

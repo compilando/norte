@@ -140,10 +140,7 @@ impl Estado {
         let Some(a) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let temas: Vec<String> = norte_theme::preset_names()
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let temas = norte_frontend::theme::theme_names(&self.config.user_themes);
         match a.activar(&temas, norte_frontend::keymap::presets::NAMES) {
             crate::settings::Activacion::Nada => (self.aplicada(), Vec::new()),
             crate::settings::Activacion::Escribir(write) => {

@@ -347,10 +347,7 @@ impl Estado {
     /// el del terminal — presets, cursor en el que está puesto, y preview EN
     /// VIVO al moverse.
     pub(super) fn abrir_tema(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let nombres: Vec<String> = norte_theme::preset_names()
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let nombres = norte_frontend::theme::theme_names(&self.config.user_themes);
         let cursor = nombres
             .iter()
             .position(|n| *n == self.tema.name)

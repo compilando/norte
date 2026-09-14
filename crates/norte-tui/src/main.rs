@@ -172,6 +172,7 @@ async fn main() -> Result<()> {
     app.active_profile.clone_from(&cli_profile);
     app.pick = cli_pick; // `--pick` (S2): see the field's rustdoc (`app.rs`).
     app.columns = columns;
+    app.user_themes.clone_from(&cfg.user_themes);
     // Sincronizar necesita journal Y spool (regla dura 4: `sync.apply` abre un
     // lote deshacible y se niega sin él; `sync.plan` se niega sin spool). Desde
     // #167 el brazo embebido SÍ lleva el journal del directorio de estado (que

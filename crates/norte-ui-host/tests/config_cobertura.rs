@@ -165,5 +165,9 @@ fn todo_campo_de_frontend_config_esta_clasificado_para_la_ventana() {
         // ─── El host la lee: `pane.quick-search` arranca en el modo que
         //     diga la clave, como en el terminal.
         quick_search_mode: _,
+
+        // ─── El host la lee: el selector de tema, el asistente y la pantalla
+        //     de ajustes ofrecen los temas del usuario, igual que el terminal.
+        user_themes: _,
     } = cfg;
 }

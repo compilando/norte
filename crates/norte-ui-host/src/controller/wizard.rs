@@ -13,7 +13,8 @@ impl Estado {
     /// Abre el asistente con los presets y los temas que hay, arrancando en
     /// lo vigente. Lo manda el renderer cuando el catálogo dice `first_run`.
     pub(super) fn abrir_asistente(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let temas = norte_theme::preset_names();
+        let nombres = norte_frontend::theme::theme_names(&self.config.user_themes);
+        let temas: Vec<&str> = nombres.iter().map(String::as_str).collect();
         let tema = self
             .config
             .common
