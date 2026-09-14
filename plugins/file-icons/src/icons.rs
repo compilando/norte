@@ -22,11 +22,18 @@ pub enum Style {
     /// cell wide. The window bundles the glyphs it needs; a terminal needs a
     /// patched font, or it paints a box.
     Nerd,
+    /// The Seti UI set, the file icons VSCode shows by default (spec
+    /// 2026-09-11, F4): one glyph per LANGUAGE where `Nerd` has one per
+    /// class, so `main.py` and `main.go` look different. The glyphs are the
+    /// `nf-seti-*` range of the same Nerd font (MIT), so the window needs no
+    /// second font and a patched terminal font already has them. Seti has
+    /// no link or slides icon; those two borrow `Nerd`'s.
+    Seti,
 }
 
 impl Style {
     /// Every style, for tests that sweep the table.
-    pub const ALL: &'static [Style] = &[Style::Emoji, Style::Ascii, Style::Nerd];
+    pub const ALL: &'static [Style] = &[Style::Emoji, Style::Ascii, Style::Nerd, Style::Seti];
 }
 
 /// What the host says an entry is. A name cannot tell a folder from a
@@ -122,6 +129,27 @@ impl Kind {
             (Kind::Git, Style::Nerd) => "\u{e702}",
             (Kind::Container, Style::Nerd) => "\u{e7b0}",
             (Kind::Licence, Style::Nerd) => "\u{f24e}",
+            // Seti (`nf-seti-*`, U+E5FA–E6B7). The subset font carries these
+            // too: add one here, add it there. `Code` is only the fallback
+            // for a language `SETI_BY_EXTENSION` does not name.
+            (Kind::Folder, Style::Seti) => "\u{e613}",
+            (Kind::Link, Style::Seti) => "\u{f0c1}",
+            (Kind::Rust, Style::Seti) => "\u{e68b}",
+            (Kind::Code, Style::Seti) => "\u{e64e}",
+            (Kind::Script, Style::Seti) => "\u{e691}",
+            (Kind::Doc, Style::Seti) => "\u{e64e}",
+            (Kind::Sheet, Style::Seti) => "\u{e6a6}",
+            (Kind::Slides, Style::Seti) => "\u{f1c4}",
+            (Kind::Readme, Style::Seti) => "\u{e66a}",
+            (Kind::Image, Style::Seti) => "\u{e60d}",
+            (Kind::Audio, Style::Seti) => "\u{e638}",
+            (Kind::Video, Style::Seti) => "\u{e69f}",
+            (Kind::Archive, Style::Seti) => "\u{e6aa}",
+            (Kind::Config, Style::Seti) => "\u{e615}",
+            (Kind::Build, Style::Seti) => "\u{e673}",
+            (Kind::Git, Style::Seti) => "\u{e65d}",
+            (Kind::Container, Style::Seti) => "\u{e650}",
+            (Kind::Licence, Style::Seti) => "\u{e60a}",
         }
     }
 
@@ -254,6 +282,85 @@ const BY_EXTENSION: &[(&[u8], Kind)] = &[
     (b"conf", Kind::Config),
     (b"cfg", Kind::Config),
     (b"env", Kind::Config),
+    // Code that only `Seti` tells apart; the other styles call it code.
+    (b"html", Kind::Code),
+    (b"htm", Kind::Code),
+    (b"css", Kind::Code),
+    (b"scss", Kind::Code),
+    (b"sass", Kind::Code),
+    (b"vue", Kind::Code),
+    (b"svelte", Kind::Code),
+    (b"hs", Kind::Code),
+    (b"ex", Kind::Code),
+    (b"exs", Kind::Code),
+    (b"dart", Kind::Code),
+    (b"scala", Kind::Code),
+    (b"clj", Kind::Code),
+    (b"ml", Kind::Code),
+    (b"jl", Kind::Code),
+    (b"nim", Kind::Code),
+    (b"cr", Kind::Code),
+    (b"tf", Kind::Code),
+    (b"xml", Kind::Config),
+    (b"tex", Kind::Doc),
+];
+
+/// `Seti` only: one glyph per language, consulted before the kind. Every
+/// extension here is also in [`BY_EXTENSION`], so no style shows an icon
+/// for a name the others leave blank.
+const SETI_BY_EXTENSION: &[(&[u8], &str)] = &[
+    (b"py", "\u{e606}"),
+    (b"js", "\u{e60c}"),
+    (b"jsx", "\u{e625}"),
+    (b"tsx", "\u{e625}"),
+    (b"ts", "\u{e628}"),
+    (b"go", "\u{e627}"),
+    (b"c", "\u{e649}"),
+    (b"h", "\u{e649}"),
+    (b"cpp", "\u{e646}"),
+    (b"hpp", "\u{e646}"),
+    (b"cc", "\u{e646}"),
+    (b"java", "\u{e66d}"),
+    (b"kt", "\u{e634}"),
+    (b"rb", "\u{e605}"),
+    (b"lua", "\u{e620}"),
+    (b"php", "\u{e608}"),
+    (b"cs", "\u{e648}"),
+    (b"swift", "\u{e699}"),
+    (b"zig", "\u{e6a9}"),
+    (b"ps1", "\u{e683}"),
+    (b"md", "\u{e609}"),
+    (b"markdown", "\u{e609}"),
+    (b"json", "\u{e60b}"),
+    (b"yml", "\u{e6a8}"),
+    (b"yaml", "\u{e6a8}"),
+    (b"csv", "\u{e64a}"),
+    (b"tsv", "\u{e64a}"),
+    (b"pdf", "\u{e67d}"),
+    (b"doc", "\u{e6a5}"),
+    (b"docx", "\u{e6a5}"),
+    (b"odt", "\u{e6a5}"),
+    (b"svg", "\u{e698}"),
+    (b"html", "\u{e60e}"),
+    (b"htm", "\u{e60e}"),
+    (b"css", "\u{e614}"),
+    (b"scss", "\u{e603}"),
+    (b"sass", "\u{e603}"),
+    (b"vue", "\u{e6a0}"),
+    (b"svelte", "\u{e697}"),
+    (b"hs", "\u{e61f}"),
+    (b"ex", "\u{e62d}"),
+    (b"exs", "\u{e62d}"),
+    (b"dart", "\u{e64c}"),
+    (b"scala", "\u{e68e}"),
+    (b"clj", "\u{e642}"),
+    (b"ml", "\u{e67a}"),
+    (b"jl", "\u{e624}"),
+    (b"nim", "\u{e677}"),
+    (b"cr", "\u{e62f}"),
+    (b"tf", "\u{e69a}"),
+    (b"xml", "\u{e619}"),
+    (b"tex", "\u{e69b}"),
 ];
 
 /// The extension of a base name, in bytes and without the dot; `None` if it
@@ -295,7 +402,25 @@ pub fn kind_of(name: &[u8]) -> Option<Kind> {
 
 /// The badge for a name in a style, or `None`: what a name alone says.
 pub fn badge_for(name: &[u8], style: Style) -> Option<&'static str> {
-    kind_of(name).map(|k| k.glyph(style))
+    let kind = kind_of(name);
+    // A name that means something on its own (`Cargo.toml`, `README.md`)
+    // keeps that meaning in Seti too: the language table only refines what
+    // the extension alone would have said. `Readme`/`Licence` can only come
+    // from the name, never from `BY_EXTENSION` (a test pins that).
+    let whole_name = matches!(kind, Some(Kind::Readme | Kind::Licence))
+        || SPECIAL.iter().any(|(n, _)| eq_ignore_ascii_case(n, name));
+    if style == Style::Seti && !whole_name {
+        let seti = extension_of(name).and_then(|ext| {
+            SETI_BY_EXTENSION
+                .iter()
+                .find(|(e, _)| eq_ignore_ascii_case(e, ext))
+                .map(|(_, g)| *g)
+        });
+        if seti.is_some() {
+            return seti;
+        }
+    }
+    kind.map(|k| k.glyph(style))
 }
 
 /// The icon for an entry: the whole plugin, as a pure function.
@@ -458,6 +583,73 @@ mod tests {
             );
             assert_eq!(g.width(), 1, "{k:?}");
         }
+    }
+
+    /// Every glyph the Seti style can answer — per kind and per language —
+    /// is ONE private-use codepoint, one cell wide, from `nf-seti` or (for
+    /// the two Seti lacks) `nf-fa`.
+    #[test]
+    fn every_seti_glyph_is_one_private_use_codepoint() {
+        use unicode_width::UnicodeWidthStr;
+        let per_kind = Kind::ALL.iter().map(|k| k.glyph(Style::Seti));
+        let per_language = SETI_BY_EXTENSION.iter().map(|(_, g)| *g);
+        for g in per_kind.chain(per_language) {
+            let mut chars = g.chars();
+            let c = chars.next().expect("a glyph") as u32;
+            assert!(chars.next().is_none(), "{g:?}: one codepoint");
+            assert!(
+                (0xE5FA..=0xE6B7).contains(&c) || (0xF000..=0xF2E0).contains(&c),
+                "U+{c:04X} is outside nf-seti / nf-fa"
+            );
+            assert_eq!(g.width(), 1, "U+{c:04X}");
+        }
+    }
+
+    /// The language table never offers an icon the others leave blank, and
+    /// lists each extension once, in lowercase.
+    #[test]
+    fn the_seti_table_refines_known_extensions_only() {
+        for (i, (ext, _)) in SETI_BY_EXTENSION.iter().enumerate() {
+            assert!(
+                BY_EXTENSION.iter().any(|(e, _)| e == ext),
+                "{}: not in BY_EXTENSION",
+                String::from_utf8_lossy(ext)
+            );
+            assert!(!ext.iter().any(u8::is_ascii_uppercase));
+            assert!(
+                !SETI_BY_EXTENSION[i + 1..].iter().any(|(e, _)| e == ext),
+                "{}: listed twice",
+                String::from_utf8_lossy(ext)
+            );
+        }
+    }
+
+    /// `badge_for` reads `Readme`/`Licence` as "the whole name spoke": true
+    /// only while no extension maps to them.
+    #[test]
+    fn no_extension_means_readme_or_licence() {
+        assert!(
+            !BY_EXTENSION
+                .iter()
+                .any(|(_, k)| matches!(k, Kind::Readme | Kind::Licence))
+        );
+    }
+
+    #[test]
+    fn seti_tells_languages_apart_and_keeps_special_names() {
+        let py = badge_for(b"main.py", Style::Seti);
+        let go = badge_for(b"main.go", Style::Seti);
+        assert_ne!(py, go, "one glyph per language");
+        assert_eq!(
+            badge_for(b"main.py", Style::Nerd),
+            badge_for(b"main.go", Style::Nerd),
+            "while Nerd has one per class"
+        );
+        assert_eq!(badge_for(b"README.md", Style::Seti), Some("\u{e66a}"));
+        assert_eq!(badge_for(b"Cargo.toml", Style::Seti), Some("\u{e68b}"));
+        assert_eq!(badge_for(b"PAGE.HTML", Style::Seti), Some("\u{e60e}"));
+        assert_eq!(badge_for(b"notes.txt", Style::Seti), Some("\u{e64e}"));
+        assert_eq!(icon_for(b"src", Class::Dir, Style::Seti), Some("\u{e613}"));
     }
 
     #[test]

@@ -12,9 +12,10 @@ It decides from the name and from what the listing says the entry is. It
 never opens the file and never learns where you are.
 
 The `style` setting picks the glyph set: `emoji` (the default), `ascii` for
-terminals whose font has no emoji, or `nerd` for one-cell Nerd Font glyphs —
-the window carries the ones it needs, a terminal needs a Nerd-patched font
-or it paints a box.
+terminals whose font has no emoji, `nerd` for one-cell Nerd Font glyphs, or
+`seti` for the Seti icons Visual Studio Code shows — one per language, so a
+Python file and a Go file look different. The window carries the glyphs of
+both; a terminal needs a Nerd-patched font or it paints a box.
 
 Two more settings shape the column: `dir-icon` is your own glyph for plain
 folders (folders whose name means more, like `.git`, keep theirs), and

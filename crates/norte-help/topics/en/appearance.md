@@ -105,9 +105,14 @@ desktop prefers a light or a dark scheme; `theme` covers whichever is not
 set. A theme can ask for `backdrop = "blur"` under `[effects]` to blur what
 lies behind a dialog; the terminal ignores that block.
 
+A theme of your own is a file in `themes/` under the configuration
+directory, offered by name wherever a theme is chosen. `norte theme import`
+makes one from a Visual Studio Code colour theme.
+
 Every row shows a mark checkbox on hover; clicking it toggles the mark
 without Ctrl. The `file-icons` extension can paint one-cell Nerd Font
-glyphs (`style = "nerd"`): the window bundles the glyphs it needs, a
+glyphs (`style = "nerd"`), or Visual Studio Code's Seti icons, one per
+language (`style = "seti"`): the window bundles the glyphs it needs, a
 terminal needs a Nerd-patched font.
 
 When the viewer has no picture of its own — a photo too big for its cap, a

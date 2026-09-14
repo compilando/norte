@@ -1564,9 +1564,12 @@ fn clic_en_una_fila_del_gestor_la_elige_y_repetirlo_abre_sus_ajustes() {
 /// de lo pintado: el ratón encuentra «[Apagar]» donde el frame lo puso.
 #[test]
 fn los_botones_de_la_ficha_disparan_el_comando_de_su_tecla() {
+    // Las etiquetas de abajo son las de `en.ftl`, así que el idioma se FIJA
+    // antes de pintar: sin esto el test lee el `LANG` de quien lo corre y en
+    // una máquina en español busca «[Disable]» donde se pintó «[Apagar]».
+    // Mismo patrón que `render.rs`; nextest da un proceso por test.
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
     let (mut app, lineas) = app_con_gestor(100, 24);
-    // Los tests de este fichero pintan en inglés (el locale por defecto sin
-    // `[ui] lang`), así que las etiquetas son las de `en.ftl`.
     for (etiqueta, cmd) in [
         ("[Disable]", "dialog.toggle-enabled"),
         ("[Revoke]", "dialog.approve"),

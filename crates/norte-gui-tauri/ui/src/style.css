@@ -706,15 +706,15 @@ body {
   font-family: "Symbols Nerd Font Mono", var(--font-mono);
 }
 
-/* Symbols Nerd Font Mono (MIT), RECORTADA a los dieciocho glifos que el
-   plugin `file-icons` usa en su estilo `nerd` (3,8 KB en woff2, frente a los
-   2,6 MB de la fuente entera). Cómo se regenera está en
+/* Symbols Nerd Font Mono (MIT), RECORTADA a los glifos que el plugin
+   `file-icons` usa en sus estilos `nerd` y `seti` (unos KB en woff2, frente a
+   los 2,6 MB de la fuente entera). Cómo se regenera está en
    `ui/src/fonts/README.md`; añadir un glifo al plugin es añadirlo ahí. */
 @font-face {
   font-family: "Symbols Nerd Font Mono";
   src: url("./fonts/symbols-nerd-mono-subset.woff2") format("woff2");
   font-display: swap;
-  unicode-range: U+E700-E7C5, U+F000-F2E0;
+  unicode-range: U+E5FA-E6B7, U+E700-E7C5, U+F000-F2E0;
 }
 
 .empty,

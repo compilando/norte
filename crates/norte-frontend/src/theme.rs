@@ -106,7 +106,18 @@ pub struct UserTheme {
 /// Un NOMBRE, no una ruta: sin separadores ni `..`, sin empezar por punto y
 /// en un alfabeto que se puede escribir tal cual en `[ui] theme`. Lo que no
 /// pase se trata como ruta, que es lo que era antes de que hubiera nombres.
-fn es_nombre_de_tema(s: &str) -> bool {
+///
+/// Pública para `norte theme import`, que tiene que rehusar escribir un
+/// fichero que el resolutor nunca buscaría por nombre.
+///
+/// ```
+/// use norte_frontend::theme::is_theme_name;
+/// assert!(is_theme_name("one-dark-pro"));
+/// assert!(!is_theme_name("../fuera"));
+/// assert!(!is_theme_name(".oculto"));
+/// ```
+#[must_use]
+pub fn is_theme_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
         && !s.starts_with('.')
@@ -148,7 +159,7 @@ pub fn load_user_themes(config_dir: &Path) -> Vec<UserTheme> {
                 return None;
             }
             let name = path.file_stem()?.to_str()?.to_owned();
-            if !es_nombre_de_tema(&name) || matches!(Theme::preset(&name), Ok(Some(_))) {
+            if !is_theme_name(&name) || matches!(Theme::preset(&name), Ok(Some(_))) {
                 return None;
             }
             let raw = std::fs::read_to_string(&path).ok()?;
@@ -235,7 +246,7 @@ pub fn resolve_theme_in(
         return Ok(theme);
     }
     if let Some(dir) = config_dir
-        && es_nombre_de_tema(spec)
+        && is_theme_name(spec)
     {
         let candidato = directorio_de_temas(dir).join(format!("{spec}.toml"));
         match std::fs::read_to_string(&candidato) {

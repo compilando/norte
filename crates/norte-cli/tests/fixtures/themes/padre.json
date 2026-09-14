@@ -1,0 +1,9 @@
+{
+	"name": "Padre",
+	"type": "dark",
+	"colors": {
+		"editor.background": "#000000",
+		"sideBar.background": "#0a1018",
+		"list.activeSelectionBackground": "#203040"
+	}
+}

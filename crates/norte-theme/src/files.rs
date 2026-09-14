@@ -31,6 +31,41 @@ pub enum FileKind {
     Regular,
 }
 
+impl FileKind {
+    /// Las clases que un tema puede colorear en `[files.kind]`, en el orden
+    /// en que se escriben. `Regular` no está: un fichero regular es el rol
+    /// `regular`, no una clase.
+    pub const ALL: &'static [FileKind] = &[
+        FileKind::Dir,
+        FileKind::Symlink,
+        FileKind::Executable,
+        FileKind::Fifo,
+        FileKind::Socket,
+        FileKind::BlockDevice,
+        FileKind::CharDevice,
+    ];
+
+    /// La clave kebab con la que se escribe en `[files.kind]`.
+    ///
+    /// ```
+    /// use norte_theme::FileKind;
+    /// assert_eq!(FileKind::BlockDevice.as_kebab(), "block-device");
+    /// ```
+    #[must_use]
+    pub const fn as_kebab(self) -> &'static str {
+        match self {
+            Self::Dir => "dir",
+            Self::Symlink => "symlink",
+            Self::Executable => "executable",
+            Self::Fifo => "fifo",
+            Self::Socket => "socket",
+            Self::BlockDevice => "block-device",
+            Self::CharDevice => "char-device",
+            Self::Regular => "regular",
+        }
+    }
+}
+
 /// Estilos por tipo de archivo. `[files.kind]` colorea por clase; `[files.ext]`
 /// por extensión (más específico, gana).
 #[derive(Debug, Clone, Default, Deserialize)]

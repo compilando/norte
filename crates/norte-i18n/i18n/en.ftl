@@ -307,6 +307,25 @@ cli-enqueue-mkdir = could not enqueue the mkdir
 # does, because this one is a closed set, not a corpus the user could plausibly
 # have misspelled a new page against.
 cli-shell-init-unknown = unknown shell "{ $shell }" — supported: bash, zsh, fish
+# `norte theme import` (spec 2026-09-11, F5).
+cli-theme-imported = imported theme { $name } → { $path } (over { $base })
+cli-theme-ignored = warning: { $count } entries are not colours and were skipped: { $ids }
+cli-theme-used = [ui] theme = "{ $name }" written to { $path }
+cli-theme-err-no-config-dir = cannot find the user configuration directory
+cli-theme-err-name-invalid = not a valid theme name: use letters, digits, -, _ and ., not starting with a dot (--name)
+cli-theme-err-name-preset = "{ $name }" is a bundled preset, which always wins over a file of that name: choose another --name
+cli-theme-err-exists = { $path } already exists: pass --force to replace it
+cli-theme-err-depth = the include chain has more than { $max } includes
+cli-theme-err-cycle = the include chain loops back to { $path }
+cli-theme-err-read = cannot read theme file { $path }
+cli-theme-err-too-big = { $path } is larger than { $max } MiB: not a theme
+cli-theme-err-parse = { $path } is not a VSCode theme
+cli-theme-err-binary = { $path } is not text in an encoding norte can tell: if it is UTF-16 without a byte-order mark, save it as UTF-8
+cli-theme-err-use = the theme was imported, but [ui] theme could not be written
+cli-theme-header-imported = Imported from a VS Code theme by `norte theme import`.
+cli-theme-header-source = Source: { $file }
+cli-theme-header-base = Base: { $base } — whatever the theme does not define comes from that preset.
+cli-theme-header-ignored = Skipped, not colours: { $count }
 cli-list-failed = list failed
 cli-entry-unreadable = unreadable entry
 cli-serialize-failed = could not serialize

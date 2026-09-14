@@ -38,7 +38,35 @@ que la ejecución cambió respecto a lo planeado, para quien retome esto:
   no repintaba las filas.
 - **`just gui-test` es nuevo**: `just t norte-gui-tauri` no corría nada.
 
-Quedan las tareas 9–12 (importador) y el plan aparte de F4 (iconos).
+Tareas 9–12 (F5) cerradas el 2026-09-14 en `feat/theme-import`, ADR 0109.
+Lo que cambió respecto a lo planeado:
+
+- **La 10 fue antes que la 9**, en `main` (`5c974029`), y con otra forma:
+  `load_user_themes` + `theme_names` en vez de `available_themes`.
+- **El alfa se COMPONE sobre el fondo, no se descarta.** El plan decía
+  quitarlo; One Dark Pro trae 26 colores `#rrggbbaa` y su deslizador al 38 %
+  saldría opaco. Por eso `colors` es `HashMap<String, VsColor>`, no de `Color`.
+- **Un color inválido se ignora y se nombra**, no es `BadColor`: VSCode lo
+  ignora también, y un tema del marketplace con un valor raro debe importar.
+- **`MAPPING` tiene respaldos** (`editor.foreground` antes que `foreground`,
+  `editorError.foreground` antes que `errorForeground`): One Dark Pro no
+  define ni `foreground` ni `errorForeground`.
+- **`Theme::to_toml` es nuevo**: `Theme` solo deserializaba, y un serializador
+  genérico escribiría una sección por rol. Ida y vuelta testeada en cada preset.
+- **Los fixtures viven en `norte-cli/tests/fixtures/themes/`**, no en el corpus
+  de `norte-testkit`, que es de nombres hostiles.
+
+**F4, iconos de fichero: hecho el mismo día**, sin plan aparte porque salió
+pequeño. Nerd Fonts ya lleva el juego Seti (`nf-seti-*`, U+E5FA–E6B7, MIT),
+así que es un estilo `seti` más en `file-icons` sobre la MISMA fuente
+recortada: sin WIT bump, sin licencia nueva, sin segunda fuente.
+
+**F4, iconos del cromo (Codicons): sin empezar, y es una decisión de diseño,
+no una transcripción.** El cromo de la ventana hoy es solo texto (menús,
+pestañas, barra de paneles, toasts): no hay ningún sitio que pinte un icono
+al que cambiarle el juego. Añadirlos es decidir DÓNDE van, y Codicons es
+CC-BY-4.0, que pide una excepción acotada con atribución (los glifos `cod-*`
+de Nerd Fonts siguen siendo CC-BY aunque viajen en una fuente MIT).
 
 ## Global Constraints
 
