@@ -430,6 +430,12 @@ async fn main() -> Result<()> {
     let (tty_out, mut mouse_out) = open_terminal_or_exit()?;
     let mut terminal = tty::init(tty_out)?;
     let mut capture = arm_mouse(&cfg, &mut app, &mut mouse_out);
+    // La pregunta de soporte del protocolo de kitty, UNA vez y aquí: con raw
+    // mode ya puesto y antes de que `run` levante el lector de eventos, que se
+    // quedaría el lock de crossterm y la dejaría contestando «no» tras dos
+    // segundos. Se pregunta aunque la clave esté apagada, para que encenderla
+    // desde los ajustes funcione sin reiniciar.
+    let _ = norte_tui::alt_menu::consultar_soporte();
     // `[ui] alt_menu`: un terminal sin el protocolo no recibe nada, y un fallo
     // al escribir deja la TUI sin el gesto, no sin arrancar.
     if let Err(e) = norte_tui::alt_menu::set(

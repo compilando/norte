@@ -15,8 +15,9 @@ independently through `PROTOCOL_VERSION`.
   the keyboard as it does for F9. In the terminal behind `[ui] alt_menu`,
   off by default: a lone modifier can only be reported under the kitty
   keyboard protocol (kitty, foot, WezTerm, Ghostty — not tmux, xterm or
-  GNOME Terminal), and in that mode a letter typed with a dead key can
-  arrive without its accent.
+  GNOME Terminal), and in that mode the terminal sends keys rather than
+  text: a letter typed with a dead key (é) or a symbol typed with AltGr
+  (@, #) arrives as its base key.
 - **Column widths by dragging in the terminal too.** Drag the separator
   that opens a column in the header; the width follows the pointer and is
   written to `[ui.columns]` when you let go, the same key the window writes.

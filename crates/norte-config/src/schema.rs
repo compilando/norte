@@ -272,8 +272,9 @@ pub struct UiSection {
     ///
     /// Off by default because the terminal can only report a lone modifier
     /// under the kitty keyboard protocol's "report all keys" mode, and in
-    /// that mode a character composed with a dead key (`é` on a Spanish
-    /// layout) arrives as its base key rather than as text. Only terminals
+    /// that mode the terminal sends keys, not text: a character composed with
+    /// a dead key (`é`) or typed with `AltGr` (`@`, `#` on a Spanish layout)
+    /// arrives as its base key, so `a@b` can become `a2b`. Only terminals
     /// that implement the protocol honour it (kitty, foot, `WezTerm`, Ghostty);
     /// tmux, xterm and VTE-based terminals cannot, and there it does
     /// nothing. The GUI ignores this key: a window always has the gesture.

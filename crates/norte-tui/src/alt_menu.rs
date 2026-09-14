@@ -9,8 +9,11 @@
 //!
 //! Por qué va apagada por defecto: en ese modo el terminal manda la TECLA y
 //! no el texto, y crossterm no lee el texto asociado (flag 16). Una letra
-//! compuesta con tecla muerta —la `é` de un teclado español— llega como su
-//! tecla base. Quien la encienda lo hace sabiendo eso.
+//! compuesta con tecla muerta —la `é` de un teclado español— o un símbolo
+//! escrito con `AltGr` —`@`, `#`, `[`— llega como su tecla base: en un
+//! renombrado, `a@b` puede quedar `a2b`. El flag 4 solo arregla Shift, porque
+//! `AltGr` no es un modificador del protocolo. Quien la encienda lo hace
+//! sabiendo eso.
 //!
 //! Dos piezas, y ninguna decide qué hace el menú:
 //! - [`set`] pide o retira el protocolo. Su estado es de PROCESO, como el raw
@@ -18,7 +21,8 @@
 //!   nadie tenga que pasarles nada.
 //! - [`AltSolo`] reconoce el gesto sobre los eventos que llegan.
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::event::{
@@ -60,40 +64,88 @@ pub fn set(want: bool, soportado: impl FnOnce() -> bool, out: &mut impl Write) -
             return Ok(());
         }
         crossterm::execute!(out, PushKeyboardEnhancementFlags(FLAGS))?;
-    } else {
+    } else if !CEDIDO.swap(false, Ordering::Relaxed) {
+        // Cedido ya está fuera de la pila: quitarlo otra vez se llevaría una
+        // entrada que es del shell.
         crossterm::execute!(out, PopKeyboardEnhancementFlags)?;
     }
     PEDIDO.store(want, Ordering::Relaxed);
     Ok(())
 }
 
-/// Pregunta al terminal de verdad. Un error se lee como «no»: una clave de
-/// presentación no puede tumbar el arranque.
+/// Pedido, pero retirado mientras otro programa tiene la terminal. Es lo que
+/// empareja [`ceder`] con [`recuperar`]: sin esto, un fallo ANTES de ceder
+/// dejaba a `recuperar` apilando una segunda entrada que la salida no quita.
+static CEDIDO: AtomicBool = AtomicBool::new(false);
+
+/// Lo que contestó el terminal, preguntado UNA vez.
+static SOPORTE: OnceLock<bool> = OnceLock::new();
+
+/// Pregunta al terminal si habla el protocolo, y guarda la respuesta.
+///
+/// Se llama al ARRANCAR, antes de que el bucle levante su lector de eventos,
+/// y en ningún otro momento. Dos motivos, y los dos cuestan caro:
+/// - con el lector vivo, ese hilo tiene el lock de crossterm; la pregunta
+///   espera dos segundos, se rinde y contesta «no». Una recarga de config
+///   congelaba la TUI dos segundos y dejaba el gesto apagado.
+/// - crossterm manda la pregunta por STDOUT si no puede escribir en la
+///   terminal de control, y bajo `--pick` stdout es la tubería de datos de
+///   quien llama. Sin un terminal en stdout no se pregunta: se da por «no».
+///
+/// Un error se lee como «no»: una clave de presentación no tumba el arranque.
+pub fn consultar_soporte() -> bool {
+    *SOPORTE.get_or_init(|| {
+        io::stdout().is_terminal()
+            && crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
+    })
+}
+
+/// La respuesta de [`consultar_soporte`], sin preguntar. Si no se preguntó,
+/// «no».
 #[must_use]
 pub fn soportado() -> bool {
-    crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
+    SOPORTE.get().copied().unwrap_or(false)
 }
 
 /// Devuelve el terminal a la codificación de siempre SIN olvidar que estaba
 /// pedido: para ceder la terminal a un shell o a un editor, que no hablan
-/// este protocolo y recibirían escapes en vez de letras.
+/// este protocolo y recibirían escapes en vez de letras. Dos veces seguidas
+/// ceden una.
 ///
 /// # Errors
 /// La de escribir en `out`.
 pub fn ceder(out: &mut impl Write) -> io::Result<()> {
-    if PEDIDO.load(Ordering::Relaxed) {
+    if PEDIDO.load(Ordering::Relaxed) && !CEDIDO.swap(true, Ordering::Relaxed) {
         crossterm::execute!(out, PopKeyboardEnhancementFlags)?;
     }
     Ok(())
 }
 
-/// La pareja de [`ceder`]: al volver de una suspensión.
+/// La pareja de [`ceder`]: al volver de una suspensión. Solo apila lo que se
+/// cedió.
 ///
 /// # Errors
 /// La de escribir en `out`.
 pub fn recuperar(out: &mut impl Write) -> io::Result<()> {
-    if PEDIDO.load(Ordering::Relaxed) {
+    if PEDIDO.load(Ordering::Relaxed) && CEDIDO.swap(false, Ordering::Relaxed) {
         crossterm::execute!(out, PushKeyboardEnhancementFlags(FLAGS))?;
+    }
+    Ok(())
+}
+
+/// Lo retira desde el hook de pánico, OLVIDANDO que estaba pedido.
+///
+/// Un pánico dentro de una tarea de tokio corre el hook y el proceso sigue
+/// vivo; al salir, `tty::restore` quitaría el protocolo otra vez, ya fuera de
+/// la pantalla alternativa, y se llevaría una entrada de la pila del shell.
+///
+/// # Errors
+/// La de escribir en `out`.
+pub fn soltar_en_panico(out: &mut impl Write) -> io::Result<()> {
+    let pedido = PEDIDO.swap(false, Ordering::Relaxed);
+    let cedido = CEDIDO.swap(false, Ordering::Relaxed);
+    if pedido && !cedido {
+        crossterm::execute!(out, PopKeyboardEnhancementFlags)?;
     }
     Ok(())
 }
@@ -279,9 +331,16 @@ mod tests {
         set(true, || panic!("no vuelve a preguntar"), &mut out).expect("escribe");
         assert!(out.is_empty(), "idempotente");
 
+        // Ceder y recuperar van EMPAREJADOS: dos veces cada uno es uno.
+        ceder(&mut out).expect("escribe");
         ceder(&mut out).expect("escribe");
         recuperar(&mut out).expect("escribe");
-        assert_eq!(String::from_utf8_lossy(&out), "\x1b[<1u\x1b[>15u");
+        recuperar(&mut out).expect("escribe");
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "\x1b[<1u\x1b[>15u",
+            "un pop y un push"
+        );
         out.clear();
 
         set(false, || true, &mut out).expect("escribe");
@@ -289,5 +348,21 @@ mod tests {
         out.clear();
         ceder(&mut out).expect("escribe");
         assert!(out.is_empty(), "apagado no hay nada que ceder");
+
+        // Apagar mientras está CEDIDO no quita nada: ya está fuera de la pila.
+        set(true, || true, &mut out).expect("escribe");
+        ceder(&mut out).expect("escribe");
+        out.clear();
+        set(false, || true, &mut out).expect("escribe");
+        assert!(out.is_empty(), "cedido no se quita dos veces");
+        recuperar(&mut out).expect("escribe");
+        assert!(out.is_empty(), "apagado no se recupera");
+
+        // Tras un pánico, la salida no vuelve a quitarlo.
+        set(true, || true, &mut out).expect("escribe");
+        out.clear();
+        soltar_en_panico(&mut out).expect("escribe");
+        set(false, || true, &mut out).expect("escribe");
+        assert_eq!(String::from_utf8_lossy(&out), "\x1b[<1u", "un solo pop");
     }
 }

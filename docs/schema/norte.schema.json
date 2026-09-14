@@ -421,7 +421,7 @@
       "properties": {
         "alt_menu": {
           "default": null,
-          "description": "Whether pressing and releasing Alt on its own opens the menu bar in\nthe TUI. Absent = `false`.\n\nOff by default because the terminal can only report a lone modifier\nunder the kitty keyboard protocol's \"report all keys\" mode, and in\nthat mode a character composed with a dead key (`é` on a Spanish\nlayout) arrives as its base key rather than as text. Only terminals\nthat implement the protocol honour it (kitty, foot, `WezTerm`, Ghostty);\ntmux, xterm and VTE-based terminals cannot, and there it does\nnothing. The GUI ignores this key: a window always has the gesture.",
+          "description": "Whether pressing and releasing Alt on its own opens the menu bar in\nthe TUI. Absent = `false`.\n\nOff by default because the terminal can only report a lone modifier\nunder the kitty keyboard protocol's \"report all keys\" mode, and in\nthat mode the terminal sends keys, not text: a character composed with\na dead key (`é`) or typed with `AltGr` (`@`, `#` on a Spanish layout)\narrives as its base key, so `a@b` can become `a2b`. Only terminals\nthat implement the protocol honour it (kitty, foot, `WezTerm`, Ghostty);\ntmux, xterm and VTE-based terminals cannot, and there it does\nnothing. The GUI ignores this key: a window always has the gesture.",
           "type": [
             "boolean",
             "null"

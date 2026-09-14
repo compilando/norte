@@ -918,8 +918,10 @@ pub async fn run(
                     tracing::warn!(error = %e, "no se pudo cambiar la captura de ratón");
                     app.message = Some(t("msg-mouse-capture-failed"));
                 }
-                // `[ui] alt_menu` en caliente, con la misma exención. La
-                // pregunta al terminal solo se hace al ENCENDER.
+                // `[ui] alt_menu` en caliente, con la misma exención. NO se
+                // pregunta al terminal: se lee lo que contestó al arrancar
+                // (`alt_menu::consultar_soporte`), porque con el lector de
+                // eventos vivo la pregunta bloquea dos segundos y dice «no».
                 if let Err(e) = crate::alt_menu::set(
                     cfg.common.ui_alt_menu.unwrap_or(false),
                     crate::alt_menu::soportado,
@@ -1008,6 +1010,10 @@ pub async fn run(
                     // solo alimenta el gesto. Con el menú abierto lo pliega;
                     // con otro overlay delante no hace nada, como F9 allí.
                     if alt_solo.tecla(&key) && (app.menu.is_some() || !mouse::overlay_open(app)) {
+                        // Como F9 por `on_key`: una secuencia a medias (`g`…)
+                        // se abandona, o la siguiente tecla tras cerrar el
+                        // menú la completaría.
+                        resolver.reset();
                         app.toggle_menu();
                     }
                 } else if let Event::Key(key) = event

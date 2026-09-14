@@ -234,6 +234,26 @@ fn un_clic_en_el_borde_de_una_columna_no_guarda_nada() {
     assert_eq!(ancho_de(&app, &id), ancho);
 }
 
+/// Agarrar la celda de ANTES del separador no hace saltar el ancho al primer
+/// movimiento: se mide contra donde se agarró, no contra el borde.
+#[test]
+fn agarrar_antes_del_separador_no_salta_una_celda() {
+    let dir = vp("file:///casa");
+    let mut app = App::new(
+        Pane::new(dir.clone(), entradas(&dir, 3)),
+        Pane::new(dir.clone(), entradas(&dir, 3)),
+    );
+    let _ = pintar_en(&mut app, 120, H);
+    let (borde, cabecera, id, ancho) = borde_de_la_segunda_columna(&app);
+    mouse::handle(&mut app, ev(ABAJO, borde - 1, cabecera));
+    mouse::handle(&mut app, ev(ARRASTRE, borde - 3, cabecera));
+    assert_eq!(
+        ancho_de(&app, &id),
+        ancho + 2,
+        "dos celdas a la izquierda, dos más"
+    );
+}
+
 /// Botón izquierdo abajo.
 const ABAJO: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
 /// Botón izquierdo arriba.

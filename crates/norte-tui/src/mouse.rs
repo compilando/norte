@@ -342,10 +342,10 @@ impl MouseState {
     fn invalidate(&mut self) {
         self.drag.cancel();
         self.last_click = None;
-        // Un arrastre de columna sobre un listado que ya no es el que se
-        // agarró movería el ancho desde un borde que no está donde el lector
-        // lo ve. Lo aplicado se queda, como las marcas de un barrido.
-        self.columna = None;
+        // El arrastre de COLUMNA no se suelta aquí: sus bordes no dependen de
+        // qué filas hay, y un listado que se rellena por páginas o un refresco
+        // del vigilante lo cortaban a medias — el ancho se veía en pantalla y
+        // no se guardaba nunca.
     }
 }
 
@@ -823,12 +823,24 @@ struct ColumnDrag {
     /// El id de la columna, con la forma que escribe `persist_column_width`
     /// y que usa la ventana (`ColumnId` en texto).
     column: String,
-    /// La celda donde TERMINA la columna. No se mueve durante el gesto: el
-    /// nombre, que es quien crece, absorbe la diferencia, así que el ancho es
-    /// la distancia del puntero a este borde.
-    fin: u16,
+    /// El ancho con que se agarró.
+    inicio: u16,
+    /// La celda donde se agarró. El final de la columna no se mueve durante
+    /// el gesto —el nombre, que es quien crece, absorbe la diferencia—, así
+    /// que el ancho es `inicio` más lo que el puntero se haya movido a la
+    /// izquierda desde AQUÍ. Medir contra el borde y no contra el agarre hacía
+    /// saltar una celda al primer movimiento a quien agarraba la celda de
+    /// antes del separador.
+    agarre: u16,
     /// Hubo movimiento. Sin él, soltar no es un ancho nuevo sino un clic.
     movido: bool,
+}
+
+impl ColumnDrag {
+    /// El ancho con el puntero en la celda `col`.
+    const fn ancho_en(&self, col: u16) -> u16 {
+        self.inicio.saturating_add(self.agarre).saturating_sub(col)
+    }
 }
 
 /// El borde de columna bajo `(col, row)`, si lo hay.
@@ -863,7 +875,8 @@ fn column_border_at(app: &App, col: u16, row: u16) -> Option<ColumnDrag> {
             if k > 0 && (col == x || col.saturating_add(1) == x) {
                 return Some(ColumnDrag {
                     column: id.to_string(),
-                    fin: x.saturating_add(*w),
+                    inicio: *w,
+                    agarre: col,
                     movido: false,
                 });
             }
@@ -886,13 +899,16 @@ fn column_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
             let agarre = column_border_at(app, ev.column, ev.row)?;
             app.mouse.drag.cancel();
             app.mouse.last_click = None;
+            // Pulsar la cabecera enfocaba el panel antes de que el borde fuera
+            // agarrable; que ahora sea un borde no le quita eso.
+            enfocar_lo_pulsado(app, ev.column, ev.row);
             app.mouse.columna = Some(agarre);
             Some(After::Nothing)
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             let agarre = app.mouse.columna.as_mut()?;
             agarre.movido = true;
-            let cells = agarre.fin.saturating_sub(ev.column);
+            let cells = agarre.ancho_en(ev.column);
             let column = agarre.column.clone();
             app.columns.apply_width(&column, cells);
             Some(After::Nothing)
@@ -904,7 +920,7 @@ fn column_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
             }
             let cells = app
                 .columns
-                .apply_width(&agarre.column, agarre.fin.saturating_sub(ev.column));
+                .apply_width(&agarre.column, agarre.ancho_en(ev.column));
             app.mouse.ancho_soltado = Some((agarre.column, cells));
             Some(After::ColumnWidth)
         }

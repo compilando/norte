@@ -100,16 +100,20 @@ pub fn restore(term: &mut Tui) -> io::Result<()> {
     // The kitty keyboard protocol (`[ui] alt_menu`) is a stack on the
     // terminal, not part of the alternate screen: leaving it pushed would
     // hand the user's shell escape codes instead of letters.
-    crate::alt_menu::set(false, || true, term.backend_mut())?;
+    //
+    // Every step runs even if an earlier one failed: a write error on the
+    // protocol must not leave the user in raw mode on the alternate screen.
+    // The first error is the one reported.
+    let protocolo = crate::alt_menu::set(false, || true, term.backend_mut());
     // Disabling raw mode first, same order as `ratatui::try_restore`: it has
     // more side effects than leaving the alternate screen buffer.
-    disable_raw_mode()?;
-    execute!(
+    let raw = disable_raw_mode();
+    let pantalla = execute!(
         term.backend_mut(),
         DisableBracketedPaste,
         LeaveAlternateScreen
-    )?;
-    Ok(())
+    );
+    protocolo.and(raw).and(pantalla)
 }
 
 /// Wraps whatever panic hook is already installed in one that restores the
@@ -123,7 +127,7 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
         if let Ok(mut out) = open_controlling_terminal() {
-            let _ = crate::alt_menu::ceder(&mut out);
+            let _ = crate::alt_menu::soltar_en_panico(&mut out);
             let _ = execute!(
                 out,
                 DisableBracketedPaste,
