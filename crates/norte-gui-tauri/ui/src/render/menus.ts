@@ -13,7 +13,7 @@ import type {
   TabGroupView,
   WhichKeyView,
 } from "../types";
-import { badge, colVar } from "./dom";
+import { badge, colVar, sinCambios } from "./dom";
 import type { SlotDom } from "./dom";
 
 /**
@@ -35,6 +35,9 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
     document.documentElement.style.setProperty("--panelbar-h", alto);
     this.panelBarHeight = alto;
     this.viewportSucio = true;
+  }
+  if (sinCambios(this.panelBarRoot, JSON.stringify(bar))) {
+    return;
   }
   if (!bar.bar) {
     this.panelBarRoot.replaceChildren();
@@ -106,6 +109,9 @@ export function paintKeyBar(this: Screen, bar: KeyBarView | null): void {
     doc.documentElement.style.setProperty("--keybar-h", alto);
     this.keyBarHeight = alto;
     this.viewportSucio = true;
+  }
+  if (sinCambios(raiz, JSON.stringify(bar))) {
+    return;
   }
   if (!visible) {
     raiz.replaceChildren();
@@ -214,6 +220,9 @@ export function paintMenu(this: Screen, menu: MenuView): void {
     document.documentElement.style.setProperty("--menubar-h", alto);
     this.menuBarHeight = alto;
     this.viewportSucio = true;
+  }
+  if (sinCambios(this.menuRoot, JSON.stringify(menu))) {
+    return;
   }
   if (!menu.bar && menu.open === null) {
     this.menuRoot.replaceChildren();
@@ -432,6 +441,9 @@ export function paintTabs(
   dom: SlotDom,
   grupo: TabGroupView | undefined,
 ): void {
+  if (sinCambios(dom.tabs, JSON.stringify(grupo ?? null))) {
+    return;
+  }
   if (grupo === undefined) {
     if (dom.tabs.dataset["open"] === "true") {
       dom.tabs.replaceChildren();
@@ -474,6 +486,19 @@ export function paintTabs(
  * La del nombre nunca: es la que crece.
  */
 export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): void {
+  if (sinCambios(dom.header, JSON.stringify(slot.columns))) {
+    // Las mismas columnas: los nodos y las variables de ancho ya están. Lo
+    // que NO se puede saltar es el descarte, que depende del ancho del hueco
+    // y no de las columnas — un hueco que se ensanchó recupera la columna que
+    // descartó de estrecho, y por eso se vuelve a decidir desde cero.
+    for (const c of slot.columns) {
+      if (c.id !== "name") {
+        dom.root.style.removeProperty(`${colVar(c.id)}-show`);
+      }
+    }
+    descartarLasQueNoCaben(dom, slot, this.cell().w);
+    return;
+  }
   const nodes = slot.columns.map((c) => {
     const el = document.createElement("span");
     el.className = c.id === "name" ? "col col-name" : "col";

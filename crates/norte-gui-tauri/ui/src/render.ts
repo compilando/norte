@@ -27,6 +27,7 @@ import {
   newRow,
   updateRow,
   badge,
+  sinCambios,
   emptyNode,
   errorNode,
   statusNodes,
@@ -879,6 +880,39 @@ export class Screen {
     // directo, una larga empujaba fuera de la vista todo lo que viniera
     // detrás —el △ de hostil y el aviso de entradas omitidas— y desaparecían
     // en silencio, que es justo lo contrario de lo que existen para hacer.
+    // El título se rehace solo si cambió lo que dice. El aviso de «esperando»
+    // es su último hijo y va aparte (más abajo): tiene su propio umbral y un
+    // nodo que no se recrea.
+    const firmaTitulo = JSON.stringify([
+      slot.path_display,
+      slot.path_segments ?? null,
+      slot.path_hostile,
+      slot.generation,
+      slot.filling_note ?? "",
+      slot.skipped_note,
+      slot.names_note ?? "",
+      slot.pruned_note ?? "",
+      slot.hidden_note,
+      slot.marked_note ?? "",
+    ]);
+    if (!sinCambios(dom.title, firmaTitulo)) {
+      this.paintBrowserTitle(dom, slot);
+    }
+    dom.root.setAttribute("aria-label", slot.path_display);
+    dom.generation = slot.generation;
+    if (
+      !sinCambios(
+        dom.footer,
+        JSON.stringify([slot.footer ?? "", slot.used_ratio ?? null]),
+      )
+    ) {
+      this.paintBrowserFooter(dom, slot);
+    }
+    this.paintBrowserRest(dom, slot, cell);
+  }
+
+  /** La ruta con sus migas y los avisos del listado, en el título del hueco. */
+  paintBrowserTitle(dom: SlotDom, slot: BrowserSlotView): void {
     const ruta = document.createElement("span");
     ruta.className = "title-path";
     const migas = slot.path_segments ?? [];
@@ -960,8 +994,11 @@ export class Screen {
       nota.textContent = texto;
       dom.title.append(nota);
     }
-    dom.root.setAttribute("aria-label", slot.path_display);
-    dom.generation = slot.generation;
+    dom.title.append(dom.busy);
+  }
+
+  /** El pie del hueco: cuentas y el indicador de espacio. */
+  paintBrowserFooter(dom: SlotDom, slot: BrowserSlotView): void {
     // El pie (puente 63): vacío = apagado, y entonces no ocupa fila.
     const pie = slot.footer ?? "";
     dom.footer.textContent = pie;
@@ -983,7 +1020,14 @@ export class Screen {
       gauge.append(lleno);
       dom.footer.append(gauge);
     }
+  }
 
+  /** La cabecera de columnas, el estado del listado y las filas. */
+  paintBrowserRest(
+    dom: SlotDom,
+    slot: BrowserSlotView,
+    cell: { w: number; h: number },
+  ): void {
     this.paintHeader(dom, slot);
 
     const total = slot.total_rows ?? slot.rows.length;
@@ -1034,7 +1078,6 @@ export class Screen {
         }
       }
     }
-    dom.title.append(dom.busy);
 
     if (slot.state.state === "error") {
       // Con un REINTENTO, y no solo la frase. Un hueco en error es lo que
