@@ -940,3 +940,27 @@ gui-package: gui-build
 # Instala el paquete en un contenedor limpio y lo arranca.
 gui-smoke imagen="debian:trixie":
     ./scripts/gui-smoke.sh {{imagen}}
+
+# El paquete de la ventana compilado DENTRO de una base vieja (tarea 7.1):
+# `gui-package` enlaza contra la glibc de esta máquina, y su `.deb` no arranca
+# en una distribución de hace dos años. Construye el COMMIT (`git archive
+# HEAD`), no el árbol, en volúmenes Docker propios, y deja paquetes, sumas
+# SHA-256 y la glibc que pide cada binario en `target/baseline/<imagen>/`.
+gui-baseline imagen="ubuntu:22.04":
+    ./scripts/gui-baseline.sh {{imagen}}
+
+# Sube a la release del tag el paquete de la ventana de la base vieja. Como
+# `dist-publish`: el tag ya tiene que existir, esto publica, no etiqueta. Antes
+# de subir, comprueba las sumas y pasa `gui-smoke` sobre ESE `.deb` — lo que se
+# publica es lo que se ha probado, no lo que salió de `target/release`.
+gui-publish tag base="ubuntu-22.04":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="target/baseline/{{base}}"
+    [[ -d "$dir" ]] || { echo "no hay $dir — corre \`just gui-baseline\` primero" >&2; exit 1; }
+    (cd "$dir" && sha256sum -c ./*.sha256)
+    deb="$(find "$dir" -maxdepth 1 -name '*.deb' -print -quit)"
+    NORTE_DEB="$deb" ./scripts/gui-smoke.sh debian:bookworm
+    gh release upload {{tag}} \
+        $(find "$dir" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.sha256' \)) \
+        --clobber

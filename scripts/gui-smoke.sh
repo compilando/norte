@@ -14,11 +14,16 @@
 # No necesita CI. Necesita un contenedor.
 #
 #   scripts/gui-smoke.sh [imagen]
+#   NORTE_DEB=target/baseline/ubuntu-22.04/norte_….deb scripts/gui-smoke.sh [imagen]
+#   NORTE_RPM=target/baseline/ubuntu-22.04/norte-….rpm scripts/gui-smoke.sh fedora:41
 #
-# `imagen` es la base limpia (por defecto `debian:trixie`). Exige que
-# `just gui-package` se haya corrido antes: construirlo aquí dentro obligaría
-# a meter el toolchain entero en el contenedor, que es lo contrario de una
-# máquina limpia.
+# `imagen` es la base limpia (por defecto `debian:trixie`). Una imagen de la
+# familia Fedora (fedora, rockylinux, almalinux, centos) prueba el `.rpm` con
+# dnf; cualquier otra, el `.deb` con apt. Exige que `just gui-package` se haya
+# corrido antes: construirlo aquí dentro obligaría a meter el toolchain entero
+# en el contenedor, que es lo contrario de una máquina limpia. `NORTE_DEB` y
+# `NORTE_RPM` prueban otro paquete —el de `gui-baseline`, que es el que se
+# publicaría— en vez del de `target/release/bundle`.
 set -euo pipefail
 
 IMAGEN="${1:-debian:trixie}"
@@ -28,52 +33,60 @@ BUNDLE="$RAIZ/target/release/bundle"
 rojo() { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 verde() { printf '\033[32m%s\033[0m\n' "$*"; }
 
+case "${IMAGEN##*/}" in
+  fedora* | rockylinux* | almalinux* | centos*) FORMATO=rpm ;;
+  *) FORMATO=deb ;;
+esac
+
 # --- 1. El paquete existe -----------------------------------------------
-DEB="$(find "$BUNDLE/deb" -name '*.deb' -print -quit 2>/dev/null || true)"
-if [[ -z "$DEB" ]]; then
-  rojo "no hay .deb en $BUNDLE/deb — corre \`just gui-package\` primero"
+if [[ $FORMATO == deb ]]; then
+  ELEGIDO="${NORTE_DEB:-}"
+else
+  ELEGIDO="${NORTE_RPM:-}"
+fi
+if [[ -n "$ELEGIDO" ]]; then
+  PAQUETE="$(realpath "$ELEGIDO")"
+else
+  PAQUETE="$(find "$BUNDLE/$FORMATO" -name "*.$FORMATO" -print -quit 2>/dev/null || true)"
+fi
+if [[ -z "$PAQUETE" || ! -f "$PAQUETE" ]]; then
+  rojo "no hay .$FORMATO (${ELEGIDO:-$BUNDLE/$FORMATO}) — corre \`just gui-package\` primero"
   exit 1
 fi
-echo "paquete: $(basename "$DEB")"
+echo "paquete: $(basename "$PAQUETE") en $IMAGEN"
 
-# --- 2. Lleva los TRES binarios -----------------------------------------
+# --- 2. Se instala, lleva los TRES binarios, y funciona ------------------
+#
+# El gestor de paquetes resuelve las dependencias que el paquete DECLARA: si
+# el bundler se dejó una, aquí falla, que es justo lo que no se veía. El
+# contenedor no comparte nada con el host salvo el paquete.
 #
 # La ventana busca a `norte` como HERMANO de su propio ejecutable (#256). Si
 # el bundler se deja un sidecar, en una instalación limpia no hay daemon que
-# arrancar y la ventana no tiene a quién pedirle un listado.
-contenido="$(dpkg-deb -c "$DEB")"
-falta=0
-for b in norte-gui norte ntc; do
-  # Sin barra inicial: `dpkg-deb -c` lista `usr/bin/norte-gui`, no
-  # `./usr/bin/…`. El `$` final es lo que impide que `norte` case con
-  # `norte-gui`.
-  if ! grep -qE "(^| )usr/bin/$b\$" <<<"$contenido"; then
-    rojo "el .deb no lleva /usr/bin/$b"
-    falta=1
-  fi
-done
-[[ $falta -eq 0 ]] || exit 1
-verde "los tres binarios están en el paquete"
-
-# --- 3. Se instala y funciona en una máquina que no conoce este árbol ----
-#
-# `apt-get -f install` resuelve las dependencias que el paquete DECLARA: si
-# el bundler se dejó una, aquí falla, que es justo lo que no se veía. El
-# contenedor no comparte nada con el host salvo el .deb.
+# arrancar y la ventana no tiene a quién pedirle un listado. Por eso se
+# pregunta al gestor de quién es cada `/usr/bin/<b>`: que esté en el PATH no
+# basta, tiene que haberlo puesto ESTE paquete. Y se pregunta dentro, donde
+# está el gestor: el host no tiene por qué tener `rpm`.
 docker run --rm -i \
-  -v "$DEB:/tmp/norte.deb:ro" \
+  -v "$PAQUETE:/tmp/norte.$FORMATO:ro" \
+  -e FORMATO="$FORMATO" \
   -e DEBIAN_FRONTEND=noninteractive \
   "$IMAGEN" bash -euo pipefail -s <<'DENTRO'
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends xvfb ca-certificates >/dev/null
-
 echo "--- instalando"
-dpkg -i /tmp/norte.deb 2>/dev/null || apt-get -f install -y -qq
+if [[ $FORMATO == deb ]]; then
+  apt-get update -qq
+  apt-get install -y -qq --no-install-recommends xvfb ca-certificates >/dev/null
+  dpkg -i /tmp/norte.deb 2>/dev/null || apt-get -f install -y -qq
+  dueno() { dpkg -S "$1" >/dev/null 2>&1; }
+else
+  dnf install -y -q xorg-x11-server-Xvfb /tmp/norte.rpm >/dev/null
+  dueno() { rpm -qf "$1" >/dev/null 2>&1; }
+fi
 
 for b in norte-gui norte ntc; do
-  command -v "$b" >/dev/null || { echo "FALTA $b tras instalar" >&2; exit 1; }
+  dueno "/usr/bin/$b" || { echo "el paquete no instala /usr/bin/$b" >&2; exit 1; }
 done
-echo "los tres binarios están en el PATH"
+echo "los tres binarios los pone el paquete"
 
 # El CLI arranca: si faltara una biblioteca del sistema, esto ya no enlaza.
 norte --version
