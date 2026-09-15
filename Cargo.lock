@@ -5065,7 +5065,7 @@ dependencies = [
 
 [[package]]
 name = "norte-ai"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "async-trait",
  "bitflags 2.13.0",
@@ -5082,7 +5082,7 @@ dependencies = [
 
 [[package]]
 name = "norte-cli"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -5110,7 +5110,7 @@ dependencies = [
 
 [[package]]
 name = "norte-client"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "base64 0.22.1",
  "futures",
@@ -5125,7 +5125,7 @@ dependencies = [
 
 [[package]]
 name = "norte-compare"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5146,7 +5146,7 @@ dependencies = [
 
 [[package]]
 name = "norte-config"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "log",
  "norte-proto",
@@ -5167,7 +5167,7 @@ dependencies = [
 
 [[package]]
 name = "norte-connect"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "age",
  "futures",
@@ -5200,7 +5200,7 @@ dependencies = [
 
 [[package]]
 name = "norte-core"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5257,7 +5257,7 @@ dependencies = [
 
 [[package]]
 name = "norte-encoding"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -5267,7 +5267,7 @@ dependencies = [
 
 [[package]]
 name = "norte-frontend"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "base64 0.22.1",
  "globset",
@@ -5298,7 +5298,7 @@ dependencies = [
 
 [[package]]
 name = "norte-gui-tauri"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "norte-client",
  "norte-config",
@@ -5326,7 +5326,7 @@ dependencies = [
 
 [[package]]
 name = "norte-help"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "norte-encoding",
  "norte-i18n",
@@ -5338,7 +5338,7 @@ dependencies = [
 
 [[package]]
 name = "norte-i18n"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "fluent 0.17.0",
  "fluent-syntax 0.12.0",
@@ -5347,7 +5347,7 @@ dependencies = [
 
 [[package]]
 name = "norte-index"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "norte-proto",
  "sqlx",
@@ -5359,7 +5359,7 @@ dependencies = [
 
 [[package]]
 name = "norte-mcp"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -5378,7 +5378,7 @@ dependencies = [
 
 [[package]]
 name = "norte-plugin-host"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "anyhow",
  "image",
@@ -5399,7 +5399,7 @@ dependencies = [
 
 [[package]]
 name = "norte-proto"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.0",
@@ -5413,7 +5413,7 @@ dependencies = [
 
 [[package]]
 name = "norte-sync"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "bytes",
  "futures",
@@ -5431,7 +5431,7 @@ dependencies = [
 
 [[package]]
 name = "norte-testkit"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5450,7 +5450,7 @@ dependencies = [
 
 [[package]]
 name = "norte-theme"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "proptest",
  "schemars 1.2.1",
@@ -5462,7 +5462,7 @@ dependencies = [
 
 [[package]]
 name = "norte-tui"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5504,7 +5504,7 @@ dependencies = [
 
 [[package]]
 name = "norte-ui-host"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "bytes",
  "futures",
@@ -5532,7 +5532,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5545,7 +5545,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs-archive"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5564,7 +5564,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs-local"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5587,7 +5587,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs-object"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5608,7 +5608,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs-rar"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5626,7 +5626,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs-sftp"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "async-trait",
  "bytes",

@@ -99,7 +99,7 @@ inherits = "release"
 lto = "thin"
 
 [workspace.package]
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 edition = "2024"
 rust-version = "1.94"
 repository = "https://github.com/compilando/norte"
@@ -107,31 +107,31 @@ authors = ["The norte Authors"]
 
 [workspace.dependencies]
 # Crates internos
-norte-proto = { path = "crates/norte-proto", version = "0.3.0-alpha.3" }
-norte-vfs = { path = "crates/norte-vfs", version = "0.3.0-alpha.3" }
-norte-vfs-local = { path = "crates/norte-vfs-local", version = "0.3.0-alpha.3" }
-norte-vfs-sftp = { path = "crates/norte-vfs-sftp", version = "0.3.0-alpha.3" }
-norte-vfs-object = { path = "crates/norte-vfs-object", version = "0.3.0-alpha.3" }
-norte-vfs-archive = { path = "crates/norte-vfs-archive", version = "0.3.0-alpha.3" }
-norte-vfs-rar = { path = "crates/norte-vfs-rar", version = "0.3.0-alpha.3" }
-norte-client = { path = "crates/norte-client", version = "0.3.0-alpha.3" }
-norte-connect = { path = "crates/norte-connect", version = "0.3.0-alpha.3" }
-norte-testkit = { path = "crates/norte-testkit", version = "0.3.0-alpha.3" }
-norte-core = { path = "crates/norte-core", version = "0.3.0-alpha.3" }
-norte-index = { path = "crates/norte-index", version = "0.3.0-alpha.3" }
-norte-compare = { path = "crates/norte-compare", version = "0.3.0-alpha.3" }
-norte-sync = { path = "crates/norte-sync", version = "0.3.0-alpha.3" }
-norte-tui = { path = "crates/norte-tui", version = "0.3.0-alpha.3" }
-norte-ui-host = { path = "crates/norte-ui-host", version = "0.3.0-alpha.3" }
-norte-config = { path = "crates/norte-config", version = "0.3.0-alpha.3" }
-norte-frontend = { path = "crates/norte-frontend", version = "0.3.0-alpha.3" }
-norte-help = { path = "crates/norte-help", version = "0.3.0-alpha.3" }
-norte-encoding = { path = "crates/norte-encoding", version = "0.3.0-alpha.3" }
-norte-i18n = { path = "crates/norte-i18n", version = "0.3.0-alpha.3" }
-norte-theme = { path = "crates/norte-theme", version = "0.3.0-alpha.3" }
-norte-plugin-host = { path = "crates/norte-plugin-host", version = "0.3.0-alpha.3" }
-norte-mcp = { path = "crates/norte-mcp", version = "0.3.0-alpha.3" }
-norte-ai = { path = "crates/norte-ai", version = "0.3.0-alpha.3" }
+norte-proto = { path = "crates/norte-proto", version = "0.3.0-alpha.4" }
+norte-vfs = { path = "crates/norte-vfs", version = "0.3.0-alpha.4" }
+norte-vfs-local = { path = "crates/norte-vfs-local", version = "0.3.0-alpha.4" }
+norte-vfs-sftp = { path = "crates/norte-vfs-sftp", version = "0.3.0-alpha.4" }
+norte-vfs-object = { path = "crates/norte-vfs-object", version = "0.3.0-alpha.4" }
+norte-vfs-archive = { path = "crates/norte-vfs-archive", version = "0.3.0-alpha.4" }
+norte-vfs-rar = { path = "crates/norte-vfs-rar", version = "0.3.0-alpha.4" }
+norte-client = { path = "crates/norte-client", version = "0.3.0-alpha.4" }
+norte-connect = { path = "crates/norte-connect", version = "0.3.0-alpha.4" }
+norte-testkit = { path = "crates/norte-testkit", version = "0.3.0-alpha.4" }
+norte-core = { path = "crates/norte-core", version = "0.3.0-alpha.4" }
+norte-index = { path = "crates/norte-index", version = "0.3.0-alpha.4" }
+norte-compare = { path = "crates/norte-compare", version = "0.3.0-alpha.4" }
+norte-sync = { path = "crates/norte-sync", version = "0.3.0-alpha.4" }
+norte-tui = { path = "crates/norte-tui", version = "0.3.0-alpha.4" }
+norte-ui-host = { path = "crates/norte-ui-host", version = "0.3.0-alpha.4" }
+norte-config = { path = "crates/norte-config", version = "0.3.0-alpha.4" }
+norte-frontend = { path = "crates/norte-frontend", version = "0.3.0-alpha.4" }
+norte-help = { path = "crates/norte-help", version = "0.3.0-alpha.4" }
+norte-encoding = { path = "crates/norte-encoding", version = "0.3.0-alpha.4" }
+norte-i18n = { path = "crates/norte-i18n", version = "0.3.0-alpha.4" }
+norte-theme = { path = "crates/norte-theme", version = "0.3.0-alpha.4" }
+norte-plugin-host = { path = "crates/norte-plugin-host", version = "0.3.0-alpha.4" }
+norte-mcp = { path = "crates/norte-mcp", version = "0.3.0-alpha.4" }
+norte-ai = { path = "crates/norte-ai", version = "0.3.0-alpha.4" }
 
 # Externos: versiones centralizadas; cada crate opta por las que necesita
 # con justificación en la PR que las introduce (regla 8 de CLAUDE.md).
