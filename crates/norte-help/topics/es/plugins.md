@@ -76,6 +76,10 @@ Un directorio puede llevar un `init.lua` —un script, no un ajuste— y norte n
 lo ejecutará hasta que tú lo digas. La pregunta sale la primera vez que
 aterrizas ahí, y contestarla es una tecla.
 
+Los scripts Lua solo se ejecutan en el frontend de terminal, `ntc`. La ventana
+no los ejecuta, y una tecla ligada a un comando `lua:` dice allí que no está
+disponible.
+
 La decisión se recuerda para **el contenido de ese fichero**, no para su ruta.
 Edita el script y se te vuelve a preguntar, porque aprobar un script no es un
 cheque en blanco para lo que ese nombre guarde más tarde. Lo que se evalúa son

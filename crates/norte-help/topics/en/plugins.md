@@ -77,6 +77,9 @@ A directory can carry an `init.lua` — a script, not a setting — and norte wi
 not run it until you say so. The question comes up the first time you land
 there, and answering it is one key.
 
+Lua scripts run in the terminal frontend, `ntc`, only. The window does not run
+them, and a key bound to a `lua:` command says there that it is not available.
+
 The decision is remembered for **that file's contents**, not for its path. Edit
 the script and you are asked again, because approving a script is not a blank
 cheque for whatever that name holds later. What gets evaluated is the bytes

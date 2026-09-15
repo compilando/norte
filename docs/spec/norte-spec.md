@@ -198,7 +198,9 @@ Embedded Lua provides user automation, programmable keybindings, and custom
 status behaviour. Scripts are user configuration, not third-party sandboxed
 software. Raw Lua `io` and `os` functions have the user's operating-system
 permissions; `norte.*` filesystem calls pass through the core, journal, and
-policy engine. Project-local scripts require explicit hash-based trust.
+policy engine. Project-local scripts require explicit hash-based trust. Lua
+runs in the terminal frontend only; the window does not host it and says so
+for a `lua:` key (ADR 0110).
 
 ### 7.3 External programs
 

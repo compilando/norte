@@ -108,6 +108,11 @@ pretending: a `lua:` binding is not available there.
   but not a replacement.
 - Negative: `mlua` and vendored Lua stay a structural TUI dependency, with the
   maintenance that implies, for a feature with no known user.
+- Neutral: `norte help` builds its own map from the bundled presets, without
+  `LUA_HOST`, so a user's `lua:` binding is `NotHere` there too. Nothing
+  visible changes today — the keys page prints `Here` and `NotHere` alike, and
+  no help topic names a `lua:` command in a `{{cmd:…}}` mark — but a topic
+  that ever did would find that mark unresolved.
 - Follow-up (code, separate change): point 2 in `norte-frontend` with a test
   in both directions, and point 3 in `crates/norte-help/topics/{en,es}` with
   the `norte-cli` help golden regenerated.

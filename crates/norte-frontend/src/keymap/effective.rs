@@ -108,6 +108,20 @@ pub struct Effective {
     discarded_lua_bindings: usize,
 }
 
+/// The entry a frontend adds to its `known_commands` to say it HOSTS Lua
+/// (ADR 0110). Without it, a `lua:<name>` binding still validates — the name
+/// charset is shared — but resolves as [`Availability::NotHere`]: a frontend
+/// that cannot run a script must not advertise the key that runs it.
+///
+/// Not a valid Lua command name (`*` fails [`valid_lua_name`]), so no binding
+/// can ever collide with it.
+///
+/// ```
+/// use norte_frontend::keymap::{LUA_HOST, valid_lua_name};
+/// assert!(!valid_lua_name(LUA_HOST.trim_start_matches("lua:")));
+/// ```
+pub const LUA_HOST: &str = "lua:*";
+
 /// Charset de un nombre de comando Lua (`lua:<nombre>`): `[a-z0-9._-]{1,64}`.
 /// FUENTE ÚNICA (#88): el motor lo usa para validar el binding `lua:<nombre>`,
 /// y el runtime Lua de un frontend con host (la TUI, `norte.command`) lo reusa
@@ -158,14 +172,20 @@ fn check_binding(raw: &RawBinding, known_commands: &[&str]) -> Result<Binding, K
     // (runtime), así que jamás está en el catálogo — solo se valida el
     // charset del nombre (la MISMA `valid_lua_name`, una sola fuente). Un
     // comando lua no registrado al invocar NO es error de keymap: el frontend
-    // con host avisa en runtime.
+    // con host avisa en runtime. Un frontend SIN host (la ventana, ADR 0110)
+    // no declara `LUA_HOST`, y la tecla se dice no disponible aquí en vez de
+    // anunciarse y no hacer nada.
     let avail = if let Some(lua_name) = raw.run.strip_prefix("lua:") {
         if !valid_lua_name(lua_name) {
             return Err(KeymapError::UnknownCommand {
                 run: raw.run.clone(),
             });
         }
-        Availability::Here
+        if known_commands.contains(&LUA_HOST) {
+            Availability::Here
+        } else {
+            Availability::NotHere
+        }
     } else if known_commands.contains(&raw.run.as_str()) {
         Availability::Here
     } else {

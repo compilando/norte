@@ -24,7 +24,7 @@ pub use catalogue::{CATALOGUE, CommandDef, Status};
 pub use chord::{
     Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_mod_key, unpaint_chord,
 };
-pub use effective::{Availability, Continuation, Effective, valid_lua_name};
+pub use effective::{Availability, Continuation, Effective, LUA_HOST, valid_lua_name};
 // Not public API: the spelling a sequence has IN THE FILE, which the keyboard
 // sheet paints (after `paint_chord`) and the shortcut editor hands to the
 // `keymap.toml` writer. Two copies of it is how the writer and the loader
@@ -890,11 +890,27 @@ mod tests {
             [pane]
             keymap = [{ on = ["x"], run = "lua:mi-comando.v2" }]
         "#;
-        let mut r = Resolver::new(eff(preset, None).expect("lua: con nombre válido pasa"));
+        let kf = parse_keymap(preset).unwrap();
+        let con_host =
+            Effective::build(&kf, None, &[LUA_HOST]).expect("lua: con nombre válido pasa");
+        let mut r = Resolver::new(con_host);
         assert_eq!(
             r.push(parse_chord("x").unwrap()),
             run("lua:mi-comando.v2"),
             "el binding resuelve al comando lua: completo"
+        );
+
+        // ADR 0110: el mismo binding en un frontend SIN host de Lua valida
+        // igual, pero no se anuncia como ejecutable.
+        let sin_host = eff(preset, None).expect("sin host también carga");
+        let mut r = Resolver::new(sin_host);
+        assert_eq!(
+            r.push(parse_chord("x").unwrap()),
+            Resolution::Unavailable {
+                command: "lua:mi-comando.v2".to_owned(),
+                why: Availability::NotHere,
+            },
+            "sin LUA_HOST la tecla dice que aquí no está"
         );
 
         // Nombres fuera del charset [a-z0-9._-]{1,64}: error de CARGA.
@@ -1090,7 +1106,9 @@ mod tests {
     /// funcionando; el mismo binding en una capa de usuario SÍ resuelve.
     #[test]
     fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
-        const COMANDOS: &[&str] = &["cursor.down", "cursor.up"];
+        // Un frontend que HOSPEDA Lua (ADR 0110): sin `LUA_HOST`, el binding
+        // de usuario se diría no disponible y este test no probaría el descarte.
+        const COMANDOS: &[&str] = &["cursor.down", "cursor.up", LUA_HOST];
         let preset = parse_keymap(
             r#"
             [pane]

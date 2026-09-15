@@ -2,7 +2,7 @@
 //! archivo, y claves desconocidas como error claro.
 
 use norte_tui::config::{ConfigError, Layer, Layers, load};
-use norte_tui::keymap::{COMMANDS, Effective, Screen, presets};
+use norte_tui::keymap::{Effective, Screen, presets};
 
 fn dir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
     let d = tempfile::tempdir().expect("tempdir");
@@ -168,7 +168,10 @@ fn el_keymap_de_la_ultima_capa_se_marca_como_proyecto() {
     // Y el efecto de seguridad, de punta a punta: el lua: del PROYECTO se
     // descarta (contado); el de USUARIO sobrevive y gana la precedencia.
     let (_, preset) = &presets()[0];
-    let eff = Effective::build_for(preset, &cfg.keymap_layers, COMMANDS, Screen::Browse)
+    // El conjunto real de la TUI, con `LUA_HOST` (ADR 0110): `bindings()` solo
+    // cuenta lo disponible AQUÍ.
+    let known = norte_tui::shortcuts_editor::known_commands(Screen::Browse);
+    let eff = Effective::build_for(preset, &cfg.keymap_layers, &known, Screen::Browse)
         .expect("descartar no es error");
     assert_eq!(eff.discarded_lua_bindings(), 1, "solo el del proyecto");
     assert!(
