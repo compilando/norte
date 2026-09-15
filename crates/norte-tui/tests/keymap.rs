@@ -6,13 +6,20 @@
 
 use norte_tui::keymap::{COMMANDS as COMANDOS, KeyCode};
 use norte_tui::keymap::{
-    Chord, Count, Effective, KeymapError, Mods, Resolution, Resolver, parse_chord, parse_keymap,
+    Chord, Count, Effective, KeymapError, Mods, Resolution, Resolver, Screen, parse_chord,
+    parse_keymap,
 };
 
 fn eff(preset: &str, user: Option<&str>) -> Result<Effective, KeymapError> {
     let preset = parse_keymap(preset)?;
     let user = user.map(parse_keymap).transpose()?;
-    Effective::build(&preset, user.as_ref(), COMANDOS)
+    // El conjunto REAL de la TUI, que lleva `LUA_HOST` (ADR 0110): con
+    // `COMMANDS` a secas un `lua:` se diría no disponible aquí.
+    Effective::build(
+        &preset,
+        user.as_ref(),
+        &norte_tui::shortcuts_editor::known_commands(Screen::Browse),
+    )
 }
 
 #[test]
@@ -522,7 +529,6 @@ fn capas_multiples_se_pliegan_por_precedencia() {
 
 #[test]
 fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
-    use norte_tui::keymap::Screen;
     let preset = parse_keymap(
         r#"
         [global]
@@ -741,7 +747,8 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
     // builtin del preset — y queda contado para el aviso.
     let mut proyecto = parse_keymap(capa).unwrap();
     proyecto.mark_project();
-    let eff = Effective::build_layered(&preset, std::slice::from_ref(&proyecto), COMANDOS)
+    let known = norte_tui::shortcuts_editor::known_commands(Screen::Browse);
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&proyecto), &known)
         .expect("descartar no es error de carga");
     assert_eq!(eff.discarded_lua_bindings(), 1, "contado para el aviso");
     let mut r = Resolver::new(eff);
@@ -756,7 +763,7 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
 
     // El MISMO binding en capa de USUARIO (sin marcar): resuelve normal.
     let usuario = parse_keymap(capa).unwrap();
-    let eff = Effective::build_layered(&preset, std::slice::from_ref(&usuario), COMANDOS).unwrap();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&usuario), &known).unwrap();
     assert_eq!(eff.discarded_lua_bindings(), 0);
     let mut r = Resolver::new(eff);
     assert_eq!(

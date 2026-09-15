@@ -295,3 +295,70 @@ async fn ejecutar_en_la_paleta_manda_su_cierre_en_un_parche() {
         "el cierre viaja como parche, sin esperar a una foto"
     );
 }
+
+/// Una tecla ligada a `lua:` en la capa del usuario dice que aquí no está
+/// (ADR 0110).
+///
+/// La ventana no ejecuta Lua. Antes la resolvía como disponible —el registro
+/// Lua es dinámico y el keymap no podía saber quién lo hospeda—, así que la
+/// hoja, which-key y la paleta la anunciaban y la tecla no hacía nada.
+#[tokio::test]
+async fn una_tecla_lua_dice_que_aqui_no_esta() {
+    use norte_frontend::keymap::{Effective, Screen, parse_keymap, parse_keymap_layer};
+
+    let preset = parse_keymap(
+        norte_frontend::keymap::presets::source("orthodox").expect("preset de fábrica"),
+    )
+    .expect("preset parsea");
+    let capa = parse_keymap_layer(
+        r#"
+[pane]
+prepend_keymap = [{ on = ["ctrl+x"], run = "lua:saluda" }]
+"#,
+    )
+    .expect("capa parsea");
+    let keymap = Effective::build_for(
+        &preset,
+        &[capa],
+        &norte_ui_host::commands::todos(),
+        Screen::Browse,
+    )
+    .expect("una tecla lua: con nombre válido carga también en la ventana");
+
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap,
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+
+    let ack = h
+        .dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+            key: "x".to_owned(),
+            ctrl: true,
+            alt: false,
+            shift: false,
+            meta: false,
+        }))
+        .await
+        .expect("host vivo");
+    match ack {
+        ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "cmd-not-here"),
+        otro => panic!("se esperaba no disponible aquí: {otro:?}"),
+    }
+}

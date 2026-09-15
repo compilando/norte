@@ -147,6 +147,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A `lua:` key in the window says it is not available.** Lua runs in the
+  terminal frontend only (ADR 0110), but a `lua:` binding in your keymap
+  layer was offered by the window's reference sheet, which-key and palette,
+  and pressing it did nothing. It is now "not available here", like any
+  other command the window does not have; `ntc` runs it as before.
 - **A double click opens a directory in the window.** The renderer waited
   for the engine's own `dblclick`, the only door into a directory with the
   mouse; it now counts two presses on the same row itself, the way the

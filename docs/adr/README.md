@@ -115,3 +115,5 @@ edits.
 | [0107](0107-a-thumbnail-is-a-plugin-kind-of-its-own-package.md) | A thumbnail is a plugin kind, in a WIT package of its own | accepted |
 | [0108](0108-a-plugin-names-a-meaning-and-the-window-derives-its-chrome.md) | A plugin names a meaning, and the window derives its chrome | accepted |
 | [0109](0109-a-theme-name-can-be-a-file-and-a-vscode-theme-imports-over-a-base.md) | A theme name can be a file you own, and a VSCode theme imports over a base | accepted |
+| [0110](0110-lua-stays-in-the-terminal-and-the-window-says-so.md) | Lua stays in the terminal, and the window says so | accepted |
+| [0111](0111-the-window-package-is-built-on-ubuntu-22-04.md) | The window package is built on Ubuntu 22.04, and that sets its floor | accepted |
