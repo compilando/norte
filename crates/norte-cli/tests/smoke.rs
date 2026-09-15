@@ -329,16 +329,16 @@ fn unsafe_free_kill(pid: u32) {
 
 /// ADR 0104 lo dejó escrito como hueco: `norte plugin uninstall` borraba el
 /// disco por detrás de un daemon vivo, que descubre el catálogo al arrancar y
-/// no vigila el directorio — y seguía anunciando el plugin hasta reiniciarse.
-/// Con un daemon escuchando, desinstalar va POR él.
+/// no vigila el directorio. ADR 0113: con `--daemon` va POR él; sin él borra
+/// en el directorio propio y AVISA — y jamás toca el del daemon, que puede
+/// ser otro: el socket por defecto no depende de `NORTE_CONFIG_DIR`.
 ///
-/// Un plugin ROTO basta, y es el caso que más se ve: el daemon lo cuenta en
-/// `errors` y `plugin list` lo dice por stderr («`norte doctor` dice por
-/// qué», en los dos idiomas). La afirmación de ANTES es la que hace que la
-/// de después signifique algo.
+/// Un plugin ROTO basta: el daemon lo cuenta en `errors` y `plugin list` lo
+/// dice por stderr («`norte doctor` dice por qué», en los dos idiomas). La
+/// afirmación de ANTES es la que hace que la de después signifique algo.
 #[cfg(unix)]
 #[test]
-fn plugin_uninstall_con_daemon_vivo_lo_olvida_el_daemon() {
+fn plugin_uninstall_va_por_el_daemon_solo_con_daemon() {
     /// El daemon muere con el test, también si una aserción revienta.
     struct Hijo(std::process::Child);
     impl Drop for Hijo {
@@ -348,10 +348,17 @@ fn plugin_uninstall_con_daemon_vivo_lo_olvida_el_daemon() {
         }
     }
 
-    let estado = tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir de estado");
-    let roto = estado.path().join("plugins").join("org.test.roto");
-    std::fs::create_dir_all(&roto).unwrap();
-    std::fs::write(roto.join("plugin.toml"), "esto no es un manifiesto").unwrap();
+    // Dos directorios con el MISMO plugin: el del daemon y el del CLI.
+    let con_roto = || {
+        let dir =
+            tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir de estado");
+        let roto = dir.path().join("plugins").join("org.test.roto");
+        std::fs::create_dir_all(&roto).unwrap();
+        std::fs::write(roto.join("plugin.toml"), "esto no es un manifiesto").unwrap();
+        (dir, roto)
+    };
+    let (del_daemon, roto_del_daemon) = con_roto();
+    let (del_cli, roto_del_cli) = con_roto();
     // El socket en `/tmp` y no bajo el target: `sun_path` tiene 108 bytes.
     let run = tempfile::tempdir().unwrap();
     let socket = run.path().join("d.sock");
@@ -359,7 +366,7 @@ fn plugin_uninstall_con_daemon_vivo_lo_olvida_el_daemon() {
     let bin = assert_cmd::cargo::cargo_bin("norte");
     let _daemon = Hijo(
         std::process::Command::new(&bin)
-            .env("NORTE_CONFIG_DIR", estado.path())
+            .env("NORTE_CONFIG_DIR", del_daemon.path())
             .args(["daemon", "run", "--idle-timeout", "0", "--socket"])
             .arg(&socket)
             .stdout(std::process::Stdio::null())
@@ -378,14 +385,14 @@ fn plugin_uninstall_con_daemon_vivo_lo_olvida_el_daemon() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let norte_en = || {
+    let norte_en = |dir: &std::path::Path| {
         let mut c = Command::cargo_bin("norte").expect("binario norte compilado");
-        c.env("NORTE_CONFIG_DIR", estado.path());
+        c.env("NORTE_CONFIG_DIR", dir);
         c.arg("--socket").arg(&socket);
         c
     };
     let rotos_segun_el_daemon = || {
-        let out = norte_en()
+        let out = norte_en(del_daemon.path())
             .args(["--daemon", "plugin", "list"])
             .assert()
             .success();
@@ -396,16 +403,43 @@ fn plugin_uninstall_con_daemon_vivo_lo_olvida_el_daemon() {
         rotos_segun_el_daemon(),
         "el daemon debía contar el plugin roto antes"
     );
-    // Sin `--daemon`: es el camino que escribía por detrás.
-    norte_en()
+
+    // Sin `--daemon`, desde OTRO directorio: borra el suyo, avisa, y el del
+    // daemon —con el mismo id— sigue ahí. Antes de ADR 0113 esta orden iba
+    // por el daemon que escuchaba y borraba en SU directorio.
+    let sin = norte_en(del_cli.path())
         .args(["plugin", "uninstall", "org.test.roto"])
         .assert()
         .success();
-    assert!(!roto.exists(), "el directorio del plugin sigue en disco");
+    assert!(!roto_del_cli.exists(), "el plugin propio sigue en disco");
+    assert!(
+        roto_del_daemon.exists(),
+        "sin --daemon se borró en el directorio del daemon"
+    );
+    assert!(
+        String::from_utf8_lossy(&sin.get_output().stderr).contains("--daemon"),
+        "avisa de que el daemon lo seguirá listando"
+    );
+
+    // Con `--daemon`: por él, en su directorio, y deja de anunciarlo.
+    norte_en(del_daemon.path())
+        .args(["--daemon", "plugin", "uninstall", "org.test.roto"])
+        .assert()
+        .success();
+    assert!(
+        !roto_del_daemon.exists(),
+        "el plugin del daemon sigue en disco"
+    );
     assert!(
         !rotos_segun_el_daemon(),
         "el daemon sigue anunciando un plugin desinstalado"
     );
+
+    // Y lo que el daemon ya no tiene se dice contra SU catálogo.
+    norte_en(del_cli.path())
+        .args(["--daemon", "plugin", "uninstall", "org.test.roto"])
+        .assert()
+        .failure();
 }
 
 /// M3-4 T6: `policy grant` sin daemon en marcha falla LIMPIO (sin autoarranque

@@ -1839,91 +1839,107 @@ async fn plugin_cmd(
     }
 }
 
-/// `norte plugin uninstall`: con un daemon escuchando, POR él
-/// (`plugin.uninstall`, ADR 0104); sin daemon, en el disco, como `install`.
+/// `norte plugin uninstall` (ADR 0113). Con `--daemon`, POR el daemon
+/// (`plugin.uninstall`): borra en SU directorio de configuración y lo olvida
+/// en memoria. Sin `--daemon`, en el disco de este proceso, como `install`.
 ///
-/// Por él y no por detrás: el daemon descubre el catálogo al arrancar y no
-/// vigila el directorio, así que un borrado a sus espaldas lo dejaba
-/// anunciando —y decorando con— lo borrado hasta reiniciarse. No se ARRANCA
-/// un daemon para esto: sin daemon no hay registro que se quede viejo.
+/// Por el daemon solo si se pide. El socket por defecto sale del usuario, no
+/// de `NORTE_CONFIG_DIR`, y nada en `initialize` dice qué directorio sirve
+/// el daemon: un CLI con otro directorio que desinstalase por el que escucha
+/// borraría la extensión —y retiraría su aprobación— en el directorio de ESE
+/// daemon. Sin `--daemon`, si hay uno aceptando, se avisa de que la seguirá
+/// listando hasta reiniciarse.
 async fn plugin_uninstall(
     backend: &Backend,
     socket: Option<PathBuf>,
     id: &str,
 ) -> anyhow::Result<ExitCode> {
     use norte_core::plugins::UninstallError as U;
-    // Las dos negativas se deciden AQUÍ aunque conteste el daemon: él las
-    // manda como `INVALID_PARAMS` sin taxonomía, y a este lado llegan como
-    // un `Internal` que no distingue «no es un id» de «no está instalado».
-    // El id se valida antes de convertirlo en ruta.
     if !norte_core::is_valid_plugin_id(id) {
         return Ok(uninstall_fallido(&U::InvalidId));
     }
-    let dir = norte_core::connect::config_dir();
-    let plugin_dir = dir.join("plugins").join(id);
-    if !tokio::task::spawn_blocking(move || plugin_dir.is_dir())
-        .await
-        .unwrap_or(false)
-    {
-        return Ok(uninstall_fallido(&U::NotInstalled(id.to_owned())));
-    }
-    #[cfg(unix)]
-    let por_daemon = match backend {
-        Backend::Remote(r) => Some(r.plugins_uninstall(id).await),
-        Backend::Embedded(_) => match daemon_escuchando(socket).await {
-            Some(r) => Some(r.plugins_uninstall(id).await),
-            None => None,
-        },
-    };
-    #[cfg(not(unix))]
-    let por_daemon: Option<Result<norte_proto::methods::PluginUninstallResult, _>> = {
-        let _ = (backend, socket);
-        None
-    };
-    match por_daemon {
-        Some(Ok(r)) => Ok(uninstall_hecho(id, r.was_approved)),
-        Some(Err(e)) => {
-            eprintln!(
-                "{}",
-                norte_i18n::ta("cli-plugin-uninstall-io", &[("error", &e.to_string())])
-            );
-            Ok(ExitCode::FAILURE)
-        }
-        None => {
-            let id = id.to_owned();
-            match tokio::task::spawn_blocking(move || norte_core::plugins::uninstall(&dir, &id))
+    match backend {
+        #[cfg(unix)]
+        Backend::Remote(r) => {
+            // «¿Está?» contra el catálogo DEL DAEMON, que es el directorio que
+            // se borra. Y aquí y no por su respuesta: rehúsa con un
+            // `INVALID_PARAMS` sin taxonomía, que llega como un `Internal`.
+            let lista = backend
+                .plugins_list()
                 .await
-                .context("desinstalando")?
-            {
-                Ok(rep) => Ok(uninstall_hecho(&rep.id, rep.was_approved)),
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let esta = lista.plugins.iter().any(|p| p.id == id)
+                || lista
+                    .errors
+                    .iter()
+                    .any(|e| e.dir_bytes.as_deref().unwrap_or(e.dir.as_bytes()) == id.as_bytes());
+            if !esta {
+                return Ok(uninstall_fallido(&U::NotInstalled(id.to_owned())));
+            }
+            match r.plugins_uninstall(id).await {
+                Ok(res) => Ok(uninstall_hecho(id, res.was_approved)),
+                Err(e) => {
+                    eprintln!(
+                        "{}",
+                        norte_i18n::ta("cli-plugin-uninstall-io", &[("error", &e.to_string())])
+                    );
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
+        Backend::Embedded(_) => {
+            let dir = norte_core::connect::config_dir();
+            let owned = id.to_owned();
+            let informe =
+                tokio::task::spawn_blocking(move || norte_core::plugins::uninstall(&dir, &owned))
+                    .await
+                    .context("desinstalando")?;
+            match informe {
+                Ok(rep) => {
+                    let code = uninstall_hecho(&rep.id, rep.was_approved);
+                    avisar_si_hay_daemon(socket).await;
+                    Ok(code)
+                }
                 Err(e) => Ok(uninstall_fallido(&e)),
             }
         }
     }
 }
 
-/// El daemon de `socket`, si hay uno ACEPTANDO — sin arrancarlo.
+/// Avisa, sin arrancarlo, si un daemon ACEPTA en `socket`: seguirá listando
+/// lo que se acaba de borrar por detrás hasta reiniciarse.
 #[cfg(unix)]
-async fn daemon_escuchando(
-    socket: Option<PathBuf>,
-) -> Option<norte_core::backend::remote::RemoteBackend> {
+async fn avisar_si_hay_daemon(socket: Option<PathBuf>) {
+    /// Lo que se espera a un daemon que acepta y no contesta: es un aviso, y
+    /// no puede colgar un comando que antes no tocaba el socket.
+    const PLAZO: std::time::Duration = std::time::Duration::from_secs(2);
     let socket = match socket {
         Some(s) => s,
-        None => tokio::task::spawn_blocking(|| norte_core::daemon::default_socket_path(None))
-            .await
-            .ok()?,
+        None => {
+            match tokio::task::spawn_blocking(|| norte_core::daemon::default_socket_path(None))
+                .await
+            {
+                Ok(s) => s,
+                Err(_) => return,
+            }
+        }
     };
-    norte_core::backend::remote::RemoteBackend::connect(
+    let conectar = norte_core::backend::remote::RemoteBackend::connect(
         socket,
         None,
         norte_proto::methods::ClientInfo {
             name: "norte-cli".into(),
             version: env!("CARGO_PKG_VERSION").into(),
         },
-    )
-    .await
-    .ok()
+    );
+    if matches!(tokio::time::timeout(PLAZO, conectar).await, Ok(Ok(_))) {
+        eprintln!("{}", norte_i18n::t("cli-plugin-uninstall-daemon-stale"));
+    }
 }
+
+/// Sin daemon por socket unix no hay registro que se quede viejo.
+#[cfg(not(unix))]
+async fn avisar_si_hay_daemon(_socket: Option<PathBuf>) {}
 
 /// Lo que `plugin uninstall` dice cuando borró.
 fn uninstall_hecho(id: &str, was_approved: bool) -> ExitCode {
