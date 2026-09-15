@@ -174,8 +174,33 @@ pub struct SessionBody {
     /// Los directorios populares de la sesión entera
     /// ([`crate::history::Popular`], spec 2026-09-15 D6), en el orden en que
     /// se guardan. Aditivo como [`Self::palette_recent`].
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "populares::deserialize"
+    )]
     pub popular: Vec<crate::history::PopularEntry>,
+}
+
+/// Los populares se leen ENTRADA A ENTRADA.
+///
+/// Una ruta que no parsea —un cuerpo editado a mano— se salta en vez de
+/// rehusar el cuerpo entero, que se llevaría por delante disposiciones y huecos
+/// que no tienen nada que ver. Es una lista de atajos que se rehace andando
+/// (spec 2026-09-15 D6); la ruta de un hueco, en cambio, sigue siendo un error,
+/// porque sin ella el hueco no es nada.
+mod populares {
+    use serde::{Deserialize, Deserializer};
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Vec<crate::history::PopularEntry>, D::Error> {
+        let crudas = Vec::<serde_json::Value>::deserialize(d)?;
+        Ok(crudas
+            .into_iter()
+            .filter_map(|v| serde_json::from_value(v).ok())
+            .collect())
+    }
 }
 
 /// Cuántos comandos recientes guarda la paleta. Cinco: los que caben en la
@@ -1332,18 +1357,42 @@ mod tests {
 
     #[test]
     fn la_poda_deja_los_populares_en_su_tope_por_importancia() {
-        let mut b = SessionBody::default();
-        b.popular = (0..crate::history::POPULAR_CAP + 5)
-            .map(|i| crate::history::PopularEntry {
-                path: vp(&format!("file:///d{i}")),
-                // Los cinco primeros son los MENOS visitados: los que se van.
-                visits: if i < 5 { 1 } else { 2 },
-                last: i as u64,
-            })
-            .collect();
+        let mut b = SessionBody {
+            popular: (0..crate::history::POPULAR_CAP + 5)
+                .map(|i| crate::history::PopularEntry {
+                    path: vp(&format!("file:///d{i}")),
+                    // Los cinco primeros son los MENOS visitados: los que se van.
+                    visits: if i < 5 { 1 } else { 2 },
+                    last: u64::try_from(i).expect("cabe"),
+                })
+                .collect(),
+            ..SessionBody::default()
+        };
         b.prune(0);
         assert_eq!(b.popular.len(), crate::history::POPULAR_CAP);
         assert!(b.popular.iter().all(|e| e.visits == 2));
+    }
+
+    /// Una entrada de populares ilegible se salta: no se lleva la sesión
+    /// entera por delante (encoding-auditor, fase 1).
+    #[test]
+    fn un_popular_ilegible_se_salta_y_el_cuerpo_carga() {
+        let v = serde_json::json!({
+            "layouts": {},
+            "slots": { "1": { "path": "file:///casa" } },
+            "popular": [
+                { "path": "no es una ruta", "visits": 9 },
+                { "path": "file:///bien", "visits": 2, "last": 1 },
+            ],
+        });
+        let b = SessionBody::from_value(SCHEMA_VERSION, &v).expect("el cuerpo carga");
+        assert_eq!(
+            b.slots[&1].path,
+            vp("file:///casa"),
+            "los huecos siguen ahí"
+        );
+        assert_eq!(b.popular.len(), 1);
+        assert_eq!(b.popular[0].path, vp("file:///bien"));
     }
 
     /// Y un cuerpo del FUTURO se sigue rehusando entero: subir a 2 no puede

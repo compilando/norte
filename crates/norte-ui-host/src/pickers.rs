@@ -503,9 +503,14 @@ impl Selector {
     /// lo pinta: lo decide el crate compartido, igual que en el terminal. La
     /// marca («aquí», «adelante») va en el detalle de la fila, y el cursor
     /// empieza en la siguiente a la actual.
+    ///
+    /// `pintar` pone la ruta en pantalla —con la reinterpretación del panel, o
+    /// sin ninguna para los populares— y lo decide quien sabe de qué panel es
+    /// la lista.
     pub(crate) fn historia(
         slot: u32,
         filas: &[norte_frontend::history::HistoryRow],
+        pintar: impl Fn(&VPath) -> (String, bool),
         lang: Lang,
         titulo: &'static str,
         populares: bool,
@@ -513,7 +518,7 @@ impl Selector {
         let vistas = filas
             .iter()
             .map(|r| {
-                let (pintable, hostile) = norte_frontend::display::path_display(&r.path);
+                let (pintable, hostile) = pintar(&r.path);
                 let detalle = norte_frontend::history::mark_key(r.mark)
                     .map_or_else(String::new, |k| norte_i18n::t_in(lang, k));
                 Fila {

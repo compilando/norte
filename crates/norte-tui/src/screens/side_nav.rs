@@ -419,22 +419,11 @@ pub async fn on_nav_popup_key(
         // toda lista que navega: una ruta de la historia, un favorito o un
         // volumen se abren en el otro lado igual.
         "dialog.confirm-other" => {
-            let from = app
-                .nav_popup
-                .as_ref()
-                .map_or_else(|| app.focus(), NavPopup::target_pane);
             let Some(other) = app.nav_popup_other_pane() else {
                 app.message = Some(t("host-no-other-slot"));
                 return Cd::Cancelled;
             };
-            if let Some(path) = app.nav_popup_input(PickerAction::Confirm) {
-                let outcome = cd_in(app, backend, events, other, path.clone(), Trail::Record).await;
-                if kind == NavPopupKind::History && matches!(&outcome, Cd::Failed(Error::NotFound))
-                {
-                    app.history[from].remove(&path);
-                }
-                return outcome;
-            }
+            return confirm_nav_popup(app, backend, events, kind, other).await;
         }
         // design §D: the in-popup unfiltered toggle. Same operation as
         // opening the popup, just with the flag flipped and the SAME target
@@ -457,21 +446,47 @@ pub async fn on_nav_popup_key(
                 .nav_popup
                 .as_ref()
                 .map_or_else(|| app.focus(), NavPopup::target_pane);
-            // Confirm sobre un item inválido/vacío es no-op (el popup sigue).
-            if let Some(path) = app.nav_popup_input(PickerAction::Confirm) {
-                let outcome = cd_in(app, backend, events, pane, path.clone(), Trail::Record).await;
-                if kind == NavPopupKind::History && matches!(&outcome, Cd::Failed(Error::NotFound))
-                {
-                    // El dir ya no existe: fuera del historial. La barra ya
-                    // muestra el error normal del cd fallido.
-                    app.history[pane].remove(&path);
-                }
-                return outcome;
-            }
+            return confirm_nav_popup(app, backend, events, kind, pane).await;
         }
         _ => {} // fuera del allowlist de este overlay (o kind): inerte
     }
     Cd::Cancelled
+}
+
+/// Navega lo elegido en el popup al pane `to` y cierra el popup.
+///
+/// `to` es el pane del popup para `dialog.confirm` y el OTRO para
+/// `dialog.confirm-other` (spec 2026-09-15 D2); el resto es lo mismo, y por eso
+/// es una sola función. Confirm sobre un item inválido o una lista vacía es
+/// no-op: el popup sigue abierto. Si el destino salió de la HISTORIA y ya no
+/// existe, se retira de la historia de la lista (spec 2026-07-18) —la de
+/// `from`, que no tiene por qué ser `to`—; la barra ya muestra el error normal
+/// del cd fallido.
+async fn confirm_nav_popup(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut crate::console::Console<'_>,
+    kind: NavPopupKind,
+    to: usize,
+) -> Cd {
+    let from = app
+        .nav_popup
+        .as_ref()
+        .map_or_else(|| app.focus(), NavPopup::target_pane);
+    let Some(path) = app.nav_popup_input(PickerAction::Confirm) else {
+        return Cd::Cancelled;
+    };
+    let outcome = cd_in(app, backend, events, to, path.clone(), Trail::Record).await;
+    if matches!(&outcome, Cd::Failed(Error::NotFound)) {
+        // Un directorio que ya no existe sale de la lista de la que vino: de la
+        // historia de `from`, o de los populares (rust-reviewer, fase 1).
+        match kind {
+            NavPopupKind::History => app.history[from].remove(&path),
+            NavPopupKind::Popular => app.popular.remove(&path),
+            NavPopupKind::Hotlist | NavPopupKind::Volumes => {}
+        }
+    }
+    outcome
 }
 
 /// `config::user_config_dir()` o el MISMO io `NotFound` que fabrica

@@ -193,6 +193,22 @@ impl Estado {
             fuera.extend(self.pedir_secreto(conn, &endpoint, slot, dir));
             return fuera;
         }
+        // La visita a los populares cuenta cuando el listado LLEGA (spec
+        // 2026-09-15 D6), como en el terminal; y un directorio que ya no existe
+        // sale también de ellos, igual que sale de la historia.
+        let pendiente = self
+            .huecos
+            .get_mut(&slot)
+            .and_then(|h| h.visita_pendiente.take());
+        match &res {
+            Ok(_) => {
+                if let Some(visitado) = pendiente {
+                    self.popular.visit(&visitado);
+                }
+            }
+            Err(Error::NotFound) => self.popular.remove(&dir),
+            Err(_) => {}
+        }
         self.aterriza_en(slot, dir, res);
         self.pedir_capacidades(slot, backend, buzon);
         self.sondear(slot, backend, buzon);

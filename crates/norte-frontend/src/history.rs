@@ -156,12 +156,25 @@ pub fn record_visit(
     dir: &VPath,
     trail: Trail,
 ) -> bool {
-    if prev == dir || trail != Trail::Record {
+    if !counts_as_step(prev, dir, trail) {
         return false;
     }
     history.record(prev.clone());
     popular.visit(dir);
     true
+}
+
+/// La decisión de [`record_visit`], sola: si navegar de `prev` a `dir` es un
+/// paso del lector.
+///
+/// Suelta porque la ventana tiene que partir el evento en dos: el rastro se
+/// graba al PEDIR el listado —el terminal, cuando llega— y la visita a los
+/// populares espera a que llegue, porque un listado que falla no es un sitio
+/// al que se fue. Las dos mitades preguntan AQUÍ, y así no pueden discrepar
+/// sobre qué cuenta.
+#[must_use]
+pub fn counts_as_step(prev: &VPath, dir: &VPath, trail: Trail) -> bool {
+    prev != dir && trail == Trail::Record
 }
 
 /// A dónde lleva `nav.jump-back`, o la clave Fluent de por qué no lleva a
@@ -464,6 +477,9 @@ mod tests {
         Forward(u8),
         Remove(u8),
         Cap(usize),
+        // Una sesión escrita con OTRO tope (rust-reviewer, fase 1): `seed` no
+        // pasa por `record`, así que el invariante lo tiene que restituir ella.
+        Seed(Vec<u8>, Vec<u8>),
     }
 
     fn op() -> impl Strategy<Value = Op> {
@@ -473,6 +489,11 @@ mod tests {
             2 => (0u8..12).prop_map(Op::Forward),
             1 => (0u8..12).prop_map(Op::Remove),
             1 => (0usize..80).prop_map(Op::Cap),
+            1 => (
+                proptest::collection::vec(0u8..12, 0..80),
+                proptest::collection::vec(0u8..12, 0..80),
+            )
+                .prop_map(|(b, f)| Op::Seed(b, f)),
         ]
     }
 
@@ -493,6 +514,10 @@ mod tests {
                     Op::Forward(i) => { let _ = h.step_forward(d(i)); }
                     Op::Remove(i) => h.remove(&d(i)),
                     Op::Cap(c) => h.set_capacity(c),
+                    Op::Seed(b, f) => h.seed(
+                        b.into_iter().map(d).collect(),
+                        f.into_iter().map(d).collect(),
+                    ),
                 }
                 prop_assert!(h.back_len() + h.fwd_len() <= h.capacity());
                 prop_assert!(h.entries().len() <= h.capacity());

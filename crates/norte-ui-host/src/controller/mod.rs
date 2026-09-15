@@ -1864,6 +1864,11 @@ struct Hueco {
     celdas_plugin: std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
     /// Hay una tanda de decoración en vuelo para este hueco.
     adornando: bool,
+    /// El directorio al que va una navegación que CUENTA como paso, hasta que
+    /// su listado llegue (spec 2026-09-15 D6): entonces se suma a los
+    /// populares, y si falla se olvida. Lo relevan la siguiente navegación del
+    /// hueco y el propio aterrizaje.
+    visita_pendiente: Option<VPath>,
     /// Las rutas que ya se pidieron decorar (hayan contestado o no). Misma
     /// memoria que `sondeados` y por el mismo motivo: sin ella, un plugin
     /// que no decora nada se vuelve a preguntar en cada repintado.
@@ -3175,6 +3180,7 @@ impl Hueco {
             adornos: std::collections::HashMap::new(),
             celdas_plugin: std::collections::HashMap::new(),
             adornando: false,
+            visita_pendiente: None,
             adornadas: std::collections::HashSet::new(),
             gen_adornos: 0,
         }

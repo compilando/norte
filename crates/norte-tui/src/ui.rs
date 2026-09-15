@@ -631,10 +631,20 @@ fn draw_nav_popup(
                 .items()
                 .iter()
                 .map(|it| {
-                    ListItem::new(Line::raw(format!(
+                    // La marca de una fila de historia va en su PROPIO span y
+                    // con otro estilo: pegada al texto la imitaba un directorio
+                    // con ese nombre. El recorte es de la ruta, no de la marca.
+                    let mark = it.mark.as_deref().map(|m| {
+                        ratatui::text::Span::styled(format!(" · {m}"), theme.role(Role::Info))
+                    });
+                    let mark_w = mark.as_ref().map_or(0, ratatui::text::Span::width);
+                    let path = ratatui::text::Span::raw(format!(
                         " {}",
-                        middle_ellipsis(&it.display, inner)
-                    )))
+                        middle_ellipsis(&it.display, inner.saturating_sub(mark_w))
+                    ));
+                    ListItem::new(Line::from(
+                        std::iter::once(path).chain(mark).collect::<Vec<_>>(),
+                    ))
                 })
                 .collect(),
             Some(popup.cursor()),

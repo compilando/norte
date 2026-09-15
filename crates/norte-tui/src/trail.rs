@@ -129,6 +129,9 @@ pub fn rewind_trail(app: &mut App, pane: usize, step: TrailStep, dir: &VPath, re
         Rewind::StepAndRetire => {
             untake_step(app, pane, step, dir.clone());
             app.history[pane].remove(dir);
+            // «Este directorio ya no está» es un hecho, no dos: tampoco sigue
+            // en los populares (la ventana hace lo mismo al fallar el listado).
+            app.popular.remove(dir);
         }
     }
 }

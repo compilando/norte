@@ -283,22 +283,46 @@ impl Estado {
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let tope = self.config.common.ui_chrome.history_size();
         let Some(hueco) = self.huecos.get_mut(&slot) else {
+            // El hueco se fue con la lista puesta: se cierra, como cuando pasa
+            // lo mismo al elegir. Dejarla abierta ofrecía filas de un panel que
+            // ya no existe.
+            let cerrar = self.selector.take().is_some();
+            let envios = if cerrar {
+                vec![self.parche(vec![ViewChange::Picker { picker: None }])]
+            } else {
+                Vec::new()
+            };
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-other-slot".to_owned(),
                 },
-                Vec::new(),
+                envios,
             );
         };
         hueco.historial.set_capacity(tope);
         let actual = hueco.pane.dir().clone();
+        // La historia se pinta con la reinterpretación de SU panel, como el
+        // terminal y como la barra de rutas (#98/F4: una lista es superficie de
+        // decisión). Los populares con ninguna: son de toda la sesión, y aplicar
+        // el encoding de un panel a rutas de otro sería inventar mojibake.
+        let enc = if populares {
+            None
+        } else {
+            hueco.pane.name_encoding()
+        };
         let filas = if populares {
             norte_frontend::history::popular_rows(&self.popular, &actual, "")
         } else {
             norte_frontend::history::history_rows(&hueco.historial, &actual, "")
         };
-        let mut selector =
-            crate::pickers::Selector::historia(slot, &filas, self.lang, titulo, populares);
+        let mut selector = crate::pickers::Selector::historia(
+            slot,
+            &filas,
+            |p| norte_frontend::path_display_with(p, enc),
+            self.lang,
+            titulo,
+            populares,
+        );
         if let Some(c) = cursor {
             selector.senalar(c.min(filas.len().saturating_sub(1)));
         }
@@ -325,6 +349,13 @@ impl Estado {
         if populares {
             self.popular.remove(&destino);
         } else if let Some(h) = self.huecos.get_mut(&slot) {
+            // La fila «aquí» no se quita: la lista la pone siempre, así que
+            // quitarla no la quitaría de la pantalla, y `History::remove` sí
+            // podaría del rastro el directorio actual y su punto de salto sin
+            // que se viera (rust-reviewer, fase 1).
+            if *h.pane.dir() == destino {
+                return (self.aplicada(), Vec::new());
+            }
             h.historial.remove(&destino);
         }
         self.abrir_lista_de_historia(slot, titulo, populares, Some(cursor))
@@ -363,7 +394,7 @@ impl Estado {
         let Some(s) = self.selector.as_ref() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let (desde, destino) = (s.slot(), s.elegir());
+        let (desde, destino, hay_fila) = (s.slot(), s.elegir(), s.hay_fila());
         let otro = if desde == self.activo() {
             self.hueco_destino()
         } else {
@@ -381,6 +412,16 @@ impl Estado {
             }
         };
         let Some(destino) = destino else {
+            // Hay fila y no lleva a ninguna parte: un favorito cuya ruta no
+            // parsea. Se DICE, igual que al elegirlo en su sitio.
+            if hay_fila {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: "hotlist-invalid".to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
             return (self.aplicada(), Vec::new());
         };
         self.selector = None;

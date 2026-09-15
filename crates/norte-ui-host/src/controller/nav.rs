@@ -177,17 +177,17 @@ impl Estado {
         };
         let anterior = hueco.pane.dir().clone();
         hueco.historial.set_capacity(tope);
-        // La MISMA decisión que el terminal (`record_visit`): un `Replay` es el
-        // rastro reproduciéndose —registrarlo lo haría oscilar entre dos
+        // La MISMA decisión que el terminal (`counts_as_step`): un `Replay` es
+        // el rastro reproduciéndose —registrarlo lo haría oscilar entre dos
         // directorios—, un `Seed` coloca sin andar y un refresco no es un paso.
-        // Lo que cuenta entra en el rastro y en los populares.
-        norte_frontend::history::record_visit(
-            &mut hueco.historial,
-            &mut self.popular,
-            &anterior,
-            &destino,
-            trail,
-        );
+        // Lo que cuenta entra YA en el rastro; la visita a los populares espera
+        // a que el listado llegue (`aterrizar_listado`), porque uno que falla no
+        // es un sitio al que se fue — el terminal solo cuenta cuando llega.
+        let cuenta = norte_frontend::history::counts_as_step(&anterior, &destino, trail);
+        if cuenta {
+            hueco.historial.record(anterior);
+        }
+        hueco.visita_pendiente = cuenta.then(|| destino.clone());
         // La memoria del cursor se toma con el dir que se ABANDONA todavía
         // puesto (contrato de `remember_cursor`).
         hueco.pane.remember_cursor();

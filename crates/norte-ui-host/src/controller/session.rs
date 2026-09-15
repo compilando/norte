@@ -349,7 +349,12 @@ impl Estado {
 
     /// Coloca cada hueco donde la sesión dice que estaba.
     pub(super) fn aplicar_sesion(&mut self, body: &norte_frontend::session::SessionBody) {
+        // El tope ANTES de sembrar (rust-reviewer MAJOR, fase 1): un hueco nace
+        // con el de fábrica, y sembrar con él recortaba a 30 una historia de 64
+        // que la sesión guardó entera — y la siguiente escritura lo perpetuaba.
+        let tope = self.config.common.ui_chrome.history_size();
         for (id, hueco) in &mut self.huecos {
+            hueco.historial.set_capacity(tope);
             let Some(estado) = body.slots.get(id) else {
                 continue;
             };

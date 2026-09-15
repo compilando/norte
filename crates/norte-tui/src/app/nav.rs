@@ -49,6 +49,14 @@ impl App {
                     norte_frontend::history::popular_rows(&self.popular, &current, "")
                 };
                 cursor = norte_frontend::history::start_cursor(&rows);
+                // Los populares son de toda la sesión: la reinterpretación de UN
+                // panel aplicada a rutas de otro inventaría mojibake
+                // (encoding-auditor, fase 1).
+                let enc = if kind == NavPopupKind::History {
+                    enc
+                } else {
+                    None
+                };
                 super::nav_popup::history_items(rows, enc)
             }
             NavPopupKind::Hotlist => self
@@ -74,6 +82,7 @@ impl App {
                         display,
                         target,
                         hotlist_name: Some(h.name.clone()),
+                        mark: None,
                     }
                 })
                 .collect(),
@@ -113,6 +122,10 @@ impl App {
             return;
         };
         match kind {
+            // La fila «aquí» no se quita: la lista la pone siempre, y
+            // `History::remove` podaría del rastro el directorio actual y su
+            // punto de salto sin que se viera (rust-reviewer, fase 1).
+            NavPopupKind::History if path == *self.panes[pane].dir() => return,
             NavPopupKind::History => self.history[pane].remove(&path),
             NavPopupKind::Popular => self.popular.remove(&path),
             NavPopupKind::Hotlist | NavPopupKind::Volumes => return,
@@ -485,11 +498,23 @@ mod tests {
         app.open_nav_popup(NavPopupKind::History);
         let p = app.nav_popup.as_ref().unwrap();
         assert_eq!(p.items()[0].target, Some(aqui));
-        assert!(
-            p.items()[0]
-                .display
-                .ends_with(&norte_i18n::t("history-mark-current"))
+        assert_eq!(
+            p.items()[0].mark.as_deref(),
+            Some(norte_i18n::t("history-mark-current").as_str()),
+            "la marca va APARTE de la ruta: pegada al texto la imitaba un \
+             directorio llamado `x · aquí`"
         );
+        assert!(
+            !p.items()[0]
+                .display
+                .contains(&norte_i18n::t("history-mark-current"))
+        );
+        // Quitar la fila «aquí» no hace nada: ni la lista ni el rastro cambian.
+        app.nav_popup.as_mut().unwrap().cursor = 0;
+        app.nav_popup_remove_selected();
+        assert_eq!(app.nav_popup.as_ref().unwrap().items().len(), 3);
+        app.nav_popup.as_mut().unwrap().cursor = 1;
+        let p = app.nav_popup.as_ref().unwrap();
         assert_eq!(p.selected().unwrap().target, Some(vp("mem:///dos")));
 
         app.nav_popup_remove_selected();

@@ -603,7 +603,9 @@ impl History {
         }
         // `fwd` va del más viejo al más reciente y `step_forward` saca el
         // ÚLTIMO, así que el principio es lo más lejano hacia delante: lo que
-        // antes dejaría de estar a mano.
+        // antes dejaría de estar a mano. El rastro de vuelta tiene preferencia:
+        // si llena el tope él solo, la rama de delante se va entera, que es lo
+        // mismo que haría la siguiente navegación.
         let exceso = (self.back.len() + self.fwd.len()).saturating_sub(self.cap);
         self.fwd.drain(..exceso.min(self.fwd.len()));
     }
