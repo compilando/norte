@@ -721,7 +721,8 @@ pub struct PathRowView {
 pub struct ExtensionsView {
     /// Lo instalado, en el orden que dio el catálogo.
     pub rows: Vec<ExtensionRowView>,
-    /// Cuál está elegida.
+    /// Cuál está elegida. Recorre `rows` y, detrás, `errors` (puente 69):
+    /// `rows.len() + j` es `errors[j]`.
     pub cursor: u64,
     /// La ficha de la elegida, cuando ya llegó su esquema. `None` mientras
     /// se pide, o si no se pidió.
@@ -935,6 +936,10 @@ pub struct ExtensionErrorView {
     /// Aparte del de `dir` porque son dos cadenas con dos orígenes, y una
     /// sola bandera para las dos deja al lector sin saber cuál mira.
     pub reason_hostile: bool,
+    /// El id con el que se desinstala (puente 69), o `None` si el nombre del
+    /// directorio no es un id: entonces no hay botón, y el host lo rehúsa
+    /// diciendo por qué. La regla es `norte_frontend::broken_plugin`.
+    pub id: Option<String>,
 }
 
 /// La ficha de una extensión: lo que PIDE y lo que se le ha configurado.

@@ -321,7 +321,14 @@ use serde::{Deserialize, Serialize};
 ///   menú abierto o lo abre como `app.menu`, y no hace nada con una pantalla
 ///   que se queda las teclas delante. Cruza como acción propia porque un
 ///   modificador solo no es un chord del keymap.
-pub const BRIDGE_VERSION: u32 = 68;
+/// - **69**: una extensión que no cargó es una fila del gestor.
+///   `ExtensionErrorView` lleva `id` —el de su directorio, si se llama como
+///   uno— y el cursor de `ExtensionsView` sigue detrás de `rows` por
+///   `errors`. `extension_select_row` y `extension_govern` nombran esas filas
+///   por la misma cuenta, y sobre una rota el único cambio que se atiende es
+///   `uninstall`. ADR 0104 lo había dejado escrito como hueco: el handler la
+///   borraba y la ventana no tenía cómo pedírselo.
+pub const BRIDGE_VERSION: u32 = 69;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

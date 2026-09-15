@@ -97,6 +97,11 @@ impl Extensiones {
         // dejaría al lector señalando otra distinta justo después de haberle
         // concedido permisos a la primera.
         let elegida = self.elegida().map(str::to_owned);
+        // Y una ROTA, por lo que se pinta de ella: se queda señalada aunque
+        // el catálogo de encima cambie de tamaño. Por posición, un catálogo
+        // con una cargada menos dejaba el cursor sobre otra fila, y la
+        // siguiente `e` encendía una extensión que nadie eligió.
+        let rota_elegida = self.rota_elegida().map(|r| (r.dir.clone(), r.hostile));
         self.catalogo = lista
             .plugins
             .iter()
@@ -160,11 +165,18 @@ impl Extensiones {
                     // tercero.
                     reason: clamp_display(reason),
                     reason_hostile: reason_enmascarado || dir_ya_convertido(&e.reason),
+                    id: norte_frontend::broken_plugin::uninstallable_id(e, &lista.plugins),
                 }
             })
             .collect();
         if let Some(i) = elegida.and_then(|id| self.filas.iter().position(|f| f.id == id)) {
             self.cursor = i;
+        } else if let Some(j) = rota_elegida.and_then(|(dir, hostil)| {
+            self.errores
+                .iter()
+                .position(|e| e.dir == dir && e.hostile == hostil)
+        }) {
+            self.cursor = self.filas.len() + j;
         } else {
             // La que estaba elegida ya no está —o el catálogo llegó
             // vacío, que es lo que pasa cuando la petición vence—: el
@@ -172,7 +184,7 @@ impl Extensiones {
             // detalle seguía describiendo a una extensión mientras el
             // cursor señalaba a otra, y la siguiente tecla se aplicaba a
             // la señalada.
-            self.cursor = self.cursor.min(self.filas.len().saturating_sub(1));
+            self.cursor = self.cursor.min(self.total().saturating_sub(1));
             self.cerrar_ficha();
         }
     }
@@ -182,15 +194,40 @@ impl Extensiones {
         self.filas.get(self.cursor)
     }
 
+    /// Filas que recorre el cursor: las cargadas y, detrás, las que no.
+    fn total(&self) -> usize {
+        self.filas.len() + self.errores.len()
+    }
+
+    /// La que NO cargó bajo el cursor, si el cursor está en una.
+    ///
+    /// Van detrás de las cargadas, en el orden en que viajaron: la fila
+    /// `filas.len() + j` es `errores[j]`. Un cursor que solo recorría el
+    /// catálogo dejaba una extensión rota sin forma de pedir que se quitara.
+    pub(crate) fn rota_elegida(&self) -> Option<&ExtensionErrorView> {
+        self.cursor
+            .checked_sub(self.filas.len())
+            .and_then(|j| self.errores.get(j))
+    }
+
+    /// La que no cargó y se desinstala con este id, si la hay.
+    pub(crate) fn rota(&self, id: &str) -> Option<&ExtensionErrorView> {
+        self.errores.iter().find(|e| e.id.as_deref() == Some(id))
+    }
+
+    /// El id de la fila `fila` —cargada o rota— tal como viajó. Una rota sin
+    /// id no nombra nada.
+    pub(crate) fn id_de_fila(&self, fila: usize) -> Option<&str> {
+        match fila.checked_sub(self.filas.len()) {
+            None => self.filas.get(fila).map(|f| f.id.as_str()),
+            Some(j) => self.errores.get(j).and_then(|e| e.id.as_deref()),
+        }
+    }
+
     /// El catálogo crudo, para dárselo a la ayuda: sus páginas de extensión
     /// salen de la misma lista que estas filas.
     pub(crate) fn catalogo(&self) -> &[PluginInfo] {
         &self.catalogo
-    }
-
-    /// Las filas tal como viajaron, para comprobar que un clic nombra una.
-    pub(crate) fn filas(&self) -> &[ExtensionRowView] {
-        &self.filas
     }
 
     /// Lo que hay que ENSEÑAR antes de conceder capabilities: el nombre de
@@ -227,15 +264,14 @@ impl Extensiones {
 
     /// Mueve el cursor y TIRA la ficha: describe otra extensión.
     pub(crate) fn mover(&mut self, delta: i64) {
-        if self.filas.is_empty() {
+        let total = self.total();
+        if total == 0 {
             return;
         }
         let destino = i64::try_from(self.cursor)
             .unwrap_or(0)
             .saturating_add(delta);
-        let nuevo = usize::try_from(destino.max(0))
-            .unwrap_or(0)
-            .min(self.filas.len() - 1);
+        let nuevo = usize::try_from(destino.max(0)).unwrap_or(0).min(total - 1);
         if nuevo != self.cursor {
             self.cursor = nuevo;
             self.cerrar_ficha();
@@ -245,7 +281,7 @@ impl Extensiones {
     /// Pone el cursor en una fila concreta (un click). Fuera de rango no hace
     /// nada: quien pinta puede ir un frame por detrás.
     pub(crate) fn senalar(&mut self, fila: usize) {
-        if fila < self.filas.len() && fila != self.cursor {
+        if fila < self.total() && fila != self.cursor {
             self.cursor = fila;
             self.cerrar_ficha();
         }

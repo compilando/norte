@@ -1,6 +1,6 @@
 # 0104 — An extension is uninstalled from the manager, and the manager has buttons
 
-- Status: accepted
+- Status: accepted; its two "not done" uninstall gaps are closed by ADR 0113
 - Date: 2026-09-10
 - Decision makers: Oscar González
 - Related: ADR 0022 (plugin consent is manifest + digest), ADR 0066 (the

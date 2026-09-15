@@ -344,6 +344,16 @@ impl Estado {
                 }
             }
             (Some("dialog.confirm"), _) => {
+                // Una rota no tiene ajustes que abrir: se dice, en vez de una
+                // tecla que no hace nada.
+                if e.rota_elegida().is_some() {
+                    return (
+                        ActionAck::Unavailable {
+                            reason_key: "ext-broken-only-uninstall".to_owned(),
+                        },
+                        self.decir("ext-broken-only-uninstall"),
+                    );
+                }
                 if e.tiene_ficha() {
                     return self.activar_clave(backend, buzon);
                 }
@@ -596,11 +606,29 @@ impl Estado {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         let Some(fila) = e.fila_elegida() else {
+            // Una que NO cargó: no hay capabilities que leer ni nada que
+            // encender, y lo único que se le puede pedir es que se quite —si
+            // su directorio se llama como un id, que es lo que se borra—.
+            let Some(rota) = e.rota_elegida() else {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: "host-no-extension".to_owned(),
+                    },
+                    Vec::new(),
+                );
+            };
+            let clave = match (cambio, rota.id.clone()) {
+                (Cambio::Desinstalacion, Some(id)) => {
+                    return self.preguntar_por_desinstalacion(&id);
+                }
+                (Cambio::Desinstalacion, None) => "ext-broken-not-id",
+                _ => "ext-broken-only-uninstall",
+            };
             return (
                 ActionAck::Unavailable {
-                    reason_key: "host-no-extension".to_owned(),
+                    reason_key: clave.to_owned(),
                 },
-                Vec::new(),
+                self.decir(clave),
             );
         };
         let (id, aprobada, encendida) = (fila.id.clone(), fila.approved, fila.enabled);
@@ -685,8 +713,7 @@ impl Estado {
         row: u32,
         id: &str,
     ) -> Option<bool> {
-        let fila = e.filas().get(row as usize)?;
-        if fila.id != id {
+        if e.id_de_fila(row as usize)? != id {
             return None;
         }
         let movio = e.elegida() != Some(id);
@@ -704,12 +731,13 @@ impl Estado {
         &mut self,
         id: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(nombre) = self
-            .extensiones
-            .as_ref()
-            .and_then(|e| e.concesion(id))
-            .map(|c| c.nombre)
-        else {
+        // Una que no cargó no tiene nombre de manifiesto: se enseña su
+        // directorio, que ya viene saneado y con su bandera.
+        let Some(nombre) = self.extensiones.as_ref().and_then(|e| {
+            e.concesion(id)
+                .map(|c| c.nombre)
+                .or_else(|| e.rota(id).map(|r| (r.dir.clone(), r.hostile)))
+        }) else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         let modal = ModalId(self.siguiente_modal);

@@ -65,8 +65,16 @@ que esta pantalla. Salen por cualquiera de los dos lados. La tecla de quitar
 (y, en la ventana, el botón) de esta pantalla pregunta antes, porque
 desinstalar borra los ficheros de la extensión **y su aprobación** —un plugin
 instalado después con el mismo id empieza de cero. `norte plugin uninstall
-<id>` hace lo mismo sin preguntar, y un daemon que ya está en marcha no se
-entera hasta que reinicia.
+<id>` hace lo mismo sin preguntar. Añade `--daemon` si hay un daemon en
+marcha: entonces lo hace él y la extensión desaparece a la vez de todas las
+ventanas abiertas; sin eso, la orden avisa de que el daemon la seguirá
+listando hasta reiniciarse.
+
+Una extensión que no cargó sale detrás de las demás, con el motivo. Se elige
+como cualquier fila: lo único que ofrece es desinstalar, con la misma tecla,
+el mismo botón y la misma pregunta. Si su directorio no se llama como un id
+de extensión, o una extensión cargada ya usa ese id, no se puede desinstalar
+desde aquí, y la pantalla lo dice: borra el directorio a mano.
 
 > 💡 `norte doctor` informa de qué le pasa a una extensión instalada: un manifiesto que no parsea, un digest que ya no cuadra, una página de ayuda por encima del tope de tamaño.
 

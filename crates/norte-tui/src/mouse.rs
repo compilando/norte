@@ -711,7 +711,7 @@ fn extensions_mouse(app: &mut App, ev: MouseEvent) -> After {
                     return After::Extension("dialog.confirm");
                 }
                 Some(crate::ui::ExtensionHit::Row(i)) => {
-                    if i < mgr.plugins.len() {
+                    if i < mgr.plugins.len() + mgr.errors.len() {
                         mgr.cursor = i;
                         let otro = mgr.config.as_ref().is_some_and(|c| {
                             mgr.plugins.get(i).is_none_or(|p| p.id != c.plugin_id)

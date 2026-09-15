@@ -273,6 +273,9 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
         // con una tecla, enumerando nada.
         "dialog.approve" => {
             let Some(sel) = mgr.selected() else {
+                if mgr.selected_broken().is_some() {
+                    app.message = Some(t("ext-broken-only-uninstall"));
+                }
                 return;
             };
             if sel.approved {
@@ -304,6 +307,9 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
                 .selected()
                 .map(|p| (p.id.clone(), p.enabled, p.approved))
             else {
+                if mgr.selected_broken().is_some() {
+                    app.message = Some(t("ext-broken-only-uninstall"));
+                }
                 return;
             };
             // Encender lo que no está aprobado, no. Apagar lo que sí lo está
@@ -324,6 +330,7 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
         // confirmación que borrar ficheros.
         "dialog.remove" => {
             let Some((id, name)) = mgr.selected().map(|p| (p.id.clone(), p.name.clone())) else {
+                preguntar_desinstalar_rota(app);
                 return;
             };
             let (nombre, nombre_hostil) = crate::app::display_name(name.as_bytes());
@@ -335,6 +342,9 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
         }
         "dialog.confirm" => {
             let Some((id, name)) = mgr.selected().map(|p| (p.id.clone(), p.name.clone())) else {
+                if mgr.selected_broken().is_some() {
+                    app.message = Some(t("ext-broken-only-uninstall"));
+                }
                 return;
             };
             match backend.plugin_get_config(&id).await {
@@ -500,6 +510,29 @@ pub(crate) async fn conceder_aprobacion(
     }
 }
 
+/// `dialog.remove` sobre una extensión que NO cargó: se desinstala por su
+/// directorio si se llama como un id —es lo que `plugin.uninstall` borra—, y
+/// si no, se dice por qué no. La pregunta es la misma que para una cargada.
+fn preguntar_desinstalar_rota(app: &mut App) {
+    let Some(mgr) = app.extensions.as_ref() else {
+        return;
+    };
+    let Some(rota) = mgr.selected_broken() else {
+        return;
+    };
+    let Some(id) = norte_frontend::broken_plugin::uninstallable_id(rota, &mgr.plugins) else {
+        app.message = Some(t("ext-broken-not-id"));
+        return;
+    };
+    let (nombre, nombre_hostil) =
+        crate::app::display_name(rota.dir_bytes.as_deref().unwrap_or(rota.dir.as_bytes()));
+    app.modal = Some(crate::app::Modal::ConfirmPluginUninstall {
+        id,
+        name: nombre,
+        name_hostile: nombre_hostil,
+    });
+}
+
 /// Vuelve a pedirle el catálogo al core y repinta la pantalla con ÉL.
 ///
 /// El camino anterior era `set_local_approved`: un `bool` de este proceso que
@@ -517,7 +550,7 @@ async fn relistar_extensiones(app: &mut App, backend: &Backend) {
             let mut plugins = list.plugins;
             crate::app::clamp_plugin_descriptions(&mut plugins);
             let config = app.extensions.as_mut().and_then(|m| m.config.take());
-            let tope = plugins.len().saturating_sub(1);
+            let tope = (plugins.len() + list.errors.len()).saturating_sub(1);
             app.extensions = Some(crate::app::ExtensionManager {
                 plugins,
                 errors: list.errors,
@@ -602,5 +635,53 @@ mod aprobacion_tests {
 
         assert!(app.modal.is_none(), "no abre ninguna pregunta");
         assert!(app.message.is_some(), "y lo DICE en vez de callarse");
+    }
+
+    fn roto(dir: &str) -> norte_proto::methods::PluginLoadError {
+        norte_proto::methods::PluginLoadError {
+            dir: dir.to_owned(),
+            reason: "el manifiesto no parsea".to_owned(),
+            dir_bytes: Some(dir.as_bytes().to_vec()),
+        }
+    }
+
+    /// Una extensión que NO CARGÓ es una fila más: el cursor baja hasta ella,
+    /// `dialog.remove` pregunta por ella, y los demás verbos lo dicen. Antes
+    /// el cursor se paraba en la última cargada y un roto solo se quitaba a
+    /// mano.
+    #[tokio::test]
+    async fn una_extension_rota_se_senala_y_solo_se_desinstala() {
+        let mut app = app_con(plugin(true, true));
+        if let Some(mgr) = &mut app.extensions {
+            mgr.errors = vec![roto("org.acme.roto"), roto("no un id")];
+            mgr.down();
+        }
+        let backend =
+            norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()));
+
+        super::on_extensions_list_cmd(&mut app, &backend, "dialog.approve").await;
+        assert!(app.modal.is_none(), "aprobar una rota no pregunta nada");
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("ext-broken-only-uninstall").as_str())
+        );
+
+        super::on_extensions_list_cmd(&mut app, &backend, "dialog.remove").await;
+        let Some(Modal::ConfirmPluginUninstall { id, .. }) = &app.modal else {
+            panic!("desinstalar una rota pregunta: {:?}", app.modal);
+        };
+        assert_eq!(id, "org.acme.roto");
+
+        app.modal = None;
+        app.message = None;
+        if let Some(mgr) = &mut app.extensions {
+            mgr.down();
+        }
+        super::on_extensions_list_cmd(&mut app, &backend, "dialog.remove").await;
+        assert!(app.modal.is_none(), "sin id no hay nada que preguntar");
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("ext-broken-not-id").as_str())
+        );
     }
 }

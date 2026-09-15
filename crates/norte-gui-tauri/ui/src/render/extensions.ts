@@ -5,6 +5,7 @@ import type { Screen } from "../render";
 import type {
   ExtensionsView,
   ExtensionRowView,
+  ExtensionErrorView,
   AgentsView,
   ExtensionCommandView,
   ExtensionOutputView,
@@ -132,7 +133,7 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
     }
     lista.append(fila);
   }
-  if (ext.rows.length > 0) {
+  if (ext.cursor < ext.rows.length) {
     lista.setAttribute("aria-activedescendant", `extension-row-${String(ext.cursor)}`);
   }
   cuerpo.append(lista);
@@ -140,6 +141,9 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
   const panel = document.createElement("article");
   panel.className = "extensions-pane";
   const elegida = ext.rows[ext.cursor];
+  // Las que no cargaron van DETRÁS de las cargadas en la cuenta del cursor
+  // (puente 69): la fila `rows.length + j` es `errors[j]`.
+  const rota = ext.errors[ext.cursor - ext.rows.length];
   if (elegida !== undefined) {
     panel.append(this.extensionPaneHead(elegida, ext.cursor));
     if (ext.detail !== null && ext.detail.id === elegida.id) {
@@ -150,6 +154,8 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
       pista.textContent = this.t("ext-detail-hint");
       panel.append(pista);
     }
+  } else if (rota !== undefined) {
+    panel.append(fichaDeRota(this, rota, ext.cursor));
   }
   cuerpo.append(panel);
   caja.append(cuerpo);
@@ -161,8 +167,19 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
     caja.append(titulo);
     const errores = document.createElement("ul");
     errores.className = "extensions-errors";
-    for (const e of ext.errors) {
+    for (const [j, e] of ext.errors.entries()) {
+      // Una fila más: se señala con un clic, y su ficha tiene el único
+      // verbo que le queda. Sin esto, una extensión rota solo se quitaba a
+      // mano, borrando su directorio.
+      const row = ext.rows.length + j;
       const li = document.createElement("li");
+      li.className = "extensions-error";
+      li.id = `extension-row-${String(row)}`;
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", String(ext.cursor === row));
+      li.addEventListener("click", () => {
+        this.send({ action: "extension_select_row", row });
+      });
       const dir = document.createElement("span");
       dir.className = "extensions-error-dir";
       dir.dataset["hostile"] = String(e.hostile);
@@ -185,7 +202,58 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
     caja.append(errores);
   }
   this.extensionsRoot.replaceChildren(caja);
-  revelar(lista.querySelector(`#extension-row-${String(ext.cursor)}`) ?? undefined);
+  revelar(caja.querySelector(`#extension-row-${String(ext.cursor)}`) ?? undefined);
+}
+
+/**
+ * La ficha de una extensión que NO cargó: dónde, por qué, y el único verbo
+ * que le queda. Sin id no hay botón —el directorio no se llama como un id y
+ * no hay nada que mandar a borrar—, y se dice con la frase del host.
+ */
+function fichaDeRota(s: Screen, e: ExtensionErrorView, row: number): HTMLElement {
+  const cabecera = document.createElement("header");
+  cabecera.className = "extensions-pane-head";
+  const nombre = document.createElement("h2");
+  nombre.className = "extensions-pane-name";
+  nombre.dataset["hostile"] = String(e.hostile);
+  nombre.textContent = e.dir;
+  if (e.hostile) {
+    nombre.append(badge(s.t("hostile-name")));
+  }
+  const motivo = document.createElement("p");
+  motivo.className = "extensions-error-reason";
+  motivo.dataset["hostile"] = String(e.reason_hostile);
+  motivo.textContent = e.reason;
+  if (e.reason_hostile) {
+    motivo.append(badge(s.t("hostile-name")));
+  }
+  cabecera.append(nombre, motivo);
+
+  const acciones = document.createElement("div");
+  acciones.className = "extensions-actions";
+  acciones.setAttribute("role", "group");
+  acciones.setAttribute("aria-label", s.t("ext-actions"));
+  const id = e.id;
+  if (id !== null) {
+    const desinstalar = document.createElement("button");
+    desinstalar.type = "button";
+    desinstalar.className = "extensions-action extensions-action-uninstall";
+    desinstalar.textContent = s.t("ext-uninstall");
+    desinstalar.dataset["destructive"] = "true";
+    desinstalar.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      // La misma acción que la tecla: el host pregunta antes de borrar.
+      s.send({ action: "extension_govern", row, id, change: "uninstall" });
+    });
+    acciones.append(desinstalar);
+  } else {
+    const nota = document.createElement("p");
+    nota.className = "extensions-note";
+    nota.textContent = s.t("ext-broken-not-id");
+    acciones.append(nota);
+  }
+  cabecera.append(acciones);
+  return cabecera;
 }
 
 /** La píldora de estado: DOS hechos independientes, y se dicen los dos. */

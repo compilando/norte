@@ -71,9 +71,10 @@ impl ExtensionManager {
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// Baja el cursor (tope al último plugin).
+    /// Baja el cursor (tope a la última fila: las que no cargaron van detrás
+    /// de los plugins).
     pub fn down(&mut self) {
-        let max = self.plugins.len().saturating_sub(1);
+        let max = (self.plugins.len() + self.errors.len()).saturating_sub(1);
         self.cursor = (self.cursor + 1).min(max);
     }
 
@@ -81,6 +82,18 @@ impl ExtensionManager {
     #[must_use]
     pub fn selected(&self) -> Option<&norte_proto::methods::PluginInfo> {
         self.plugins.get(self.cursor)
+    }
+
+    /// La extensión que NO cargó bajo el cursor, si el cursor está en una.
+    ///
+    /// Van detrás de los plugins: la fila `plugins.len() + j` es `errors[j]`.
+    /// Un cursor que se paraba en el último plugin dejaba una extensión rota
+    /// sin forma de pedir que se quitara.
+    #[must_use]
+    pub fn selected_broken(&self) -> Option<&norte_proto::methods::PluginLoadError> {
+        self.cursor
+            .checked_sub(self.plugins.len())
+            .and_then(|j| self.errors.get(j))
     }
 
     /// Togglea el bool LOCAL de aprobación del plugin bajo el cursor, para

@@ -1782,6 +1782,7 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
             hostile: false,
             reason: "el manifiesto no parsea".to_owned(),
             reason_hostile: false,
+            id: None,
         }],
     }
 }
@@ -2441,10 +2442,9 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    // Puente 66: el tema colorea las entradas (`RowView.name_color`,
-    // `name_bold`, `name_dim`, `name_italic`, `name_underline`; spec
-    // 2026-09-11).
-    const FORMA: u64 = 149_794_389_627_969_176;
+    // Puente 69: una extensión que no cargó lleva el id con el que se
+    // desinstala (`ExtensionErrorView.id`).
+    const FORMA: u64 = 13_497_379_772_997_439_901;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {
