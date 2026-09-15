@@ -338,6 +338,20 @@ three binaries, the first listing, and the window coming up under Xvfb. It
 needs Docker and a prior `gui-package`, and deliberately not CI: a clean-install
 failure should not depend on who pressed the button.
 
+**What would be released is built by `just baseline [ref]`, never on this
+machine** (ADR 0112). This machine's glibc is newer than most installed Linux
+systems; a `norte` built here needed GLIBC_2.39 and did not start on Ubuntu
+22.04 or Debian 12, and the smoke that ran it here was green. `baseline` clones
+the ref inside a pinned Ubuntu 22.04 image, builds the `dist` tarballs and
+installers and the window's deb/rpm/AppImage there, fails if any binary needs
+glibc above 2.35 or reports another revision, smoke-tests every artefact on
+the digest-pinned matrix in `scripts/baseline/matrix.txt`, and verifies.
+`baseline-publish <tag> <dir>` uploads only a verified build of exactly that
+tag. The loop for its scripts is `just baseline-selftest` (seconds, no Docker).
+`just gui-smoke` stays for a package `gui-package` built here, and says
+nothing about old distributions. `just baseline-prune` removes its Docker
+volumes and images.
+
 ## Workspace map
 
 - `crates/norte-proto`: protocol types. Any change affects the wire format and

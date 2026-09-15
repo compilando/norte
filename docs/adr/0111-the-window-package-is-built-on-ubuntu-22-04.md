@@ -1,6 +1,6 @@
 # 0111 — The window package is built on Ubuntu 22.04, and that sets its floor
 
-- Status: accepted
+- Status: accepted; its recipes (`gui-baseline`, `gui-publish`) superseded by ADR 0112
 - Date: 2026-09-15
 - Decision makers: Oscar González
 - Related: ADR 0021 (cargo-dist releases), ADR 0087 (the window is a
