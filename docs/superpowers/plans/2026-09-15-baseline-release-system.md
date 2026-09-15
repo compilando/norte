@@ -392,7 +392,8 @@ ENV RUSTUP_HOME=/opt/rustup \
 COPY rust-toolchain.toml dist-workspace.toml /opt/norte/
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none \
  && cd /opt/norte && rustup toolchain install \
- && rustc --version
+ && rustup default "$(grep -E '^channel' rust-toolchain.toml | cut -d'"' -f2)" \
+ && cd / && rustc --version
 RUN v="$(grep -E '^cargo-dist-version' /opt/norte/dist-workspace.toml | cut -d'"' -f2)" \
  && cd /opt/norte && cargo install cargo-dist --version "$v" --locked \
  && rm -rf /opt/cargo/registry /opt/cargo/git
