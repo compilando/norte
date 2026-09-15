@@ -127,5 +127,15 @@ source. What has no key is in the Go menu and the palette.
 - A help snapshot test that looked for titles anywhere in the frame passed by
   accident (the index body printed the longest title whole); it now measures
   the sidebar column only, at a width where the 35 % ceiling fits the title.
-- Still to do in this phase: filtering the list with `/`, adding a history row
-  to bookmarks, and the window's mouse side buttons as back/forward.
+- The lists also take `dialog.add` (the row becomes a bookmark, its name
+  proposed) and `dialog.filter` (type to narrow, `Esc` drops it). The filter
+  folds each path SEGMENT with the pane's name encoding, like the quick search,
+  not the masked display string; popular rows use no reinterpretation.
+- In the window the mouse's side buttons (DOM buttons 3/4) are back/forward on
+  `mouseup`, after the capture `mousedown` has focused the panel. A terminal
+  does not receive them; the help topic says so.
+- Review (rust-reviewer, encoding-auditor): the window applies the configured
+  cap BEFORE seeding a restored history, and counts a popular visit when the
+  listing LANDS (`counts_as_step` split out), so a failed navigation counts in
+  neither frontend; the "here" row cannot be removed; a directory that turns
+  out not to exist leaves Popular too; the TUI mark is its own styled span.

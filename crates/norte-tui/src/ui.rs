@@ -587,6 +587,11 @@ fn draw_nav_popup(
             " {} {masked}_ ",
             t("hotlist-name-prompt")
         )))
+    } else if let Some(filter) = &popup.filter {
+        // Lo que se está filtrando se VE, con el mismo mask que el nombre de
+        // un favorito: un pegado hostil no pinta bidi crudo.
+        let (masked, _) = display_name(filter.as_bytes());
+        Some(Line::raw(format!(" /{masked}_ ")))
     } else if popup.kind == NavPopupKind::Hotlist {
         Some(Line::raw(format!(" {} ", hints.nav_list)))
     } else if matches!(popup.kind, NavPopupKind::History | NavPopupKind::Popular) {

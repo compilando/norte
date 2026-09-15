@@ -13,6 +13,8 @@ commands = [
     "dialog.confirm-other",
     "dialog.remove",
     "dialog.clear",
+    "dialog.add",
+    "dialog.filter",
     "pane.popular",
     "nav.set-jump-point",
     "nav.jump-back",
@@ -48,7 +50,10 @@ Dentro de la lista:
 - {{cmd:dialog.confirm}} va al directorio;
 - {{cmd:dialog.confirm-other}} lo abre en el OTRO panel, sin mover el foco;
 - {{cmd:dialog.remove}} lo quita de la lista y del rastro;
-- {{cmd:dialog.clear}} vacía la historia de ese panel.
+- {{cmd:dialog.clear}} vacía la historia de ese panel;
+- {{cmd:dialog.add}} guarda la fila como favorito, con el nombre ya propuesto;
+- {{cmd:dialog.filter}} filtra la lista mientras tecleas, y `Esc` quita el
+  filtro.
 
 ## Populares
 

@@ -12,7 +12,9 @@ independently through `PROTOCOL_VERSION`.
 - **Navigation history, the whole feature** (ADR 0114). The history list
   starts with where you are ("here") and marks what `nav.forward` can still
   reach; inside it, `Del` removes an entry, `Shift+Del` clears the panel's
-  history and `Alt+Enter` opens the entry in the other panel. New commands in
+  history, `Alt+Enter` opens the entry in the other panel, `a` saves it as a
+  bookmark and `/` filters the list. In the window, the mouse's side buttons
+  are back and forward. New commands in
   both frontends: `pane.popular` (the directories you visit most, one list for
   the session), `pane.history-left` / `pane.history-right` (the history of one
   side), and a jump point per panel (`nav.set-jump-point`, `nav.jump-back`).

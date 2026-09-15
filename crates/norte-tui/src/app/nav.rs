@@ -19,19 +19,25 @@ impl App {
     /// [`Self::open_volumes_popup`], nunca aquí.
     pub fn open_nav_popup(&mut self, kind: NavPopupKind) {
         let pane = self.focus;
-        self.open_nav_popup_for(kind, pane, None);
+        self.open_nav_popup_for(kind, pane, None, None);
     }
 
     /// La historia de un LADO de la pantalla (`pane.history-left/-right`,
     /// spec 2026-09-15 D7): lo elegido navega ESE panel aunque el foco esté en
     /// el otro, y el lado se congela al abrir, como en los volúmenes.
     pub fn open_side_history(&mut self, side: usize) {
-        self.open_nav_popup_for(NavPopupKind::History, side, Some(side));
+        self.open_nav_popup_for(NavPopupKind::History, side, Some(side), None);
     }
 
     /// Abre el popup de `kind` sobre el pane `pane`. `side` solo lo lleva una
     /// historia abierta por lado, para el título.
-    fn open_nav_popup_for(&mut self, kind: NavPopupKind, pane: usize, side: Option<usize>) {
+    fn open_nav_popup_for(
+        &mut self,
+        kind: NavPopupKind,
+        pane: usize,
+        side: Option<usize>,
+        filter: Option<String>,
+    ) {
         let enc = self.panes[pane].name_encoding();
         let mut cursor = 0;
         let items: Vec<NavItem> = match kind {
@@ -43,10 +49,16 @@ impl App {
                 // qué marca lo decide `norte_frontend::history`, igual que en
                 // la ventana (ADR 0077).
                 let current = self.panes[pane].dir().clone();
+                let filtro = filter.as_deref().unwrap_or("");
                 let rows = if kind == NavPopupKind::History {
-                    norte_frontend::history::history_rows(&self.history[pane], &current, "")
+                    norte_frontend::history::history_rows(
+                        &self.history[pane],
+                        &current,
+                        filtro,
+                        enc,
+                    )
                 } else {
-                    norte_frontend::history::popular_rows(&self.popular, &current, "")
+                    norte_frontend::history::popular_rows(&self.popular, &current, filtro)
                 };
                 cursor = norte_frontend::history::start_cursor(&rows);
                 // Los populares son de toda la sesión: la reinterpretación de UN
@@ -95,6 +107,7 @@ impl App {
             target_pane: pane,
             include_pseudo: false,
             side,
+            filter,
         });
     }
 
@@ -162,7 +175,8 @@ impl App {
             return;
         };
         let (kind, pane, side, cursor) = (p.kind, p.target_pane, p.side, p.cursor);
-        self.open_nav_popup_for(kind, pane, side);
+        let filter = p.filter.clone();
+        self.open_nav_popup_for(kind, pane, side, filter);
         if let Some(p) = &mut self.nav_popup {
             p.cursor = cursor.min(p.items.len().saturating_sub(1));
         }
@@ -189,6 +203,7 @@ impl App {
             target_pane: pane,
             include_pseudo,
             side: None,
+            filter: None,
         });
     }
 
@@ -247,19 +262,42 @@ impl App {
     /// intuía. Vacío sigue queriendo decir cancelar (`main.rs`), así que
     /// borrarlo entero sigue siendo la salida.
     pub fn nav_popup_open_name_input(&mut self) {
-        if self
-            .nav_popup
-            .as_ref()
-            .is_none_or(|p| p.kind != NavPopupKind::Hotlist)
-        {
+        let Some(target) = self.nav_popup_add_target() else {
             return;
-        }
+        };
         let ocupados: Vec<&str> = self.hotlist.iter().map(|h| h.name.as_str()).collect();
-        let sugerido =
-            norte_frontend::places::suggested_hotlist_name(self.focused().dir(), &ocupados);
+        let sugerido = norte_frontend::places::suggested_hotlist_name(&target, &ocupados);
         if let Some(p) = &mut self.nav_popup {
             p.name_input = Some(sugerido);
         }
+    }
+
+    /// A dónde apunta el favorito que `dialog.add` crea desde el popup: el
+    /// directorio del pane con foco en la lista de favoritos, y la FILA del
+    /// cursor en una lista de historia o de populares (spec 2026-09-15 D2).
+    /// `None` en volúmenes o sin fila.
+    #[must_use]
+    pub fn nav_popup_add_target(&self) -> Option<VPath> {
+        let p = self.nav_popup.as_ref()?;
+        match p.kind {
+            NavPopupKind::Hotlist => Some(self.focused().dir().clone()),
+            NavPopupKind::History | NavPopupKind::Popular => p.selected()?.target.clone(),
+            NavPopupKind::Volumes => None,
+        }
+    }
+
+    /// Cambia el filtro de una lista de historia o de populares y la rehace
+    /// (spec 2026-09-15 D2). El cursor vuelve al principio: la lista es otra.
+    /// `None` quita el filtro.
+    pub fn nav_popup_set_filter(&mut self, filter: Option<String>) {
+        let Some(p) = &self.nav_popup else {
+            return;
+        };
+        if !matches!(p.kind, NavPopupKind::History | NavPopupKind::Popular) {
+            return;
+        }
+        let (kind, pane, side) = (p.kind, p.target_pane, p.side);
+        self.open_nav_popup_for(kind, pane, side, filter);
     }
 
     /// El `name` CRUDO del favorito seleccionado (la clave que necesita
@@ -562,15 +600,40 @@ mod tests {
         assert_eq!(p.items()[1].target, Some(vp("mem:///poco")));
     }
 
-    /// En el popup de HISTORIAL no hay input de nombre ni name de hotlist.
+    /// En el popup de HISTORIAL, `a` abre el nombre del favorito para la FILA
+    /// del cursor (spec 2026-09-15 D2) —antes no hacía nada—, y no hay name de
+    /// hotlist que borrar.
     #[test]
-    fn nav_popup_historial_sin_input_ni_name() {
+    fn nav_popup_historial_anade_la_fila_como_favorito() {
         let mut app = app_dos_panes();
         app.history[0].push(vp("mem:///uno"));
         app.open_nav_popup(NavPopupKind::History);
+        assert_eq!(app.nav_popup_add_target(), Some(vp("mem:///uno")));
         app.nav_popup_open_name_input();
-        assert!(app.nav_popup.as_ref().unwrap().name_input.is_none());
+        assert_eq!(
+            app.nav_popup.as_ref().unwrap().name_input.as_deref(),
+            Some("uno")
+        );
         assert_eq!(app.nav_popup_selected_hotlist_name(), None);
+    }
+
+    /// D2: el filtro rehace la lista, el cursor vuelve al principio y quitarlo
+    /// la devuelve entera.
+    #[test]
+    fn el_filtro_de_la_historia_rehace_la_lista() {
+        let mut app = app_dos_panes();
+        app.history[0].push(vp("mem:///fotos/2024"));
+        app.history[0].push(vp("mem:///facturas"));
+        app.history[0].push(vp("mem:///musica"));
+        app.open_nav_popup(NavPopupKind::History);
+        let entera = app.nav_popup.as_ref().unwrap().items().len();
+        app.nav_popup_set_filter(Some("fac".to_owned()));
+        let p = app.nav_popup.as_ref().unwrap();
+        assert_eq!(p.filter.as_deref(), Some("fac"));
+        assert_eq!(p.items().len(), 1);
+        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///facturas")));
+        app.nav_popup_set_filter(None);
+        assert_eq!(app.nav_popup.as_ref().unwrap().items().len(), entera);
     }
 
     /// `hotlist_apply_saved` reemplaza por name conservando posición o

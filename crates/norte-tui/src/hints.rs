@@ -328,7 +328,9 @@ impl DialogHints {
             nav_history: dialog_hints(
                 &without_navigation(ALLOW_NAV_HISTORY)
                     .into_iter()
-                    .filter(|c| !matches!(*c, "dialog.confirm" | "dialog.cancel"))
+                    // `add` tampoco: con él no cabe en 80 celdas, y la ayuda
+                    // de la historia lo dice.
+                    .filter(|c| !matches!(*c, "dialog.confirm" | "dialog.cancel" | "dialog.add"))
                     .collect::<Vec<_>>(),
                 eff,
             ),

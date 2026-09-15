@@ -13,6 +13,8 @@ commands = [
     "dialog.confirm-other",
     "dialog.remove",
     "dialog.clear",
+    "dialog.add",
+    "dialog.filter",
     "pane.popular",
     "nav.set-jump-point",
     "nav.jump-back",
@@ -48,7 +50,10 @@ Inside the list:
 - {{cmd:dialog.confirm}} goes to the directory;
 - {{cmd:dialog.confirm-other}} opens it in the OTHER panel, focus stays put;
 - {{cmd:dialog.remove}} drops it from the list and from the trail;
-- {{cmd:dialog.clear}} clears that panel's history.
+- {{cmd:dialog.clear}} clears that panel's history;
+- {{cmd:dialog.add}} saves the row as a bookmark, with a name already proposed;
+- {{cmd:dialog.filter}} filters the list as you type, and `Esc` drops the
+  filter.
 
 ## Popular
 

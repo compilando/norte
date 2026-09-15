@@ -233,8 +233,13 @@ pub fn start_cursor(rows: &[HistoryRow]) -> usize {
 /// delante llevan [`HistoryMark::Forward`]. `filter` casa por subsecuencia
 /// sobre la ruta pintable plegada, igual que la paleta; vacío casa todo.
 #[must_use]
-pub fn history_rows(history: &History, current: &VPath, filter: &str) -> Vec<HistoryRow> {
-    let casa = matcher(filter);
+pub fn history_rows(
+    history: &History,
+    current: &VPath,
+    filter: &str,
+    enc: Option<norte_encoding::NameEncoding>,
+) -> Vec<HistoryRow> {
+    let casa = matcher(filter, enc);
     let mut rows = Vec::with_capacity(history.entries().len() + 1);
     if casa(current) {
         rows.push(HistoryRow {
@@ -264,7 +269,9 @@ pub fn history_rows(history: &History, current: &VPath, filter: &str) -> Vec<His
 /// se mueve de su puesto: aquí el orden ES la información.
 #[must_use]
 pub fn popular_rows(popular: &Popular, current: &VPath, filter: &str) -> Vec<HistoryRow> {
-    let casa = matcher(filter);
+    // Sin reinterpretación: los populares son de toda la sesión, y aplicarles
+    // el encoding de un panel sería inventar lo que no está escrito.
+    let casa = matcher(filter, None);
     popular
         .ranked()
         .into_iter()
@@ -280,12 +287,22 @@ pub fn popular_rows(popular: &Popular, current: &VPath, filter: &str) -> Vec<His
         .collect()
 }
 
-fn matcher(filter: &str) -> impl Fn(&VPath) -> bool {
+/// Si una ruta casa con `filter`, leída con la reinterpretación `enc`.
+///
+/// Se pliega SEGMENTO A SEGMENTO con [`crate::nav::fold_with`] —el nombre
+/// decodificado y sin enmascarar, lo mismo que el buscador rápido— y no la
+/// ruta pintable, que ya viene enmascarada y no sabe de encodings: con esa, un
+/// `Папка` que el panel enseña bien bajo CP866 no casaba con `п`
+/// (encoding-auditor, fase 1). Filtrar nunca cambia un destino.
+fn matcher(filter: &str, enc: Option<norte_encoding::NameEncoding>) -> impl Fn(&VPath) -> bool {
     let needle = crate::nav::fold(filter.as_bytes());
     move |p: &VPath| {
         needle.is_empty() || {
-            let (pintable, _) = crate::display::path_display(p);
-            crate::palette_state::is_subsequence(&needle, &crate::nav::fold(pintable.as_bytes()))
+            let hay: Vec<String> = p
+                .segments()
+                .map(|s| crate::nav::fold_with(s, enc))
+                .collect();
+            crate::palette_state::is_subsequence(&needle, &hay.join("/"))
         }
     }
 }
@@ -383,7 +400,7 @@ mod tests {
         h.record(vp("mem:///b"));
         // Estamos en C; atrás a B: C queda en la rama de delante.
         assert_eq!(h.step_back(vp("mem:///c")), Some(vp("mem:///b")));
-        let rows = history_rows(&h, &vp("mem:///b"), "");
+        let rows = history_rows(&h, &vp("mem:///b"), "", None);
         assert_eq!(rows[0].mark, HistoryMark::Current);
         assert_eq!(rows[0].path, vp("mem:///b"));
         assert!(
@@ -395,7 +412,7 @@ mod tests {
         // C no está en el MRU (nunca se salió de C con un Record), así que no
         // es fila; lo que sí se comprueba es la marca cuando lo está.
         h.push(vp("mem:///c"));
-        let rows = history_rows(&h, &vp("mem:///b"), "");
+        let rows = history_rows(&h, &vp("mem:///b"), "", None);
         let c = rows.iter().find(|r| r.path == vp("mem:///c")).expect("c");
         assert_eq!(c.mark, HistoryMark::Forward);
     }
@@ -405,7 +422,7 @@ mod tests {
         let mut h = History::default();
         h.record(vp("mem:///Documentos/facturas"));
         h.record(vp("mem:///tmp"));
-        let rows = history_rows(&h, &vp("mem:///casa"), "dfac");
+        let rows = history_rows(&h, &vp("mem:///casa"), "dfac", None);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].path, vp("mem:///Documentos/facturas"));
     }

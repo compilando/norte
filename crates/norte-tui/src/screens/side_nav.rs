@@ -338,34 +338,13 @@ pub async fn on_nav_popup_key(
         app.quit = true;
         return Cd::Cancelled;
     }
-    let Some(popup) = &mut app.nav_popup else {
+    let Some(popup) = &app.nav_popup else {
         return Cd::Cancelled;
     };
     let kind = popup.kind;
     // SHIFT pasa (mayúsculas llegan como Char+SHIFT); ctrl/alt no escriben.
     let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
-    if popup.name_input.is_some() {
-        match code {
-            KeyCode::Char(c) if plain => {
-                if let Some(input) = &mut popup.name_input {
-                    input.push(c);
-                }
-            }
-            KeyCode::Backspace if plain => {
-                if let Some(input) = &mut popup.name_input {
-                    input.pop();
-                }
-            }
-            KeyCode::Esc => popup.name_input = None,
-            KeyCode::Enter => {
-                let name = popup.name_input.take().unwrap_or_default();
-                // Input vacío = cancela (plan T5): no hay favorito sin nombre.
-                if !name.is_empty() {
-                    hotlist_add(app, &name).await;
-                }
-            }
-            _ => {}
-        }
+    if name_input_key(app, code, plain).await || filter_key(app, code, plain) {
         return Cd::Cancelled;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
@@ -400,7 +379,9 @@ pub async fn on_nav_popup_key(
         "dialog.cancel" => {
             app.nav_popup_input(PickerAction::Cancel);
         }
-        "dialog.add" if kind == NavPopupKind::Hotlist => {
+        // En favoritos crea uno para el panel; en una historia o en populares,
+        // para la fila del cursor (spec 2026-09-15 D2).
+        "dialog.add" if kind != NavPopupKind::Volumes => {
             app.nav_popup_open_name_input();
         }
         "dialog.remove" if kind == NavPopupKind::Hotlist => {
@@ -411,6 +392,9 @@ pub async fn on_nav_popup_key(
         // Spec 2026-09-15 D2: la historia y los populares también se editan.
         "dialog.remove" if matches!(kind, NavPopupKind::History | NavPopupKind::Popular) => {
             app.nav_popup_remove_selected();
+        }
+        "dialog.filter" if matches!(kind, NavPopupKind::History | NavPopupKind::Popular) => {
+            app.nav_popup_set_filter(Some(String::new()));
         }
         "dialog.clear" if matches!(kind, NavPopupKind::History | NavPopupKind::Popular) => {
             app.nav_popup_clear();
@@ -489,6 +473,63 @@ async fn confirm_nav_popup(
     outcome
 }
 
+/// Las teclas de TEXTO mientras se filtra una lista de historia o de
+/// populares (spec 2026-09-15 D2): imprimibles y borrar escriben el filtro,
+/// `Esc` lo quita, y el resto —Enter, flechas, `Supr`— sigue yendo al keymap
+/// como sin filtro. `true` si la tecla era del filtro.
+fn filter_key(app: &mut App, code: KeyCode, plain: bool) -> bool {
+    let Some(mut filtro) = app.nav_popup.as_ref().and_then(|p| p.filter.clone()) else {
+        return false;
+    };
+    match code {
+        KeyCode::Char(c) if plain => filtro.push(c),
+        KeyCode::Backspace if plain => {
+            filtro.pop();
+        }
+        KeyCode::Esc => {
+            app.nav_popup_set_filter(None);
+            return true;
+        }
+        _ => return false,
+    }
+    app.nav_popup_set_filter(Some(filtro));
+    true
+}
+
+/// Las teclas mientras el nombre de un favorito está abierto (`a`): un editor
+/// de texto RAW, no comandos `dialog.*` (H1 T2). Enter guarda con el destino
+/// del popup; Esc cierra el campo sin cerrar el popup. `true` si el campo
+/// estaba abierto: mientras lo esté, toda tecla es suya.
+async fn name_input_key(app: &mut App, code: KeyCode, plain: bool) -> bool {
+    let Some(input) = app.nav_popup.as_mut().and_then(|p| p.name_input.as_mut()) else {
+        return false;
+    };
+    match code {
+        KeyCode::Char(c) if plain => input.push(c),
+        KeyCode::Backspace if plain => {
+            input.pop();
+        }
+        KeyCode::Esc => {
+            if let Some(p) = &mut app.nav_popup {
+                p.name_input = None;
+            }
+        }
+        KeyCode::Enter => {
+            let name = app
+                .nav_popup
+                .as_mut()
+                .and_then(|p| p.name_input.take())
+                .unwrap_or_default();
+            // Input vacío = cancela (plan T5): no hay favorito sin nombre.
+            if !name.is_empty() {
+                hotlist_add(app, &name).await;
+            }
+        }
+        _ => {}
+    }
+    true
+}
+
 /// `config::user_config_dir()` o el MISMO io `NotFound` que fabrica
 /// `persist_ui_theme` sin entorno (CI pelada): la barra lo pinta como
 /// `err-not-found` vía categoría (#73), clave existente y razonable.
@@ -501,13 +542,17 @@ fn user_config_dir_io() -> std::io::Result<std::path::PathBuf> {
     })
 }
 
-/// Persiste el favorito `name` = cwd del pane con foco en el `norte.toml`
-/// del USUARIO (`spawn_blocking`, regla 2 — `persist_hotlist_add` es
-/// bloqueante por contrato). Solo si el disco fue bien se refresca la copia
-/// en `App` (consistencia con disco) y sale `msg-hotlist-saved`; un fallo
-/// io sale por categoría y la copia NO se toca.
+/// Persiste el favorito `name` = el destino del popup
+/// ([`App::nav_popup_add_target`]: el cwd del pane con foco en favoritos, la
+/// fila del cursor en una historia) en el `norte.toml` del USUARIO
+/// (`spawn_blocking`, regla 2 — `persist_hotlist_add` es bloqueante por
+/// contrato). Solo si el disco fue bien se refresca la copia en `App`
+/// (consistencia con disco) y sale `msg-hotlist-saved`; un fallo io sale por
+/// categoría y la copia NO se toca.
 async fn hotlist_add(app: &mut App, name: &str) {
-    let target = app.focused().dir().clone();
+    let Some(target) = app.nav_popup_add_target() else {
+        return;
+    };
     let wire = target.to_wire();
     let n = name.to_owned();
     // Al PERFIL activo si lo hay: los favoritos son de un espacio de trabajo,

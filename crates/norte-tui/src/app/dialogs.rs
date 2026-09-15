@@ -298,18 +298,21 @@ pub const ALLOW_NAV_POPUP: &[&str] = &[
     // y vaciar (historia y populares; lo filtra el caller por kind).
     "dialog.confirm-other",
     "dialog.clear",
+    // Filtrar la historia o los populares (lo filtra el caller por kind).
+    "dialog.filter",
 ];
 
-/// HINT del popup en modo HISTORIA o POPULARES (spec 2026-09-15 D2): quitar,
-/// vaciar y abrir en el otro panel. Sin `add`: un favorito se crea desde su
-/// propia lista.
+/// HINT del popup en modo HISTORIA o POPULARES (spec 2026-09-15 D2): añadir a
+/// favoritos, quitar, vaciar, abrir en el otro panel y filtrar.
 pub const ALLOW_NAV_HISTORY: &[&str] = &[
     "dialog.up",
     "dialog.down",
     "dialog.confirm",
     "dialog.confirm-other",
+    "dialog.add",
     "dialog.remove",
     "dialog.clear",
+    "dialog.filter",
     "dialog.cancel",
 ];
 

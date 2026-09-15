@@ -236,7 +236,7 @@ impl Estado {
     /// Abre la historia del hueco activo.
     pub(super) fn abrir_historial(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let slot = self.activo();
-        self.abrir_lista_de_historia(slot, "picker-history-title", false, None)
+        self.abrir_lista_de_historia(slot, "picker-history-title", false, None, None)
     }
 
     /// Abre la historia de un LADO de la pantalla (spec 2026-09-15 D7): lo
@@ -259,13 +259,13 @@ impl Estado {
         } else {
             "picker-history-title-left"
         };
-        self.abrir_lista_de_historia(slot, titulo, false, None)
+        self.abrir_lista_de_historia(slot, titulo, false, None, None)
     }
 
     /// Abre los populares de la sesión (D6), navegando el hueco activo.
     pub(super) fn abrir_populares(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let slot = self.activo();
-        self.abrir_lista_de_historia(slot, "picker-popular-title", true, None)
+        self.abrir_lista_de_historia(slot, "picker-popular-title", true, None, None)
     }
 
     /// Abre —o rehace, con `cursor`— una lista de historia sobre `slot`.
@@ -280,6 +280,7 @@ impl Estado {
         titulo: &'static str,
         populares: bool,
         cursor: Option<usize>,
+        filtro: Option<String>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let tope = self.config.common.ui_chrome.history_size();
         let Some(hueco) = self.huecos.get_mut(&slot) else {
@@ -310,10 +311,11 @@ impl Estado {
         } else {
             hueco.pane.name_encoding()
         };
+        let texto = filtro.as_deref().unwrap_or("");
         let filas = if populares {
-            norte_frontend::history::popular_rows(&self.popular, &actual, "")
+            norte_frontend::history::popular_rows(&self.popular, &actual, texto)
         } else {
-            norte_frontend::history::history_rows(&hueco.historial, &actual, "")
+            norte_frontend::history::history_rows(&hueco.historial, &actual, texto, enc)
         };
         let mut selector = crate::pickers::Selector::historia(
             slot,
@@ -322,6 +324,7 @@ impl Estado {
             self.lang,
             titulo,
             populares,
+            filtro,
         );
         if let Some(c) = cursor {
             selector.senalar(c.min(filas.len().saturating_sub(1)));
@@ -343,6 +346,7 @@ impl Estado {
         };
         let (slot, titulo, populares, cursor) =
             (s.slot(), s.titulo(), s.es_populares(), s.cursor());
+        let filtro = s.filtro().map(str::to_owned);
         let Some(destino) = s.elegir() else {
             return (self.aplicada(), Vec::new());
         };
@@ -358,7 +362,7 @@ impl Estado {
             }
             h.historial.remove(&destino);
         }
-        self.abrir_lista_de_historia(slot, titulo, populares, Some(cursor))
+        self.abrir_lista_de_historia(slot, titulo, populares, Some(cursor), filtro)
     }
 
     /// `dialog.clear` sobre una lista de historia (D2). Sin confirmación, como
@@ -378,7 +382,8 @@ impl Estado {
             }
             "msg-history-cleared"
         };
-        let (ack, mut envios) = self.abrir_lista_de_historia(slot, titulo, populares, Some(0));
+        let (ack, mut envios) =
+            self.abrir_lista_de_historia(slot, titulo, populares, Some(0), None);
         envios.extend(self.decir(clave));
         (ack, envios)
     }
@@ -458,6 +463,48 @@ impl Estado {
         self.hueco_mut().historial.set_jump(dir);
         let envios = self.decir("msg-nav-jump-point-set");
         (self.aplicada(), envios)
+    }
+
+    /// Las teclas de TEXTO mientras se filtra una lista de historia (spec
+    /// 2026-09-15 D2), con la regla del terminal: imprimibles y borrar
+    /// escriben, `Esc` quita el filtro, y lo demás sigue yendo al keymap.
+    /// `None` si la tecla no era del filtro, o no se está filtrando.
+    pub(super) fn tecla_de_filtro(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        let mut filtro = self.selector.as_ref()?.filtro()?.to_owned();
+        match k.key.as_str() {
+            "Escape" | "esc" => return Some(self.filtrar_historia(None)),
+            "Backspace" | "backspace" => {
+                filtro.pop();
+            }
+            otra => {
+                // Una tecla de TEXTO es un punto de código, como en la paleta.
+                let mut chars = otra.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => filtro.push(c),
+                    _ => return None,
+                }
+            }
+        }
+        Some(self.filtrar_historia(Some(filtro)))
+    }
+
+    /// Rehace la lista de historia abierta con otro filtro; `None` lo quita.
+    /// El cursor vuelve al principio: la lista es otra.
+    pub(super) fn filtrar_historia(
+        &mut self,
+        filtro: Option<String>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(s) = self.selector.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        if !s.es_historia() {
+            return (self.aplicada(), Vec::new());
+        }
+        let (slot, titulo, populares) = (s.slot(), s.titulo(), s.es_populares());
+        self.abrir_lista_de_historia(slot, titulo, populares, None, filtro)
     }
 
     /// Abre los favoritos de la configuración con la que arrancó la ventana.

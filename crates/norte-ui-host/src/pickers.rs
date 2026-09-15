@@ -378,6 +378,9 @@ pub(crate) struct Selector {
     /// editaba (#309). Con la historia y los populares (spec 2026-09-15 D2) son
     /// tres, y tres bools serían tres campos que se pueden contradecir.
     tipo: TipoSelector,
+    /// El filtro de una lista de historia mientras se teclea (spec 2026-09-15
+    /// D2). `None` sin filtrar y en las demás listas.
+    filtro: Option<String>,
 }
 
 /// Qué lista es un selector, en lo que a sus verbos importa.
@@ -436,6 +439,7 @@ impl Selector {
             titulo,
             slot,
             tipo: TipoSelector::Otro,
+            filtro: None,
         }
     }
 
@@ -453,6 +457,7 @@ impl Selector {
             titulo: "picker-connections-title",
             slot,
             tipo: TipoSelector::Otro,
+            filtro: None,
         }
     }
 
@@ -514,6 +519,7 @@ impl Selector {
         lang: Lang,
         titulo: &'static str,
         populares: bool,
+        filtro: Option<String>,
     ) -> Self {
         let vistas = filas
             .iter()
@@ -547,6 +553,7 @@ impl Selector {
             } else {
                 TipoSelector::Historia
             },
+            filtro,
         }
     }
 
@@ -594,6 +601,7 @@ impl Selector {
             titulo: "picker-hotlist-title",
             slot,
             tipo: TipoSelector::Hotlist,
+            filtro: None,
         }
     }
 
@@ -631,6 +639,11 @@ impl Selector {
     /// La clave Fluent del título, para rehacer la lista con el mismo.
     pub(crate) fn titulo(&self) -> &'static str {
         self.titulo
+    }
+
+    /// El filtro de una lista de historia, si se está filtrando.
+    pub(crate) fn filtro(&self) -> Option<&str> {
+        self.filtro.as_deref()
     }
 
     /// El NOMBRE de la fila del cursor, sin pintar.
@@ -711,7 +724,17 @@ impl Selector {
     /// La proyección.
     pub(crate) fn vista(&self, lang: Lang) -> PickerView {
         PickerView {
-            title: clamp_display(norte_i18n::t_in(lang, self.titulo)),
+            // El filtro de una historia se DICE en el título (spec 2026-09-15
+            // D2): sin verlo, la lista encoge sin motivo aparente. Enmascarado:
+            // lo teclea el lector, pero un pegado puede colar bidi.
+            title: clamp_display(match &self.filtro {
+                Some(f) => format!(
+                    "{} — /{}",
+                    norte_i18n::t_in(lang, self.titulo),
+                    norte_frontend::display_name(f.as_bytes()).0
+                ),
+                None => norte_i18n::t_in(lang, self.titulo),
+            }),
             rows: self.filas.iter().map(|f| f.vista.clone()).collect(),
             cursor: (!self.filas.is_empty()).then_some(self.cursor as u64),
             empty: if self.filas.is_empty() {

@@ -77,6 +77,10 @@ pub struct NavPopup {
     /// Solo una historia abierta por LADO (`pane.history-left/-right`): qué
     /// lado, para que el título lo diga. `None` en todo lo demás.
     pub(crate) side: Option<usize>,
+    /// El filtro de una lista de historia o de populares (`dialog.filter`,
+    /// spec 2026-09-15 D2): `Some` mientras se teclea, y entonces las teclas de
+    /// texto son suyas. `None` sin filtrar y en las demás listas.
+    pub filter: Option<String>,
 }
 
 impl NavPopup {
