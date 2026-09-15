@@ -101,7 +101,18 @@ artefact on each distribution.
   fails, not recorded in a file somebody may read.
 - Negative: releasing needs Docker; the builder image and the
   `norte-baseline-registry` / `norte-baseline-target` volumes live on disk
-  until `just baseline-prune`.
+  until `just baseline-prune`. Measured on 2026-09-15 for `v0.3.0-alpha.4`:
+  image 2.43 GB, target volume 7.9 GB, registry volume 1.5 GB, output
+  257 MB; `just baseline` took 19 minutes with a warm target volume — 13 for
+  the build, 6 for the 18 smoke runs (four at a time) and the verification.
+  The first build of the image adds the rustup and cargo-dist install.
+- Positive, and the reason the matrix is worth its six minutes: its first run
+  found two defects no check had seen. The AppImage does not start in a
+  bare container, because AppImage's excludelist leaves the desktop's GL,
+  X11 and font libraries out on purpose — so the AppImage smoke installs that
+  desktop baseline, including `libGLESv2`, which WebKit opens with `dlopen`
+  and `ldd` does not list. And the builder image had no default Rust
+  toolchain outside the repository directory.
 - Negative: Ubuntu 22.04 leaves standard support in 2027; the base and the
   floor move then, and the image digest is the line that changes.
 - Negative: packages are still unsigned, and `cargo-semver-checks` still skips
