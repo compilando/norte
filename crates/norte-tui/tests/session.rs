@@ -454,6 +454,7 @@ fn la_sesion_gana_a_profile_start() {
             cursor: 0,
             back: Vec::new(),
             forward: Vec::new(),
+            jump: None,
             sort: norte_frontend::SortSpec::default(),
             columns: Vec::new(),
             show_hidden: false,

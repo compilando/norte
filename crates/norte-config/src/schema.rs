@@ -403,6 +403,14 @@ pub struct UiSection {
     /// `[enter] confirm · [esc] cancel` line. Absent = `true`.
     #[serde(default)]
     pub dialog_buttons: Option<bool>,
+    /// How many directories each panel's navigation history keeps: the list
+    /// `pane.history` shows and the trail `nav.back` walks. Absent = `30`.
+    ///
+    /// [`crate::load::load`] rejects values outside `5..=64`: 64 is what the
+    /// saved session keeps per panel, so a larger number would be lost on
+    /// restart without a word.
+    #[serde(default)]
+    pub history_size: Option<u32>,
     /// `[ui.columns]` (#108 block 4): column selection and sort order.
     #[serde(default)]
     pub columns: Option<UiColumnsSection>,

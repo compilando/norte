@@ -268,6 +268,17 @@ mod tests {
         VPath::parse(wire).expect("wire")
     }
 
+    /// `norte-config` valida `[ui] history_size` con sus propios números
+    /// porque no puede depender de este crate; este test es lo que impide que
+    /// los dos topes diverjan.
+    #[test]
+    fn los_topes_de_la_config_son_los_del_historial() {
+        use norte_config::load::UiChrome;
+        assert_eq!(UiChrome::MIN_HISTORY_SIZE as usize, HISTORY_MIN);
+        assert_eq!(UiChrome::MAX_HISTORY_SIZE as usize, HISTORY_MAX);
+        assert_eq!(UiChrome::DEFAULT_HISTORY_SIZE as usize, HISTORY_DEFAULT);
+    }
+
     #[test]
     fn un_replay_o_un_seed_no_cuentan_como_visita() {
         let (mut h, mut p) = (History::default(), Popular::default());

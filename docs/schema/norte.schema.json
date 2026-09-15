@@ -517,6 +517,16 @@
             "null"
           ]
         },
+        "history_size": {
+          "default": null,
+          "description": "How many directories each panel's navigation history keeps: the list\n`pane.history` shows and the trail `nav.back` walks. Absent = `30`.\n\n[`crate::load::load`] rejects values outside `5..=64`: 64 is what the\nsaved session keeps per panel, so a larger number would be lost on\nrestart without a word.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "key_bar": {
           "default": null,
           "description": "Whether the row of function keys (F1–F10 with what each one does on\nthe current screen) stays pinned at the bottom. Absent = `true`.\n\nDerived from the effective keymap, never drawn by hand: rebinding F5\nchanges the label, and a screen that binds nothing to F7 shows an\nempty cell there. Clicking a cell runs the command.",

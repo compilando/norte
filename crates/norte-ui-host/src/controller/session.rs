@@ -362,6 +362,7 @@ impl Estado {
             hueco
                 .historial
                 .seed(estado.back.clone(), estado.forward.clone());
+            hueco.historial.seed_jump(estado.jump.clone());
         }
     }
 
@@ -393,6 +394,7 @@ impl Estado {
                     cursor: hueco.pane.cursor() as u64,
                     back: hueco.historial.trail().to_vec(),
                     forward: hueco.historial.forward_trail().to_vec(),
+                    jump: hueco.historial.jump().cloned(),
                     sort: hueco.pane.sort(),
                     columns: Vec::new(),
                     show_hidden: hueco.pane.show_hidden(),

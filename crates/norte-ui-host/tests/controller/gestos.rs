@@ -1009,6 +1009,7 @@ async fn la_sesion_devuelve_el_orden_y_los_ocultos() {
             cursor: 0,
             back: Vec::new(),
             forward: Vec::new(),
+            jump: None,
             sort: norte_frontend::SortSpec {
                 column: norte_frontend::SortColumn::Size,
                 dir: norte_frontend::SortDir::Desc,

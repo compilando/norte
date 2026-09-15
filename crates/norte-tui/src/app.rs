@@ -990,6 +990,10 @@ pub struct App {
     /// (spec 2026-09-10). Viven en la sesión de UI: se leen al restaurarla y
     /// se escriben con ella.
     pub palette_recent: Vec<String>,
+    /// Los directorios a los que más se va, de la sesión entera (spec
+    /// 2026-09-15 D6). Como `palette_recent`: se leen al restaurar la sesión
+    /// y se escriben con ella.
+    pub popular: norte_frontend::history::Popular,
     /// Filas de la palette PRECOMPUTADAS del keymap vigente
     /// ([`crate::palette::build_rows`]) — igual criterio que `help_lines`/
     /// `dialog_hints`: se reconstruyen en el arranque y en cada hot-reload
@@ -1182,6 +1186,7 @@ impl App {
             help_chords: default_help_chords(),
             palette: None,
             palette_recent: Vec::new(),
+            popular: norte_frontend::history::Popular::default(),
             palette_rows: Vec::new(),
             wizard: None,
             mouse: crate::mouse::MouseState::default(),

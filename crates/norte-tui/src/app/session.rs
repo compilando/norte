@@ -59,6 +59,7 @@ impl App {
             layouts,
             slots: self.session.orphans.clone(),
             palette_recent: self.palette_recent.clone(),
+            popular: self.popular.entries().to_vec(),
         };
         for id in self.layout.slot_ids() {
             let Some(pane) = self.panes.browser(id) else {
@@ -74,6 +75,7 @@ impl App {
                     forward: history
                         .map(|h| h.forward_trail().to_vec())
                         .unwrap_or_default(),
+                    jump: history.and_then(|h| h.jump().cloned()),
                     sort: pane.sort(),
                     // Las columnas son de la CONFIGURACIÓN por scheme, no
                     // estado por hueco: capturarlas aquí inventaría un estado
@@ -128,6 +130,7 @@ impl App {
             self.set_layout(tree.clone());
         }
         self.palette_recent.clone_from(&body.palette_recent);
+        self.popular = norte_frontend::history::Popular::from_entries(body.popular.clone());
         // Lo de los OTROS perfiles se guarda entero para volver a escribirlo:
         // este proceso mira un perfil y el documento es de todos.
         self.session.other_layouts = body
@@ -165,9 +168,9 @@ impl App {
                 Some(estado.show_hidden),
             );
             self.session.cursors.insert(*raw, estado.cursor);
-            self.history
-                .for_slot_mut(id)
-                .seed(estado.back.clone(), estado.forward.clone());
+            let history = self.history.for_slot_mut(id);
+            history.seed(estado.back.clone(), estado.forward.clone());
+            history.seed_jump(estado.jump.clone());
             ask.push(id);
         }
         ask
