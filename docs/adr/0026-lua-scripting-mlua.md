@@ -3,7 +3,8 @@
 - Status: accepted
 - Date: 2026-07-17
 - Decision makers: Oscar González
-- Related: specification sections 7.2 and 8; ADR 0022
+- Related: specification sections 7.2 and 8; ADR 0022; ADR 0110 (the window
+  does not host Lua, and the API is frozen)
 
 ## Context
 
