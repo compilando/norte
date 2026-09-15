@@ -327,6 +327,87 @@ fn unsafe_free_kill(pid: u32) {
     assert!(status.success(), "kill -INT falló");
 }
 
+/// ADR 0104 lo dejó escrito como hueco: `norte plugin uninstall` borraba el
+/// disco por detrás de un daemon vivo, que descubre el catálogo al arrancar y
+/// no vigila el directorio — y seguía anunciando el plugin hasta reiniciarse.
+/// Con un daemon escuchando, desinstalar va POR él.
+///
+/// Un plugin ROTO basta, y es el caso que más se ve: el daemon lo cuenta en
+/// `errors` y `plugin list` lo dice por stderr («`norte doctor` dice por
+/// qué», en los dos idiomas). La afirmación de ANTES es la que hace que la
+/// de después signifique algo.
+#[cfg(unix)]
+#[test]
+fn plugin_uninstall_con_daemon_vivo_lo_olvida_el_daemon() {
+    /// El daemon muere con el test, también si una aserción revienta.
+    struct Hijo(std::process::Child);
+    impl Drop for Hijo {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let estado = tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir de estado");
+    let roto = estado.path().join("plugins").join("org.test.roto");
+    std::fs::create_dir_all(&roto).unwrap();
+    std::fs::write(roto.join("plugin.toml"), "esto no es un manifiesto").unwrap();
+    // El socket en `/tmp` y no bajo el target: `sun_path` tiene 108 bytes.
+    let run = tempfile::tempdir().unwrap();
+    let socket = run.path().join("d.sock");
+
+    let bin = assert_cmd::cargo::cargo_bin("norte");
+    let _daemon = Hijo(
+        std::process::Command::new(&bin)
+            .env("NORTE_CONFIG_DIR", estado.path())
+            .args(["daemon", "run", "--idle-timeout", "0", "--socket"])
+            .arg(&socket)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    // Hasta que ACEPTA, no hasta que el fichero existe: un `--daemon` que no
+    // conecta arranca otro daemon por su cuenta, y el test mediría a ese.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::os::unix::net::UnixStream::connect(&socket).is_err() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "el daemon no aceptó en 15 s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let norte_en = || {
+        let mut c = Command::cargo_bin("norte").expect("binario norte compilado");
+        c.env("NORTE_CONFIG_DIR", estado.path());
+        c.arg("--socket").arg(&socket);
+        c
+    };
+    let rotos_segun_el_daemon = || {
+        let out = norte_en()
+            .args(["--daemon", "plugin", "list"])
+            .assert()
+            .success();
+        String::from_utf8_lossy(&out.get_output().stderr).contains("doctor")
+    };
+
+    assert!(
+        rotos_segun_el_daemon(),
+        "el daemon debía contar el plugin roto antes"
+    );
+    // Sin `--daemon`: es el camino que escribía por detrás.
+    norte_en()
+        .args(["plugin", "uninstall", "org.test.roto"])
+        .assert()
+        .success();
+    assert!(!roto.exists(), "el directorio del plugin sigue en disco");
+    assert!(
+        !rotos_segun_el_daemon(),
+        "el daemon sigue anunciando un plugin desinstalado"
+    );
+}
+
 /// M3-4 T6: `policy grant` sin daemon en marcha falla LIMPIO (sin autoarranque
 /// — conceder un scope a un daemon que no existe no tiene sentido). El socket
 /// apunta a un path muerto en un tempdir.
