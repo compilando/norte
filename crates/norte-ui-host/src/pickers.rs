@@ -372,12 +372,25 @@ pub(crate) struct Selector {
     /// que mover el foco mientras la lista está puesta cambiara el panel que
     /// acaba montando el volumen.
     slot: u32,
-    /// Es el de FAVORITOS, la única lista de esta ventana que se EDITA (#309).
+    /// Qué lista es, para los verbos que solo significan algo sobre algunas.
     ///
-    /// Un bool y no un `kind` con cinco variantes: lo que se pregunta aquí no
-    /// es qué lista es sino si `dialog.add`/`dialog.remove` significan algo
-    /// sobre ella, y hoy solo hay una de la que sea cierto.
-    hotlist: bool,
+    /// Fue un `bool` de «es la de favoritos» mientras hubo UNA lista que se
+    /// editaba (#309). Con la historia y los populares (spec 2026-09-15 D2) son
+    /// tres, y tres bools serían tres campos que se pueden contradecir.
+    tipo: TipoSelector,
+}
+
+/// Qué lista es un selector, en lo que a sus verbos importa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TipoSelector {
+    /// Volúmenes, conexiones: se eligen y nada más.
+    Otro,
+    /// Los favoritos: se añaden y se quitan (#309).
+    Hotlist,
+    /// La historia de un hueco: se quita y se vacía.
+    Historia,
+    /// Los populares de la sesión: igual que la historia.
+    Populares,
 }
 
 /// Una fila con lo que hace falta para ACTUAR, además de para pintar.
@@ -422,7 +435,7 @@ impl Selector {
             vacio: "picker-volumes-loading",
             titulo,
             slot,
-            hotlist: false,
+            tipo: TipoSelector::Otro,
         }
     }
 
@@ -439,7 +452,7 @@ impl Selector {
             vacio: "picker-connections-loading",
             titulo: "picker-connections-title",
             slot,
-            hotlist: false,
+            tipo: TipoSelector::Otro,
         }
     }
 
@@ -483,34 +496,52 @@ impl Selector {
         };
     }
 
-    /// El rastro de navegación de un hueco, más reciente primero.
+    /// Una lista de historia —la de un hueco o los populares de la sesión—
+    /// desde las filas COMPARTIDAS ([`norte_frontend::history::history_rows`]).
     ///
-    /// Las filas son las de `History::entries` —el MRU compartido— y no una
-    /// segunda lista de aquí: qué recuerda un panel y en qué orden no puede
-    /// depender de quién lo pinta.
-    pub(crate) fn historial(slot: u32, rastro: &std::collections::VecDeque<VPath>) -> Self {
-        let filas = rastro
+    /// Qué filas salen, en qué orden y con qué marca no puede depender de quién
+    /// lo pinta: lo decide el crate compartido, igual que en el terminal. La
+    /// marca («aquí», «adelante») va en el detalle de la fila, y el cursor
+    /// empieza en la siguiente a la actual.
+    pub(crate) fn historia(
+        slot: u32,
+        filas: &[norte_frontend::history::HistoryRow],
+        lang: Lang,
+        titulo: &'static str,
+        populares: bool,
+    ) -> Self {
+        let vistas = filas
             .iter()
-            .map(|p| {
-                let (pintable, hostile) = norte_frontend::display::path_display(p);
+            .map(|r| {
+                let (pintable, hostile) = norte_frontend::display::path_display(&r.path);
+                let detalle = norte_frontend::history::mark_key(r.mark)
+                    .map_or_else(String::new, |k| norte_i18n::t_in(lang, k));
                 Fila {
                     vista: PickerRowView {
                         label: clamp_display(pintable),
                         hostile,
-                        detail: String::new(),
+                        detail: clamp_display(detalle),
                     },
-                    destino: Some(p.clone()),
+                    destino: Some(r.path.clone()),
                     nombre: None,
                 }
             })
             .collect();
         Self {
-            filas,
-            cursor: 0,
-            vacio: "picker-history-empty",
-            titulo: "picker-history-title",
+            filas: vistas,
+            cursor: norte_frontend::history::start_cursor(filas),
+            vacio: if populares {
+                "picker-popular-empty"
+            } else {
+                "picker-history-empty"
+            },
+            titulo,
             slot,
-            hotlist: false,
+            tipo: if populares {
+                TipoSelector::Populares
+            } else {
+                TipoSelector::Historia
+            },
         }
     }
 
@@ -557,7 +588,7 @@ impl Selector {
             vacio: "picker-hotlist-empty",
             titulo: "picker-hotlist-title",
             slot,
-            hotlist: true,
+            tipo: TipoSelector::Hotlist,
         }
     }
 
@@ -573,7 +604,28 @@ impl Selector {
     /// monta el sistema y las disposiciones se guardan por otro camino—, así
     /// que esos dos verbos solo significan algo aquí.
     pub(crate) fn es_hotlist(&self) -> bool {
-        self.hotlist
+        self.tipo == TipoSelector::Hotlist
+    }
+
+    /// ¿Es una lista de HISTORIA, la de un hueco o los populares? Lo pregunta
+    /// quien atiende `dialog.remove`/`dialog.clear` (spec 2026-09-15 D2).
+    pub(crate) fn es_historia(&self) -> bool {
+        matches!(self.tipo, TipoSelector::Historia | TipoSelector::Populares)
+    }
+
+    /// ¿Es la de populares?
+    pub(crate) fn es_populares(&self) -> bool {
+        self.tipo == TipoSelector::Populares
+    }
+
+    /// La fila del cursor, para rehacer la lista sin perder el sitio.
+    pub(crate) fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// La clave Fluent del título, para rehacer la lista con el mismo.
+    pub(crate) fn titulo(&self) -> &'static str {
+        self.titulo
     }
 
     /// El NOMBRE de la fila del cursor, sin pintar.

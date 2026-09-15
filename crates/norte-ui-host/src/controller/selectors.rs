@@ -940,6 +940,14 @@ impl Estado {
                 // ignoran, como cualquier tecla que ese selector no ata.
                 Some("dialog.add") if s.es_hotlist() => return self.pedir_favorito(),
                 Some("dialog.remove") if s.es_hotlist() => return self.quitar_favorito(buzon),
+                // La historia y los populares también se editan (spec
+                // 2026-09-15 D2), y abrir en el otro hueco vale para toda
+                // lista que navega.
+                Some("dialog.remove") if s.es_historia() => return self.quitar_de_historia(),
+                Some("dialog.clear") if s.es_historia() => return self.vaciar_historia(),
+                Some("dialog.confirm-other") => {
+                    return self.elegir_del_selector_en_otro(backend, buzon);
+                }
                 _ => return (self.aplicada(), Vec::new()),
             }
         }

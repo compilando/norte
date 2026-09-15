@@ -61,6 +61,12 @@ keymap = [
     { on = ["backspace"], run = "nav.parent" },
     { on = ["alt+left"], run = "nav.back" },
     { on = ["alt+right"], run = "nav.forward" },
+    # `H`/`L`: atrás y adelante en la historia, como en ranger y yazi, que son
+    # el vim de los gestores de ficheros. `h`/`l` siguen siendo subir y entrar.
+    # El punto de salto, los populares y la historia de un lado van por el menú
+    # Ir y la paleta: ninguno de los dos les da tecla.
+    { on = ["H"], run = "nav.back" },
+    { on = ["L"], run = "nav.forward" },
     { on = ["alt+i"], run = "pane.mirror" },
     { on = ["alt+u"], run = "pane.pull" },
     # `ctrl+u` (el chord de los otros dos presets para pane.swap) ya es
@@ -203,4 +209,9 @@ keymap = [
     { on = ["backspace"], run = "dialog.back" },
     { on = ["/"], run = "dialog.filter" },
     { on = ["ctrl+o"], run = "dialog.back" },
+    # Las listas de historia (spec 2026-09-15 D2): las mismas que orthodox, que
+    # explica de dónde salen.
+    { on = ["delete"], run = "dialog.remove" },
+    { on = ["shift+delete"], run = "dialog.clear" },
+    { on = ["alt+enter"], run = "dialog.confirm-other" },
 ]

@@ -18,7 +18,7 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::Backend;
-use norte_i18n::ta;
+use norte_i18n::{t, ta};
 use norte_proto::Error;
 
 use crate::app::{
@@ -406,6 +406,34 @@ pub async fn on_nav_popup_key(
         "dialog.remove" if kind == NavPopupKind::Hotlist => {
             if let Some(name) = app.nav_popup_selected_hotlist_name() {
                 hotlist_remove(app, &name).await;
+            }
+        }
+        // Spec 2026-09-15 D2: la historia y los populares también se editan.
+        "dialog.remove" if matches!(kind, NavPopupKind::History | NavPopupKind::Popular) => {
+            app.nav_popup_remove_selected();
+        }
+        "dialog.clear" if matches!(kind, NavPopupKind::History | NavPopupKind::Popular) => {
+            app.nav_popup_clear();
+        }
+        // Lo elegido va al OTRO panel y el foco se queda donde está. Vale para
+        // toda lista que navega: una ruta de la historia, un favorito o un
+        // volumen se abren en el otro lado igual.
+        "dialog.confirm-other" => {
+            let from = app
+                .nav_popup
+                .as_ref()
+                .map_or_else(|| app.focus(), NavPopup::target_pane);
+            let Some(other) = app.nav_popup_other_pane() else {
+                app.message = Some(t("host-no-other-slot"));
+                return Cd::Cancelled;
+            };
+            if let Some(path) = app.nav_popup_input(PickerAction::Confirm) {
+                let outcome = cd_in(app, backend, events, other, path.clone(), Trail::Record).await;
+                if kind == NavPopupKind::History && matches!(&outcome, Cd::Failed(Error::NotFound))
+                {
+                    app.history[from].remove(&path);
+                }
+                return outcome;
             }
         }
         // design §D: the in-popup unfiltered toggle. Same operation as

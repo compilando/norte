@@ -510,6 +510,9 @@ impl<'a> IntoIterator for &'a mut PaneSlots {
 pub struct Histories {
     by_slot: BySlot<crate::nav::History>,
     order: Vec<SlotId>,
+    /// El tope de `[ui] history_size`. `None` = el de fábrica, que es el que
+    /// ya trae un `History` recién nacido.
+    cap: Option<usize>,
 }
 
 impl Histories {
@@ -519,7 +522,28 @@ impl Histories {
         Self {
             by_slot: BySlot::new(),
             order: vec![SLOT_LEFT, SLOT_RIGHT],
+            cap: None,
         }
+    }
+
+    /// Aplica `[ui] history_size` a los historiales que hay y a los que nazcan
+    /// después (spec 2026-09-15 D4).
+    pub fn set_capacity(&mut self, cap: usize) {
+        self.cap = Some(cap);
+        for (_, h) in self.by_slot.iter_mut() {
+            h.set_capacity(cap);
+        }
+    }
+
+    /// Un historial recién sacado del almacén, con el tope vigente: el que
+    /// nace por `entry` trae el de fábrica.
+    fn con_tope(cap: Option<usize>, h: &mut crate::nav::History) -> &mut crate::nav::History {
+        if let Some(cap) = cap
+            && h.capacity() != cap
+        {
+            h.set_capacity(cap);
+        }
+        h
     }
 
     /// Dice qué hueco ocupa cada posición visible.
@@ -559,7 +583,8 @@ impl Histories {
 
     /// El historial de UN hueco, creándolo vacío si no lo tenía.
     pub fn for_slot_mut(&mut self, id: SlotId) -> &mut crate::nav::History {
-        self.by_slot.entry(id)
+        let cap = self.cap;
+        Self::con_tope(cap, self.by_slot.entry(id))
     }
 
     /// Tira los historiales de los huecos que el árbol ya no tiene.
@@ -584,7 +609,8 @@ impl std::ops::Index<usize> for Histories {
 impl std::ops::IndexMut<usize> for Histories {
     fn index_mut(&mut self, side: usize) -> &mut Self::Output {
         let id = self.slot_of(side);
-        self.by_slot.entry(id)
+        let cap = self.cap;
+        Self::con_tope(cap, self.by_slot.entry(id))
     }
 }
 

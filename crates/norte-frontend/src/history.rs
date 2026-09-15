@@ -194,6 +194,25 @@ pub struct HistoryRow {
     pub mark: HistoryMark,
 }
 
+/// La clave Fluent de la marca de una fila, o `None` si la fila no lleva
+/// ninguna. Una sola tabla para los dos frontends: la TUI la pinta detrás de la
+/// ruta y la ventana en el detalle de la fila, pero la PALABRA es la misma.
+#[must_use]
+pub fn mark_key(mark: HistoryMark) -> Option<&'static str> {
+    match mark {
+        HistoryMark::Current => Some("history-mark-current"),
+        HistoryMark::Forward => Some("history-mark-forward"),
+        HistoryMark::Visited => None,
+    }
+}
+
+/// Dónde empieza el cursor de una lista de historia: en la SEGUNDA fila si la
+/// primera es el directorio actual, porque a donde ya estás no se quiere ir.
+#[must_use]
+pub fn start_cursor(rows: &[HistoryRow]) -> usize {
+    usize::from(rows.len() > 1 && rows.first().is_some_and(|r| r.mark == HistoryMark::Current))
+}
+
 /// Las filas de la lista de historia de un panel (`pane.history`).
 ///
 /// Primero el directorio ACTUAL, marcado; luego el MRU, del más reciente al

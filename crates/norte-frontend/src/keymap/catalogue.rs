@@ -185,6 +185,12 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("pane.quick-search", false),
     live("pane.history", false),
     live("pane.hotlist", false),
+    // La historia entera (spec 2026-09-15, fase 1). `pane.popular` es la lista
+    // de la sesión ordenada por visitas (Krusader `Ctrl+Z`); `-left`/`-right`
+    // nombran un LADO, como los volúmenes. Ninguno lleva contador: son listas.
+    live("pane.popular", false),
+    live("pane.history-left", false),
+    live("pane.history-right", false),
     // `pane.select-drive*` (2026-08-10-volumes.md, closes #131): the focused
     // pane and the two sides Total Commander's `Alt+F1`/`Alt+F2` name. None
     // is a clamped mover — a drive picker has no count to take.
@@ -225,6 +231,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("nav.parent", false),
     live("nav.back", true),
     live("nav.forward", true),
+    // El punto de salto de Krusader (`Ctrl+J`). Sin contador: hay UN punto, y
+    // saltar a él cinco veces es saltar a él.
+    live("nav.jump-back", false),
+    live("nav.set-jump-point", false),
     // --- mark ---
     live("mark.toggle", false),
     live("mark.all", false),
@@ -313,6 +323,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("dialog.pane", false),
     live("dialog.back", false),
     live("dialog.filter", false),
+    // Las listas de historia (spec 2026-09-15 D2): abrir lo elegido en el
+    // OTRO panel sin mover el foco, y vaciar la lista entera.
+    live("dialog.confirm-other", false),
+    live("dialog.clear", false),
     // --- planned: named by a preset, not built yet ---
     //
     // K2b imports four foreign keymaps (Total Commander, Krusader, Norton,

@@ -1956,15 +1956,30 @@ fn la_lateral_de_la_ayuda_se_dimensiona_a_sus_titulos() {
 ///
 /// La comprobación de arriba es aritmética; ésta es sobre el frame pintado, que
 /// es donde se ve si la sangría, el canalón o la elipsis se comieron una celda
-/// de más. A 120 columnas caben las nueve filas del corpus español enteras.
+/// de más.
+///
+/// Se mira SOLO la columna de la lateral. Antes buscaba el título en cualquier
+/// línea del frame, y pasaba por accidente: a 120 columnas la lateral ya
+/// recortaba el título más largo («Lo que la pantalla enseña alrededor del
+/// listado», 49 celdas con la sangría, contra un techo del 35 % = 42), pero el
+/// CUERPO de la página índice lo pintaba entero en su lista de enlaces. Añadir
+/// un tema (spec 2026-09-15) empujó esa línea fuera de las 36 filas y destapó el
+/// recorte. Con sitio de verdad es 140 columnas: 35 % = 49.
 #[test]
-fn a_120_columnas_ningun_titulo_de_la_ayuda_sale_recortado() {
+fn con_sitio_ningun_titulo_de_la_ayuda_sale_recortado() {
     let mut app = app_base();
     open_help(&mut app);
-    let text = render_ayuda(&mut app, 120, 36);
+    let text = render_ayuda(&mut app, 140, 40);
+    let lateral = usize::from(ui::help_sidebar_width(
+        ratatui::layout::Rect::new(0, 0, 140, 40),
+        norte_help::Lang::Es,
+    ));
+    // Lo que precede a la lateral en cada línea: el borde del frame, el de la
+    // caja y, si el volcado entrecomilla la línea, la comilla.
+    let columna = |l: &str| l.chars().take(lateral + 4).collect::<String>();
     for tema in norte_help::topics(norte_i18n::Lang::Es) {
         assert!(
-            text.lines().any(|l| l.contains(&tema.title)),
+            text.lines().any(|l| columna(l).contains(&tema.title)),
             "el título {:?} no aparece entero en la lateral:\n{text}",
             tema.title
         );

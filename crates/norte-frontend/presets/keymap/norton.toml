@@ -55,6 +55,12 @@
 # acorde, y un preset cuyo objetivo es la fidelidad no inventa uno. Los tres
 # presets nativos lo llevan en `alt+C`.
 
+# La historia (spec 2026-09-15): NADA atado, ni atrás/adelante ni la lista. No
+# hay fuente primaria de este preset, y lo que se cuenta de una historia de
+# directorios en NC/Volkov no está atestiguado por ninguna; atar una tecla por
+# rumor es peor que el `—` de la hoja de referencia. Todo sigue en el menú Ir y
+# en la paleta.
+
 dialog_from = "orthodox"
 
 [global]

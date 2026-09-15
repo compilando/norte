@@ -18,20 +18,39 @@ impl App {
     /// no puede hacer — `main.rs` abre ese kind vía
     /// [`Self::open_volumes_popup`], nunca aquí.
     pub fn open_nav_popup(&mut self, kind: NavPopupKind) {
-        let enc = self.focused().name_encoding();
+        let pane = self.focus;
+        self.open_nav_popup_for(kind, pane, None);
+    }
+
+    /// La historia de un LADO de la pantalla (`pane.history-left/-right`,
+    /// spec 2026-09-15 D7): lo elegido navega ESE panel aunque el foco esté en
+    /// el otro, y el lado se congela al abrir, como en los volúmenes.
+    pub fn open_side_history(&mut self, side: usize) {
+        self.open_nav_popup_for(NavPopupKind::History, side, Some(side));
+    }
+
+    /// Abre el popup de `kind` sobre el pane `pane`. `side` solo lo lleva una
+    /// historia abierta por lado, para el título.
+    fn open_nav_popup_for(&mut self, kind: NavPopupKind, pane: usize, side: Option<usize>) {
+        let enc = self.panes[pane].name_encoding();
+        let mut cursor = 0;
         let items: Vec<NavItem> = match kind {
             NavPopupKind::Volumes => unreachable!(
                 "Volumes se abre vía `open_volumes_popup` (design §D), nunca `open_nav_popup`"
             ),
-            NavPopupKind::History => self.history[self.focus]
-                .entries()
-                .iter()
-                .map(|p| NavItem {
-                    display: nav_item_display(None, p, enc),
-                    target: Some(p.clone()),
-                    hotlist_name: None,
-                })
-                .collect(),
+            NavPopupKind::History | NavPopupKind::Popular => {
+                // Las filas son las COMPARTIDAS: qué sale, en qué orden y con
+                // qué marca lo decide `norte_frontend::history`, igual que en
+                // la ventana (ADR 0077).
+                let current = self.panes[pane].dir().clone();
+                let rows = if kind == NavPopupKind::History {
+                    norte_frontend::history::history_rows(&self.history[pane], &current, "")
+                } else {
+                    norte_frontend::history::popular_rows(&self.popular, &current, "")
+                };
+                cursor = norte_frontend::history::start_cursor(&rows);
+                super::nav_popup::history_items(rows, enc)
+            }
             NavPopupKind::Hotlist => self
                 .hotlist
                 .iter()
@@ -62,11 +81,78 @@ impl App {
         self.nav_popup = Some(NavPopup {
             kind,
             items,
-            cursor: 0,
+            cursor,
             name_input: None,
-            target_pane: self.focus,
+            target_pane: pane,
             include_pseudo: false,
+            side,
         });
+    }
+
+    /// El OTRO panel respecto al que navega el popup abierto: el destino del
+    /// foco si el popup es del foco, y el foco si el popup es de un lado que
+    /// no lo tiene (`dialog.confirm-other`, spec 2026-09-15 D2).
+    #[must_use]
+    pub fn nav_popup_other_pane(&self) -> Option<usize> {
+        let pane = self.nav_popup.as_ref()?.target_pane;
+        if pane == self.focus {
+            self.target_index()
+        } else {
+            Some(self.focus)
+        }
+    }
+
+    /// Quita la fila del cursor de la historia o de los populares
+    /// (`dialog.remove`) y rehace la lista conservando el cursor.
+    pub fn nav_popup_remove_selected(&mut self) {
+        let Some(p) = &self.nav_popup else {
+            return;
+        };
+        let (kind, pane) = (p.kind, p.target_pane);
+        let Some(path) = p.selected().and_then(|it| it.target.clone()) else {
+            return;
+        };
+        match kind {
+            NavPopupKind::History => self.history[pane].remove(&path),
+            NavPopupKind::Popular => self.popular.remove(&path),
+            NavPopupKind::Hotlist | NavPopupKind::Volumes => return,
+        }
+        self.reopen_history_popup();
+    }
+
+    /// Vacía la historia del panel o los populares (`dialog.clear`). Sin
+    /// confirmación: es memoria de navegación, no ficheros, y el aviso lo dice.
+    pub fn nav_popup_clear(&mut self) {
+        let Some(p) = &self.nav_popup else {
+            return;
+        };
+        let (kind, pane) = (p.kind, p.target_pane);
+        let key = match kind {
+            NavPopupKind::History => {
+                self.history[pane].clear();
+                "msg-history-cleared"
+            }
+            NavPopupKind::Popular => {
+                self.popular.clear();
+                "msg-popular-cleared"
+            }
+            NavPopupKind::Hotlist | NavPopupKind::Volumes => return,
+        };
+        self.message = Some(t(key));
+        self.reopen_history_popup();
+    }
+
+    /// Rehace una lista de historia o de populares tras cambiarla, con el
+    /// cursor donde estaba (acotado).
+    fn reopen_history_popup(&mut self) {
+        let Some(p) = &self.nav_popup else {
+            return;
+        };
+        let (kind, pane, side, cursor) = (p.kind, p.target_pane, p.side, p.cursor);
+        self.open_nav_popup_for(kind, pane, side);
+        if let Some(p) = &mut self.nav_popup {
+            p.cursor = cursor.min(p.items.len().saturating_sub(1));
+        }
     }
 
     /// Abre el popup de volúmenes (`pane.select-drive`/`-left`/`-right`,
@@ -89,6 +175,7 @@ impl App {
             name_input: None,
             target_pane: pane,
             include_pseudo,
+            side: None,
         });
     }
 
@@ -245,7 +332,11 @@ mod tests {
         app.history[0].push(vp("mem:///uno"));
         app.history[0].push(vp("mem:///dos"));
         app.open_nav_popup(NavPopupKind::History);
-        assert_eq!(app.nav_popup.as_ref().unwrap().items().len(), 2);
+        assert_eq!(
+            app.nav_popup.as_ref().unwrap().items().len(),
+            3,
+            "el directorio actual va primero (spec 2026-09-15 D3)"
+        );
         assert_eq!(
             app.nav_popup.as_ref().unwrap().selected().unwrap().target,
             Some(vp("mem:///dos")),
@@ -380,6 +471,70 @@ mod tests {
             Some("norte/src"),
             "ocupado: se cualifica con el padre en vez de pisar"
         );
+    }
+
+    /// Spec 2026-09-15 D3: la primera fila es donde está el panel, marcada, y
+    /// el cursor empieza en la siguiente; quitar y vaciar rehacen la lista.
+    #[test]
+    fn la_historia_marca_el_actual_y_quitar_o_vaciar_la_rehacen() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
+        let mut app = app_dos_panes();
+        let aqui = app.panes[0].dir().clone();
+        app.history[0].push(vp("mem:///uno"));
+        app.history[0].push(vp("mem:///dos"));
+        app.open_nav_popup(NavPopupKind::History);
+        let p = app.nav_popup.as_ref().unwrap();
+        assert_eq!(p.items()[0].target, Some(aqui));
+        assert!(
+            p.items()[0]
+                .display
+                .ends_with(&norte_i18n::t("history-mark-current"))
+        );
+        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///dos")));
+
+        app.nav_popup_remove_selected();
+        assert!(!app.history[0].entries().contains(&vp("mem:///dos")));
+        let p = app.nav_popup.as_ref().unwrap();
+        assert_eq!(p.items().len(), 2);
+        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///uno")));
+
+        app.nav_popup_clear();
+        assert!(app.history[0].entries().is_empty());
+        assert_eq!(
+            app.nav_popup.as_ref().unwrap().items().len(),
+            1,
+            "solo el actual"
+        );
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("msg-history-cleared").as_str())
+        );
+    }
+
+    /// D7: la historia de un LADO navega ese lado aunque el foco esté en el
+    /// otro, y abrir en el otro panel apunta al foco.
+    #[test]
+    fn la_historia_de_un_lado_congela_el_lado() {
+        let mut app = app_dos_panes();
+        app.history[1].push(vp("mem:///derecha"));
+        app.open_side_history(1);
+        let p = app.nav_popup.as_ref().unwrap();
+        assert_eq!((p.target_pane(), p.side), (1, Some(1)));
+        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///derecha")));
+        assert_eq!(app.nav_popup_other_pane(), Some(app.focus()));
+    }
+
+    /// D6: los populares se listan por visitas.
+    #[test]
+    fn los_populares_van_por_visitas() {
+        let mut app = app_dos_panes();
+        app.popular.visit(&vp("mem:///poco"));
+        app.popular.visit(&vp("mem:///mucho"));
+        app.popular.visit(&vp("mem:///mucho"));
+        app.open_nav_popup(NavPopupKind::Popular);
+        let p = app.nav_popup.as_ref().unwrap();
+        assert_eq!(p.items()[0].target, Some(vp("mem:///mucho")));
+        assert_eq!(p.items()[1].target, Some(vp("mem:///poco")));
     }
 
     /// En el popup de HISTORIAL no hay input de nombre ni name de hotlist.

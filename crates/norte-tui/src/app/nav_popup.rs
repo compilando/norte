@@ -8,8 +8,10 @@ use norte_proto::VPath;
 /// Qué popup de navegación está abierto (spec 2026-07-18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavPopupKind {
-    /// Historial de directorios del pane con foco (sesión, no persistido).
+    /// Historial de directorios de un pane (el del foco, o un LADO).
     History,
+    /// Los directorios populares de la sesión (spec 2026-09-15 D6).
+    Popular,
     /// Favoritos persistidos en el `norte.toml` del USUARIO.
     Hotlist,
     /// Volúmenes del host (`pane.select-drive`/`-left`/`-right`, design
@@ -66,6 +68,9 @@ pub struct NavPopup {
     /// toggle "mostrar todo" del design §E). Sin sentido en historial/
     /// hotlist, donde queda `false`.
     pub(crate) include_pseudo: bool,
+    /// Solo una historia abierta por LADO (`pane.history-left/-right`): qué
+    /// lado, para que el título lo diga. `None` en todo lo demás.
+    pub(crate) side: Option<usize>,
 }
 
 impl NavPopup {
@@ -136,6 +141,31 @@ pub(crate) fn nav_item_display(
     } else {
         format!("{prefix}{text}")
     }
+}
+
+/// Items de una lista de historia o de populares, desde las filas
+/// COMPARTIDAS ([`norte_frontend::history::history_rows`]): la ruta saneada
+/// como cualquier otra, y la marca de la fila (`aquí`, `adelante`) detrás.
+/// Detrás y no delante porque el recorte es por el MEDIO: la cola se ve
+/// siempre, y el badge hostil sigue siendo el prefijo.
+pub(crate) fn history_items(
+    rows: Vec<norte_frontend::history::HistoryRow>,
+    enc: Option<norte_encoding::NameEncoding>,
+) -> Vec<NavItem> {
+    rows.into_iter()
+        .map(|r| {
+            let path = nav_item_display(None, &r.path, enc);
+            let display = match norte_frontend::history::mark_key(r.mark) {
+                Some(key) => format!("{path} · {}", t(key)),
+                None => path,
+            };
+            NavItem {
+                display,
+                target: Some(r.path),
+                hotlist_name: None,
+            }
+        })
+        .collect()
 }
 
 /// Rows for the volumes popup (design §D): `main.rs` calls this right after

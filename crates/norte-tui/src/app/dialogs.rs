@@ -294,6 +294,23 @@ pub const ALLOW_NAV_POPUP: &[&str] = &[
     "dialog.remove",
     "dialog.toggle-enabled",
     "dialog.cancel",
+    // Spec 2026-09-15 D2: abrir en el otro panel (cualquier lista que navega)
+    // y vaciar (historia y populares; lo filtra el caller por kind).
+    "dialog.confirm-other",
+    "dialog.clear",
+];
+
+/// HINT del popup en modo HISTORIA o POPULARES (spec 2026-09-15 D2): quitar,
+/// vaciar y abrir en el otro panel. Sin `add`: un favorito se crea desde su
+/// propia lista.
+pub const ALLOW_NAV_HISTORY: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.confirm",
+    "dialog.confirm-other",
+    "dialog.remove",
+    "dialog.clear",
+    "dialog.cancel",
 ];
 
 /// HINT del popup en modo HOTLIST (H1 T3): historial y volúmenes pintan el

@@ -7,6 +7,24 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **Navigation history, the whole feature** (ADR 0114). The history list
+  starts with where you are ("here") and marks what `nav.forward` can still
+  reach; inside it, `Del` removes an entry, `Shift+Del` clears the panel's
+  history and `Alt+Enter` opens the entry in the other panel. New commands in
+  both frontends: `pane.popular` (the directories you visit most, one list for
+  the session), `pane.history-left` / `pane.history-right` (the history of one
+  side), and a jump point per panel (`nav.set-jump-point`, `nav.jump-back`).
+  `[ui] history_size` sets how many directories a panel keeps (5–64, default
+  30); history, jump point and popular directories persist in the session.
+- **Krusader preset: Alt+←/→ go back and forward**, as in Krusader itself.
+  The preset had copied a stale docs table that called them bookmark menus;
+  it now binds Ctrl+Alt+←/→ (history of the left/right panel), Ctrl+J (jump
+  back) and Ctrl+Z (popular directories) from Krusader's source. orthodox
+  adds mc's `Alt+Y` and `Alt+Shift+H`, vim adds `H`/`L`, and every preset
+  says in its header why it binds what it does not.
+
 ## [0.3.0-alpha.4] - 2026-09-15
 
 ### Added

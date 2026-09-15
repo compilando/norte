@@ -4,8 +4,8 @@ expression: text
 ---
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "  ┌ Ayuda ───────────────────────────────────────────────────────────────────┐  "
-"┌/│  Dos paneles, un destino   ║ comprobable.                               ║│─┐"
-"│N│  Pestañas en un panel      █                                            ║│a│"
+"┌/│  Pestañas en un panel      ║ comprobable.                               ║│─┐"
+"│N│  Historia de navegación    █                                            ║│a│"
 "│ │  Marcar sobre qué se actúa █ ⚠ Un lote se RECHAZA por encima de 4096    ║│ │"
 "│ │  Usar el ratón             █   rutas en vez de recortarse. Una lista    ║│ │"
 "│ │  Cómo se lee esta ayuda    █   recortada en silencio se lee como «todo  ║│ │"

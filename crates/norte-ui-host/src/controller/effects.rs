@@ -93,6 +93,8 @@ impl Estado {
                 solo_listados,
             } => self.mover_foco(atras, solo_listados, backend, buzon),
             Efecto::Destino => self.designar_destino(),
+            Efecto::SaltoAtras => self.saltar_al_punto(backend, buzon),
+            Efecto::FijarSalto => self.fijar_punto_de_salto(),
             // Atendido arriba, antes del panel enfocado. El brazo existe
             // porque el `match` es exhaustivo a propósito: un efecto nuevo
             // sin sitio tiene que ser un error de compilación.
@@ -187,6 +189,8 @@ impl Estado {
             // reparte, y crece un brazo por cada gesto nuevo.
             | Efecto::Historial
             | Efecto::Hotlist
+            | Efecto::Populares
+            | Efecto::HistorialDeLado { .. }
             | Efecto::Ver => self.efecto_que_abre(efecto, backend, buzon),
             Efecto::CrearDirectorio
             | Efecto::CrearFichero
@@ -722,6 +726,8 @@ impl Estado {
             Efecto::Conexiones => self.abrir_conexiones(backend, buzon),
             Efecto::Historial => self.abrir_historial(),
             Efecto::Hotlist => self.abrir_hotlist(),
+            Efecto::Populares => self.abrir_populares(),
+            Efecto::HistorialDeLado { derecha } => self.abrir_historial_de_lado(derecha),
             Efecto::Ver => self.pedir_visor(backend, buzon),
             // Los demás no llegan aquí: el `match` de arriba los reparte.
             _ => Self::no_muta(),

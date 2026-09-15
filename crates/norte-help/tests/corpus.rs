@@ -27,10 +27,11 @@ const LANGS: [Lang; 2] = [Lang::En, Lang::Es];
 /// the corpus so that DELETING a topic file is a test failure too: a check
 /// that reads the corpus to decide what the corpus should contain cannot see
 /// an absence.
-const EXPECTED: [&str; 19] = [
+const EXPECTED: [&str; 20] = [
     "index",
     "panes",
     "tabs",
+    "history",
     "selection",
     "mouse",
     "help",
@@ -478,7 +479,7 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 157] = [
+const DOCUMENTED: [&str; 164] = [
     "app.extensions",
     "app.help",
     "app.menu",
@@ -499,7 +500,9 @@ const DOCUMENTED: [&str; 157] = [
     "dialog.approve",
     "dialog.back",
     "dialog.cancel",
+    "dialog.clear",
     "dialog.confirm",
+    "dialog.confirm-other",
     "dialog.cycle-format",
     "dialog.deny",
     "dialog.down",
@@ -555,7 +558,9 @@ const DOCUMENTED: [&str; 157] = [
     "nav.back",
     "nav.enter",
     "nav.forward",
+    "nav.jump-back",
     "nav.parent",
+    "nav.set-jump-point",
     "pane.ai-rename",
     "pane.checksum",
     "pane.checksum-verify",
@@ -573,6 +578,8 @@ const DOCUMENTED: [&str; 157] = [
     "pane.edit",
     "pane.edit-new",
     "pane.history",
+    "pane.history-left",
+    "pane.history-right",
     "pane.hotlist",
     "pane.mirror",
     "pane.mirror-target",
@@ -585,6 +592,7 @@ const DOCUMENTED: [&str; 157] = [
     "pane.split-file",
     "pane.combine-files",
     "pane.open",
+    "pane.popular",
     "pane.properties",
     "pane.chmod",
     "pane.pull",

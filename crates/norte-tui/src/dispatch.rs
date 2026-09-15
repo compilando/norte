@@ -14,7 +14,7 @@
 //! sacando de aquí debajo.
 
 use crate::app::{
-    App, ExtensionManager, Modal, NavPopupKind, Palette, Settings, TrailStep, TransferKind,
+    App, ExtensionManager, Modal, NavPopupKind, Palette, Settings, Trail, TrailStep, TransferKind,
     error_message,
 };
 use crate::config;
@@ -25,7 +25,7 @@ use crate::gestures::{
 use crate::keymap::Command;
 use crate::mutations::{combine_pieces, launch_size_count, test_archive, unpack};
 use crate::nav;
-use crate::navigate::{Cd, cd};
+use crate::navigate::{Cd, cd, cd_in};
 use crate::overlays::open_contextual_help;
 use crate::refresh::refresh_panes;
 use crate::screens::{open_drive_popup, plugin_config_summaries};
@@ -286,6 +286,26 @@ pub async fn dispatch(
         // brazos solo corren para ABRIRLO.
         Command::PaneHistory => app.open_nav_popup(NavPopupKind::History),
         Command::PaneHotlist => app.open_nav_popup(NavPopupKind::Hotlist),
+        // Spec 2026-09-15 D6/D7: populares y la historia de un LADO. El lado
+        // es `panes[0]`/`panes[1]`, como en `pane.select-drive-left/-right`.
+        Command::PanePopular => app.open_nav_popup(NavPopupKind::Popular),
+        Command::PaneHistoryLeft => app.open_side_history(0),
+        Command::PaneHistoryRight => app.open_side_history(1),
+        // D5: saltar al punto es una navegación NORMAL —entra en el rastro—,
+        // así que `nav.back` deshace el salto.
+        Command::NavJumpBack => {
+            let pane = app.focus();
+            match norte_frontend::history::jump_target(&app.history[pane]) {
+                Ok(dir) => cd_outcome = cd_in(app, backend, events, pane, dir, Trail::Record).await,
+                Err(key) => app.message = Some(t(key)),
+            }
+        }
+        Command::NavSetJumpPoint => {
+            let pane = app.focus();
+            let dir = app.panes[pane].dir().clone();
+            app.history[pane].set_jump(dir);
+            app.message = Some(t("msg-nav-jump-point-set"));
+        }
         // `pane.select-drive*` (design §D): `-left`/`-right` name a SIDE —
         // `panes[0]`/`panes[1]` — not the focus, which is what Total
         // Commander's `Alt+F1`/`Alt+F2` do; only the unsided variant reads

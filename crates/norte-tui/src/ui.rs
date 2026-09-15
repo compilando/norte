@@ -567,7 +567,12 @@ fn draw_nav_popup(
 ) {
     use crate::app::NavPopupKind;
     let title = match popup.kind {
-        NavPopupKind::History => t("history-title"),
+        NavPopupKind::History => match popup.side {
+            Some(0) => t("history-title-left"),
+            Some(_) => t("history-title-right"),
+            None => t("history-title"),
+        },
+        NavPopupKind::Popular => t("popular-title"),
         NavPopupKind::Hotlist => t("hotlist-title"),
         NavPopupKind::Volumes => t("volumes-title"),
     };
@@ -584,6 +589,10 @@ fn draw_nav_popup(
         )))
     } else if popup.kind == NavPopupKind::Hotlist {
         Some(Line::raw(format!(" {} ", hints.nav_list)))
+    } else if matches!(popup.kind, NavPopupKind::History | NavPopupKind::Popular) {
+        // Spec 2026-09-15 D2: la historia ya se edita (quitar, vaciar, abrir en
+        // el otro panel), y una lista que se edita dice cómo.
+        Some(Line::raw(format!(" {} ", hints.nav_history)))
     } else if popup.kind == NavPopupKind::Volumes {
         // design §D: el footer dice en qué MODO está la lista, no solo qué
         // teclas hay — un toggle sin indicador deja al lector adivinando si
@@ -611,6 +620,7 @@ fn draw_nav_popup(
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = if popup.items().is_empty() {
         let empty = match popup.kind {
             NavPopupKind::History => t("history-empty"),
+            NavPopupKind::Popular => t("popular-empty"),
             NavPopupKind::Hotlist => t("hotlist-empty"),
             NavPopupKind::Volumes => t("volumes-empty"),
         };

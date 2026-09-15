@@ -83,6 +83,9 @@ pub async fn reload_config(
                 app.panel_bar = cfg.common.ui_panel_bar.unwrap_or(true);
                 // El cromo entero, por lo mismo: cada frame lo lee.
                 app.chrome = cfg.common.ui_chrome;
+                // El tope de la historia, también en caliente: al bajarlo se
+                // tira lo más lejano, nunca lo que el lector acaba de andar.
+                app.history.set_capacity(app.chrome.history_size());
                 // La fila `..`, también en caliente: es presentación, y el
                 // pane la pone o la quita sin tocar el listado.
                 app.set_parent_row(cfg.common.ui_parent_entry.unwrap_or(true));

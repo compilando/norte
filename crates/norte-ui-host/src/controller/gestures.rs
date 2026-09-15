@@ -233,19 +233,190 @@ impl Estado {
         self.pedir_listado(slot, &dir, token, backend, buzon);
     }
 
-    /// Abre el rastro de navegación del hueco activo.
-    ///
-    /// Las filas son el MRU compartido (`History::entries`), más reciente
-    /// primero: qué recuerda un panel no puede depender de quién lo pinta.
+    /// Abre la historia del hueco activo.
     pub(super) fn abrir_historial(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let slot = self.activo();
-        let rastro = self.hueco().historial.entries().clone();
-        self.selector = Some(crate::pickers::Selector::historial(slot, &rastro));
+        self.abrir_lista_de_historia(slot, "picker-history-title", false, None)
+    }
+
+    /// Abre la historia de un LADO de la pantalla (spec 2026-09-15 D7): lo
+    /// elegido navega ESE hueco aunque el foco esté en el otro. Qué es un lado
+    /// lo dice la geometría del reparto, como en los volúmenes.
+    pub(super) fn abrir_historial_de_lado(
+        &mut self,
+        derecha: bool,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(slot) = self.listado_del_lado(derecha) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-other-slot".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let titulo = if derecha {
+            "picker-history-title-right"
+        } else {
+            "picker-history-title-left"
+        };
+        self.abrir_lista_de_historia(slot, titulo, false, None)
+    }
+
+    /// Abre los populares de la sesión (D6), navegando el hueco activo.
+    pub(super) fn abrir_populares(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let slot = self.activo();
+        self.abrir_lista_de_historia(slot, "picker-popular-title", true, None)
+    }
+
+    /// Abre —o rehace, con `cursor`— una lista de historia sobre `slot`.
+    ///
+    /// Las filas son las COMPARTIDAS (`norte_frontend::history`): qué recuerda
+    /// un panel, en qué orden y con qué marca no puede depender de quién lo
+    /// pinta. El tope de `[ui] history_size` se aplica aquí y al navegar, que
+    /// son los dos sitios donde la historia se lee o crece.
+    fn abrir_lista_de_historia(
+        &mut self,
+        slot: u32,
+        titulo: &'static str,
+        populares: bool,
+        cursor: Option<usize>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let tope = self.config.common.ui_chrome.history_size();
+        let Some(hueco) = self.huecos.get_mut(&slot) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-other-slot".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        hueco.historial.set_capacity(tope);
+        let actual = hueco.pane.dir().clone();
+        let filas = if populares {
+            norte_frontend::history::popular_rows(&self.popular, &actual, "")
+        } else {
+            norte_frontend::history::history_rows(&hueco.historial, &actual, "")
+        };
+        let mut selector =
+            crate::pickers::Selector::historia(slot, &filas, self.lang, titulo, populares);
+        if let Some(c) = cursor {
+            selector.senalar(c.min(filas.len().saturating_sub(1)));
+        }
+        self.selector = Some(selector);
         self.gen_selector += 1;
         let cambio = ViewChange::Picker {
             picker: self.vista_selector(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// `dialog.remove` sobre una lista de historia (D2): la fila del cursor
+    /// sale del rastro del hueco —o de los populares— y la lista se rehace sin
+    /// perder el sitio.
+    pub(super) fn quitar_de_historia(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(s) = self.selector.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let (slot, titulo, populares, cursor) =
+            (s.slot(), s.titulo(), s.es_populares(), s.cursor());
+        let Some(destino) = s.elegir() else {
+            return (self.aplicada(), Vec::new());
+        };
+        if populares {
+            self.popular.remove(&destino);
+        } else if let Some(h) = self.huecos.get_mut(&slot) {
+            h.historial.remove(&destino);
+        }
+        self.abrir_lista_de_historia(slot, titulo, populares, Some(cursor))
+    }
+
+    /// `dialog.clear` sobre una lista de historia (D2). Sin confirmación, como
+    /// en el terminal: es memoria de navegación, no ficheros, y el aviso lo
+    /// dice.
+    pub(super) fn vaciar_historia(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(s) = self.selector.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let (slot, titulo, populares) = (s.slot(), s.titulo(), s.es_populares());
+        let clave = if populares {
+            self.popular.clear();
+            "msg-popular-cleared"
+        } else {
+            if let Some(h) = self.huecos.get_mut(&slot) {
+                h.historial.clear();
+            }
+            "msg-history-cleared"
+        };
+        let (ack, mut envios) = self.abrir_lista_de_historia(slot, titulo, populares, Some(0));
+        envios.extend(self.decir(clave));
+        (ack, envios)
+    }
+
+    /// `dialog.confirm-other` (D2): lo elegido va al OTRO hueco y el foco se
+    /// queda donde está. El otro de una lista del foco es el destino; el de una
+    /// lista de un lado que no tiene el foco, el foco.
+    pub(super) fn elegir_del_selector_en_otro(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(s) = self.selector.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let (desde, destino) = (s.slot(), s.elegir());
+        let otro = if desde == self.activo() {
+            self.hueco_destino()
+        } else {
+            Ok(self.activo())
+        };
+        let otro = match otro {
+            Ok(otro) => otro,
+            Err(clave) => {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: clave.to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+        };
+        let Some(destino) = destino else {
+            return (self.aplicada(), Vec::new());
+        };
+        self.selector = None;
+        let cierre = self.parche(vec![ViewChange::Picker { picker: None }]);
+        let mut envios = vec![cierre];
+        envios.extend(self.navegar_hueco(otro, &destino, Trail::Record, backend, buzon));
+        (self.aplicada(), envios)
+    }
+
+    /// `nav.jump-back` (D5): una navegación NORMAL al punto de salto del hueco
+    /// activo. Entra en el rastro, así que `nav.back` deshace el salto.
+    pub(super) fn saltar_al_punto(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match norte_frontend::history::jump_target(&self.hueco().historial) {
+            Ok(destino) => {
+                let envios = self.navegar(&destino, Trail::Record, backend, buzon);
+                (self.aplicada(), envios)
+            }
+            Err(clave) => (
+                ActionAck::Unavailable {
+                    reason_key: clave.to_owned(),
+                },
+                Vec::new(),
+            ),
+        }
+    }
+
+    /// `nav.set-jump-point` (D5): marca el directorio del hueco activo.
+    pub(super) fn fijar_punto_de_salto(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dir = self.hueco().pane.dir().clone();
+        self.hueco_mut().historial.set_jump(dir);
+        let envios = self.decir("msg-nav-jump-point-set");
+        (self.aplicada(), envios)
     }
 
     /// Abre los favoritos de la configuración con la que arrancó la ventana.

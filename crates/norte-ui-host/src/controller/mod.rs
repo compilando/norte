@@ -2697,6 +2697,9 @@ struct Estado {
     /// Las últimas claves lanzadas desde la paleta, la más reciente primero
     /// (spec 2026-09-10). Viven en la sesión de UI, como en el terminal.
     paleta_recientes: Vec<String>,
+    /// Los directorios populares de la sesión (spec 2026-09-15 D6). Viven en
+    /// la sesión de UI, como en el terminal.
+    popular: norte_frontend::history::Popular,
     /// Los volúmenes del host, cacheados para el pie de cada listado (spec
     /// 2026-09-10). Se piden cuando un listado aterriza, nunca por foto:
     /// `host.volumes` monta y consulta espacio en cada filesystem.
@@ -3291,6 +3294,7 @@ impl Estado {
             paleta: None,
             asistente: None,
             paleta_recientes: Vec::new(),
+            popular: norte_frontend::history::Popular::default(),
             volumenes_pie: Vec::new(),
             pie_en_vuelo: false,
             menu: None,

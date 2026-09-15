@@ -1539,7 +1539,14 @@ mod pane_gestures_tests {
         // reintento se lo pasa a `cd_in` tal cual: sigue siendo un `Replay`.
         let trail = Trail::Replay(TrailStep::Back);
 
-        record_step(&mut app.history[0], &vp("mem:///c"), &dir, trail); // lo que hace el cd_in del reintento
+        // Lo que hace el cd_in del reintento.
+        record_step(
+            &mut app.history[0],
+            &mut app.popular,
+            &vp("mem:///c"),
+            &dir,
+            trail,
+        );
         settle_suspended_trail(&mut app, 0, &dir, trail, &Cd::Replaced(0));
 
         assert_eq!(
@@ -1609,6 +1616,7 @@ mod pane_gestures_tests {
         // Y lo que el `cd_in` del reintento hace con el rastro: nada.
         record_step(
             &mut app.history[0],
+            &mut app.popular,
             &vp("mem:///c"),
             &dir,
             Trail::Replay(TrailStep::Back),

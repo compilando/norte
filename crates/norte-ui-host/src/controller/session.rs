@@ -67,6 +67,7 @@ impl Estado {
         }
         self.aplicar_sesion(&body);
         self.paleta_recientes.clone_from(&body.palette_recent);
+        self.popular = norte_frontend::history::Popular::from_entries(body.popular.clone());
         self.sesion.conocidos = body.slots.keys().copied().collect();
         for (id, estado) in &body.slots {
             self.sesion.touched.insert(*id, estado.touched_ms);
@@ -386,6 +387,7 @@ impl Estado {
         body.layouts
             .insert(self.clave_de_sesion(), self.arbol.clone());
         body.palette_recent.clone_from(&self.paleta_recientes);
+        body.popular = self.popular.entries().to_vec();
         for (id, hueco) in &self.huecos {
             body.slots.insert(
                 *id,

@@ -118,3 +118,4 @@ edits.
 | [0110](0110-lua-stays-in-the-terminal-and-the-window-says-so.md) | Lua stays in the terminal, and the window says so | accepted |
 | [0111](0111-the-window-package-is-built-on-ubuntu-22-04.md) | The window package is built on Ubuntu 22.04, and that sets its floor | superseded in part by 0112 |
 | [0112](0112-release-artefacts-are-built-in-one-pinned-image-and-smoked-per-distribution.md) | Release artefacts are built in one pinned image and smoked per distribution | accepted |
+| [0114](0114-a-panel-history-is-walked-listed-marked-and-counted.md) | A panel's history is walked, listed, marked and counted | accepted |
