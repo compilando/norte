@@ -447,7 +447,7 @@ mod tests {
     /// typed a number.
     ///
     /// `nav.back`/`nav.forward` are the two that reach the network, and they
-    /// are here on a second bound: `nav::HISTORY_MAX` caps the trail at 30
+    /// are here on a second bound: `nav::HISTORY_MAX` caps the trail at 64
     /// steps, and the TUI's repeat stops the moment a step does not land
     /// (a failed or cancelled step is put BACK on the trail, so without that
     /// the next turn would re-issue the identical listing).

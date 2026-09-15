@@ -49,7 +49,7 @@ pub struct Palette {
 /// ¿Es `needle` subsecuencia de `hay`? (`cpf` casa `copy path` porque `c`,
 /// `p`, `f`... — sí, `f` no: casa `cop` y `pat`; lo que importa es que cada
 /// byte aparezca en orden). Vacío casa todo. Solo bytes plegados.
-fn is_subsequence(needle: &str, hay: &str) -> bool {
+pub(crate) fn is_subsequence(needle: &str, hay: &str) -> bool {
     // Por CHARS, no por bytes: una consulta no puede casar sobre un byte de
     // continuación en mitad de un carácter (revisión m12).
     let mut it = hay.chars();
