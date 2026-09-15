@@ -947,6 +947,12 @@ gui-package: gui-build
 gui-smoke imagen="debian:trixie":
     ./scripts/gui-smoke.sh {{imagen}}
 
+# Las pruebas del sistema de base (`scripts/baseline/lib.sh`) y shellcheck de
+# todos sus scripts. Segundos, sin Docker: el bucle RED→GREEN de esa carpeta.
+baseline-selftest:
+    shellcheck -S warning scripts/baseline/*.sh scripts/gui-smoke.sh
+    ./scripts/baseline/selftest.sh
+
 # El paquete de la ventana compilado DENTRO de una base vieja (tarea 7.1):
 # `gui-package` enlaza contra la glibc de esta máquina, y su `.deb` no arranca
 # en una distribución de hace dos años. Construye el COMMIT (`git archive

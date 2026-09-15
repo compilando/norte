@@ -258,7 +258,7 @@ image_slug() {
 manifest_sums() {
   local dir="$1"
   (
-    cd "$dir"
+    cd "$dir" || exit 1
     find . -type f ! -name SHA256SUMS ! -name MANIFEST ! -name SMOKE ! -path './smoke/*' -printf '%P\n' |
       LC_ALL=C sort |
       while IFS= read -r f; do sha256sum --binary -- "$f"; done
