@@ -20,7 +20,11 @@ Run the release checklist without publishing:
    `norte-proto/schema/`. Any change without a protocol version bump is a
    BLOCKER.
 6. Run the complete `just ci` suite.
-7. Confirm the artefacts: `just dist && just dist-smoke`. A release that does
-   not start is the one packaging failure the user finds before we do.
+7. Confirm the artefacts: `just baseline <tag>` must end with `verificado:`.
+   It builds every artefact of the tag on the pinned Ubuntu 22.04 image,
+   refuses a binary above glibc 2.35 or with another revision, and
+   smoke-tests each artefact on the pinned distribution matrix (ADR 0112). A
+   release that does not start is the one packaging failure the user finds
+   before we do; a smoke run on the build machine cannot see it.
 
 Return GO or NO-GO and list every blocker.
