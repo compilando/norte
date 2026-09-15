@@ -711,54 +711,18 @@ plugins *ARGS:
 
 # ---------- distribución ----------
 
-# Construye los artefactos de release para ESTA máquina.
+# Los artefactos de release NO se construyen en esta máquina: su glibc es más
+# nueva que la de casi cualquier Linux instalado, y un `norte` de aquí pedía
+# GLIBC_2.39 y no arrancaba en Ubuntu 22.04 ni en Debian 12 — con un humo
+# verde, porque el humo corría aquí también. Se construyen, prueban y
+# verifican con `just baseline <ref>` (ADR 0112, recetas `baseline*` más
+# abajo). `dist` sigue siendo la herramienta; corre dentro de la imagen.
 #
-# `dist-workspace.toml` declara CINCO targets: son los que produciría una
-# release desde CI. Aquí solo sale el del host, y `--target` es explícito por
-# DOS motivos: sin él dist intenta los cinco y se para en el primer cruce a
-# macOS, y los instaladores («global») se generan con la tabla de plataformas
-# que se les pase — sin acotarla, el instalador le prometería a un macOS un
-# archivo que esta release no contiene y moriría en un 404 en vez de decir
-# «no hay binario para tu plataforma».
-#
-# `rm -rf` primero: dist no limpia, y un `.ps1` de una corrida anterior con
-# otra configuración se subiría como si fuera de esta.
-#
-# Cross-compilar aws-lc-rs es lo que el ADR 0021 dio por frágil; macOS y
-# Windows necesitan sus máquinas. Las notas de la release dicen qué lleva; la
-# config no se recorta para disimularlo.
-dist:
-    rm -rf target/distrib
-    dist build --artifacts=local --target=$(rustc -vV | sed -n 's/^host: //p')
-    dist build --artifacts=global --target=$(rustc -vV | sed -n 's/^host: //p')
-    @echo "artefactos en target/distrib/:"
-    @ls -1 target/distrib/
-
-# Arranca los binarios DESDE los artefactos construidos (no desde
-# target/release).
-dist-smoke:
-    ./scripts/dist-smoke.sh
-
-# Sube a la release del tag lo construido aquí. El tag ya tiene que existir y
-# estar empujado: esto publica, no etiqueta.
-#
-# Se sube TODO fichero suelto de `target/distrib` en vez de una lista de globs:
-# qué produce dist depende de los targets que se le pasen (sin Windows no hay
-# `.ps1`), y un glob sin coincidencias se pasaría literal y reventaría la
-# subida entera. `-maxdepth 1` deja fuera los directorios de staging.
-#
-# Los esquemas van con los binarios a propósito (#13): un tercero que quiera
-# escribir un cliente no debería tener que clonar el repositorio para saber la
-# forma del protocolo.
-dist-publish tag:
-    ./scripts/dist-smoke.sh
-    gh release upload {{tag}} \
-        $(find target/distrib -maxdepth 1 -type f) \
-        docs/schema/proto.schema.json \
-        docs/schema/norte.schema.json \
-        docs/schema/keymap.schema.json \
-        --clobber
-    @echo "subido a {{tag}}. Comprueba: gh release view {{tag}}"
+# `--target` explícito dentro de `build.sh` por lo que ya se sabía: sin él
+# dist intenta los cinco targets de `dist-workspace.toml` y se para en el
+# primer cruce a macOS, y los instaladores prometerían un archivo que la
+# release no contiene. Cross-compilar aws-lc-rs es lo que el ADR 0021 dio por
+# frágil; macOS y Windows necesitan sus máquinas.
 
 # ---------------------------------------------------------------------------
 # La ventana: el renderer de Tauri (ADR 0087).
@@ -953,26 +917,56 @@ baseline-selftest:
     shellcheck -S warning scripts/baseline/*.sh scripts/gui-smoke.sh
     ./scripts/baseline/selftest.sh
 
-# El paquete de la ventana compilado DENTRO de una base vieja (tarea 7.1):
-# `gui-package` enlaza contra la glibc de esta máquina, y su `.deb` no arranca
-# en una distribución de hace dos años. Construye el COMMIT (`git archive
-# HEAD`), no el árbol, en volúmenes Docker propios, y deja paquetes, sumas
-# SHA-256 y la glibc que pide cada binario en `target/baseline/<imagen>/`.
-gui-baseline imagen="ubuntu:22.04":
-    ./scripts/gui-baseline.sh {{imagen}}
+# La imagen de construcción de la base (Ubuntu 22.04 fijada, Node 22.23.2, el
+# toolchain de `rust-toolchain.toml`, cargo-dist de `dist-workspace.toml`). Se
+# construye una vez; su tag cambia solo si cambia alguna de esas entradas.
+baseline-image:
+    ./scripts/baseline/image.sh
 
-# Sube a la release del tag el paquete de la ventana de la base vieja. Como
-# `dist-publish`: el tag ya tiene que existir, esto publica, no etiqueta. Antes
-# de subir, comprueba las sumas y pasa `gui-smoke` sobre ESE `.deb` — lo que se
-# publica es lo que se ha probado, no lo que salió de `target/release`.
-gui-publish tag base="ubuntu-22.04":
+# Construye todo lo publicable de una referencia en la imagen de la base y
+# deja `target/baseline/<revisión>/` con dist/, gui/, MANIFEST y SHA256SUMS.
+# Falla si un binario pide glibc por encima del suelo (2.35) o dice otra
+# revisión. Lento en frío; los volúmenes `norte-baseline-*` lo abaratan.
+baseline-build ref="HEAD":
+    ./scripts/baseline/build.sh {{ref}}
+
+# Humo de una build de la base en la matriz de `scripts/baseline/matrix.txt`.
+# `artefacto` limita a uno (tarball, installer, deb, rpm, appimage).
+baseline-smoke dir artefacto="":
+    ./scripts/baseline/smoke.sh {{dir}} {{artefacto}}
+
+# Una referencia de principio a fin: build en la base, humo en la matriz y
+# verificación. Verde = esta build se podría publicar.
+baseline ref="HEAD":
+    ./scripts/baseline/all.sh {{ref}}
+
+# ¿Se puede publicar esta build? Sumas, suelo, revisiones y matriz completa.
+baseline-verify dir:
+    ./scripts/baseline/verify.sh {{dir}}
+
+# Sube a la release del tag una build VERIFICADA de ese mismo tag. Solo
+# publica: la release tiene que existir. Rechaza una build de otro commit (su
+# revisión tiene que ser `<tag>-0-g…`). Los esquemas van con los binarios a
+# propósito (#13): un tercero que quiera escribir un cliente no debería tener
+# que clonar el repositorio para saber la forma del protocolo.
+baseline-publish tag dir:
     #!/usr/bin/env bash
     set -euo pipefail
-    dir="target/baseline/{{base}}"
-    [[ -d "$dir" ]] || { echo "no hay $dir — corre \`just gui-baseline\` primero" >&2; exit 1; }
-    (cd "$dir" && sha256sum -c ./*.sha256)
-    deb="$(find "$dir" -maxdepth 1 -name '*.deb' -print -quit)"
-    NORTE_DEB="$deb" ./scripts/gui-smoke.sh debian:bookworm
+    ./scripts/baseline/verify.sh {{dir}}
+    rev="$(awk '$1 == "revision" { print $2 }' {{dir}}/MANIFEST)"
+    case "$rev" in
+        {{tag}}-0-g*) ;;
+        *) echo "la build es de $rev, no de {{tag}}" >&2; exit 1 ;;
+    esac
     gh release upload {{tag}} \
-        $(find "$dir" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.sha256' \)) \
+        $(find {{dir}}/dist {{dir}}/gui -maxdepth 1 -type f) \
+        {{dir}}/SHA256SUMS \
+        docs/schema/proto.schema.json docs/schema/norte.schema.json docs/schema/keymap.schema.json \
         --clobber
+
+# Lo que ocupa la base fuera de `target/`: volúmenes e imágenes de Docker.
+# `-cargo`, `-rustup` y `-node` son los volúmenes del `gui-baseline` retirado.
+baseline-prune:
+    docker volume rm -f norte-baseline-registry norte-baseline-target norte-baseline-cargo norte-baseline-rustup norte-baseline-node
+    docker image ls -q norte-builder | xargs -r docker image rm -f
+    rm -rf target/baseline
