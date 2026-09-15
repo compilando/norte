@@ -38,9 +38,6 @@ if [[ -n "$(git -C "$RAIZ" status --porcelain --untracked-files=no)" ]]; then
 fi
 
 TOOLCHAIN="$(grep -E '^channel' "$RAIZ/rust-toolchain.toml" | cut -d'"' -f2)"
-# Las MISMAS features que `gui-package`: el paquete de la base vieja tiene que
-# ser el mismo producto, no otro.
-FEATURES="$(cd "$RAIZ" && just --evaluate features)"
 
 rm -rf "$SALIDA"
 mkdir -p "$SALIDA"
@@ -92,9 +89,10 @@ echo "--- webview"
 (cd crates/norte-gui-tauri/ui && npm ci --no-audit --no-fund && npm run build)
 
 echo "--- daemon y terminal"
-# `$FEATURES` sin comillas a propósito: son varias palabras `--features x`.
-# shellcheck disable=SC2086
-cargo build --release -p norte-cli -p norte-tui $FEATURES
+# Los mismos pasos que `gui-package`: features por defecto y un paquete por
+# invocación, que es el producto que publica `dist`, no el universo del gate.
+cargo build --release -p norte-cli
+cargo build --release -p norte-tui
 triple="$(rustc -vV | grep '^host:' | cut -d' ' -f2)"
 mkdir -p crates/norte-gui-tauri/binaries
 for b in norte ntc; do
@@ -135,7 +133,6 @@ git -C "$RAIZ" archive --format=tar HEAD | docker run --rm -i \
   -v norte-baseline-node:/node \
   -v "$SALIDA:/out" \
   -e TOOLCHAIN="$TOOLCHAIN" \
-  -e FEATURES="$FEATURES" \
   -e NORTE_REVISION="$(git -C "$RAIZ" describe --tags --always --long HEAD)" \
   -e HOST_UID="$(id -u)" \
   -e HOST_GID="$(id -g)" \

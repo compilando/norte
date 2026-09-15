@@ -32,8 +32,8 @@ Measured on 2026-09-15:
 ### A — Build in an Ubuntu 22.04 container, locally
 
 `scripts/gui-baseline.sh` feeds `git archive HEAD` into `ubuntu:22.04`, installs
-the same system libraries `gui.yml` does, and runs the `gui-package` steps
-with the same features, keeping rustup, the cargo registry, Node and `target/`
+the same system libraries `gui.yml` does, and runs the `gui-package` steps,
+keeping rustup, the cargo registry, Node and `target/`
 in named Docker volumes.
 
 - Good: the oldest base with WebKitGTK 4.1; one machine; the build is the
@@ -86,7 +86,10 @@ check and `gui-smoke` passes on that `.deb`.
   not decide it.
 - Negative: Ubuntu 22.04 leaves standard support in 2027; the base moves then,
   and with it the floor.
-- Negative: the package is built with the gate's feature set, which includes
-  `norte-core/testing`; whether a shipped binary should carry it is open.
+- Positive: `norte` and `ntc` are built with their default features, one
+  package per invocation, as `dist` builds them. Before this, `gui-package`
+  used the gate's feature set, and `norte-core/testing` put a policy-free
+  minting path (`run_column_values_for_test`) into shipped binaries; the
+  `schema` features were in them too, against ADR 0007.
 - Neutral: the `release.yml` workflow (cargo-dist) still publishes `norte` and
   `ntc` only; the window is added to a release by hand with `gui-publish`.

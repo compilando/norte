@@ -917,7 +917,13 @@ gui-package: gui-build
     #!/usr/bin/env bash
     set -euo pipefail
     triple=$(rustc -vV | sed -n 's/^host: //p')
-    cargo build --release -p norte-cli -p norte-tui {{features}}
+    # SIN `{{features}}`, y un paquete por invocación: lo que se empaqueta es
+    # el producto que publica `dist` (`precise-builds`), no el universo del
+    # gate. Las cuatro features del gate son de test o de docs —`schema` está
+    # «fuera del binario final» (ADR 0007) y `norte-core/testing` metía en el
+    # paquete un camino de acuñado sin política—; `watch` ya lo pide `norte-tui`.
+    cargo build --release -p norte-cli
+    cargo build --release -p norte-tui
     mkdir -p {{gui_dir}}/binaries
     for b in norte ntc; do
         rm -f "{{gui_dir}}/binaries/$b-$triple"
