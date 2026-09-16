@@ -1207,7 +1207,14 @@ fn golden_methods() {
     // un gemelo con el color en otra codificación). Y el quinto es el marco
     // AUSENTE: el campo viaja con `flatten`, así que «sin panel» es `{}` y no
     // `null` — la fixtura vacía es lo único que lo deja escrito.
-    assert_eq!(fixtures.len(), 214, "[methods.json] fixtures sin caso Rust");
+    // 214 → 217 en 0.75.0 (fase 4): los tres de `fs.dir_usage`. El informe va
+    // A MEDIAS a propósito —`pending > 0` y `partial` en `true`—, que es lo
+    // que deja escrito una Task cancelada sobre un árbol con una carpeta
+    // ilegible: las dos señales que distinguen «el mapa está completo» de «el
+    // mapa es lo que se pudo leer», y que sin fixtura nadie congela. Y el
+    // nombre de un hijo lleva un byte que no es UTF-8, porque un mapa de disco
+    // pinta nombres reales y esa es la forma que el wire tiene que conservar.
+    assert_eq!(fixtures.len(), 217, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -1411,6 +1418,7 @@ fn check_methods_archive_write(fixtures: &BTreeMap<String, Value>) {
     );
     check_methods_archive_pack_report(fixtures);
     check_methods_fs_checksum(fixtures);
+    check_methods_fs_dir_usage(fixtures);
     check_methods_fs_set_mode(fixtures);
     check_one(
         fixtures,
@@ -1535,6 +1543,70 @@ fn check_methods_fs_checksum(fixtures: &BTreeMap<String, Value>) {
             // Task cancelada deja escrito, y congelarlo aquí es lo que impide
             // que alguien lo ponga a cero «por limpieza».
             pending: 2,
+        },
+    );
+}
+
+/// `fs.dir_usage` (0.75.0, fase 4): de qué está hecho un directorio.
+///
+/// El informe se congela A MEDIAS —`pending` distinto de cero y `partial` en
+/// `true`— porque ese es el estado que de verdad importa: el de una Task
+/// cancelada, o el de un árbol con una carpeta que no se dejó leer. Un mapa
+/// que no dijera ninguna de las dos cosas se lee como completo.
+fn check_methods_fs_dir_usage(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        DirUsageChild, FsDirUsageParams, FsDirUsageReportParams, FsDirUsageReportResult,
+    };
+    use norte_proto::{EntryKind, Segment};
+
+    let seg = |b: &[u8]| Segment::new(b.to_vec()).expect("segmento");
+    check_one(
+        fixtures,
+        "fs_dir_usage_params",
+        &FsDirUsageParams {
+            path: norte_proto::VPath::parse("file:///casa").expect("wire"),
+            depth: 1,
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_dir_usage_report_params",
+        &FsDirUsageReportParams {
+            task_id: norte_proto::TaskId::new(9),
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_dir_usage_report_result",
+        &FsDirUsageReportResult {
+            children: vec![
+                DirUsageChild {
+                    name: seg(b"docs"),
+                    kind: EntryKind::Dir,
+                    bytes: 4096,
+                    entries: 12,
+                    partial: false,
+                },
+                // Un nombre que NO es UTF-8: un mapa de disco pinta nombres
+                // reales, y el wire tiene que conservarlos tal cual.
+                DirUsageChild {
+                    name: seg(b"caf\xFF.txt"),
+                    kind: EntryKind::File,
+                    bytes: 17,
+                    entries: 1,
+                    // Una cota inferior, y por HIJO: es el rectángulo que el
+                    // mapa tiene que marcar, y lo que una bandera global no
+                    // puede decir.
+                    partial: true,
+                },
+            ],
+            total_bytes: 4113,
+            total_entries: 13,
+            pending: 2,
+            listed: true,
+            // Hay más hijos de los que caben, y sus bytes SÍ están en los
+            // totales: lo que se pierde es su nombre, no su tamaño.
+            omitted: 3,
         },
     );
 }
@@ -4552,7 +4624,13 @@ fn method_names_frozen() {
     // 0.74.0 (fase 3): `plugin.panel_render`, el marco que un plugin del kind
     // `panel` pinta en un hueco del reparto. Abierto, como sus gemelos.
     assert_eq!(methods::PLUGIN_PANEL_RENDER, "plugin.panel_render");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.74.0");
+    // 0.75.0 (fase 4): `fs.dir_usage` y su informe — de qué está HECHO un
+    // directorio, hijo a hijo. Dos métodos porque la lista no cabe en el
+    // desenlace de una Task, igual que `fs.checksum` y sus gemelos; el
+    // `fs.dir_size` de 0.49.0 sigue contestando lo suyo, que es otra pregunta.
+    assert_eq!(methods::FS_DIR_USAGE, "fs.dir_usage");
+    assert_eq!(methods::FS_DIR_USAGE_REPORT, "fs.dir_usage_report");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.75.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

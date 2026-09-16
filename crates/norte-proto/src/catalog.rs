@@ -170,6 +170,8 @@ rpc_catalogo! {
     FS_DIR_SIZE, Request, Task, methods::FsDirSizeParams, methods::FsTaskResult;
     FS_CHECKSUM, Request, Task, methods::FsChecksumParams, methods::FsTaskResult;
     FS_CHECKSUM_REPORT, Request, Direct, methods::FsChecksumReportParams, methods::FsChecksumReportResult;
+    FS_DIR_USAGE, Request, Task, methods::FsDirUsageParams, methods::FsTaskResult;
+    FS_DIR_USAGE_REPORT, Request, Direct, methods::FsDirUsageReportParams, methods::FsDirUsageReportResult;
 
     // Índice y semántica.
     // Task, no Direct: el daemon contesta `FsTaskResult { task_id }` y el

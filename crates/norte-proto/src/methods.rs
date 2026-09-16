@@ -1182,7 +1182,31 @@ use crate::{
 /// que es lo mismo que pasa con un plugin desinstalado. Y ve `panels` vacío,
 /// o sea ningún panel que ofrecer, que es lo que había. Un cliente 0.73
 /// contra un daemon 0.74 no pide ninguna de las dos cosas.
-pub const PROTOCOL_VERSION: &str = "0.74.0";
+/// # 0.75.0 — `fs.dir_usage` (fase 4 del programa 2026-09-15)
+///
+/// Dos métodos nuevos y una clase de Task nueva: de qué está HECHO un
+/// directorio, hijo a hijo ([`FsDirUsageParams`] → [`FsTaskResult`], y
+/// [`FsDirUsageReportParams`] → [`FsDirUsageReportResult`]), más
+/// [`TaskKind::DirUsage`](crate::TaskKind). Aditivo: ningún mensaje que
+/// existía cambia de forma.
+///
+/// El reparto tarea+informe es el de [`FS_CHECKSUM`], y por lo mismo: la lista
+/// de hijos no cabe en el desenlace de una Task, y el progreso solo sabe
+/// contar. `fs.dir_size` sigue existiendo y sigue contestando lo suyo —UN
+/// número sobre una selección—, que es otra pregunta.
+///
+/// La pérdida, para un **cliente 0.74 contra un daemon 0.75**: no sabe pedir
+/// `fs.dir_usage` y no lo pide, así que se queda sin mapa de disco — la
+/// pantalla que tenía. Y si ve la Task de OTRO en `task.list`, su `TaskKind`
+/// cae en `Unknown` por el `serde(other)`: la pinta con su progreso y su botón
+/// de cancelar, pero sin nombre, como «tarea» a secas. Es lo que le pasa a
+/// cualquier clase nueva, y es la razón por la que 0.49.0 y 0.59.0 se
+/// molestaron en darle etiqueta propia a la suya.
+///
+/// La otra dirección NO cuenta: un cliente 0.75 contra un daemon 0.74 no llega
+/// a pedir nada, porque [`version_compatible`] rechaza a un cliente con minor
+/// mayor que el del servidor y muere en el `initialize`.
+pub const PROTOCOL_VERSION: &str = "0.75.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1706,6 +1730,59 @@ pub const FS_CHECKSUM: &str = "fs.checksum";
 /// Es un SNAPSHOT: definitivo cuando la Task es terminal, parcial antes — que
 /// es justo lo que hace útil pedirlo mientras corre.
 pub const FS_CHECKSUM_REPORT: &str = "fs.checksum_report";
+/// `fs.dir_usage` — qué ocupa cada HIJO de un directorio (0.75.0, fase 4).
+///
+/// Devuelve una Task ([`FsTaskResult`],
+/// [`TaskKind::DirUsage`](crate::TaskKind)) cancelable, y los hijos se recogen
+/// después con [`FS_DIR_USAGE_REPORT`].
+///
+/// **Por qué dos métodos y no uno**, otra vez: el resultado es una LISTA, y
+/// eso no cabe en el desenlace de una Task ni en su progreso, que solo sabe
+/// contar. Es el mismo reparto —y por la misma razón— que
+/// [`FS_CHECKSUM_REPORT`], [`FS_RENAME_BATCH_REPORT`] y [`ARCHIVE_PACK_REPORT`].
+///
+/// **Por qué no es un parámetro de [`FS_DIR_SIZE`]**: aquel contesta UN número
+/// sobre una selección —«¿cabe esto en el destino?»— y por eso su total puede
+/// viajar en el progreso sin inventar tipo alguno. Este contesta «¿de qué está
+/// hecho esto?», que es otra pregunta, con otra forma y otra clase de Task.
+///
+/// NO muta: sin journal, sin undo, ni un byte escrito (la regla 4 no aplica).
+/// Lee la FORMA del árbol y no el contenido, como `fs.dir_size`, así que el
+/// daemon lo gatea por la puerta de LECTURA y no por la estrecha.
+pub const FS_DIR_USAGE: &str = "fs.dir_usage";
+/// `fs.dir_usage_report` — los hijos medidos por un [`FS_DIR_USAGE`] ya
+/// lanzado (0.75.0, fase 4).
+///
+/// Es un SNAPSHOT: parcial mientras la Task corre —que es lo que hace útil
+/// pedirlo— y definitivo cuando es terminal. Se pide por `task_id`, y el
+/// daemon comprueba que quien pregunta podía VER esa Task: un agente no lee
+/// el mapa que midió otro.
+///
+/// Un `task_id` que nunca fue un `fs.dir_usage` de esta instancia, o cuyo
+/// informe el anillo ya desalojó, contesta como el de sus gemelos: sin
+/// informe. Un daemon de meses no puede guardar el mapa de cada directorio
+/// que alguien miró.
+pub const FS_DIR_USAGE_REPORT: &str = "fs.dir_usage_report";
+
+/// Cuántos hijos caben en un [`FsDirUsageReportResult`].
+///
+/// Existe porque `children` sería la ÚNICA lista sin tope del protocolo, y el
+/// decodificador no degrada: por encima de `MAX_FRAME_BYTES` el marco no se
+/// recorta, falla entero. Un `/nix/store`, un Maildir o un `node_modules` son
+/// cientos de miles de hijos de primer nivel.
+///
+/// Por encima del tope viajan los MÁS GRANDES —que es lo que un mapa pinta— y
+/// el resto se cuenta en [`FsDirUsageReportResult::omitted`], nunca en
+/// silencio: un informe recortado sin decirlo se lee como el directorio
+/// entero, que es el fallo que este protocolo ya se prohíbe en `fs.checksum`.
+pub const DIR_USAGE_MAX_CHILDREN: usize = 4096;
+
+/// Hasta dónde puede pedir bajar un [`FsDirUsageParams`].
+///
+/// Hoy el servidor solo sirve `1`, y eso se DICE en el tipo: una profundidad
+/// que se acepta y se ignora es un cliente que pide dos niveles, recibe uno y
+/// cree que tiene dos.
+pub const DIR_USAGE_MAX_DEPTH: u32 = 8;
 /// `archive.pack` — fabrica un archivo NUEVO a partir de un conjunto de rutas
 /// (0.50.0, #132).
 ///
@@ -3412,6 +3489,159 @@ pub struct FsChecksumReportParams {
     /// La Task cuyo informe se pide (la de [`FsTaskResult::task_id`] que
     /// devolvió [`FS_CHECKSUM`]).
     pub task_id: TaskId,
+}
+
+/// Params de [`FS_DIR_USAGE`] (0.75.0, fase 4).
+///
+/// UNA raíz y no varias, al revés que [`FsDirSizeParams`]: aquello suma una
+/// selección en un número, y esto describe de qué está hecho UN directorio.
+/// Mezclar dos raíces daría una lista de hijos de sitios distintos con nombres
+/// que pueden repetirse, que no es un mapa de nada.
+///
+/// ```
+/// use norte_proto::methods::FsDirUsageParams;
+/// // `depth` omitido es UNO, que es lo que pinta un mapa.
+/// let p: FsDirUsageParams =
+///     serde_json::from_str(r#"{"path":"file:///casa"}"#).expect("params");
+/// assert_eq!(p.depth, 1);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsDirUsageParams {
+    /// El directorio que se describe.
+    pub path: VPath,
+    /// Cuántos niveles se abren. `1` —lo que pinta un mapa de disco— mide cada
+    /// hijo entero y no baja más.
+    ///
+    /// Va en el wire aunque hoy el servidor solo sirva `1` porque un mapa de
+    /// dos niveles es la primera cosa que alguien va a pedir, y añadir el
+    /// campo después obligaría a distinguir «no lo mandó» de «pidió uno».
+    ///
+    /// **Contrato**: `0` es `-32602` —describir cero niveles no es una
+    /// petición—, por encima de [`DIR_USAGE_MAX_DEPTH`] también, y lo que hoy
+    /// se sirve es `1`. Un servidor que recorte en silencio deja al cliente
+    /// creyendo que tiene lo que pidió.
+    #[serde(default = "profundidad_por_defecto")]
+    pub depth: u32,
+}
+
+/// La profundidad de un [`FS_DIR_USAGE`] que no la dice: un nivel.
+const fn profundidad_por_defecto() -> u32 {
+    1
+}
+
+/// Params de [`FS_DIR_USAGE_REPORT`] (0.75.0, fase 4).
+///
+/// ```
+/// use norte_proto::methods::FsDirUsageReportParams;
+/// let p: FsDirUsageReportParams =
+///     serde_json::from_str(r#"{"task_id":9}"#).expect("params");
+/// assert_eq!(p.task_id.get(), 9);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsDirUsageReportParams {
+    /// La Task cuyo informe se pide (la de [`FsTaskResult::task_id`] que
+    /// devolvió [`FS_DIR_USAGE`]).
+    pub task_id: TaskId,
+}
+
+/// Un hijo medido: qué es y cuánto ocupa (0.75.0, fase 4).
+///
+/// ```
+/// use norte_proto::methods::DirUsageChild;
+/// let c: DirUsageChild = serde_json::from_str(
+///     r#"{"name":"caf%FF.txt","kind":"file","bytes":17,"entries":1}"#,
+/// )
+/// .expect("hijo");
+/// // El nombre vuelve a ser los BYTES que había en el disco.
+/// assert_eq!(c.name.as_bytes(), b"caf\xFF.txt");
+/// // Y un hijo que no dice nada es un hijo COMPLETO: la cota inferior se
+/// // declara, no se supone.
+/// assert!(!c.partial);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirUsageChild {
+    /// Su nombre BASE, en bytes (regla 1): un nombre no es UTF-8, y quien lo
+    /// pinte lo enmascara como cualquier otro.
+    ///
+    /// Un [`Segment`] y no un `String` ni una ruta: es exactamente un tramo de
+    /// nombre, ya tiene su codificación de wire, y una ruta aquí sería un
+    /// segundo camino para nombrar un fichero — el que se resuelve contra el
+    /// directorio que se pidió, sin pasar por donde pasan los demás.
+    pub name: Segment,
+    /// Qué clase de nodo es, para que el mapa lo pinte como lo que es.
+    pub kind: EntryKind,
+    /// Cuánto ocupa, contando lo que se pudo leer bajo él.
+    pub bytes: u64,
+    /// Cuántas entradas tiene dentro, él incluido.
+    pub entries: u64,
+    /// Lo de arriba es una COTA INFERIOR: hubo algo bajo este hijo que no se
+    /// dejó leer.
+    ///
+    /// Por HIJO y no por informe, que es la diferencia entre poder pintarlo y
+    /// no: un mapa marca el rectángulo que no está completo; una bandera
+    /// global solo puede apagar el mapa entero. Es el mismo criterio que
+    /// [`ChecksumEntry::miss`], que también va por entrada.
+    ///
+    /// `default` para que añadir campos aquí siga siendo aditivo.
+    #[serde(default)]
+    pub partial: bool,
+}
+
+/// Result de [`FS_DIR_USAGE_REPORT`] (0.75.0, fase 4): lo medido hasta ahora.
+///
+/// Es un SNAPSHOT, como el de [`FS_CHECKSUM_REPORT`]: parcial mientras la Task
+/// corre —que es lo que hace útil pedirlo— y definitivo cuando termina. El
+/// orden es el del LISTADO del directorio, no el de terminación: un mapa que
+/// se reordena solo cambia de forma entre dos vistas de lo mismo.
+///
+/// ```
+/// use norte_proto::methods::FsDirUsageReportResult;
+/// // Un fragmento: la Task se paró mientras listaba la raíz.
+/// let r: FsDirUsageReportResult = serde_json::from_str(
+///     r#"{"children":[],"total_bytes":0,"total_entries":0,
+///         "pending":0,"listed":false,"omitted":0}"#,
+/// )
+/// .expect("informe");
+/// // `pending: 0` NO quiere decir «terminado» aquí: sin `listed`, nadie sabe
+/// // cuántos hijos había.
+/// assert!(!r.listed);
+/// assert_eq!(r.pending, 0);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsDirUsageReportResult {
+    /// Un hijo por entrada del directorio, ya medida.
+    pub children: Vec<DirUsageChild>,
+    /// La suma de los hijos medidos.
+    pub total_bytes: u64,
+    /// Las entradas contadas bajo ellos.
+    pub total_entries: u64,
+    /// Cuántos hijos quedan por medir. Cero con la Task `Completed`; en una
+    /// cancelada o fallida se queda en lo que faltaba.
+    ///
+    /// **Solo significa algo con [`Self::listed`] en `true`.** Al revés que el
+    /// de [`FsChecksumReportResult`], cuyo denominador son las rutas que mandó
+    /// el cliente, aquí no se sabe cuántos hijos hay hasta que termina el
+    /// listado de la raíz: una Task cancelada mientras listaba informa `0`
+    /// sobre un puñado de hijos, y sin `listed` eso se lee como un mapa
+    /// completo.
+    pub pending: u64,
+    /// El listado de la raíz TERMINÓ, así que ya se sabe cuántos hijos hay.
+    ///
+    /// En `false` el informe es un fragmento —se canceló mientras listaba, o
+    /// la raíz ni se dejó abrir— y ni [`Self::pending`] ni los totales dicen
+    /// nada de lo que falta.
+    pub listed: bool,
+    /// Hijos que EXISTEN y no están en la lista, porque no cabían
+    /// ([`DIR_USAGE_MAX_CHILDREN`]).
+    ///
+    /// Los totales SÍ los cuentan, así que un mapa puede pintar el resto como
+    /// un rectángulo más: lo que se pierde es su nombre, no su tamaño. Cero es
+    /// el caso normal.
+    pub omitted: u64,
 }
 
 /// Result de [`FS_CHECKSUM_REPORT`] (0.59.0, #311): lo calculado hasta ahora.

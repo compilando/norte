@@ -216,6 +216,10 @@ pub fn counts_as_work(kind: norte_proto::TaskKind) -> bool {
         norte_proto::TaskKind::Search
             | norte_proto::TaskKind::Compare
             | norte_proto::TaskKind::DirSize
+            // Medir de qué está hecho un directorio es lo mismo que medir
+            // cuánto ocupa: una LECTURA que el lector pidió mirando, no trabajo
+            // que el tablero deba anunciar.
+            | norte_proto::TaskKind::DirUsage
             | norte_proto::TaskKind::Checksum
             | norte_proto::TaskKind::Index
             | norte_proto::TaskKind::Embed
@@ -233,8 +237,15 @@ mod tests {
     /// NUEVA cuenta como trabajo sin que nadie lo piense — que es el valor
     /// por defecto correcto (una clase nueva suele mutar, y un panel que no
     /// se abre nunca es una función que no existe), pero no puede ser una
-    /// decisión silenciosa. Este `match` sin brazo comodín rompe la
-    /// compilación del test en cuanto el enum crece, y obliga a elegir.
+    /// decisión silenciosa.
+    ///
+    /// **Y este test no la caza solo.** El `match` de abajo no lleva comodín
+    /// —el `otra => panic!` obliga a elegir—, pero lo que itera es el ARRAY de
+    /// aquí al lado, escrito a mano: una clase que no esté en el array no se
+    /// prueba, y el `panic!` no llega a dispararse. Pasó con `DirUsage`
+    /// (0.75.0), que entró clasificada y sin ejercitar. Al añadir una clase se
+    /// tocan los DOS sitios, y esta frase existe porque la de antes prometía
+    /// una red que no había.
     #[test]
     fn cada_clase_decide_a_mano_si_es_trabajo() {
         use norte_proto::TaskKind as K;
@@ -251,6 +262,7 @@ mod tests {
             K::RenameBatch,
             K::Compare,
             K::DirSize,
+            K::DirUsage,
             K::Checksum,
             K::SetMode,
             K::Pack,
@@ -282,6 +294,7 @@ mod tests {
                 K::Search
                 | K::Compare
                 | K::DirSize
+                | K::DirUsage
                 | K::Checksum
                 | K::Index
                 | K::Embed

@@ -290,6 +290,36 @@
   "fs_checksum_report_params": {
     "task_id": 9
   },
+  "fs_dir_usage_params": {
+    "path": "file:///casa",
+    "depth": 1
+  },
+  "fs_dir_usage_report_params": {
+    "task_id": 9
+  },
+  "fs_dir_usage_report_result": {
+    "children": [
+      {
+        "name": "docs",
+        "kind": "dir",
+        "bytes": 4096,
+        "entries": 12,
+        "partial": false
+      },
+      {
+        "name": "caf%FF.txt",
+        "kind": "file",
+        "bytes": 17,
+        "entries": 1,
+        "partial": true
+      }
+    ],
+    "total_bytes": 4113,
+    "total_entries": 13,
+    "pending": 2,
+    "listed": true,
+    "omitted": 3
+  },
   "fs_checksum_report_result": {
     "entries": [
       {

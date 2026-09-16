@@ -42,14 +42,36 @@ un treemap. Pulsar un rectángulo entra en ese hijo.
    `FsDirUsageParams { path, depth }`. `depth` es `1` hoy y va en el wire
    porque un mapa de dos niveles es la primera cosa que alguien pedirá.
 2. `FS_DIR_USAGE_REPORT` (`Request`, `Direct`) con
-   `FsDirUsageReportParams { task_id }` → `FsDirUsageReportResult { usage }`,
-   y `DirUsage { children: Vec<DirUsageChild>, total_bytes, total_entries,
-   partial }`; `DirUsageChild { name: Vec<u8>, kind, bytes, entries }`.
-   **`name` son BYTES** (regla 1): un nombre no es UTF-8 y el mapa lo pinta con
-   el enmascarado de siempre.
-3. `TaskKind::DirUsage`. Ojo al `match` exhaustivo de
-   `norte_frontend::tasks::counts_as_work`: una clase nueva decide A MANO si
-   es trabajo (esto lo es: mide, y el panel de procesos debe poder cancelarlo).
+   `FsDirUsageReportParams { task_id }` → `FsDirUsageReportResult { children,
+   total_bytes, total_entries, pending, listed, omitted }`, con
+   `DirUsageChild { name: Segment, kind, bytes, entries, partial }`.
+
+   **`name` es un `Segment`**, no bytes sueltos ni una ruta: es el tipo de
+   nombre de este protocolo, codifica sin pérdida lo que no es UTF-8 (regla 1)
+   y **rechaza separadores, NUL y `.`/`..` DESPUÉS de decodificar**, así que un
+   `%2E%2E` no cuela un `..`. Eso convierte el «el arg nunca es una ruta» del
+   ADR 0116 en un invariante del TIPO, y no en una comprobación que alguien
+   tenga que acordarse de escribir.
+
+   **Tres señales, tres preguntas distintas.** `pending` —cuántos hijos
+   conocidos faltan por medir— solo significa algo con `listed` en `true`:
+   hasta que termina el listado de la raíz no se sabe cuántos hijos hay, así
+   que una Task cancelada listando informaría `0` y se leería como un mapa
+   completo. `omitted` son los hijos que existen y no caben en
+   `DIR_USAGE_MAX_CHILDREN`, y sus bytes SÍ están en los totales: lo que se
+   pierde es su nombre, no su tamaño. Y `partial` va por HIJO, porque lo que
+   un mapa puede pintar es el rectángulo que es una cota inferior; una bandera
+   global solo sabe apagar el mapa entero.
+3. `TaskKind::DirUsage`, y en `norte_frontend::tasks::counts_as_work` va con
+   `DirSize` y `Checksum`: **no es trabajo de tablero**. Mide, no muta, y el
+   panel de procesos no tiene por qué abrirse solo porque alguien mire un
+   directorio.
+
+   Ojo, porque aquí hay una trampa que costó encontrar: ese `!matches!` es por
+   exclusión, así que una clase nueva entra como trabajo sin que nadie lo
+   decida, y el test de al lado **tampoco** rompe la compilación — itera un
+   array escrito a mano, y lo que no está en el array no se prueba. Hay que
+   añadirla a los dos sitios.
 4. Las seis puertas de completitud del ADR 0089: catálogo, `catalogo.tsv`,
    `golden_types.rs` con sus casos, `methods.json`, `tests/schema.rs` y
    `docs/schema/proto.schema.json`.
