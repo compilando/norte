@@ -160,6 +160,30 @@ Rama (`.git/HEAD`), commit (`.git/logs/HEAD`, última línea) y los diez último
 movimientos del reflog, con `location-root-marker = ".git"`. Con `git-status`
 (columna) cierra la mejora 7 del programa.
 
+**T5 hecho** (`2068bfef`): `plugins/git-panel`, con el `wit` enlazado al del
+host, tests de host sobre el parseo (el commit es el DESTINO de la última línea
+del reflog, no el origen) y receta `just plugin-git-panel`. El world va
+CUALIFICADO —`norte:panel/norte-panel`—, porque el paquete raíz del `wit`
+enlazado es `norte:plugin` y el del panel es una dependencia suya.
+
+**Lo que NO se hizo, a propósito y anotado como deuda:**
+
+- **Un e2e del plugin real contra un `.git` de verdad**, al estilo de
+  `columns_git_e2e.rs`. El plugin tiene tests de host del parseo y el
+  componente compila; lo que falta es el camino entero —instalado como el de un
+  tercero, aprobado, renderizando—. Es el test que de verdad prueba el WIT del
+  panel, y el sitio es `crates/norte-core/tests/`.
+- **El guest no recibe sus propios clics.** Una zona ejecuta un comando de casa
+  y el plugin no se entera; `PanelEvent::Click`/`Command` existen en el WIT y
+  ningún frontend los manda todavía. El sitio es el `event:` de
+  `panelplugin::pedir_marco`, en los dos.
+- **El brazo EMBEBIDO redescubre el catálogo en disco por llamada.** Se paga
+  por cambio de contexto, no por frame, pero el daemon lo tiene en memoria.
+  Cachearlo pide invalidación donde se escribe el estado de los plugins.
+- **`Hit.arg` viaja y no lo lee nadie**, porque ningún comando permitido toma
+  operando. ADR 0116 lo deja escrito: nunca es una ruta, y quien ate un comando
+  con operando decide `arg` a la vez en los dos frontends.
+
 ## T6 — Ayuda, ADR y cierre
 
 - Topic de ayuda (en/es) del kind `panel`: qué es, cómo se abre, y que lo que
