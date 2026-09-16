@@ -102,10 +102,57 @@ tareas; `just ci` una vez antes de fusionar.
 2. Ventana: `SlotView::Panel` (puente 70) y `paintPanel` en `render/panel.ts`,
    con los `Hit` como zonas pulsables. Un `Hit` no ejecuta nada por su cuenta:
    manda la acción que ya existe.
-3. Cuándo se repinta: al cambiar directorio o cursor del panel con foco (con
-   coalición), al redimensionar, y tras un evento. Un plugin lento **no
-   bloquea**: se queda la última foto con indicador.
+3. Cuándo se repinta: al cambiar directorio o cursor del panel con foco, al
+   redimensionar, y tras un evento. Un plugin lento **no bloquea**: se queda la
+   última foto con indicador.
+
+   La «coalición» que pedía este punto **no es un temporizador**, y eso lo
+   decide el repositorio, no yo: no hay ningún debounce ni coalescedor en los
+   dos frontends (el único `sleep` con plazo es la recarga de configuración,
+   300 ms, y es otra cosa). Lo que hay, y lo que un panel copia, es **una
+   petición viva por hueco que la siguiente SUSTITUYE**:
+   - TUI (`turn.rs:567`): se reevalúa una vez por turno de pintado y solo se
+     pide si no está ya mostrado ni en vuelo; pedir otra vez sobreescribe la
+     sonda y **suelta el `Receiver`**, que es la cancelación.
+   - Ventana (`preview.rs:105`): igual, con `RequestToken` monotónico guardado
+     en `en_vuelo`; al aterrizar, un token que no es el de ahora se tira.
+
+   El `state` opaco del guest **no lo guarda nadie todavía** en ningún
+   frontend: va en la misma estructura por hueco que la última foto, junto al
+   token en vuelo, y vuelve en el siguiente `PluginPanelRenderParams::state`.
+   Un hueco que desaparece se limpia como los previews (`retain` sobre los
+   vivos), o su estado sobrevive al panel que lo pidió.
 4. Test de paridad: el mismo `StyledFrame` pintado en los dos, mismas filas.
+
+**T4a (terminal) hecho.** Lo que dejó, y que T4b hereda en vez de volver a
+decidir:
+
+- El comando de un `Hit` se FILTRA (`norte_frontend::frame::zona_puede`), y la
+  lista vive junto al `Hit` para que la ventana no escriba la suya. El plugin
+  elige la etiqueta y el comando, y nada los ata: una zona que pone
+  «Actualizar» podía nombrar `pane.unpack`. El consentimiento fue para pintar.
+- El tramo del wire se convierte con `norte_frontend::ansi::span_de_wire`
+  —enmascara el texto y estrecha el rol—, y la ventana tiene que usarla: una
+  segunda conversión a mano reabre el agujero que esta cerró.
+- La firma de un repintado lleva el KIND, no solo la geometría, y lo que un
+  panel guarda se poda con el árbol: un `SlotId` de preset se reutiliza, y sin
+  eso el panel de otro plugin recibía el estado opaco del primero.
+- Un intento que vuelve vacío se anota: si no, un panel sin plugin que lo pinte
+  se repide en cada frame pintado.
+- Una petición viva por hueco. Soltar el receptor descarta la RESPUESTA, no el
+  trabajo: el guest se instancia y corre igual.
+
+Y lo que queda anotado como deuda, no como hecho:
+
+- El brazo EMBEBIDO descubre el catálogo en disco por llamada; el daemon lo
+  tiene en memoria. Cachearlo pide invalidación donde se escribe el estado de
+  los plugins.
+- Ningún frontend manda todavía `Click` ni `Command` al guest: una zona ejecuta
+  un comando de casa y el plugin no se entera. El sitio es el `event:` de
+  `panelplugin::pedir_marco`.
+- `Hit.arg` viaja y no lo lee nadie, porque ningún comando del catálogo toma
+  operando. Quien ate un comando con operando decide `arg` a la vez (ADR 0116
+  debe recordar que `arg` no es nunca una ruta).
 
 ## T5 — Demo oficial `plugins/git-panel`
 

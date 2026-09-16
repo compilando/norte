@@ -53,6 +53,65 @@ pub struct Hit {
     pub arg: Option<String>,
 }
 
+/// El código del idioma activo, tal como viaja a un guest.
+///
+/// Aquí y no en cada frontend: el terminal y la ventana le dicen lo MISMO al
+/// mismo plugin. Dos tablas de códigos empiezan iguales y se separan en cuanto
+/// aparezca un idioma más — y la diferencia solo se vería con un panel
+/// traducido delante.
+///
+/// ```
+/// assert!(matches!(norte_frontend::frame::lang_code(), "es" | "en"));
+/// ```
+#[must_use]
+pub fn lang_code() -> &'static str {
+    match norte_i18n::active() {
+        norte_i18n::Lang::Es => "es",
+        norte_i18n::Lang::En => "en",
+    }
+}
+
+/// Los comandos que una ZONA de un panel puede nombrar.
+///
+/// El plugin elige la etiqueta Y el comando, y nada los ata: una zona que pone
+/// «Actualizar» puede nombrar `pane.unpack`, que copia. El consentimiento que
+/// dio el lector fue para PINTAR —la capacidad del manifiesto es `panel`—, no
+/// para conducir el gestor, así que el clic tiene que quedarse en el mismo
+/// alcance que las teclas que recibe un panel enfocado: cromo y moverse entre
+/// paneles.
+///
+/// Vive aquí, junto al [`Hit`], y no en cada frontend: el terminal y la
+/// ventana tienen que filtrar IGUAL, y dos listas se separan al primer añadido
+/// (ADR 0077). Lo que un plugin quiera ofrecer más allá de esto se pide con un
+/// comando propio, que pasa por el catálogo, por el consentimiento y por la
+/// policy como cualquier otro.
+pub const ZONA_PERMITIDA: &[&str] = &[
+    "layout.grow",
+    "layout.shrink",
+    "layout.focus-next",
+    "layout.focus-prev",
+    "layout.places",
+    "layout.preview",
+    "layout.processes",
+    "layout.metadata",
+    "layout.log",
+    "pane.tree",
+];
+
+/// ¿Puede una zona de un panel nombrar este comando?
+///
+/// ```
+/// use norte_frontend::frame::zona_puede;
+///
+/// assert!(zona_puede("layout.focus-next"));
+/// assert!(!zona_puede("pane.unpack"), "un plugin no conduce el gestor");
+/// assert!(!zona_puede("app.quit"));
+/// ```
+#[must_use]
+pub fn zona_puede(command: &str) -> bool {
+    ZONA_PERMITIDA.contains(&command)
+}
+
 /// Un marco pintable: líneas con estilo y zonas pulsables.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StyledFrame {

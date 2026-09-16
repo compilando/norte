@@ -666,6 +666,23 @@ pub async fn run(
                     app.kinds.insert_panels(&lista.plugins);
                 }
             }
+            res = async {
+                match &mut work.panel_render {
+                    Some(pr) => (&mut pr.rx).await.ok(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                // El marco de un panel de plugin (fase 3). El hueco se limpia
+                // SIEMPRE, y quien decide si la respuesta sigue valiendo es
+                // `aterrizar`, comparando la firma: mientras volaba, el cursor
+                // pudo moverse y ese marco describe otra pantalla.
+                // La sonda se TOMA, no se clona: el brazo se reconstruye en
+                // cada vuelta del `select!`, así que clonar la firma ahí era
+                // clonarla por poll y no por respuesta.
+                if let Some(pr) = work.panel_render.take() {
+                    crate::panelplugin::aterrizar(app, pr.slot, &pr.firma, res);
+                }
+            }
             (epoca, res) = async {
                 match &mut work.log_tail {
                     Some(pr) => (pr.epoca, (&mut pr.rx).await.ok()),

@@ -55,6 +55,47 @@ pub struct StyledSpan {
 /// Una línea = secuencia de tramos con estilo.
 pub type StyledLine = Vec<StyledSpan>;
 
+/// Un tramo del WIRE, saneado y validado.
+///
+/// Las dos puertas que cruza un tramo que viene de un plugin, en un solo
+/// sitio: el `text` es texto de un TERCERO y se enmascara igual que el de la
+/// ruta ANSI (`crate::display_name`), y el `role` se valida contra lo que un
+/// plugin PUEDE pedir ([`norte_theme::Role::from_kebab_requestable`]), que
+/// deja fuera los roles del cromo y del estado de la ventana (spec
+/// 2026-09-11, F2). Un nombre desconocido degrada a `None`, nunca a un error:
+/// un guest de un norte más nuevo no rompe el pintado de uno más viejo.
+///
+/// Compartida porque los consumidores son tres —el visor con preview
+/// estilada, las decoraciones y, desde la fase 3, el marco de un panel— y la
+/// tercera copia se escribió copiando los campos a mano, sin enmascarar el
+/// texto: un panel podía colar escapes de terminal por el único camino que no
+/// pasaba por aquí.
+///
+/// ```
+/// use norte_proto::methods::SpanWire;
+///
+/// let s = norte_frontend::ansi::span_de_wire(&SpanWire {
+///     text: "rama".to_owned(),
+///     role: Some("scrollbar-slider".to_owned()),
+///     fg: None,
+///     bg: None,
+/// });
+/// assert_eq!(s.text, "rama");
+/// assert!(s.role.is_none(), "un rol del cromo no lo puede pedir un plugin");
+/// ```
+#[must_use]
+pub fn span_de_wire(span: &norte_proto::methods::SpanWire) -> StyledSpan {
+    StyledSpan {
+        text: crate::display_name(span.text.as_bytes()).0,
+        role: span
+            .role
+            .as_deref()
+            .and_then(norte_theme::Role::from_kebab_requestable),
+        fg: span.fg.map(|[r, g, b]| (r, g, b)),
+        bg: span.bg.map(|[r, g, b]| (r, g, b)),
+    }
+}
+
 /// Parsea `input` (salida de un previewer) a líneas con estilo, interpretando
 /// SOLO SGR de color de primer plano y DESCARTANDO cualquier otra secuencia de
 /// escape (saneado — ver el módulo). Las líneas se separan por `\n`; un `\r`

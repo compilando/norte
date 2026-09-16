@@ -17,8 +17,8 @@ use crate::fill::Fill;
 use crate::jobs::{CompareRun, SearchRun, SyncRun};
 use crate::lua::CommandRun;
 use crate::probes::{
-    CompareStatProbe, DecorateFetch, LogLevelProbe, LogTailProbe, PanelsProbe, PreviewFetch,
-    Probed, StatProbe,
+    CompareStatProbe, DecorateFetch, LogLevelProbe, LogTailProbe, PanelRenderProbe, PanelsProbe,
+    PreviewFetch, Probed, StatProbe,
 };
 use norte_proto::{Error, VPath};
 
@@ -191,6 +191,11 @@ pub struct InFlight {
     /// (fase 3): a lo sumo uno, y se pide UNA vez por sesión — lo que trae es
     /// qué huecos existen, no el contenido de ninguno.
     pub panels: Option<PanelsProbe>,
+    /// El repintado de un panel de plugin en vuelo (fase 3): a lo sumo uno —el
+    /// `multi: false` de su kind garantiza que hay como mucho un panel de
+    /// plugin visible—, y pedir otro SUSTITUYE al anterior, soltando su
+    /// receptor.
+    pub panel_render: Option<PanelRenderProbe>,
     /// Cuándo toca la siguiente (ver [`crate::probes::LOG_TAIL_PERIODO`]).
     /// `None` = ya, que es lo que hace que abrir el panel pregunte en el acto.
     pub log_next_at: Option<tokio::time::Instant>,

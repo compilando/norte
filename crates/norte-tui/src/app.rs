@@ -1040,6 +1040,13 @@ pub struct App {
     /// `None` = el primero visible, que es lo correcto cuando el teclado llegó
     /// por el anillo y no señalando un hueco concreto.
     pub panel_focus: Option<norte_frontend::layout::SlotId>,
+    /// Lo que cada panel de plugin tiene vivo: su marco, su estado opaco y qué
+    /// pidió (fase 3).
+    ///
+    /// Por HUECO y no un solo campo, aunque hoy solo pueda haber un panel de
+    /// plugin visible: el estado del guest pertenece a su hueco, y con
+    /// pestañas hay más huecos vivos que visibles — igual que los historiales.
+    pub paneles: norte_frontend::layout::BySlot<crate::panelplugin::PanelRuntime>,
     /// La fila del splash que el lector acaba de elegir con su número, hasta
     /// que el bucle la despache. Como el resto de intenciones pendientes: la
     /// tecla decide, y quien tiene el backend delante ejecuta.
@@ -1233,6 +1240,7 @@ impl App {
             splash_until_ms: None,
             processes_auto: false,
             panel_focus: None,
+            paneles: norte_frontend::layout::BySlot::new(),
             pending_splash_row: None,
             mouse: crate::mouse::MouseState::default(),
             settings: None,

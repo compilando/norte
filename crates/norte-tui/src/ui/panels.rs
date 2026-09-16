@@ -134,21 +134,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
                 Line::from(
                     line.iter()
                         .map(|span| {
-                            let s = Span::raw(span.text.clone());
-                            let mut style = if let Some(role) = span.role {
-                                app.theme.role(role)
-                            } else if let Some((r, g, b)) = span.fg {
-                                Style::default().fg(Color::Rgb(r, g, b))
-                            } else {
-                                Style::default()
-                            };
-                            // El fondo (proto 0.66.0, D4): ningún rol manda
-                            // sobre él, y un medio bloque sin fondo es media
-                            // imagen.
-                            if let Some((r, g, b)) = span.bg {
-                                style = style.bg(Color::Rgb(r, g, b));
-                            }
-                            s.style(style)
+                            Span::raw(span.text.clone()).style(estilo_de_span(span, &app.theme))
                         })
                         .collect::<Vec<_>>(),
                 )
@@ -246,21 +232,7 @@ pub(crate) fn draw_preview(
                 Line::from(
                     line.iter()
                         .map(|span| {
-                            let s = Span::raw(span.text.clone());
-                            let mut style = if let Some(role) = span.role {
-                                app.theme.role(role)
-                            } else if let Some((r, g, b)) = span.fg {
-                                Style::default().fg(Color::Rgb(r, g, b))
-                            } else {
-                                Style::default()
-                            };
-                            // El fondo (proto 0.66.0, D4): ningún rol manda
-                            // sobre él, y un medio bloque sin fondo es media
-                            // imagen.
-                            if let Some((r, g, b)) = span.bg {
-                                style = style.bg(Color::Rgb(r, g, b));
-                            }
-                            s.style(style)
+                            Span::raw(span.text.clone()).style(estilo_de_span(span, &app.theme))
                         })
                         .collect::<Vec<_>>(),
                 )
@@ -271,6 +243,89 @@ pub(crate) fn draw_preview(
     frame.render_widget(Paragraph::new(lines).block(block), area);
     // Solo la vertical: el borde de abajo es de la línea de estado.
     barras_del_visor(frame, area, viewer, &app.theme, false);
+}
+
+/// El estilo de un tramo con estilo, sea de un preview, de un visor o de un
+/// panel de plugin.
+///
+/// El ROL gana al color (ADR 0037, decisión 3): el tema del lector tiene
+/// precedencia sobre el color fijo que pida un tercero. El fondo no lo manda
+/// ningún rol (proto 0.66.0, D4), porque un medio bloque sin fondo es media
+/// imagen.
+///
+/// Una sola copia: esto estaba escrito palabra por palabra en el visor y en el
+/// preview, y el panel de plugin habría sido la tercera — tres sitios donde
+/// cambiar la precedencia de un rol.
+fn estilo_de_span(span: &norte_frontend::ansi::StyledSpan, theme: &TuiTheme) -> Style {
+    let mut style = if let Some(role) = span.role {
+        theme.role(role)
+    } else if let Some((r, g, b)) = span.fg {
+        Style::default().fg(Color::Rgb(r, g, b))
+    } else {
+        Style::default()
+    };
+    if let Some((r, g, b)) = span.bg {
+        style = style.bg(Color::Rgb(r, g, b));
+    }
+    style
+}
+
+/// El panel que pinta un PLUGIN (fase 3): su marco, dentro de un borde de casa.
+///
+/// El borde, el título y el foco los pone norte; lo de dentro lo describe el
+/// guest. Esa frontera es la que hace que un plugin no pueda fingir ser otro
+/// panel: no puede pintar su propio marco ni escribir en el título.
+///
+/// Sin marco todavía —la primera petición sigue en vuelo, o el plugin falló—
+/// el hueco se pinta VACÍO con su borde: se sabe que está y de quién es. Lo
+/// que nunca hace es parpadear, porque un marco que llegó se conserva mientras
+/// se pide el siguiente.
+pub(crate) fn draw_plugin_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &App,
+    id: norte_frontend::layout::SlotId,
+    con_teclado: bool,
+) {
+    let border = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    // El kind ya pasó el alfabeto de `KindRegistry::insert_panels` (ASCII
+    // alfanumérico, `.`, `_`, `-`), así que no hay nada que enmascarar aquí:
+    // lo hostil se quedó fuera al declararlo, no al pintarlo.
+    let titulo = app
+        .layout
+        .kind_of(id)
+        .and_then(|k| crate::panelplugin::partes(k.as_str()).map(|(_, kind)| kind.to_owned()))
+        .unwrap_or_default();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {titulo} "))
+        .title_style(app.theme.role(Role::Title))
+        .border_style(app.theme.role(border));
+    let lines: Vec<Line<'_>> = app
+        .paneles
+        .get(id)
+        .and_then(|p| p.frame.as_ref())
+        .map(|f| {
+            f.lines
+                .iter()
+                .map(|linea| {
+                    Line::from(
+                        linea
+                            .iter()
+                            .map(|span| {
+                                Span::raw(span.text.clone()).style(estilo_de_span(span, &app.theme))
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// El sidebar de sitios (L3): discos y favoritos en un panel que se queda.

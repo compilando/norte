@@ -208,6 +208,44 @@ pub fn spawn_log_tail(backend: &Backend, cursor: Option<u64>, epoca: u64) -> Log
 /// Lo que se espera al catálogo de plugins, igual que la ventana.
 pub const PLAZO_PANELES: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Un repintado de panel de plugin en vuelo (fase 3).
+///
+/// Lleva el HUECO y la FIRMA de lo que pidió: cuando llega, si ese hueco ya
+/// quiere otra cosa —el cursor se movió, el panel cambió de tamaño— la
+/// respuesta se tira. Misma regla que el preview, y por el mismo motivo.
+pub struct PanelRenderProbe {
+    /// El hueco al que va el marco.
+    pub slot: SlotId,
+    /// Lo que se pidió: si el hueco ya quiere otra cosa, no se aplica.
+    pub firma: crate::panelplugin::Firma,
+    /// El marco, o `None` si ningún plugin consentido pinta ese panel.
+    pub rx: tokio::sync::oneshot::Receiver<Result<Option<norte_proto::methods::PanelFrame>, Error>>,
+}
+
+/// Le pide al core el marco de un panel de plugin.
+///
+/// Fail-soft como todo lo cosmético: si la llamada falla, el hueco se queda con
+/// el marco anterior —o vacío, si no había— y el lector no ve un error por algo
+/// que solo decora.
+///
+/// Sin plazo, al contrario que el catálogo: el guest corre con la época del
+/// runtime, que es quien lo corta si se pasa. Un plazo aquí sería un segundo
+/// reloj sobre el mismo guest.
+#[must_use]
+pub fn spawn_panel_render(
+    backend: &Backend,
+    slot: SlotId,
+    firma: crate::panelplugin::Firma,
+    params: norte_proto::methods::PluginPanelRenderParams,
+) -> PanelRenderProbe {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    tokio::spawn(async move {
+        let _ = tx.send(b.plugin_panel_render(params).await);
+    });
+    PanelRenderProbe { slot, firma, rx }
+}
+
 /// El catálogo de plugins en vuelo, para saber qué PANELES aportan (fase 3).
 ///
 /// Una por sesión y sin época: no hay panel abierto al que pertenezca —lo que

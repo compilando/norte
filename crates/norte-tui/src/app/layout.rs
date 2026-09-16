@@ -62,7 +62,7 @@ impl App {
         }
         self.layout = tree;
         self.panes.refresh_visible(&self.layout);
-        self.history.retain_tree(&self.layout);
+        self.podar_por_arbol();
         self.settle_key_owner();
         // Un sidebar recién sembrado nace VACÍO, y quien lo llenaba era su
         // tecla. Una disposición que lo trae —`full`, `explorer`, la sesión de
@@ -152,7 +152,7 @@ impl App {
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
         self.panes.refresh_visible(&self.layout);
-        self.history.retain_tree(&self.layout);
+        self.podar_por_arbol();
         // El foco al recién nacido: partir es pedir sitio para trabajar en él.
         if let Some(i) = (0..self.panes.len()).find(|i| self.panes.slot_of(*i) == id) {
             self.set_focus(i);
@@ -285,7 +285,7 @@ impl App {
                 if let Some(nuevo) = self.layout.close_slot(id) {
                     self.layout = nuevo;
                     self.panes.refresh_visible(&self.layout);
-                    self.history.retain_tree(&self.layout);
+                    self.podar_por_arbol();
                 }
                 self.key_owner = KeyOwner::Panes;
             }
@@ -476,7 +476,7 @@ impl App {
                 if let Some(nuevo) = self.layout.close_slot(id) {
                     self.layout = nuevo;
                     self.panes.refresh_visible(&self.layout);
-                    self.history.retain_tree(&self.layout);
+                    self.podar_por_arbol();
                 }
                 self.key_owner = KeyOwner::Panes;
             }
@@ -532,7 +532,7 @@ impl App {
                 if let Some(nuevo) = self.layout.close_slot(id) {
                     self.layout = nuevo;
                     self.panes.refresh_visible(&self.layout);
-                    self.history.retain_tree(&self.layout);
+                    self.podar_por_arbol();
                 }
                 self.key_owner = KeyOwner::Panes;
             }
@@ -726,11 +726,29 @@ impl App {
         if let Some(nuevo) = self.layout.close_slot(id) {
             self.layout = nuevo;
             self.panes.refresh_visible(&self.layout);
-            self.history.retain_tree(&self.layout);
+            self.podar_por_arbol();
         }
         if self.key_owner == KeyOwner::Processes {
             self.key_owner = KeyOwner::Panes;
         }
+    }
+
+    /// Tira lo que pertenecía a huecos que el árbol ya no tiene.
+    ///
+    /// Los historiales y —desde la fase 3— lo que un panel de plugin tiene
+    /// vivo: su último marco y el ESTADO OPACO del guest. Juntos en una
+    /// función porque son la misma regla, y porque tenerla escrita quince
+    /// veces era la forma de que el siguiente inquilino de `BySlot` se
+    /// olvidara.
+    ///
+    /// Que el estado se pode importa más que el marco: los ids de hueco de un
+    /// preset son pequeños y fijos, así que cambiar de disposición puede poner
+    /// el panel de OTRO plugin en el mismo `SlotId`. Sin esto, el segundo
+    /// recibía el blob opaco del primero —que para norte no significa nada,
+    /// pero para un guest que reconozca su propio formato sí—.
+    pub(crate) fn podar_por_arbol(&mut self) {
+        self.history.retain_tree(&self.layout);
+        self.paneles.retain_tree(&self.layout);
     }
 
     /// El hueco del panel de PLUGIN que el lector ve, si hay alguno.
@@ -807,7 +825,7 @@ impl App {
                 if let Some(nuevo) = self.layout.close_slot(id) {
                     self.layout = nuevo;
                     self.panes.refresh_visible(&self.layout);
-                    self.history.retain_tree(&self.layout);
+                    self.podar_por_arbol();
                 }
                 self.key_owner = KeyOwner::Panes;
                 // Cerrar BAJA el nivel del anillo al que se estaba enseñando.
@@ -1029,7 +1047,7 @@ impl App {
             } else if let Some(nuevo) = self.layout.close_slot(id) {
                 self.layout = nuevo;
                 self.panes.refresh_visible(&self.layout);
-                self.history.retain_tree(&self.layout);
+                self.podar_por_arbol();
             }
         } else {
             let id = self.mint_slot();
@@ -1083,7 +1101,7 @@ impl App {
         };
         self.layout = nuevo;
         self.panes.refresh_visible(&self.layout);
-        self.history.retain_tree(&self.layout);
+        self.podar_por_arbol();
         true
     }
 

@@ -141,7 +141,7 @@ impl App {
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
         self.panes.refresh_visible(&self.layout);
-        self.history.retain_tree(&self.layout);
+        self.podar_por_arbol();
     }
 
     /// Cierra la pestaña enfocada. Sin efecto si el pane no está en un grupo.
@@ -150,7 +150,7 @@ impl App {
         if let Some(nuevo) = self.layout.close_tab(focus) {
             self.layout = nuevo;
             self.panes.refresh_visible(&self.layout);
-            self.history.retain_tree(&self.layout);
+            self.podar_por_arbol();
         }
     }
 
@@ -168,7 +168,7 @@ impl App {
         let dest = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
         self.layout = self.layout.set_active_for(focus, dest);
         self.panes.refresh_visible(&self.layout);
-        self.history.retain_tree(&self.layout);
+        self.podar_por_arbol();
         // #329: cambiar de pestaña puede esconder el panel que tenía el
         // teclado, y entonces las teclas iban a algo que ya no está en
         // pantalla. No lo cierra nadie, así que sin esto no había quien lo
@@ -182,7 +182,7 @@ impl App {
         if self.layout.tabs_of(focus).is_some() {
             self.layout = self.layout.set_active_for(focus, n.saturating_sub(1));
             self.panes.refresh_visible(&self.layout);
-            self.history.retain_tree(&self.layout);
+            self.podar_por_arbol();
             // Mismo motivo que en `tab_cycle` (#329).
             self.settle_key_owner();
         }
@@ -196,7 +196,7 @@ impl App {
         if self.layout.tabs_of(focus).is_some() {
             self.layout = self.layout.move_tab(focus, delta);
             self.panes.refresh_visible(&self.layout);
-            self.history.retain_tree(&self.layout);
+            self.podar_por_arbol();
         }
     }
 
