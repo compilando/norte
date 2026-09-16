@@ -569,7 +569,10 @@ async fn compara(nombre: &str, pasos: &[Paso]) {
             "sin fila `..`"
         };
         let esperado = via_primitivas(pasos, fila_de_subir);
-        let obtenido = via_host(pasos, fila_de_subir).await;
+        // En caja: el futuro que monta el host entero pasa del umbral de
+        // `clippy::large_futures` en cuanto el controlador gana un campo, y
+        // copiarlo por la pila de cada test no mide nada.
+        let obtenido = Box::pin(via_host(pasos, fila_de_subir)).await;
         assert_eq!(
             esperado.len(),
             obtenido.len(),

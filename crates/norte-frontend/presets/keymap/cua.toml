@@ -52,6 +52,10 @@ keymap = [
     { on = ["backspace"], run = "nav.parent" },
     { on = ["alt+left"], run = "nav.back" },
     { on = ["alt+right"], run = "nav.forward" },
+    # La convención de escritorio para la historia es solo atrás/adelante (y
+    # los botones laterales del ratón, que la ventana atiende sola). El punto
+    # de salto, los populares y la historia de un lado no tienen tecla de
+    # escritorio: van por el menú Ir y la paleta.
     { on = ["alt+i"], run = "pane.mirror" },
     { on = ["alt+u"], run = "pane.pull" },
     { on = ["ctrl+u"], run = "pane.swap" },
@@ -177,4 +181,10 @@ keymap = [
     { on = ["tab"], run = "dialog.pane" },
     { on = ["backspace"], run = "dialog.back" },
     { on = ["/"], run = "dialog.filter" },
+    # Las listas de historia (spec 2026-09-15 D2): las mismas que orthodox, que
+    # explica de dónde salen. `Supr` y `Mayús+Supr` son además lo que un
+    # escritorio espera para quitar.
+    { on = ["delete"], run = "dialog.remove" },
+    { on = ["shift+delete"], run = "dialog.clear" },
+    { on = ["alt+enter"], run = "dialog.confirm-other" },
 ]

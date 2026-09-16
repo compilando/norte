@@ -1279,9 +1279,25 @@ pub struct UiChrome {
     pub notice_seconds: Option<u32>,
     /// `[ui] dialog_buttons` (None = buttons).
     pub dialog_buttons: Option<bool>,
+    /// `[ui] history_size` (None = 30), within `5..=64`.
+    pub history_size: Option<u32>,
 }
 
 impl UiChrome {
+    /// The lowest `history_size`: below it `nav.back` stops being a trail.
+    pub const MIN_HISTORY_SIZE: u32 = 5;
+    /// The highest `history_size`: what the saved session keeps per panel
+    /// (`norte_frontend::session::HISTORY_CAP`, pinned equal by a test there).
+    pub const MAX_HISTORY_SIZE: u32 = 64;
+    /// What `history_size` means when absent.
+    pub const DEFAULT_HISTORY_SIZE: u32 = 30;
+
+    /// Effective `history_size` (absent = 30).
+    #[must_use]
+    pub fn history_size(self) -> usize {
+        self.history_size.unwrap_or(Self::DEFAULT_HISTORY_SIZE) as usize
+    }
+
     /// The upper bound of `notice_seconds`: ten minutes is already "never
     /// goes away on its own" in practice, and a larger number is a typo.
     pub const MAX_NOTICE_SECONDS: u32 = 600;
@@ -1861,6 +1877,12 @@ fn merge_ui_chrome(
             return Err(bad("[ui] notice_seconds inválido: el máximo es 600"));
         }
         acc.notice_seconds = Some(n);
+    }
+    if let Some(n) = ui.history_size {
+        if !(UiChrome::MIN_HISTORY_SIZE..=UiChrome::MAX_HISTORY_SIZE).contains(&n) {
+            return Err(bad("[ui] history_size inválido: entre 5 y 64"));
+        }
+        acc.history_size = Some(n);
     }
     Ok(())
 }
@@ -3144,7 +3166,7 @@ format = "exact"
         std::fs::write(
             user.path().join("norte.toml"),
             "[ui]\nkey_bar = false\npanel_bar_style = \"letters\"\ndate_format = \"iso\"\n\
-             notice_seconds = 30\n",
+             notice_seconds = 30\nhistory_size = 12\n",
         )
         .unwrap();
         let project = tempfile::tempdir().unwrap();
@@ -3164,6 +3186,7 @@ format = "exact"
         assert_eq!(c.panel_bar_style(), PanelBarStyle::Letters);
         assert_eq!(c.date_format(), DateFormat::Relative, "la última capa gana");
         assert_eq!(c.notice_seconds(), 30);
+        assert_eq!(c.history_size(), 12);
         assert!(!c.pane_footer());
         assert!(!c.dialog_buttons());
 
@@ -3173,11 +3196,14 @@ format = "exact"
         assert_eq!(empty.panel_bar_style(), PanelBarStyle::Names);
         assert_eq!(empty.date_format(), DateFormat::Smart);
         assert_eq!(empty.notice_seconds(), 8);
+        assert_eq!(empty.history_size(), 30);
 
         for bad in [
             "panel_bar_style = \"icons\"",
             "date_format = \"unix\"",
             "notice_seconds = 601",
+            "history_size = 4",
+            "history_size = 65",
         ] {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(dir.path().join("norte.toml"), format!("[ui]\n{bad}\n")).unwrap();

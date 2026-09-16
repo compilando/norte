@@ -2,7 +2,7 @@
 id = "panes"
 title = "Two panes, one destination"
 tags = ["basics"]
-see_also = ["selection", "copying"]
+see_also = ["selection", "copying", "history"]
 commands = [
     "pane.switch",
     "cursor.up",

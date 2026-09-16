@@ -48,6 +48,7 @@ pub mod format;
 pub mod help;
 pub mod help_badge;
 pub mod help_chords;
+pub mod history;
 pub mod keybar;
 pub mod keymap;
 pub mod keysheet;

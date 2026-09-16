@@ -521,6 +521,19 @@ export class Screen {
       },
       true,
     );
+    // Los botones LATERALES del ratón son atrás y adelante en la historia de
+    // navegación (spec 2026-09-15 D1), la convención de todo gestor de
+    // escritorio. En `mouseup`, porque el `mousedown` de captura de arriba ya
+    // ha enfocado el panel y el host solo acepta el rastro del hueco activo; y
+    // con `preventDefault`, para que el webview no los tome por navegación de
+    // la página.
+    dom.root.addEventListener("mouseup", (e) => {
+      if (e.button !== 3 && e.button !== 4) {
+        return;
+      }
+      e.preventDefault();
+      this.send({ action: "history", slot_id: slotId, back: e.button === 3 });
+    });
     dom.header.addEventListener("mousedown", (e) => {
       const target = e.target;
       if (!(target instanceof Element)) {

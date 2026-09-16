@@ -18,7 +18,7 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::Backend;
-use norte_i18n::ta;
+use norte_i18n::{t, ta};
 use norte_proto::Error;
 
 use crate::app::{
@@ -338,34 +338,13 @@ pub async fn on_nav_popup_key(
         app.quit = true;
         return Cd::Cancelled;
     }
-    let Some(popup) = &mut app.nav_popup else {
+    let Some(popup) = &app.nav_popup else {
         return Cd::Cancelled;
     };
     let kind = popup.kind;
     // SHIFT pasa (mayúsculas llegan como Char+SHIFT); ctrl/alt no escriben.
     let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
-    if popup.name_input.is_some() {
-        match code {
-            KeyCode::Char(c) if plain => {
-                if let Some(input) = &mut popup.name_input {
-                    input.push(c);
-                }
-            }
-            KeyCode::Backspace if plain => {
-                if let Some(input) = &mut popup.name_input {
-                    input.pop();
-                }
-            }
-            KeyCode::Esc => popup.name_input = None,
-            KeyCode::Enter => {
-                let name = popup.name_input.take().unwrap_or_default();
-                // Input vacío = cancela (plan T5): no hay favorito sin nombre.
-                if !name.is_empty() {
-                    hotlist_add(app, &name).await;
-                }
-            }
-            _ => {}
-        }
+    if name_input_key(app, code, plain).await || filter_key(app, code, plain) {
         return Cd::Cancelled;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
@@ -400,13 +379,35 @@ pub async fn on_nav_popup_key(
         "dialog.cancel" => {
             app.nav_popup_input(PickerAction::Cancel);
         }
-        "dialog.add" if kind == NavPopupKind::Hotlist => {
+        // En favoritos crea uno para el panel; en una historia o en populares,
+        // para la fila del cursor (spec 2026-09-15 D2).
+        "dialog.add" if kind != NavPopupKind::Volumes => {
             app.nav_popup_open_name_input();
         }
         "dialog.remove" if kind == NavPopupKind::Hotlist => {
             if let Some(name) = app.nav_popup_selected_hotlist_name() {
                 hotlist_remove(app, &name).await;
             }
+        }
+        // Spec 2026-09-15 D2: la historia y los populares también se editan.
+        "dialog.remove" if matches!(kind, NavPopupKind::History | NavPopupKind::Popular) => {
+            app.nav_popup_remove_selected();
+        }
+        "dialog.filter" if matches!(kind, NavPopupKind::History | NavPopupKind::Popular) => {
+            app.nav_popup_set_filter(Some(String::new()));
+        }
+        "dialog.clear" if matches!(kind, NavPopupKind::History | NavPopupKind::Popular) => {
+            app.nav_popup_clear();
+        }
+        // Lo elegido va al OTRO panel y el foco se queda donde está. Vale para
+        // toda lista que navega: una ruta de la historia, un favorito o un
+        // volumen se abren en el otro lado igual.
+        "dialog.confirm-other" => {
+            let Some(other) = app.nav_popup_other_pane() else {
+                app.message = Some(t("host-no-other-slot"));
+                return Cd::Cancelled;
+            };
+            return confirm_nav_popup(app, backend, events, kind, other).await;
         }
         // design §D: the in-popup unfiltered toggle. Same operation as
         // opening the popup, just with the flag flipped and the SAME target
@@ -429,21 +430,104 @@ pub async fn on_nav_popup_key(
                 .nav_popup
                 .as_ref()
                 .map_or_else(|| app.focus(), NavPopup::target_pane);
-            // Confirm sobre un item inválido/vacío es no-op (el popup sigue).
-            if let Some(path) = app.nav_popup_input(PickerAction::Confirm) {
-                let outcome = cd_in(app, backend, events, pane, path.clone(), Trail::Record).await;
-                if kind == NavPopupKind::History && matches!(&outcome, Cd::Failed(Error::NotFound))
-                {
-                    // El dir ya no existe: fuera del historial. La barra ya
-                    // muestra el error normal del cd fallido.
-                    app.history[pane].remove(&path);
-                }
-                return outcome;
-            }
+            return confirm_nav_popup(app, backend, events, kind, pane).await;
         }
         _ => {} // fuera del allowlist de este overlay (o kind): inerte
     }
     Cd::Cancelled
+}
+
+/// Navega lo elegido en el popup al pane `to` y cierra el popup.
+///
+/// `to` es el pane del popup para `dialog.confirm` y el OTRO para
+/// `dialog.confirm-other` (spec 2026-09-15 D2); el resto es lo mismo, y por eso
+/// es una sola función. Confirm sobre un item inválido o una lista vacía es
+/// no-op: el popup sigue abierto. Si el destino salió de la HISTORIA y ya no
+/// existe, se retira de la historia de la lista (spec 2026-07-18) —la de
+/// `from`, que no tiene por qué ser `to`—; la barra ya muestra el error normal
+/// del cd fallido.
+async fn confirm_nav_popup(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut crate::console::Console<'_>,
+    kind: NavPopupKind,
+    to: usize,
+) -> Cd {
+    let from = app
+        .nav_popup
+        .as_ref()
+        .map_or_else(|| app.focus(), NavPopup::target_pane);
+    let Some(path) = app.nav_popup_input(PickerAction::Confirm) else {
+        return Cd::Cancelled;
+    };
+    let outcome = cd_in(app, backend, events, to, path.clone(), Trail::Record).await;
+    if matches!(&outcome, Cd::Failed(Error::NotFound)) {
+        // Un directorio que ya no existe sale de la lista de la que vino: de la
+        // historia de `from`, o de los populares (rust-reviewer, fase 1).
+        match kind {
+            NavPopupKind::History => app.history[from].remove(&path),
+            NavPopupKind::Popular => app.popular.remove(&path),
+            NavPopupKind::Hotlist | NavPopupKind::Volumes => {}
+        }
+    }
+    outcome
+}
+
+/// Las teclas de TEXTO mientras se filtra una lista de historia o de
+/// populares (spec 2026-09-15 D2): imprimibles y borrar escriben el filtro,
+/// `Esc` lo quita, y el resto —Enter, flechas, `Supr`— sigue yendo al keymap
+/// como sin filtro. `true` si la tecla era del filtro.
+fn filter_key(app: &mut App, code: KeyCode, plain: bool) -> bool {
+    let Some(mut filtro) = app.nav_popup.as_ref().and_then(|p| p.filter.clone()) else {
+        return false;
+    };
+    match code {
+        KeyCode::Char(c) if plain => filtro.push(c),
+        KeyCode::Backspace if plain => {
+            filtro.pop();
+        }
+        KeyCode::Esc => {
+            app.nav_popup_set_filter(None);
+            return true;
+        }
+        _ => return false,
+    }
+    app.nav_popup_set_filter(Some(filtro));
+    true
+}
+
+/// Las teclas mientras el nombre de un favorito está abierto (`a`): un editor
+/// de texto RAW, no comandos `dialog.*` (H1 T2). Enter guarda con el destino
+/// del popup; Esc cierra el campo sin cerrar el popup. `true` si el campo
+/// estaba abierto: mientras lo esté, toda tecla es suya.
+async fn name_input_key(app: &mut App, code: KeyCode, plain: bool) -> bool {
+    let Some(input) = app.nav_popup.as_mut().and_then(|p| p.name_input.as_mut()) else {
+        return false;
+    };
+    match code {
+        KeyCode::Char(c) if plain => input.push(c),
+        KeyCode::Backspace if plain => {
+            input.pop();
+        }
+        KeyCode::Esc => {
+            if let Some(p) = &mut app.nav_popup {
+                p.name_input = None;
+            }
+        }
+        KeyCode::Enter => {
+            let name = app
+                .nav_popup
+                .as_mut()
+                .and_then(|p| p.name_input.take())
+                .unwrap_or_default();
+            // Input vacío = cancela (plan T5): no hay favorito sin nombre.
+            if !name.is_empty() {
+                hotlist_add(app, &name).await;
+            }
+        }
+        _ => {}
+    }
+    true
 }
 
 /// `config::user_config_dir()` o el MISMO io `NotFound` que fabrica
@@ -458,13 +542,17 @@ fn user_config_dir_io() -> std::io::Result<std::path::PathBuf> {
     })
 }
 
-/// Persiste el favorito `name` = cwd del pane con foco en el `norte.toml`
-/// del USUARIO (`spawn_blocking`, regla 2 — `persist_hotlist_add` es
-/// bloqueante por contrato). Solo si el disco fue bien se refresca la copia
-/// en `App` (consistencia con disco) y sale `msg-hotlist-saved`; un fallo
-/// io sale por categoría y la copia NO se toca.
+/// Persiste el favorito `name` = el destino del popup
+/// ([`App::nav_popup_add_target`]: el cwd del pane con foco en favoritos, la
+/// fila del cursor en una historia) en el `norte.toml` del USUARIO
+/// (`spawn_blocking`, regla 2 — `persist_hotlist_add` es bloqueante por
+/// contrato). Solo si el disco fue bien se refresca la copia en `App`
+/// (consistencia con disco) y sale `msg-hotlist-saved`; un fallo io sale por
+/// categoría y la copia NO se toca.
 async fn hotlist_add(app: &mut App, name: &str) {
-    let target = app.focused().dir().clone();
+    let Some(target) = app.nav_popup_add_target() else {
+        return;
+    };
     let wire = target.to_wire();
     let n = name.to_owned();
     // Al PERFIL activo si lo hay: los favoritos son de un espacio de trabajo,

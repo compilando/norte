@@ -171,16 +171,23 @@ impl Estado {
         self.token += 1;
         let token = RequestToken(self.token);
         let destino = destino.clone();
+        let tope = self.config.common.ui_chrome.history_size();
         let Some(hueco) = self.huecos.get_mut(&slot) else {
             return Vec::new();
         };
         let anterior = hueco.pane.dir().clone();
-        // Un `Replay` es el rastro reproduciéndose: registrar ahí haría que
-        // `back` se alimentara de sí mismo y el lector oscilara entre dos
-        // directorios.
-        if anterior != destino && trail == Trail::Record {
+        hueco.historial.set_capacity(tope);
+        // La MISMA decisión que el terminal (`counts_as_step`): un `Replay` es
+        // el rastro reproduciéndose —registrarlo lo haría oscilar entre dos
+        // directorios—, un `Seed` coloca sin andar y un refresco no es un paso.
+        // Lo que cuenta entra YA en el rastro; la visita a los populares espera
+        // a que el listado llegue (`aterrizar_listado`), porque uno que falla no
+        // es un sitio al que se fue — el terminal solo cuenta cuando llega.
+        let cuenta = norte_frontend::history::counts_as_step(&anterior, &destino, trail);
+        if cuenta {
             hueco.historial.record(anterior);
         }
+        hueco.visita_pendiente = cuenta.then(|| destino.clone());
         // La memoria del cursor se toma con el dir que se ABANDONA todavía
         // puesto (contrato de `remember_cursor`).
         hueco.pane.remember_cursor();

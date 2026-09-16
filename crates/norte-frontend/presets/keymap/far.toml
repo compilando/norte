@@ -93,6 +93,14 @@
 # acorde, y un preset cuyo objetivo es la fidelidad no inventa uno. Los tres
 # presets nativos lo llevan en `alt+C`.
 
+# La historia (spec 2026-09-15). Far no tiene atrás/adelante: sus Alt+←/→
+# desplazan los nombres largos, así que `nav.back`/`nav.forward` se quedan sin
+# tecla. Su historia de carpetas es la lista de Alt+F12, atada arriba, y las
+# teclas de ESA lista (Del quita, Shift+Del vacía) son las que norte usa en el
+# diálogo. `Ins` (bloquear una entrada) no se copia: una entrada que sobrevive
+# a todo es un favorito, y norte ya los tiene. El punto de salto, los populares
+# y la historia de un lado no están en la fuente: menú Ir y paleta.
+
 dialog_from = "orthodox"
 
 [global]

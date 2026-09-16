@@ -51,6 +51,12 @@
 # fuente dice. Ver la nota equivalente en `krusader.toml`; los tres presets
 # nativos lo llevan en `alt+C`.
 
+# La historia (spec 2026-09-15): Alt+←/→ y Alt+↓ vienen de la fuente.
+# `Alt+Shift+↓` —la misma lista sin quitar los directorios «de paso»— NO se
+# ata: norte no quita ninguno, así que sería la misma lista con otra tecla. El
+# punto de salto, los populares y la historia de un lado no tienen tecla en la
+# fuente: están en el menú Ir y en la paleta.
+
 dialog_from = "orthodox"
 
 [global]

@@ -233,19 +233,278 @@ impl Estado {
         self.pedir_listado(slot, &dir, token, backend, buzon);
     }
 
-    /// Abre el rastro de navegación del hueco activo.
-    ///
-    /// Las filas son el MRU compartido (`History::entries`), más reciente
-    /// primero: qué recuerda un panel no puede depender de quién lo pinta.
+    /// Abre la historia del hueco activo.
     pub(super) fn abrir_historial(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let slot = self.activo();
-        let rastro = self.hueco().historial.entries().clone();
-        self.selector = Some(crate::pickers::Selector::historial(slot, &rastro));
+        self.abrir_lista_de_historia(slot, "picker-history-title", false, None, None)
+    }
+
+    /// Abre la historia de un LADO de la pantalla (spec 2026-09-15 D7): lo
+    /// elegido navega ESE hueco aunque el foco esté en el otro. Qué es un lado
+    /// lo dice la geometría del reparto, como en los volúmenes.
+    pub(super) fn abrir_historial_de_lado(
+        &mut self,
+        derecha: bool,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(slot) = self.listado_del_lado(derecha) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-other-slot".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let titulo = if derecha {
+            "picker-history-title-right"
+        } else {
+            "picker-history-title-left"
+        };
+        self.abrir_lista_de_historia(slot, titulo, false, None, None)
+    }
+
+    /// Abre los populares de la sesión (D6), navegando el hueco activo.
+    pub(super) fn abrir_populares(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let slot = self.activo();
+        self.abrir_lista_de_historia(slot, "picker-popular-title", true, None, None)
+    }
+
+    /// Abre —o rehace, con `cursor`— una lista de historia sobre `slot`.
+    ///
+    /// Las filas son las COMPARTIDAS (`norte_frontend::history`): qué recuerda
+    /// un panel, en qué orden y con qué marca no puede depender de quién lo
+    /// pinta. El tope de `[ui] history_size` se aplica aquí y al navegar, que
+    /// son los dos sitios donde la historia se lee o crece.
+    fn abrir_lista_de_historia(
+        &mut self,
+        slot: u32,
+        titulo: &'static str,
+        populares: bool,
+        cursor: Option<usize>,
+        filtro: Option<String>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let tope = self.config.common.ui_chrome.history_size();
+        let Some(hueco) = self.huecos.get_mut(&slot) else {
+            // El hueco se fue con la lista puesta: se cierra, como cuando pasa
+            // lo mismo al elegir. Dejarla abierta ofrecía filas de un panel que
+            // ya no existe.
+            let cerrar = self.selector.take().is_some();
+            let envios = if cerrar {
+                vec![self.parche(vec![ViewChange::Picker { picker: None }])]
+            } else {
+                Vec::new()
+            };
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-other-slot".to_owned(),
+                },
+                envios,
+            );
+        };
+        hueco.historial.set_capacity(tope);
+        let actual = hueco.pane.dir().clone();
+        // La historia se pinta con la reinterpretación de SU panel, como el
+        // terminal y como la barra de rutas (#98/F4: una lista es superficie de
+        // decisión). Los populares con ninguna: son de toda la sesión, y aplicar
+        // el encoding de un panel a rutas de otro sería inventar mojibake.
+        let enc = if populares {
+            None
+        } else {
+            hueco.pane.name_encoding()
+        };
+        let texto = filtro.as_deref().unwrap_or("");
+        let filas = if populares {
+            norte_frontend::history::popular_rows(&self.popular, &actual, texto)
+        } else {
+            norte_frontend::history::history_rows(&hueco.historial, &actual, texto, enc)
+        };
+        let mut selector = crate::pickers::Selector::historia(
+            slot,
+            &filas,
+            |p| norte_frontend::path_display_with(p, enc),
+            self.lang,
+            titulo,
+            populares,
+            filtro,
+        );
+        if let Some(c) = cursor {
+            selector.senalar(c.min(filas.len().saturating_sub(1)));
+        }
+        self.selector = Some(selector);
         self.gen_selector += 1;
         let cambio = ViewChange::Picker {
             picker: self.vista_selector(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// `dialog.remove` sobre una lista de historia (D2): la fila del cursor
+    /// sale del rastro del hueco —o de los populares— y la lista se rehace sin
+    /// perder el sitio.
+    pub(super) fn quitar_de_historia(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(s) = self.selector.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let (slot, titulo, populares, cursor) =
+            (s.slot(), s.titulo(), s.es_populares(), s.cursor());
+        let filtro = s.filtro().map(str::to_owned);
+        let Some(destino) = s.elegir() else {
+            return (self.aplicada(), Vec::new());
+        };
+        if populares {
+            self.popular.remove(&destino);
+        } else if let Some(h) = self.huecos.get_mut(&slot) {
+            // La fila «aquí» no se quita: la lista la pone siempre, así que
+            // quitarla no la quitaría de la pantalla, y `History::remove` sí
+            // podaría del rastro el directorio actual y su punto de salto sin
+            // que se viera (rust-reviewer, fase 1).
+            if *h.pane.dir() == destino {
+                return (self.aplicada(), Vec::new());
+            }
+            h.historial.remove(&destino);
+        }
+        self.abrir_lista_de_historia(slot, titulo, populares, Some(cursor), filtro)
+    }
+
+    /// `dialog.clear` sobre una lista de historia (D2). Sin confirmación, como
+    /// en el terminal: es memoria de navegación, no ficheros, y el aviso lo
+    /// dice.
+    pub(super) fn vaciar_historia(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(s) = self.selector.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let (slot, titulo, populares) = (s.slot(), s.titulo(), s.es_populares());
+        let clave = if populares {
+            self.popular.clear();
+            "msg-popular-cleared"
+        } else {
+            if let Some(h) = self.huecos.get_mut(&slot) {
+                h.historial.clear();
+            }
+            "msg-history-cleared"
+        };
+        let (ack, mut envios) =
+            self.abrir_lista_de_historia(slot, titulo, populares, Some(0), None);
+        envios.extend(self.decir(clave));
+        (ack, envios)
+    }
+
+    /// `dialog.confirm-other` (D2): lo elegido va al OTRO hueco y el foco se
+    /// queda donde está. El otro de una lista del foco es el destino; el de una
+    /// lista de un lado que no tiene el foco, el foco.
+    pub(super) fn elegir_del_selector_en_otro(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(s) = self.selector.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let (desde, destino, hay_fila) = (s.slot(), s.elegir(), s.hay_fila());
+        let otro = if desde == self.activo() {
+            self.hueco_destino()
+        } else {
+            Ok(self.activo())
+        };
+        let otro = match otro {
+            Ok(otro) => otro,
+            Err(clave) => {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: clave.to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+        };
+        let Some(destino) = destino else {
+            // Hay fila y no lleva a ninguna parte: un favorito cuya ruta no
+            // parsea. Se DICE, igual que al elegirlo en su sitio.
+            if hay_fila {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: "hotlist-invalid".to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+            return (self.aplicada(), Vec::new());
+        };
+        self.selector = None;
+        let cierre = self.parche(vec![ViewChange::Picker { picker: None }]);
+        let mut envios = vec![cierre];
+        envios.extend(self.navegar_hueco(otro, &destino, Trail::Record, backend, buzon));
+        (self.aplicada(), envios)
+    }
+
+    /// `nav.jump-back` (D5): una navegación NORMAL al punto de salto del hueco
+    /// activo. Entra en el rastro, así que `nav.back` deshace el salto.
+    pub(super) fn saltar_al_punto(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match norte_frontend::history::jump_target(&self.hueco().historial) {
+            Ok(destino) => {
+                let envios = self.navegar(&destino, Trail::Record, backend, buzon);
+                (self.aplicada(), envios)
+            }
+            Err(clave) => (
+                ActionAck::Unavailable {
+                    reason_key: clave.to_owned(),
+                },
+                Vec::new(),
+            ),
+        }
+    }
+
+    /// `nav.set-jump-point` (D5): marca el directorio del hueco activo.
+    pub(super) fn fijar_punto_de_salto(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dir = self.hueco().pane.dir().clone();
+        self.hueco_mut().historial.set_jump(dir);
+        let envios = self.decir("msg-nav-jump-point-set");
+        (self.aplicada(), envios)
+    }
+
+    /// Las teclas de TEXTO mientras se filtra una lista de historia (spec
+    /// 2026-09-15 D2), con la regla del terminal: imprimibles y borrar
+    /// escriben, `Esc` quita el filtro, y lo demás sigue yendo al keymap.
+    /// `None` si la tecla no era del filtro, o no se está filtrando.
+    pub(super) fn tecla_de_filtro(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        let mut filtro = self.selector.as_ref()?.filtro()?.to_owned();
+        match k.key.as_str() {
+            "Escape" | "esc" => return Some(self.filtrar_historia(None)),
+            "Backspace" | "backspace" => {
+                filtro.pop();
+            }
+            otra => {
+                // Una tecla de TEXTO es un punto de código, como en la paleta.
+                let mut chars = otra.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => filtro.push(c),
+                    _ => return None,
+                }
+            }
+        }
+        Some(self.filtrar_historia(Some(filtro)))
+    }
+
+    /// Rehace la lista de historia abierta con otro filtro; `None` lo quita.
+    /// El cursor vuelve al principio: la lista es otra.
+    pub(super) fn filtrar_historia(
+        &mut self,
+        filtro: Option<String>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(s) = self.selector.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        if !s.es_historia() {
+            return (self.aplicada(), Vec::new());
+        }
+        let (slot, titulo, populares) = (s.slot(), s.titulo(), s.es_populares());
+        self.abrir_lista_de_historia(slot, titulo, populares, None, filtro)
     }
 
     /// Abre los favoritos de la configuración con la que arrancó la ventana.

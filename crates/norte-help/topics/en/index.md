@@ -16,6 +16,7 @@ bucket is the same two keys as copying between two local directories.
 
 - [[panes]] — the two panes, focus, and why the other one is the destination
 - [[tabs]] — several tabs in one panel, each with its own directory and cursor
+- [[history]] — back and forward, the history list, popular directories and the jump point
 - [[selection]] — marking the entries a command will act on
 - [[mouse]] — click, wheel and drag, and what capture costs the terminal
 - [[help]] — moving around these pages, and where the keys in them come from

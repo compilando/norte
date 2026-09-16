@@ -113,6 +113,11 @@ pub struct SlotState {
     /// Historial hacia delante, del más viejo al más reciente.
     #[serde(default)]
     pub forward: Vec<VPath>,
+    /// El punto de salto del hueco (`nav.set-jump-point`, spec 2026-09-15
+    /// D5). Aditivo: un cuerpo viejo lo lee vacío y no sube
+    /// [`SCHEMA_VERSION`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jump: Option<VPath>,
     /// Orden del listado.
     #[serde(default, deserialize_with = "orden::deserialize")]
     pub sort: SortSpec,
@@ -166,6 +171,36 @@ pub struct SessionBody {
     /// vacío y uno nuevo lo escribe; no sube [`SCHEMA_VERSION`].
     #[serde(default)]
     pub palette_recent: Vec<String>,
+    /// Los directorios populares de la sesión entera
+    /// ([`crate::history::Popular`], spec 2026-09-15 D6), en el orden en que
+    /// se guardan. Aditivo como [`Self::palette_recent`].
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "populares::deserialize"
+    )]
+    pub popular: Vec<crate::history::PopularEntry>,
+}
+
+/// Los populares se leen ENTRADA A ENTRADA.
+///
+/// Una ruta que no parsea —un cuerpo editado a mano— se salta en vez de
+/// rehusar el cuerpo entero, que se llevaría por delante disposiciones y huecos
+/// que no tienen nada que ver. Es una lista de atajos que se rehace andando
+/// (spec 2026-09-15 D6); la ruta de un hueco, en cambio, sigue siendo un error,
+/// porque sin ella el hueco no es nada.
+mod populares {
+    use serde::{Deserialize, Deserializer};
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Vec<crate::history::PopularEntry>, D::Error> {
+        let crudas = Vec::<serde_json::Value>::deserialize(d)?;
+        Ok(crudas
+            .into_iter()
+            .filter_map(|v| serde_json::from_value(v).ok())
+            .collect())
+    }
 }
 
 /// Cuántos comandos recientes guarda la paleta. Cinco: los que caben en la
@@ -208,6 +243,13 @@ impl SessionBody {
     /// disposición, y la ruta y el cursor de cada hueco visible.
     pub fn prune(&mut self, now_ms: u64) {
         self.prune_profiles();
+        if self.popular.len() > crate::history::POPULAR_CAP {
+            // La MISMA regla de expulsión que al visitar, y no un `truncate`:
+            // el orden guardado no es el de importancia.
+            self.popular = crate::history::Popular::from_entries(std::mem::take(&mut self.popular))
+                .entries()
+                .to_vec();
+        }
         let visibles: BTreeSet<u32> = self
             .layouts
             .values()
@@ -261,9 +303,10 @@ impl SessionBody {
     ///
     /// 1. los huérfanos, ENTEROS y del que hace más que no se toca hacia
     ///    delante — nadie los está mirando;
-    /// 2. el historial de los visibles, a la mitad cada vuelta hasta cero — se
+    /// 2. los populares, enteros — son atajos que se rehacen andando;
+    /// 3. el historial de los visibles, a la mitad cada vuelta hasta cero — se
     ///    pierden pasos hacia atrás, no dónde estás;
-    /// 3. las disposiciones de los perfiles que no son el activo, con sus
+    /// 4. las disposiciones de los perfiles que no son el activo, con sus
     ///    huecos, de la que hace más que nadie activa hacia delante.
     ///
     /// Lo que jamás se toca: el perfil [`Self::active`], su disposición, y la
@@ -285,6 +328,12 @@ impl SessionBody {
         huerfanos.sort_unstable();
         for (_, id) in huerfanos {
             self.slots.remove(&id);
+            if self.cabe() {
+                return;
+            }
+        }
+        if !self.popular.is_empty() {
+            self.popular.clear();
             if self.cabe() {
                 return;
             }
@@ -749,6 +798,7 @@ mod tests {
             cursor: 0,
             back: Vec::new(),
             forward: Vec::new(),
+            jump: None,
             sort: SortSpec::default(),
             columns: Vec::new(),
             show_hidden: false,
@@ -1106,6 +1156,7 @@ mod tests {
             layouts: std::iter::once(("default".to_owned(), sin_listado)).collect(),
             slots: std::collections::BTreeMap::new(),
             palette_recent: Vec::new(),
+            popular: Vec::new(),
         };
         let v = body.to_value();
         assert!(matches!(
@@ -1272,6 +1323,76 @@ mod tests {
             .insert("work".into(), Node::slot(SlotId(1), KindId::browser()));
         let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("ida y vuelta");
         assert_eq!(vuelta.active, "work");
+    }
+
+    /// Spec 2026-09-15 D5/D6: el punto de salto y los populares hacen el viaje,
+    /// y un cuerpo escrito antes de que existieran se sigue leyendo sin ellos.
+    #[test]
+    fn el_punto_de_salto_y_los_populares_hacen_el_viaje() {
+        let mut b = SessionBody::default();
+        b.slots.insert(
+            1,
+            SlotState {
+                jump: Some(vp("file:///marcado")),
+                ..slot("file:///casa")
+            },
+        );
+        b.popular.push(crate::history::PopularEntry {
+            path: vp("file:///frecuente"),
+            visits: 3,
+            last: 9,
+        });
+        let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("ida y vuelta");
+        assert_eq!(vuelta.slots[&1].jump, Some(vp("file:///marcado")));
+        assert_eq!(vuelta.popular, b.popular);
+
+        let viejo = serde_json::json!({
+            "layouts": {},
+            "slots": { "1": { "path": "file:///casa" } },
+        });
+        let b = SessionBody::from_value(SCHEMA_VERSION, &viejo).expect("un cuerpo viejo carga");
+        assert_eq!(b.slots[&1].jump, None);
+        assert!(b.popular.is_empty());
+    }
+
+    #[test]
+    fn la_poda_deja_los_populares_en_su_tope_por_importancia() {
+        let mut b = SessionBody {
+            popular: (0..crate::history::POPULAR_CAP + 5)
+                .map(|i| crate::history::PopularEntry {
+                    path: vp(&format!("file:///d{i}")),
+                    // Los cinco primeros son los MENOS visitados: los que se van.
+                    visits: if i < 5 { 1 } else { 2 },
+                    last: u64::try_from(i).expect("cabe"),
+                })
+                .collect(),
+            ..SessionBody::default()
+        };
+        b.prune(0);
+        assert_eq!(b.popular.len(), crate::history::POPULAR_CAP);
+        assert!(b.popular.iter().all(|e| e.visits == 2));
+    }
+
+    /// Una entrada de populares ilegible se salta: no se lleva la sesión
+    /// entera por delante (encoding-auditor, fase 1).
+    #[test]
+    fn un_popular_ilegible_se_salta_y_el_cuerpo_carga() {
+        let v = serde_json::json!({
+            "layouts": {},
+            "slots": { "1": { "path": "file:///casa" } },
+            "popular": [
+                { "path": "no es una ruta", "visits": 9 },
+                { "path": "file:///bien", "visits": 2, "last": 1 },
+            ],
+        });
+        let b = SessionBody::from_value(SCHEMA_VERSION, &v).expect("el cuerpo carga");
+        assert_eq!(
+            b.slots[&1].path,
+            vp("file:///casa"),
+            "los huecos siguen ahí"
+        );
+        assert_eq!(b.popular.len(), 1);
+        assert_eq!(b.popular[0].path, vp("file:///bien"));
     }
 
     /// Y un cuerpo del FUTURO se sigue rehusando entero: subir a 2 no puede

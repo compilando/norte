@@ -67,6 +67,7 @@ impl Estado {
         }
         self.aplicar_sesion(&body);
         self.paleta_recientes.clone_from(&body.palette_recent);
+        self.popular = norte_frontend::history::Popular::from_entries(body.popular.clone());
         self.sesion.conocidos = body.slots.keys().copied().collect();
         for (id, estado) in &body.slots {
             self.sesion.touched.insert(*id, estado.touched_ms);
@@ -348,7 +349,12 @@ impl Estado {
 
     /// Coloca cada hueco donde la sesión dice que estaba.
     pub(super) fn aplicar_sesion(&mut self, body: &norte_frontend::session::SessionBody) {
+        // El tope ANTES de sembrar (rust-reviewer MAJOR, fase 1): un hueco nace
+        // con el de fábrica, y sembrar con él recortaba a 30 una historia de 64
+        // que la sesión guardó entera — y la siguiente escritura lo perpetuaba.
+        let tope = self.config.common.ui_chrome.history_size();
         for (id, hueco) in &mut self.huecos {
+            hueco.historial.set_capacity(tope);
             let Some(estado) = body.slots.get(id) else {
                 continue;
             };
@@ -362,6 +368,7 @@ impl Estado {
             hueco
                 .historial
                 .seed(estado.back.clone(), estado.forward.clone());
+            hueco.historial.seed_jump(estado.jump.clone());
         }
     }
 
@@ -385,6 +392,7 @@ impl Estado {
         body.layouts
             .insert(self.clave_de_sesion(), self.arbol.clone());
         body.palette_recent.clone_from(&self.paleta_recientes);
+        body.popular = self.popular.entries().to_vec();
         for (id, hueco) in &self.huecos {
             body.slots.insert(
                 *id,
@@ -393,6 +401,7 @@ impl Estado {
                     cursor: hueco.pane.cursor() as u64,
                     back: hueco.historial.trail().to_vec(),
                     forward: hueco.historial.forward_trail().to_vec(),
+                    jump: hueco.historial.jump().cloned(),
                     sort: hueco.pane.sort(),
                     columns: Vec::new(),
                     show_hidden: hueco.pane.show_hidden(),

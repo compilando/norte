@@ -1864,6 +1864,11 @@ struct Hueco {
     celdas_plugin: std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
     /// Hay una tanda de decoración en vuelo para este hueco.
     adornando: bool,
+    /// El directorio al que va una navegación que CUENTA como paso, hasta que
+    /// su listado llegue (spec 2026-09-15 D6): entonces se suma a los
+    /// populares, y si falla se olvida. Lo relevan la siguiente navegación del
+    /// hueco y el propio aterrizaje.
+    visita_pendiente: Option<VPath>,
     /// Las rutas que ya se pidieron decorar (hayan contestado o no). Misma
     /// memoria que `sondeados` y por el mismo motivo: sin ella, un plugin
     /// que no decora nada se vuelve a preguntar en cada repintado.
@@ -2697,6 +2702,9 @@ struct Estado {
     /// Las últimas claves lanzadas desde la paleta, la más reciente primero
     /// (spec 2026-09-10). Viven en la sesión de UI, como en el terminal.
     paleta_recientes: Vec<String>,
+    /// Los directorios populares de la sesión (spec 2026-09-15 D6). Viven en
+    /// la sesión de UI, como en el terminal.
+    popular: norte_frontend::history::Popular,
     /// Los volúmenes del host, cacheados para el pie de cada listado (spec
     /// 2026-09-10). Se piden cuando un listado aterriza, nunca por foto:
     /// `host.volumes` monta y consulta espacio en cada filesystem.
@@ -3172,6 +3180,7 @@ impl Hueco {
             adornos: std::collections::HashMap::new(),
             celdas_plugin: std::collections::HashMap::new(),
             adornando: false,
+            visita_pendiente: None,
             adornadas: std::collections::HashSet::new(),
             gen_adornos: 0,
         }
@@ -3291,6 +3300,7 @@ impl Estado {
             paleta: None,
             asistente: None,
             paleta_recientes: Vec::new(),
+            popular: norte_frontend::history::Popular::default(),
             volumenes_pie: Vec::new(),
             pie_en_vuelo: false,
             menu: None,

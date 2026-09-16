@@ -35,14 +35,13 @@
 # (Alt+Shift+Q); MountMan itself, the mount manager (Alt+/, Ctrl+M) — its
 # per-side media LIST is bound below, at Ctrl+Shift+Left/Right, because norte
 # grew that picker in #131; the User Menu (Alt+`); jumping to $HOME (Alt+Home); the
-# Sidebar (Alt+Down); per-panel bookmark menus, distinct from the Ctrl+D
-# hotlist (Alt+Left/Right); privileged edit-as-root (Ctrl+E, both listings);
+# Sidebar (Alt+Down); privileged edit-as-root (Ctrl+E, both listings);
 # the QuickFilter/Quickselect bars, distinct from the Ctrl+F quicksearch bar
-# already bound (Ctrl+I, Ctrl+Shift+S); Safari-style jump-back-to-a-marked-
-# point, not a stack-based history (Ctrl+J, Ctrl+Shift+J — nav.back/forward
-# have no faithful key here); the Location Toolbar/address bar (Ctrl+L, a
-# breadcrumb-bar concept); a folder-open file-picker dialog (Ctrl+O); Popular
-# URLs (Ctrl+Z); an ambiguous "move to the lower part of the folder" distinct
+# already bound (Ctrl+I, Ctrl+Shift+S); setting the jump-back point
+# (Ctrl+Shift+J — a ctrl+<UPPERCASE> no terminal delivers apart from Ctrl+J,
+# so `nav.set-jump-point` lives in the Go menu and the palette); the Location
+# Toolbar/address bar (Ctrl+L, a breadcrumb-bar concept); a folder-open
+# file-picker dialog (Ctrl+O); an ambiguous "move to the lower part of the folder" distinct
 # from End (Ctrl+PgDn); jumping to the filesystem root (Ctrl+Backspace); the
 # media mount/unmount menu (Ctrl+Return); moving a tab to the other panel or
 # reordering it, distinct from switching to it (Ctrl+Shift+O, Ctrl+Shift+
@@ -164,6 +163,19 @@ keymap = [
     { on = ["ctrl+r"], run = "pane.refresh" },
     { on = ["ctrl+s"], run = "pane.search" },
     { on = ["ctrl+f"], run = "pane.quick-search" },
+    # La historia (spec 2026-09-15), transcrita del CÓDIGO de Krusader
+    # (`listpanelactions.cpp`, `kractions.cpp`) y no de la tabla de
+    # docs.kde.org. Esa tabla dice que Alt+←/→ abren los marcadores de cada
+    # panel, y esta cabecera lo copió: en el código esas dos acciones no tienen
+    # tecla, y Alt+←/→ son `KStandardAction::Back/Forward`. Ctrl+Alt+←/→ son la
+    # historia del panel izquierdo/derecho, Ctrl+J vuelve al punto de salto y
+    # Ctrl+Z abre las «Popular URLs».
+    { on = ["alt+left"], run = "nav.back" },
+    { on = ["alt+right"], run = "nav.forward" },
+    { on = ["ctrl+alt+left"], run = "pane.history-left" },
+    { on = ["ctrl+alt+right"], run = "pane.history-right" },
+    { on = ["ctrl+j"], run = "nav.jump-back" },
+    { on = ["ctrl+z"], run = "pane.popular" },
     { on = ["ctrl+h"], run = "pane.history" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
     # `alt+d`: `ctrl+D` no llega (mismo byte que `ctrl+d`, que es la hotlist).

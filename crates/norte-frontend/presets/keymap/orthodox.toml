@@ -74,6 +74,12 @@ keymap = [
     { on = ["backspace"], run = "nav.parent" },
     { on = ["alt+left"], run = "nav.back" },
     { on = ["alt+right"], run = "nav.forward" },
+    # mc: `Alt+Y` es atrás en la historia de directorios, y ESE se ata. Su
+    # pareja `Alt+U` (adelante) no: aquí `alt+u` es `pane.pull` desde julio y
+    # un lector de norte ya lo tiene en los dedos; adelante sigue en
+    # `alt+right`. El punto de salto y los populares no tienen tecla en mc:
+    # están en el menú Ir y en la paleta, igual que la historia de un lado.
+    { on = ["alt+y"], run = "nav.back" },
     { on = ["alt+i"], run = "pane.mirror" },
     { on = ["alt+u"], run = "pane.pull" },
     { on = ["ctrl+u"], run = "pane.swap" },
@@ -121,6 +127,8 @@ keymap = [
     { on = ["alt+d"], run = "pane.disconnect" },
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },
+    # mc abre la misma lista con `Alt+Shift+H`.
+    { on = ["alt+H"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },
     # Total Commander's key for it, adopted as the product default: mc's own
     # "Compare directories" lives in a pull-down menu with no chord to copy.
@@ -241,4 +249,12 @@ keymap = [
     { on = ["tab"], run = "dialog.pane" },
     { on = ["backspace"], run = "dialog.back" },
     { on = ["/"], run = "dialog.filter" },
+    # Las listas de historia (spec 2026-09-15 D2), con las teclas de la lista
+    # de Far —la única fuente que las itemiza— donde un terminal las entrega:
+    # `Del` quita y `Shift+Del` vacía. Abrir en el OTRO panel es
+    # `Ctrl+Shift+Enter` en Far, y ningún terminal lo distingue de Enter:
+    # `alt+enter` sí llega.
+    { on = ["delete"], run = "dialog.remove" },
+    { on = ["shift+delete"], run = "dialog.clear" },
+    { on = ["alt+enter"], run = "dialog.confirm-other" },
 ]

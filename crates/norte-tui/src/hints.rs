@@ -217,6 +217,8 @@ pub struct DialogHints {
     /// `add`/`remove` de `nav_list` no significan nada aquí y el toggle
     /// "mostrar todo" sí.
     pub nav_volumes: String,
+    /// Popup de navegación en modo historia o populares (spec 2026-09-15 D2).
+    pub nav_history: String,
     /// Help overlay (`App::help`, H3b).
     pub help: String,
     /// `true` when a help page is covering a modal, so the modal's own keys
@@ -287,8 +289,8 @@ impl DialogHints {
     pub fn build(eff: &Effective) -> Self {
         use crate::app::{
             ALLOW_APPROVAL, ALLOW_ASK_SECRET, ALLOW_COLLISION, ALLOW_COLUMNS, ALLOW_CONFIRM,
-            ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_NAV_VOLUMES, ALLOW_PICKER,
-            ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST, ALLOW_UNINSTALL,
+            ALLOW_EXTENSIONS, ALLOW_NAV_HISTORY, ALLOW_NAV_HOTLIST, ALLOW_NAV_VOLUMES,
+            ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST, ALLOW_UNINSTALL,
         };
         Self {
             confirm: dialog_hints(ALLOW_CONFIRM, eff),
@@ -318,6 +320,20 @@ impl DialogHints {
             plugin_config: dialog_hints(&without_navigation(ALLOW_PLUGIN_CONFIG), eff),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
             nav_volumes: dialog_hints(&without_navigation(ALLOW_NAV_VOLUMES), eff),
+            // Solo los verbos PROPIOS de la lista: con confirmar y cancelar
+            // delante, el pie en castellano pasaba de 80 celdas y el frame
+            // cortaba el último grupo a medias (`[Alt+Enter]┘` sin etiqueta),
+            // el mismo MAJOR-1 que motivó `without_navigation`. Enter y Esc son
+            // las teclas que cualquier lista ya enseña; el despacho no cambia.
+            nav_history: dialog_hints(
+                &without_navigation(ALLOW_NAV_HISTORY)
+                    .into_iter()
+                    // `add` tampoco: con él no cabe en 80 celdas, y la ayuda
+                    // de la historia lo dice.
+                    .filter(|c| !matches!(*c, "dialog.confirm" | "dialog.cancel" | "dialog.add"))
+                    .collect::<Vec<_>>(),
+                eff,
+            ),
             // H3b: offered WHOLE, in priority order — the width decides how
             // much of it is printed (`ui::fit_hint_groups`), not a fixed
             // exclusion. See [`HELP_HINT_PRIORITY`].

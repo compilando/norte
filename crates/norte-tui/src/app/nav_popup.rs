@@ -8,8 +8,10 @@ use norte_proto::VPath;
 /// Qué popup de navegación está abierto (spec 2026-07-18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavPopupKind {
-    /// Historial de directorios del pane con foco (sesión, no persistido).
+    /// Historial de directorios de un pane (el del foco, o un LADO).
     History,
+    /// Los directorios populares de la sesión (spec 2026-09-15 D6).
+    Popular,
     /// Favoritos persistidos en el `norte.toml` del USUARIO.
     Hotlist,
     /// Volúmenes del host (`pane.select-drive`/`-left`/`-right`, design
@@ -38,6 +40,12 @@ pub struct NavItem {
     /// debe caer sobre lo MOSTRADO, jamás sobre lo que ahora ocupe ese
     /// índice en la lista nueva (review MAJOR T5). `None` en historial.
     pub hotlist_name: Option<String>,
+    /// La marca de una fila de historia (`aquí`, `adelante`), ya traducida.
+    ///
+    /// APARTE del display y pintada con otro estilo: pegada al texto de la
+    /// ruta, un directorio que se llamara `x · aquí` era indistinguible de `x`
+    /// marcado como actual (encoding-auditor, fase 1). `None` en todo lo demás.
+    pub mark: Option<String>,
 }
 
 /// Popup de navegación (`Alt+↓` historial / `Ctrl+D` hotlist). Los `items`
@@ -66,6 +74,13 @@ pub struct NavPopup {
     /// toggle "mostrar todo" del design §E). Sin sentido en historial/
     /// hotlist, donde queda `false`.
     pub(crate) include_pseudo: bool,
+    /// Solo una historia abierta por LADO (`pane.history-left/-right`): qué
+    /// lado, para que el título lo diga. `None` en todo lo demás.
+    pub(crate) side: Option<usize>,
+    /// El filtro de una lista de historia o de populares (`dialog.filter`,
+    /// spec 2026-09-15 D2): `Some` mientras se teclea, y entonces las teclas de
+    /// texto son suyas. `None` sin filtrar y en las demás listas.
+    pub filter: Option<String>,
 }
 
 impl NavPopup {
@@ -138,6 +153,24 @@ pub(crate) fn nav_item_display(
     }
 }
 
+/// Items de una lista de historia o de populares, desde las filas
+/// COMPARTIDAS ([`norte_frontend::history::history_rows`]): la ruta saneada
+/// como cualquier otra, y la marca de la fila (`aquí`, `adelante`) en su
+/// propio campo, que el pintor pone detrás y con otro estilo.
+pub(crate) fn history_items(
+    rows: Vec<norte_frontend::history::HistoryRow>,
+    enc: Option<norte_encoding::NameEncoding>,
+) -> Vec<NavItem> {
+    rows.into_iter()
+        .map(|r| NavItem {
+            display: nav_item_display(None, &r.path, enc),
+            mark: norte_frontend::history::mark_key(r.mark).map(t),
+            target: Some(r.path),
+            hotlist_name: None,
+        })
+        .collect()
+}
+
 /// Rows for the volumes popup (design §D): `main.rs` calls this right after
 /// `Backend::volumes` answers and hands the result to
 /// [`crate::app::App::open_volumes_popup`] — this function owns none of the I/O, only the
@@ -153,6 +186,7 @@ pub fn volume_items(
             display: volume_item_display(v, enc),
             target: Some(v.mount.clone()),
             hotlist_name: None,
+            mark: None,
         })
         .collect()
 }

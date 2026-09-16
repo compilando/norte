@@ -502,9 +502,18 @@ mod tests {
 /// la clase de divergencia que este crate existe para evitar (ADR 0066, D14).
 use std::collections::VecDeque;
 
-/// Tope de directorios retenidos en el historial de un pane (spec
-/// 2026-07-18: sesión, no persistido — a diferencia de la hotlist).
-const HISTORY_MAX: usize = 30;
+/// Tope de directorios retenidos en el historial de un pane cuando la
+/// configuración no dice otro (`[ui] history_size`, spec 2026-09-15 D4).
+pub const HISTORY_DEFAULT: usize = 30;
+
+/// El tope más bajo que admite `[ui] history_size`: por debajo, `nav.back`
+/// deja de ser un rastro y pasa a ser «el anterior».
+pub const HISTORY_MIN: usize = 5;
+
+/// El tope más alto: el que la sesión ya guarda por hueco visible
+/// ([`crate::session::HISTORY_CAP`]). Uno mayor se perdería al reiniciar sin
+/// que nada lo dijera.
+pub const HISTORY_MAX: usize = crate::session::HISTORY_CAP;
 
 /// Historial de directorios visitados por UN pane. Cada `cd` EXITOSO
 /// empuja el dir ANTERIOR (main.rs, brazos `Cd::Filling`/`Cd::Replaced`);
@@ -512,7 +521,8 @@ const HISTORY_MAX: usize = 30;
 /// `norte.toml` — a propósito, fuera de alcance de la spec (§Fuera de
 /// alcance).
 ///
-/// INVARIANTE del rastro: `back.len() + fwd.len() <= HISTORY_MAX`.
+/// INVARIANTE del rastro: `back.len() + fwd.len() <= cap`, con `cap` entre
+/// [`HISTORY_MIN`] y [`HISTORY_MAX`] ([`History::set_capacity`]).
 ///
 /// Es lo que acota la memoria del rastro, y no cada pila por su cuenta.
 /// [`History::record`] es el único método que hace CRECER la suma, y la
@@ -523,7 +533,7 @@ const HISTORY_MAX: usize = 30;
 /// de `fwd` es el que ocupa. Romper el invariante (p.ej. hacer que `record`
 /// deje de vaciar `fwd`) haría crecer el rastro sin fin por el único camino
 /// que no lo comprueba.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct History {
     /// Más reciente al frente.
     deque: VecDeque<VPath>,
@@ -538,9 +548,92 @@ pub struct History {
     /// Where `nav.forward` goes: the branch a `nav.back` stepped off, newest
     /// last. Cleared by any navigation the user initiates.
     fwd: Vec<VPath>,
+    /// Cuántos directorios guarda el MRU, y la suma del rastro (`back + fwd`).
+    /// Entre [`HISTORY_MIN`] y [`HISTORY_MAX`].
+    cap: usize,
+    /// El punto de salto (Krusader `Ctrl+J`, spec 2026-09-15 D5): un sitio
+    /// marcado A PROPÓSITO, al que `nav.jump-back` vuelve. No es parte del
+    /// rastro —un paso atrás no lo mueve, una navegación nueva no lo borra—, y
+    /// por eso va aparte.
+    jump: Option<VPath>,
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self::with_capacity(HISTORY_DEFAULT)
+    }
 }
 
 impl History {
+    /// Un historial vacío que guarda hasta `cap` directorios, acotado a
+    /// [`HISTORY_MIN`]`..=`[`HISTORY_MAX`].
+    #[must_use]
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            deque: VecDeque::new(),
+            back: Vec::new(),
+            fwd: Vec::new(),
+            cap: cap.clamp(HISTORY_MIN, HISTORY_MAX),
+            jump: None,
+        }
+    }
+
+    /// El tope vigente.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.cap
+    }
+
+    /// Cambia el tope (una recarga de `[ui] history_size`).
+    ///
+    /// Al BAJAR se tira lo más lejano del lector, nunca lo que acaba de andar:
+    /// el extremo viejo del MRU y del rastro de vuelta, y la punta lejana de la
+    /// rama de delante. Al subir no se inventa nada.
+    pub fn set_capacity(&mut self, cap: usize) {
+        self.cap = cap.clamp(HISTORY_MIN, HISTORY_MAX);
+        self.acota();
+    }
+
+    /// Restituye el invariante tras un cambio de tope o una siembra.
+    fn acota(&mut self) {
+        self.deque.truncate(self.cap);
+        if self.back.len() > self.cap {
+            let sobran = self.back.len() - self.cap;
+            self.back.drain(..sobran);
+        }
+        // `fwd` va del más viejo al más reciente y `step_forward` saca el
+        // ÚLTIMO, así que el principio es lo más lejano hacia delante: lo que
+        // antes dejaría de estar a mano. El rastro de vuelta tiene preferencia:
+        // si llena el tope él solo, la rama de delante se va entera, que es lo
+        // mismo que haría la siguiente navegación.
+        let exceso = (self.back.len() + self.fwd.len()).saturating_sub(self.cap);
+        self.fwd.drain(..exceso.min(self.fwd.len()));
+    }
+
+    /// Fija el punto de salto en `path` (`nav.set-jump-point`).
+    pub fn set_jump(&mut self, path: VPath) {
+        self.jump = Some(path);
+    }
+
+    /// Siembra el punto de salto desde una sesión guardada.
+    pub fn seed_jump(&mut self, path: Option<VPath>) {
+        self.jump = path;
+    }
+
+    /// El punto de salto, si lo hay.
+    #[must_use]
+    pub fn jump(&self) -> Option<&VPath> {
+        self.jump.as_ref()
+    }
+
+    /// Vacía el MRU y el rastro (`dialog.clear`). El punto de salto y el tope
+    /// se quedan: se marcaron o se configuraron, no se anduvieron.
+    pub fn clear(&mut self) {
+        self.deque.clear();
+        self.back.clear();
+        self.fwd.clear();
+    }
+
     /// Empuja `path` al frente. Dedup CONSECUTIVO: si `path` ya es el más
     /// reciente, no-op — evita repetir el mismo dir en cd's redundantes
     /// (p.ej. refrescar el pane). Un mismo dir en posiciones NO
@@ -554,7 +647,7 @@ impl History {
             return;
         }
         self.deque.push_front(path);
-        self.deque.truncate(HISTORY_MAX);
+        self.deque.truncate(self.cap);
     }
 
     /// El rastro de vuelta, del más viejo al más reciente: lo que la sesión
@@ -584,6 +677,9 @@ impl History {
         }
         self.back = back;
         self.fwd = fwd;
+        // Una sesión escrita con un tope mayor que el de ahora trae más de lo
+        // que cabe: se recorta igual que al bajar el tope en caliente.
+        self.acota();
     }
 
     /// Retira TODAS las ocurrencias de `path` (p.ej. tras un `cd` fallido
@@ -600,6 +696,11 @@ impl History {
         self.deque.retain(|p| p != path);
         self.back.retain(|p| p != path);
         self.fwd.retain(|p| p != path);
+        // Un punto de salto a un sitio que ya no está es la misma tecla que
+        // solo puede fallar.
+        if self.jump.as_ref() == Some(path) {
+            self.jump = None;
+        }
     }
 
     /// Entradas, más reciente primero.
@@ -627,7 +728,7 @@ impl History {
         self.push(prev.clone());
         if self.back.last() != Some(&prev) {
             self.back.push(prev);
-            if self.back.len() > HISTORY_MAX {
+            if self.back.len() > self.cap {
                 // Newest last, so the cap drops from the front: the oldest
                 // step of the trail is the one the reader is least likely to
                 // still want.
@@ -661,7 +762,7 @@ impl History {
     ///
     /// Pushes onto `back` with no bound check because it cannot need one: it
     /// pops `fwd` first, and the type's invariant (`back.len() + fwd.len() <=
-    /// HISTORY_MAX`, stated on [`History`]) makes that pop the room for this
+    /// cap`, stated on [`History`]) makes that pop the room for this
     /// push.
     pub fn step_forward(&mut self, current: VPath) -> Option<VPath> {
         let target = self.fwd.pop()?;
@@ -1151,7 +1252,7 @@ mod history_tests {
 
     #[test]
     fn el_rastro_esta_acotado_como_la_mru() {
-        let mut h = History::default();
+        let mut h = History::with_capacity(HISTORY_MAX);
         for i in 0..(HISTORY_MAX + 20) {
             h.record(vp(&format!("mem:///d{i}")));
         }
@@ -1165,7 +1266,7 @@ mod history_tests {
     /// rastro, volver hasta el final, y navegar de nuevo desde ahí.
     #[test]
     fn el_tope_aguanta_alternando_las_tres_operaciones() {
-        let mut h = History::default();
+        let mut h = History::with_capacity(HISTORY_MAX);
         let total = |h: &History| h.back_len() + h.fwd_len();
 
         let mut cur = vp("mem:///start");

@@ -437,10 +437,18 @@ pub async fn cd(app: &mut App, backend: &Backend, events: &mut Console<'_>, dir:
 ///   reader oscillates between two directories forever. This is the single
 ///   line that stops `nav.back` from doing that, and it is pinned by
 ///   `record_step_tests::un_replay_no_alimenta_el_rastro`.
-pub fn record_step(h: &mut nav::History, prev: &VPath, dir: &VPath, trail: Trail) {
-    if prev != dir && trail == Trail::Record {
-        h.record(prev.clone());
-    }
+///
+/// The two conditions now live in [`norte_frontend::history::record_visit`],
+/// shared with the window, which also counts the visit for the popular list
+/// (spec 2026-09-15 D6): the same event, so the same decision.
+pub fn record_step(
+    h: &mut nav::History,
+    popular: &mut norte_frontend::history::Popular,
+    prev: &VPath,
+    dir: &VPath,
+    trail: Trail,
+) {
+    norte_frontend::history::record_visit(h, popular, prev, dir, trail);
 }
 
 /// Navega `pane` — que NO tiene por qué ser el enfocado, porque
@@ -550,7 +558,7 @@ fn aterrizar(
             // normaliza internamente.
             let more = stream.is_some();
             app.panes[pane].begin_listing(dir.clone(), first, more, skipped);
-            record_step(&mut app.history[pane], prev, &dir, trail);
+            record_step(&mut app.history[pane], &mut app.popular, prev, &dir, trail);
             // Si queda stream, un drenador lo rellena en background.
             match stream {
                 Some(s) => Cd::Filling {

@@ -595,6 +595,33 @@ describe("Screen", () => {
     });
   });
 
+  it("los botones laterales del ratón son atrás y adelante en la historia", () => {
+    // Spec 2026-09-15 D1: la convención de escritorio. Se escuchan en
+    // `mouseup` y se cancelan, para que el webview no los tome por navegación
+    // de la PÁGINA.
+    const { screen, enviadas, root } = montar();
+    screen.paint(vista({}));
+    const fila = root.querySelectorAll(".row")[0] as HTMLElement;
+    const atras = new MouseEvent("mouseup", {
+      bubbles: true,
+      cancelable: true,
+      button: 3,
+    });
+    fila.dispatchEvent(atras);
+    expect(enviadas.at(-1)).toEqual({ action: "history", slot_id: 1, back: true });
+    expect(atras.defaultPrevented).toBe(true);
+    fila.dispatchEvent(
+      new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 4 }),
+    );
+    expect(enviadas.at(-1)).toEqual({ action: "history", slot_id: 1, back: false });
+    // El botón principal no toca el rastro.
+    const antes = enviadas.length;
+    fila.dispatchEvent(
+      new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }),
+    );
+    expect(enviadas).toHaveLength(antes);
+  });
+
   it("dos clics en filas DISTINTAS no abren nada, y el tercero de una ráfaga tampoco", () => {
     const { screen, enviadas, root } = montar();
     screen.paint(vista({ rows: [fila(0, "a.txt"), fila(1, "b.txt")] }));

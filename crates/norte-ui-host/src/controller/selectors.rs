@@ -563,6 +563,15 @@ impl Estado {
     /// TECLEADO que colisione sigue reemplazando — eso es lo que se pidió.
     pub(super) fn pedir_favorito(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let destino = self.hueco().pane.dir().clone();
+        self.pedir_favorito_de(destino)
+    }
+
+    /// Lo mismo, para un directorio que no tiene por qué ser el del panel: la
+    /// fila del cursor de una lista de historia (spec 2026-09-15 D2).
+    pub(super) fn pedir_favorito_de(
+        &mut self,
+        destino: VPath,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let ocupados: Vec<&str> = self
             .config
             .common
@@ -907,6 +916,10 @@ impl Estado {
         if self.selector.is_none() {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
+        // Filtrando una historia, las teclas de texto son del filtro.
+        if let Some(salida) = self.tecla_de_filtro(k) {
+            return salida;
+        }
         // `Home`/`End` siguen siendo teclas fijas: el catálogo compartido no
         // tiene verbo para «al principio» dentro de un diálogo, y esperar a
         // que lo tenga habría dejado la lista sin extremos.
@@ -940,6 +953,24 @@ impl Estado {
                 // ignoran, como cualquier tecla que ese selector no ata.
                 Some("dialog.add") if s.es_hotlist() => return self.pedir_favorito(),
                 Some("dialog.remove") if s.es_hotlist() => return self.quitar_favorito(buzon),
+                // La historia y los populares también se editan (spec
+                // 2026-09-15 D2), y abrir en el otro hueco vale para toda
+                // lista que navega.
+                Some("dialog.remove") if s.es_historia() => return self.quitar_de_historia(),
+                Some("dialog.clear") if s.es_historia() => return self.vaciar_historia(),
+                Some("dialog.filter") if s.es_historia() => {
+                    return self.filtrar_historia(Some(String::new()));
+                }
+                // `a` sobre una fila de historia la guarda como favorito.
+                Some("dialog.add") if s.es_historia() => {
+                    return match s.elegir() {
+                        Some(destino) => self.pedir_favorito_de(destino),
+                        None => (self.aplicada(), Vec::new()),
+                    };
+                }
+                Some("dialog.confirm-other") => {
+                    return self.elegir_del_selector_en_otro(backend, buzon);
+                }
                 _ => return (self.aplicada(), Vec::new()),
             }
         }

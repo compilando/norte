@@ -285,6 +285,12 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
+        id: "ui.history-size",
+        section: Section::General,
+        kind: SettingKind::Int { min: 5, max: 64 },
+        applies_live: true,
+    },
+    SettingDef {
         id: "ui.dialog-buttons",
         section: Section::General,
         kind: SettingKind::Bool,
@@ -424,6 +430,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         "ui.pane-footer" => cfg.common.ui_chrome.pane_footer().to_string(),
         "ui.date-format" => cfg.common.ui_chrome.date_format().as_str().to_owned(),
         "ui.notice-seconds" => cfg.common.ui_chrome.notice_seconds().to_string(),
+        "ui.history-size" => cfg.common.ui_chrome.history_size().to_string(),
         "ui.dialog-buttons" => cfg.common.ui_chrome.dialog_buttons().to_string(),
         // Vacío = sin variante: la ventana pinta `theme` en los dos esquemas.
         "ui.theme-light" => cfg.common.ui_theme_light.clone().unwrap_or_default(),

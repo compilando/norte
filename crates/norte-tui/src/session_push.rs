@@ -629,6 +629,7 @@ mod session_push_tests {
             cursor: 0,
             back: Vec::new(),
             forward: Vec::new(),
+            jump: None,
             sort: norte_frontend::SortSpec::default(),
             columns: Vec::new(),
             show_hidden: false,

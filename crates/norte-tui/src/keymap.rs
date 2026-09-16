@@ -196,6 +196,8 @@ commands! {
     "nav.parent" => NavParent,
     "nav.back" => NavBack,
     "nav.forward" => NavForward,
+    "nav.jump-back" => NavJumpBack,
+    "nav.set-jump-point" => NavSetJumpPoint,
     "app.help" => AppHelp,
     "app.theme" => AppTheme,
     "app.extensions" => AppExtensions,
@@ -230,6 +232,9 @@ commands! {
     "pane.quick-search" => PaneQuickSearch,
     "pane.history" => PaneHistory,
     "pane.hotlist" => PaneHotlist,
+    "pane.popular" => PanePopular,
+    "pane.history-left" => PaneHistoryLeft,
+    "pane.history-right" => PaneHistoryRight,
     "pane.select-drive" => PaneSelectDrive,
     "pane.select-drive-left" => PaneSelectDriveLeft,
     "pane.select-drive-right" => PaneSelectDriveRight,
@@ -319,6 +324,9 @@ pub const DIALOG_COMMANDS: &[&str] = &[
     "dialog.pane",
     "dialog.back",
     "dialog.filter",
+    // Las listas de historia (spec 2026-09-15 D2).
+    "dialog.confirm-other",
+    "dialog.clear",
 ];
 
 /// Id de Fluent con la descripción de un comando (`app.quit` →

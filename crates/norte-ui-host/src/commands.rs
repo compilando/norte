@@ -105,6 +105,8 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "nav.parent",
     "nav.back",
     "nav.forward",
+    "nav.jump-back",
+    "nav.set-jump-point",
     "mark.toggle",
     "mark.clear",
     "mark.all",
@@ -219,6 +221,9 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.swap",
     "pane.history",
     "pane.hotlist",
+    "pane.popular",
+    "pane.history-left",
+    "pane.history-right",
     "pane.select-drive-left",
     "pane.select-drive-right",
     "task.cancel",
@@ -277,6 +282,10 @@ pub const IMPLEMENTADOS_DIALOGO: &[&str] = &[
     "dialog.pane",
     "dialog.back",
     "dialog.filter",
+    // Las listas de historia (spec 2026-09-15 D2): abrir en el otro hueco, y
+    // vaciar la historia o los populares.
+    "dialog.confirm-other",
+    "dialog.clear",
 ];
 
 /// Los comandos del VISOR que este host implementa.
@@ -699,6 +708,18 @@ pub enum Efecto {
     Historial,
     /// Abre la lista de favoritos de la configuración.
     Hotlist,
+    /// Abre los directorios POPULARES de la sesión (spec 2026-09-15 D6).
+    Populares,
+    /// Abre la historia de un LADO de la pantalla (D7), resuelto por la
+    /// geometría del reparto como en [`Efecto::VolumenesDeLado`].
+    HistorialDeLado {
+        /// El de más a la derecha en vez del de más a la izquierda.
+        derecha: bool,
+    },
+    /// Vuelve al punto de salto del hueco activo (D5).
+    SaltoAtras,
+    /// Fija el punto de salto en el directorio del hueco activo (D5).
+    FijarSalto,
     /// Abre el selector de volúmenes para un LADO de la pantalla.
     ///
     /// Un lado, no el foco: es lo que hacen `Alt+F1`/`Alt+F2` de Total
@@ -749,6 +770,8 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "nav.parent" => Efecto::Subir,
         "nav.back" => Efecto::Rastro { atras: true },
         "nav.forward" => Efecto::Rastro { atras: false },
+        "nav.jump-back" => Efecto::SaltoAtras,
+        "nav.set-jump-point" => Efecto::FijarSalto,
         "mark.toggle" => Efecto::Marcar,
         "mark.clear" => Efecto::DesmarcarTodo,
         "mark.all" => Efecto::MarcarTodo,
@@ -889,6 +912,9 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.swap" => Efecto::Intercambiar,
         "pane.history" => Efecto::Historial,
         "pane.hotlist" => Efecto::Hotlist,
+        "pane.popular" => Efecto::Populares,
+        "pane.history-left" => Efecto::HistorialDeLado { derecha: false },
+        "pane.history-right" => Efecto::HistorialDeLado { derecha: true },
         "pane.select-drive-left" => Efecto::VolumenesDeLado { derecha: false },
         "pane.select-drive-right" => Efecto::VolumenesDeLado { derecha: true },
         otro => return efecto_del_tablero(otro),

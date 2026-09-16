@@ -567,7 +567,12 @@ fn draw_nav_popup(
 ) {
     use crate::app::NavPopupKind;
     let title = match popup.kind {
-        NavPopupKind::History => t("history-title"),
+        NavPopupKind::History => match popup.side {
+            Some(0) => t("history-title-left"),
+            Some(_) => t("history-title-right"),
+            None => t("history-title"),
+        },
+        NavPopupKind::Popular => t("popular-title"),
         NavPopupKind::Hotlist => t("hotlist-title"),
         NavPopupKind::Volumes => t("volumes-title"),
     };
@@ -582,8 +587,17 @@ fn draw_nav_popup(
             " {} {masked}_ ",
             t("hotlist-name-prompt")
         )))
+    } else if let Some(filter) = &popup.filter {
+        // Lo que se está filtrando se VE, con el mismo mask que el nombre de
+        // un favorito: un pegado hostil no pinta bidi crudo.
+        let (masked, _) = display_name(filter.as_bytes());
+        Some(Line::raw(format!(" /{masked}_ ")))
     } else if popup.kind == NavPopupKind::Hotlist {
         Some(Line::raw(format!(" {} ", hints.nav_list)))
+    } else if matches!(popup.kind, NavPopupKind::History | NavPopupKind::Popular) {
+        // Spec 2026-09-15 D2: la historia ya se edita (quitar, vaciar, abrir en
+        // el otro panel), y una lista que se edita dice cómo.
+        Some(Line::raw(format!(" {} ", hints.nav_history)))
     } else if popup.kind == NavPopupKind::Volumes {
         // design §D: el footer dice en qué MODO está la lista, no solo qué
         // teclas hay — un toggle sin indicador deja al lector adivinando si
@@ -611,6 +625,7 @@ fn draw_nav_popup(
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = if popup.items().is_empty() {
         let empty = match popup.kind {
             NavPopupKind::History => t("history-empty"),
+            NavPopupKind::Popular => t("popular-empty"),
             NavPopupKind::Hotlist => t("hotlist-empty"),
             NavPopupKind::Volumes => t("volumes-empty"),
         };
@@ -621,10 +636,20 @@ fn draw_nav_popup(
                 .items()
                 .iter()
                 .map(|it| {
-                    ListItem::new(Line::raw(format!(
+                    // La marca de una fila de historia va en su PROPIO span y
+                    // con otro estilo: pegada al texto la imitaba un directorio
+                    // con ese nombre. El recorte es de la ruta, no de la marca.
+                    let mark = it.mark.as_deref().map(|m| {
+                        ratatui::text::Span::styled(format!(" · {m}"), theme.role(Role::Info))
+                    });
+                    let mark_w = mark.as_ref().map_or(0, ratatui::text::Span::width);
+                    let path = ratatui::text::Span::raw(format!(
                         " {}",
-                        middle_ellipsis(&it.display, inner)
-                    )))
+                        middle_ellipsis(&it.display, inner.saturating_sub(mark_w))
+                    ));
+                    ListItem::new(Line::from(
+                        std::iter::once(path).chain(mark).collect::<Vec<_>>(),
+                    ))
                 })
                 .collect(),
             Some(popup.cursor()),
