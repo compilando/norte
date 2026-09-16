@@ -9,6 +9,22 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A start screen, and a processes panel that earns its place** (ADR 0115).
+  `[ui] splash` is `brief` (a cover any key takes away, with the build, the
+  core it talks to and a compass), `home` (it stays until a key, with the
+  directories you go to most and your bookmarks, each opened by its number) or
+  `off`; `--no-splash` and `NORTE_NO_SPLASH` turn it off for one run, and the
+  first-run wizard still comes first. `[ui] processes_panel = "auto"` opens the
+  processes panel when a task starts and closes it when the last one is gone —
+  without taking the keyboard, and never closing a panel you opened yourself.
+  Its rows now say how fast the task is going and how long is left, computed
+  from successive snapshots because the protocol carries no rate.
+- **Chrome that was lying.** `[ui] dir_indicator` drops the `/` in front of a
+  directory when the icon column already says what the row is (`auto`, the
+  default), the pane footer is painted in its own pane's border colour instead
+  of always dimmed, and a function-key cell reads `2 Copiar` instead of
+  `2Copiar` when it has room.
+
 - **Navigation history, the whole feature** (ADR 0114). The history list
   starts with where you are ("here") and marks what `nav.forward` can still
   reach; inside it, `Del` removes an entry, `Shift+Del` clears the panel's

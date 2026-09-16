@@ -73,9 +73,8 @@ impl Rate {
     /// ```
     pub fn observe(&mut self, p: &norte_proto::TaskProgress, now_ms: i64) -> Option<f64> {
         let hechos = p.bytes_done;
-        let Some((antes, cuando)) = self.ultimo.replace((hechos, now_ms)) else {
-            return None;
-        };
+        // La primera foto solo deja la base: sin dos no hay velocidad.
+        let (antes, cuando) = self.ultimo.replace((hechos, now_ms))?;
         let dt = now_ms - cuando;
         if dt <= 0 || hechos < antes {
             // Sin tiempo que dividir, o un contador que se reinició: se toma

@@ -1004,6 +1004,24 @@ pub struct App {
     /// abierto. Es un overlay más: se queda las teclas, y el modelo es el
     /// compartido con la ventana.
     pub wizard: Option<norte_frontend::wizard::Wizard>,
+    /// La pantalla de arranque (spec 2026-09-15, fase 2), mientras está
+    /// puesta. Es una CAPA, no un overlay con teclas propias: cualquier tecla
+    /// la quita, y el asistente le gana —si los dos quisieran salir, sale el
+    /// que pregunta algo—.
+    pub splash: Option<norte_frontend::splash::SplashView>,
+    // (la constante del plazo vive fuera del struct: ver `SPLASH_BRIEF_MS`)
+    /// Cuándo deja de tapar el splash `brief`, en el reloj del pintado
+    /// ([`crate::app::SPLASH_BRIEF_MS`] desde que se puso). `None` = no caduca
+    /// solo (`home`), o no hay splash.
+    pub splash_until_ms: Option<i64>,
+    /// El panel de procesos lo abrió el AUTOMÁTICO (`[ui] processes_panel =
+    /// "auto"`), así que el automático puede cerrarlo. Un panel que abrió el
+    /// lector no se cierra solo: lo abrió para mirarlo.
+    pub processes_auto: bool,
+    /// La fila del splash que el lector acaba de elegir con su número, hasta
+    /// que el bucle la despache. Como el resto de intenciones pendientes: la
+    /// tecla decide, y quien tiene el backend delante ejecuta.
+    pub pending_splash_row: Option<(String, Option<String>)>,
     /// Estado del ratón (captura aparte, que es de la terminal): la
     /// geometría PINTADA del último frame, el gesto armado y el último
     /// click. La geometría la devuelve el run loop tras cada `draw`
@@ -1189,6 +1207,10 @@ impl App {
             popular: norte_frontend::history::Popular::default(),
             palette_rows: Vec::new(),
             wizard: None,
+            splash: None,
+            splash_until_ms: None,
+            processes_auto: false,
+            pending_splash_row: None,
             mouse: crate::mouse::MouseState::default(),
             settings: None,
             shortcuts: None,
@@ -1364,6 +1386,16 @@ impl App {
     /// filas terminales del tablero de tasks — dos sitios que tienen que
     /// coincidir, porque un test que fija el reloj para el primero y no para
     /// el segundo tendría un panel que cambia solo.
+    /// Cuánto tapa el splash `brief` como MUCHO.
+    ///
+    /// No es de los temporizadores que prohíbe la ADR 0006 —aquello va de
+    /// resolver TECLAS, y aquí ninguna tecla depende del reloj: cualquiera
+    /// quita el splash antes—. Es el plazo que impide que una portada se quede
+    /// puesta cuando el primer listado tarda: 1,2 s se leen de una vez y no se
+    /// sienten como un arranque lento.
+    pub const SPLASH_BRIEF_MS: i64 = 1_200;
+
+    /// El reloj del pintado.
     #[must_use]
     pub fn now_ms(&self) -> i64 {
         self.render_now_ms.unwrap_or_else(|| {

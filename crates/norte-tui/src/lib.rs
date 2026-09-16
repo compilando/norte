@@ -39,6 +39,7 @@ pub mod screens;
 pub mod session_push;
 pub mod settings;
 pub mod shortcuts_editor;
+pub mod splash;
 /// El subshell persistente es POSIX: pty, `cd` y los ganchos de prompt lo son
 /// (#142, ADR 0084). En Windows `app.toggle-panels` declina, que es la verdad
 /// — y sin este `cfg` el crate ni siquiera compilaba ahí, porque la traducción
