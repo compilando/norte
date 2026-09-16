@@ -124,7 +124,11 @@ pub fn open(app: &mut App, modo: norte_config::load::SplashMode, cfg: &config::L
         },
         sections,
     });
-    app.splash_until_ms = (modo == SplashMode::Brief).then(|| app.now_ms() + App::SPLASH_BRIEF_MS);
+    // El plazo sale de `[ui] splash_ms`, no de una constante: una portada que
+    // no da tiempo a leerse solo estorba, y cuánto es «tiempo» depende de
+    // quién mira.
+    app.splash_until_ms = (modo == SplashMode::Brief)
+        .then(|| app.now_ms() + i64::from(cfg.common.ui_chrome.splash_ms()));
 }
 
 /// Una tecla con el splash puesto: lo quita, y con `home` un número ejecuta su

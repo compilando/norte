@@ -665,6 +665,16 @@
             "null"
           ]
         },
+        "splash_ms": {
+          "default": null,
+          "description": "How long `splash = \"brief\"` covers the first frame, in milliseconds.\nAbsent = `4000`.\n\n[`crate::load::load`] rejects values outside `200..=60_000`: below that\nthe cover is a flash nobody can read, and above it you have `\"home\"`,\nwhich stays until a key instead of pretending to leave.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "theme": {
           "default": null,
           "description": "Theme preset name or a path to a custom TOML theme (ADR 0020). When\nabsent, use `default`.\n\nThe bundled presets are `default`, `vscode-dark`, `vscode-light`,\n`catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`,\n`gruvbox-light`, `nord`, `retro-crt` and `retro-crt-amber`.\n`norte_theme::preset_names()` is the source of truth; this list is a\ncopy for readers of the schema, and it had gone stale before (it named\nsix of the eight that existed).",

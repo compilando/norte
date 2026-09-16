@@ -420,6 +420,14 @@ pub struct UiSection {
     /// over it, and `--no-splash` or `NORTE_NO_SPLASH` turn it off for one run.
     #[serde(default)]
     pub splash: Option<String>,
+    /// How long `splash = "brief"` covers the first frame, in milliseconds.
+    /// Absent = `4000`.
+    ///
+    /// [`crate::load::load`] rejects values outside `200..=60_000`: below that
+    /// the cover is a flash nobody can read, and above it you have `"home"`,
+    /// which stays until a key instead of pretending to leave.
+    #[serde(default)]
+    pub splash_ms: Option<u32>,
     /// Whether the processes panel opens by itself: `"auto"` (default — it
     /// opens when a task starts and closes when the last one is gone) or
     /// `"manual"` (only the command and the panel bar move it). Opening or
