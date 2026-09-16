@@ -435,6 +435,9 @@ impl MemProvider {
         if self.faults.list_fails_for(&key) {
             return Err(Error::Io { retryable: true });
         }
+        // Se cuenta el listado que SÍ se atiende: un test que cancela «tras el
+        // n-ésimo list» quiere decir n listados de verdad, no n intentos.
+        self.faults.tick_list();
         let lk = self.lookup();
         let tree = self.lock();
         // El filtro de hijos usa la clave REAL: listar con otra caja debe

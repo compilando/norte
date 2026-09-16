@@ -3517,10 +3517,17 @@ pub struct FsDirUsageParams {
     /// dos niveles es la primera cosa que alguien va a pedir, y añadir el
     /// campo después obligaría a distinguir «no lo mandó» de «pidió uno».
     ///
-    /// **Contrato**: `0` es `-32602` —describir cero niveles no es una
-    /// petición—, por encima de [`DIR_USAGE_MAX_DEPTH`] también, y lo que hoy
-    /// se sirve es `1`. Un servidor que recorte en silencio deja al cliente
-    /// creyendo que tiene lo que pidió.
+    /// **Contrato**: `0` —describir cero niveles no es una petición— y todo lo
+    /// que pase de [`DIR_USAGE_MAX_DEPTH`] se rechazan con la taxonomía
+    /// `invalid-path` (`-32000` con la categoría en `data`, como cualquier
+    /// error de aplicación de este protocolo), **no** con un `-32602` pelado:
+    /// un código sin categoría llega al cliente como `internal`, o sea como un
+    /// fallo del servidor y no como el error de quien llamó.
+    ///
+    /// Una `depth` VÁLIDA que este servidor todavía no sirva —hoy, cualquiera
+    /// mayor que `1`— se contesta `unsupported`, y **se rechaza en vez de
+    /// recortarse**: un servidor que recorte en silencio deja al cliente
+    /// creyendo que tiene los niveles que pidió.
     #[serde(default = "profundidad_por_defecto")]
     pub depth: u32,
 }

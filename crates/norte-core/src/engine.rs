@@ -206,6 +206,13 @@ pub struct Engine {
     /// socket (`fs.checksum_report`) y el `Backend` embebido— y dos anillos
     /// serían dos políticas de retención que se contradicen a la primera.
     checksum_reports: std::sync::Mutex<std::collections::VecDeque<ChecksumReportEntry>>,
+    /// Anillo ACOTADO de informes de `fs.dir_usage`, por `task_id`
+    /// ([`Self::dir_usage_report`]).
+    ///
+    /// El sexto de la familia. Aquí lo que no cabe en el desenlace de una Task
+    /// es la LISTA de hijos medidos: `fs.dir_size` podía devolver su total por
+    /// el progreso porque era un número, y un mapa no lo es.
+    dir_usage_reports: std::sync::Mutex<std::collections::VecDeque<DirUsageReportEntry>>,
 }
 
 /// La puerta de policy, capturable (#171).
@@ -327,6 +334,7 @@ impl Engine {
             test_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             pack_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             checksum_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            dir_usage_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             anchors: None,
             hooks_taken: std::sync::atomic::AtomicBool::new(false),
         }
@@ -1762,6 +1770,116 @@ impl Engine {
     )> {
         let ring = self
             .checksum_reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ring.iter()
+            .find(|(id, _, _)| *id == task_id)
+            .map(|(_, owner, r)| {
+                (
+                    owner.clone(),
+                    r.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone(),
+                )
+            })
+    }
+
+    /// De qué está hecho un directorio, hijo a hijo, como Task cancelable
+    /// (`fs.dir_usage`, 0.75.0, fase 4).
+    ///
+    /// **No muta nada**: medir no es escribir, así que la regla 4 no aplica —
+    /// sin journal y sin undo. El gate de LECTURA vive en el daemon, que es
+    /// quien ata una conexión a un actor, igual que en `fs.dir_size`.
+    ///
+    /// Los hijos NO viajan en el retorno: se recogen con
+    /// [`Self::dir_usage_report`], que es el único camino de lectura. Es la
+    /// diferencia con `fs.dir_size`, cuyo total cabía en el progreso porque era
+    /// un número; una LISTA no cabe ahí.
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] con `depth` en cero —describir cero niveles no es
+    /// una petición— o por encima de
+    /// [`DIR_USAGE_MAX_DEPTH`](norte_proto::methods::DIR_USAGE_MAX_DEPTH).
+    /// [`Error::Unsupported`] con cualquier `depth` mayor que uno: hoy se sirve
+    /// un nivel, y **se RECHAZA en vez de recortar** — un servidor que recorta
+    /// en silencio deja al cliente creyendo que tiene los dos niveles que pidió.
+    /// [`Error::Unsupported`] también si el scheme no tiene provider.
+    ///
+    /// # Panics
+    /// Si el lock del anillo de informes está envenenado, que es un pánico
+    /// previo de este mismo proceso — mismo criterio que sus gemelos: el camino
+    /// de ESCRITURA del anillo no sigue con un estado del que no se sabe nada.
+    /// El de lectura ([`Self::dir_usage_report`]) sí lo tolera.
+    pub async fn dir_usage_as(
+        &self,
+        params: norte_proto::methods::FsDirUsageParams,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        // ANTES de crear Task alguna: es un rechazo del REQUEST, no el fallo de
+        // una Task ya lanzada (mismo criterio que `checksum_as`).
+        if params.depth == 0 || params.depth > norte_proto::methods::DIR_USAGE_MAX_DEPTH {
+            tracing::debug!(
+                depth = params.depth,
+                "fs.dir_usage con profundidad fuera de rango"
+            );
+            return Err(Error::InvalidPath);
+        }
+        if params.depth > 1 {
+            tracing::debug!(
+                depth = params.depth,
+                "fs.dir_usage: hoy solo se sirve un nivel"
+            );
+            return Err(Error::Unsupported);
+        }
+        let key = params.path.scheme().to_owned();
+        let provider = self.provider_for(&params.path).await?;
+        let informe = Arc::new(std::sync::Mutex::new(
+            norte_proto::methods::FsDirUsageReportResult::default(),
+        ));
+        let owner = actor.clone();
+        let vivo = Arc::clone(&informe);
+        let root = params.path;
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::DirUsage,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move { crate::ops::dir_usage(provider, root, vivo, &ctx).await })
+            }),
+        );
+        {
+            let mut ring = self
+                .dir_usage_reports
+                .lock()
+                .expect("dir_usage_reports lock sano");
+            ring.push_back((handle.id(), owner, informe));
+            evict_dir_usage_reports(&mut ring);
+        }
+        Ok(handle)
+    }
+
+    /// El mapa que lleva medido un `fs.dir_usage` ya lanzado, por `task_id`, más
+    /// el ACTOR que lo pidió (fase 4). `None` si ese id nunca fue un mapa de
+    /// esta instancia o si el anillo ya lo desalojó.
+    ///
+    /// Es un SNAPSHOT: definitivo cuando la Task es terminal, parcial antes —
+    /// que es justo lo que hace útil pedirlo mientras corre, porque un mapa se
+    /// puede ir pintando. El actor sale con él porque quien sirve esto por el
+    /// wire tiene que decidir si el que pregunta podía ver esa task.
+    ///
+    /// Este camino NO panica ante un lock envenenado: es de LECTURA, igual que
+    /// sus gemelos.
+    #[must_use]
+    pub fn dir_usage_report(
+        &self,
+        task_id: TaskId,
+    ) -> Option<(
+        crate::journal::Actor,
+        norte_proto::methods::FsDirUsageReportResult,
+    )> {
+        let ring = self
+            .dir_usage_reports
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         ring.iter()
@@ -4299,6 +4417,9 @@ type PackReportEntry = ReportEntry<norte_proto::methods::ArchivePackReportResult
 /// El anillo de informes de `fs.checksum` ([`Engine::checksum_report`]).
 type ChecksumReportEntry = ReportEntry<norte_proto::methods::FsChecksumReportResult>;
 
+/// Entrada del anillo de `fs.dir_usage` (0.75.0, fase 4).
+type DirUsageReportEntry = ReportEntry<norte_proto::methods::FsDirUsageReportResult>;
+
 /// Poda el anillo de informes de lote hasta sus topes, sacrificando SIEMPRE lo
 /// que menos hace falta.
 ///
@@ -4495,6 +4616,33 @@ fn evict_checksum_reports(ring: &mut std::collections::VecDeque<ChecksumReportEn
         CHECKSUM_REPORTS_AGENTS_MAX,
         |r: &norte_proto::methods::FsChecksumReportResult| {
             r.entries.iter().any(|e| e.digest.is_none())
+        },
+    );
+}
+
+/// Tope del anillo de `fs.dir_usage`. Mismo número que sus gemelos y con nombre
+/// propio, por lo mismo que el de `fs.checksum`: atarlo al de al lado haría que
+/// tocar aquel moviera este sin que nadie lo pidiera.
+pub(crate) const DIR_USAGE_REPORTS_MAX: usize = TEST_REPORTS_MAX;
+
+/// Sub-tope por clase del anillo de `fs.dir_usage`.
+pub(crate) const DIR_USAGE_REPORTS_AGENTS_MAX: usize = TEST_REPORTS_AGENTS_MAX;
+
+/// Desalojo del anillo de `fs.dir_usage` (fase 4), con la regla de la familia:
+/// primero cae lo que no cuenta nada.
+///
+/// «Cuenta algo» es un mapa que NO es el mapa entero: uno que se quedó sin
+/// listar (`listed` en `false`), uno con hijos que no se dejaron medir del todo
+/// (`partial`), o uno al que el tope le comió nombres (`omitted`). Un mapa
+/// completo se reconstruye volviendo a medir; lo que no se recuerda solo es
+/// POR QUÉ este está incompleto.
+fn evict_dir_usage_reports(ring: &mut std::collections::VecDeque<DirUsageReportEntry>) {
+    evict_reports(
+        ring,
+        DIR_USAGE_REPORTS_MAX,
+        DIR_USAGE_REPORTS_AGENTS_MAX,
+        |r: &norte_proto::methods::FsDirUsageReportResult| {
+            !r.listed || r.omitted > 0 || r.children.iter().any(|c| c.partial)
         },
     );
 }

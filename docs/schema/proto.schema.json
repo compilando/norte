@@ -1245,7 +1245,7 @@
       "type": "string"
     },
     "DirUsageChild": {
-      "description": "Un hijo medido: qué es y cuánto ocupa (0.75.0, fase 4).",
+      "description": "Un hijo medido: qué es y cuánto ocupa (0.75.0, fase 4).\n\n```\nuse norte_proto::methods::DirUsageChild;\nlet c: DirUsageChild = serde_json::from_str(\n    r#\"{\"name\":\"caf%FF.txt\",\"kind\":\"file\",\"bytes\":17,\"entries\":1}\"#,\n)\n.expect(\"hijo\");\n// El nombre vuelve a ser los BYTES que había en el disco.\nassert_eq!(c.name.as_bytes(), b\"caf\\xFF.txt\");\n// Y un hijo que no dice nada es un hijo COMPLETO: la cota inferior se\n// declara, no se supone.\nassert!(!c.partial);\n```",
       "properties": {
         "bytes": {
           "description": "Cuánto ocupa, contando lo que se pudo leer bajo él.",
@@ -2093,7 +2093,7 @@
       "properties": {
         "depth": {
           "default": 1,
-          "description": "Cuántos niveles se abren. `1` —lo que pinta un mapa de disco— mide cada\nhijo entero y no baja más.\n\nVa en el wire aunque hoy el servidor solo sirva `1` porque un mapa de\ndos niveles es la primera cosa que alguien va a pedir, y añadir el\ncampo después obligaría a distinguir «no lo mandó» de «pidió uno».\n\n**Contrato**: `0` es `-32602` —describir cero niveles no es una\npetición—, por encima de [`DIR_USAGE_MAX_DEPTH`] también, y lo que hoy\nse sirve es `1`. Un servidor que recorte en silencio deja al cliente\ncreyendo que tiene lo que pidió.",
+          "description": "Cuántos niveles se abren. `1` —lo que pinta un mapa de disco— mide cada\nhijo entero y no baja más.\n\nVa en el wire aunque hoy el servidor solo sirva `1` porque un mapa de\ndos niveles es la primera cosa que alguien va a pedir, y añadir el\ncampo después obligaría a distinguir «no lo mandó» de «pidió uno».\n\n**Contrato**: `0` —describir cero niveles no es una petición— y todo lo\nque pase de [`DIR_USAGE_MAX_DEPTH`] se rechazan con la taxonomía\n`invalid-path` (`-32000` con la categoría en `data`, como cualquier\nerror de aplicación de este protocolo), **no** con un `-32602` pelado:\nun código sin categoría llega al cliente como `internal`, o sea como un\nfallo del servidor y no como el error de quien llamó.\n\nUna `depth` VÁLIDA que este servidor todavía no sirva —hoy, cualquiera\nmayor que `1`— se contesta `unsupported`, y **se rechaza en vez de\nrecortarse**: un servidor que recorte en silencio deja al cliente\ncreyendo que tiene los niveles que pidió.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -2109,7 +2109,7 @@
       "type": "object"
     },
     "FsDirUsageReportParams": {
-      "description": "Params de [`FS_DIR_USAGE_REPORT`] (0.75.0, fase 4).",
+      "description": "Params de [`FS_DIR_USAGE_REPORT`] (0.75.0, fase 4).\n\n```\nuse norte_proto::methods::FsDirUsageReportParams;\nlet p: FsDirUsageReportParams =\n    serde_json::from_str(r#\"{\"task_id\":9}\"#).expect(\"params\");\nassert_eq!(p.task_id.get(), 9);\n```",
       "properties": {
         "task_id": {
           "$ref": "#/$defs/TaskId",
@@ -2122,7 +2122,7 @@
       "type": "object"
     },
     "FsDirUsageReportResult": {
-      "description": "Result de [`FS_DIR_USAGE_REPORT`] (0.75.0, fase 4): lo medido hasta ahora.\n\nEs un SNAPSHOT, como el de [`FS_CHECKSUM_REPORT`]: parcial mientras la Task\ncorre —que es lo que hace útil pedirlo— y definitivo cuando termina. El\norden es el del LISTADO del directorio, no el de terminación: un mapa que\nse reordena solo cambia de forma entre dos vistas de lo mismo.",
+      "description": "Result de [`FS_DIR_USAGE_REPORT`] (0.75.0, fase 4): lo medido hasta ahora.\n\nEs un SNAPSHOT, como el de [`FS_CHECKSUM_REPORT`]: parcial mientras la Task\ncorre —que es lo que hace útil pedirlo— y definitivo cuando termina. El\norden es el del LISTADO del directorio, no el de terminación: un mapa que\nse reordena solo cambia de forma entre dos vistas de lo mismo.\n\n```\nuse norte_proto::methods::FsDirUsageReportResult;\n// Un fragmento: la Task se paró mientras listaba la raíz.\nlet r: FsDirUsageReportResult = serde_json::from_str(\n    r#\"{\"children\":[],\"total_bytes\":0,\"total_entries\":0,\n        \"pending\":0,\"listed\":false,\"omitted\":0}\"#,\n)\n.expect(\"informe\");\n// `pending: 0` NO quiere decir «terminado» aquí: sin `listed`, nadie sabe\n// cuántos hijos había.\nassert!(!r.listed);\nassert_eq!(r.pending, 0);\n```",
       "properties": {
         "children": {
           "description": "Un hijo por entrada del directorio, ya medida.",

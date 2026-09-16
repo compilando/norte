@@ -1713,6 +1713,72 @@ impl Backend {
         }
     }
 
+    /// De qué está hecho un directorio, hijo a hijo (`fs.dir_usage`, 0.75.0,
+    /// fase 4): devuelve la Task, y el mapa se recoge con
+    /// [`Self::dir_usage_report`].
+    ///
+    /// **No muta nada**: medir no es escribir (regla dura 4 no aplica).
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] con `depth` en cero o por encima de
+    /// [`DIR_USAGE_MAX_DEPTH`](norte_proto::methods::DIR_USAGE_MAX_DEPTH). Los
+    /// dos se comprueban AQUÍ, antes de elegir brazo, para que el embebido y el
+    /// remoto contesten lo mismo — la lección de `check_pairs_cap`. El daemon
+    /// los sigue comprobando por su cuenta: aquello es la frontera, esto es la
+    /// paridad de las dos vías.
+    ///
+    /// **Lo que NO se comprueba aquí es hasta dónde sabe bajar el servidor.**
+    /// Que hoy solo se sirva `depth: 1` es una capacidad del daemon, no el
+    /// contrato del tipo: cablearla en el cliente haría que un `Backend` 0.75
+    /// rechazara por su cuenta un `depth: 2` que un daemon 0.76 sí sirve, sin
+    /// llegar a preguntárselo. Eso lo contesta quien lo sabe, y llega como
+    /// [`Error::Unsupported`].
+    ///
+    /// Un daemon N-1 sin el método contesta `METHOD_NOT_FOUND` → también
+    /// [`Error::Unsupported`]: quien necesite distinguir «no conoce el método»
+    /// de «esa profundidad no se sirve» lo sabe por la `depth` que pidió.
+    pub async fn dir_usage(
+        &self,
+        params: norte_proto::methods::FsDirUsageParams,
+    ) -> Result<TaskRef, Error> {
+        if params.depth == 0 || params.depth > norte_proto::methods::DIR_USAGE_MAX_DEPTH {
+            return Err(Error::InvalidPath);
+        }
+        match self {
+            Self::Embedded(engine) => {
+                let handle = engine
+                    .dir_usage_as(params, crate::journal::Actor::User)
+                    .await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.dir_usage(params).await.map(TaskRef::from),
+        }
+    }
+
+    /// El mapa que lleva medido esa Task (`fs.dir_usage_report`, 0.75.0, fase
+    /// 4). SNAPSHOT: parcial mientras corre, definitivo cuando la Task es
+    /// terminal.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si ese id nunca fue un mapa de esta instancia o si
+    /// el anillo ya lo desalojó.
+    pub async fn dir_usage_report(
+        &self,
+        task_id: TaskId,
+    ) -> Result<norte_proto::methods::FsDirUsageReportResult, Error> {
+        match self {
+            // Embebido no hay actor que comprobar: este `Backend` ES el humano
+            // en proceso (mismo criterio que `checksum_report`).
+            Self::Embedded(engine) => engine
+                .dir_usage_report(task_id)
+                .map(|(_owner, r)| r)
+                .ok_or(Error::NotFound),
+            #[cfg(unix)]
+            Self::Remote(r) => r.dir_usage_report(task_id).await,
+        }
+    }
+
     /// Comparación de dos árboles (`fs.compare`, 0.39.0, ADR 0048): devuelve
     /// la Task ([`TaskRef`], cancelable) y el STREAM de lotes de filas
     /// ([`norte_proto::methods::CompareRowsBatch`]).
