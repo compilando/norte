@@ -68,11 +68,42 @@ impl Estado {
             }
             Fondo::PlanDeLote(epoca, res) => self.aplicar_plan_de_lote(epoca, *res),
             Fondo::PluginsDeAyuda(res) => self.aplicar_catalogo_de_plugins(res, backend, buzon),
+            // Los paneles que aportan los plugins consentidos pasan a ser
+            // kinds de verdad (fase 3). Sin superficie de la que depender: un
+            // panel de plugin tiene que poder colocarse aunque nadie haya
+            // abierto la ayuda ni el gestor. El filtro de aprobado/activado
+            // vive en `insert_panels`, compartido con el terminal.
+            //
+            // Un fallo deja la sesión sin paneles de plugin, que es la
+            // pantalla de siempre: lo cosmético se degrada.
+            Fondo::PanelesDePlugin(res) => match res {
+                Ok(lista) => {
+                    self.kinds.insert_panels(&lista.plugins);
+                    // Declarar un kind NO repinta por su cuenta: el reparto se
+                    // rehace aquí —los mínimos del panel recién declarado
+                    // cambian dónde cabe— y el parche vacío lleva la barra,
+                    // que `parche` añade sola. Sin esto, la pantalla seguía
+                    // repartida como si el kind no existiera hasta el
+                    // siguiente cambio ajeno.
+                    self.rehacer_reparto();
+                    vec![self.parche(Vec::new())]
+                }
+                Err(_) => Vec::new(),
+            },
             Fondo::PaginaDePlugin(id, res) => self
                 .aplicar_pagina_de_plugin(&id, res.as_ref().ok())
                 .into_iter()
                 .collect(),
             Fondo::Catalogo(apertura, peticion, res) => {
+                // El catálogo del gestor redeclara los paneles (fase 3): es el
+                // mismo dato, y es el momento en que un plugin acaba de ser
+                // aprobado, activado o desinstalado. Sin esto, quitarle el
+                // consentimiento a un plugin dejaba su kind declarado —y su
+                // hueco tomando foco— hasta el siguiente arranque.
+                if let Ok(lista) = &res {
+                    self.kinds.insert_panels(&lista.plugins);
+                    self.rehacer_reparto();
+                }
                 self.aplicar_catalogo_de_extensiones(apertura, peticion, res, backend, buzon)
             }
             Fondo::FichaDePlugin(id, res) => self
@@ -170,6 +201,45 @@ impl Estado {
             }
             Fondo::BusquedaRota(epoca, e) => self.busqueda_rota(epoca, &e),
         }
+    }
+
+    /// Pide el catálogo para declarar qué PANELES aportan los plugins.
+    ///
+    /// Al arrancar y una sola vez: lo que trae es qué huecos existen, no el
+    /// contenido de ninguno. Por su propio camino —y no por el de la ayuda o
+    /// el del gestor— porque aquellos salen pronto si su superficie está
+    /// cerrada, y un panel de plugin tiene que poder colocarse sin que nadie
+    /// haya abierto ninguna de las dos (fase 3).
+    ///
+    /// También en SOLO LECTURA, y es a propósito. La regla de la paleta
+    /// —«ofrecer lo que se va a rehusar es prometer algo que no se hará»— no
+    /// aplica aquí: esto no ofrece nada, es una LECTURA que trae la
+    /// declaración de qué huecos existen, y sin ella una disposición guardada
+    /// con un panel de plugin deja un hueco de kind desconocido, que se
+    /// coloca con mínimo `(1, 1)`, no se enfoca, no se pinta y no se puede ni
+    /// nombrar: una caja en blanco que roba sitio y que el lector no puede
+    /// identificar. Lo que sí se gatea por efectos es la INTERACCIÓN del
+    /// panel —sus zonas pulsables y sus comandos—, donde la promesa se hace.
+    ///
+    /// Y sin gate también porque el terminal pregunta siempre: una ventana y
+    /// una TUI en solo lectura tienen que enseñar la misma pantalla.
+    ///
+    /// Fail-soft: si la RPC falla o vence, esta sesión se queda sin paneles
+    /// de plugin, que es la pantalla de siempre.
+    /// Sin `self` a propósito: desde que no hay puerta de efectos, no depende
+    /// de nada del estado.
+    pub(super) fn pedir_paneles(backend: &Arc<dyn HostBackend>, buzon: &mpsc::Sender<Mensaje>) {
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_list()).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::PanelesDePlugin(res))))
+                .await;
+        });
     }
 
     /// El catálogo llegó al gestor.

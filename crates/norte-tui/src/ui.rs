@@ -393,7 +393,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         draw_profile_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }
     if let Some(p) = &app.layout_picker {
-        draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker);
+        draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker, &app.kinds);
     }
     // #140: el selector de conexiones, mismo allowlist y mismo hint que los
     // otros dos — es una lista con cursor que no muta nada.

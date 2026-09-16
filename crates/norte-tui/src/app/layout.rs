@@ -2,7 +2,9 @@
 //! los huecos laterales (places, preview, tree, procesos, metadatos),
 //! redimensionar y mover el foco de hueco en hueco.
 
-use super::{ALLOW_LOG, ALLOW_PROCESSES, App, KeyOwner, PlacesClick, TreeClick, TreeSpot};
+use super::{
+    ALLOW_LOG, ALLOW_PANEL, ALLOW_PROCESSES, App, KeyOwner, PlacesClick, TreeClick, TreeSpot,
+};
 use norte_i18n::t;
 use norte_proto::VPath;
 
@@ -743,11 +745,18 @@ impl App {
     /// el teclado igual de inútil que uno cerrado (#329).
     #[must_use]
     pub fn panel_slot(&self) -> Option<norte_frontend::layout::SlotId> {
-        self.layout.visible_slot_ids().into_iter().find(|id| {
+        let visibles = self.layout.visible_slot_ids();
+        let es_panel = |id: norte_frontend::layout::SlotId| {
             self.layout
-                .kind_of(*id)
+                .kind_of(id)
                 .is_some_and(|k| k.as_str().starts_with("plugin:"))
-        })
+        };
+        // El que el lector señaló, mientras siga a la vista y siga siendo un
+        // panel: `multi: false` no lo enforza nadie, así que «el panel» no
+        // puede ser «el primero» cuando hay dos.
+        self.panel_focus
+            .filter(|id| visibles.contains(id) && es_panel(*id))
+            .or_else(|| visibles.into_iter().find(|id| es_panel(*id)))
     }
 
     /// El kind del panel de plugin visible, si lo hay.
@@ -963,6 +972,36 @@ impl App {
         }
     }
 
+    /// Despacha un comando del keymap con el teclado en un panel de plugin
+    /// (fase 3), filtrado por [`ALLOW_PANEL`].
+    ///
+    /// Embudo propio y vacío de contenido: lo único que un panel aportado
+    /// entiende hoy es el cromo. Cuando T4 le dé pintado y el guest reciba
+    /// `panel-event::command`, es AQUÍ donde entra —y seguirá filtrado, que es
+    /// lo que impide que un plugin se quede con `F8`.
+    pub fn panel_command(&mut self, cmd: &str) {
+        if !ALLOW_PANEL.contains(&cmd) {
+            return; // fuera del allowlist de este panel: inerte
+        }
+        if self.panel_chrome_command(cmd) {
+            return;
+        }
+        match cmd {
+            "dialog.cancel" | "dialog.pane" | "pane.switch" => self.return_keys_to_panes(),
+            "layout.focus-next" => self.layout_focus(1),
+            "layout.focus-prev" => self.layout_focus(-1),
+            "layout.grow" => self.layout_resize(1),
+            "layout.shrink" => self.layout_resize(-1),
+            "layout.log" => self.toggle_log(),
+            "layout.processes" => self.toggle_processes(),
+            "layout.places" => self.toggle_places(),
+            "layout.preview" => self.toggle_preview(),
+            "layout.metadata" => self.toggle_metadata(),
+            "pane.tree" => self.toggle_tree(),
+            _ => {}
+        }
+    }
+
     /// El hueco de la hoja de atributos, si está abierta.
     #[must_use]
     pub fn metadata_slot(&self) -> Option<norte_frontend::layout::SlotId> {
@@ -1164,6 +1203,162 @@ mod tests {
         width: 110,
         height: 30,
     };
+
+    /// Un panel APORTADO por un plugin es un hueco de pleno derecho: se
+    /// encuentra, toma el teclado y el selector lo ofrece (fase 3).
+    ///
+    /// El test recorre el camino entero porque cada tramo tenía su propia
+    /// tabla de nombres de casa: `focus_stop` miraba el registro de serie
+    /// —donde un kind aportado no existe—, `panel_slot` resuelve por prefijo
+    /// porque `plugin:<id>:<kind>` no se conoce al compilar, y `KeyOwner::Panel`
+    /// no lleva cuál es, que es lo que `multi: false` permite.
+    #[test]
+    fn un_panel_de_plugin_se_encuentra_toma_el_teclado_y_se_nombra() {
+        use norte_frontend::layout::{Dir, KindId, KindRegistry, Node, Size, SlotId};
+
+        let mut app = app_dos_panes();
+        app.kinds
+            .insert_panels(&[plugin_con_panel("git", "status")]);
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(1), Size::Fixed(24)],
+            children: vec![
+                Node::slot(SlotId(70), KindId::browser()),
+                Node::slot(SlotId(71), KindId::new("plugin:git:status")),
+            ],
+        };
+        app.set_layout(arbol);
+
+        let id = app.panel_slot().expect("el panel aportado se encuentra");
+        assert_eq!(id, SlotId(71));
+        assert_eq!(app.panel_kind(), Some("plugin:git:status"));
+        // Y lo toma de verdad: un hueco que no pasa `focus_stop` devuelve
+        // `false` aquí y deja el teclado donde estaba.
+        assert!(app.focus_slot(id));
+        assert_eq!(app.key_owner, crate::app::KeyOwner::Panel);
+        assert!(
+            app.kinds
+                .decls()
+                .iter()
+                .any(|d| d.id.as_str() == "plugin:git:status"),
+            "el registro declara el kind aportado"
+        );
+        // Y lo declara con SU mínimo, que es lo que consumen el reparto al
+        // colocar el hueco y la miniatura del selector al dibujarlo. Con el
+        // registro de serie —el que recibían antes de la fase 3— ese kind es
+        // desconocido y vale `(1, 1)`: el hueco se colocaba donde no cabe.
+        let kid = KindId::new("plugin:git:status");
+        assert_eq!(app.kinds.min_of(&kid), (20, 4));
+        assert_eq!(KindRegistry::builtin().min_of(&kid), (1, 1));
+    }
+
+    /// Retirarle el consentimiento a un plugin RETIRA su panel, en la misma
+    /// sesión.
+    ///
+    /// Declarar añadiendo dejaba el kind puesto hasta el siguiente arranque:
+    /// el hueco se seguía colocando y seguía tomando el teclado de un plugin
+    /// que el lector acababa de desactivar. El catálogo se relee al aprobar,
+    /// activar o desinstalar, así que la declaración se REHACE entera.
+    #[test]
+    fn quitarle_el_consentimiento_a_un_plugin_retira_su_panel() {
+        let mut app = app_dos_panes();
+        app.kinds
+            .insert_panels(&[plugin_con_panel("git", "status")]);
+        assert!(app.kinds.decls().iter().any(es_panel_de_git));
+
+        let mut apagado = plugin_con_panel("git", "status");
+        apagado.enabled = false;
+        app.kinds.insert_panels(&[apagado]);
+        assert!(
+            !app.kinds.decls().iter().any(es_panel_de_git),
+            "un panel sin consentimiento deja de existir para el reparto"
+        );
+    }
+
+    /// Un `kind` con caracteres fuera del alfabeto no se declara.
+    ///
+    /// El id y el kind son texto de un tercero y acaban dentro de un `KindId`,
+    /// que no valida nada: de ahí salen el nombre que se pinta y la clave que
+    /// se guarda en la sesión.
+    #[test]
+    fn un_kind_con_caracteres_hostiles_no_se_declara() {
+        let mut app = app_dos_panes();
+        app.kinds.insert_panels(&[
+            plugin_con_panel("git", "sta\ntus"),
+            plugin_con_panel("git", "está"),
+            plugin_con_panel("git", ""),
+        ]);
+        assert!(
+            !app.kinds
+                .decls()
+                .iter()
+                .any(|d| d.id.as_str().starts_with("plugin:")),
+            "ninguno de los tres pasa el alfabeto"
+        );
+    }
+
+    /// El embudo de teclas de un panel de plugin deja pasar el cromo y NADA
+    /// más.
+    ///
+    /// Sin embudo, las teclas seguían hasta el resolver de `browse` y actuaban
+    /// sobre el listado de detrás mientras el borde de foco decía que el
+    /// teclado estaba en el panel — el fallo de #243.
+    #[test]
+    fn un_panel_de_plugin_solo_deja_pasar_el_cromo() {
+        use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+
+        let mut app = app_dos_panes();
+        app.kinds
+            .insert_panels(&[plugin_con_panel("git", "status")]);
+        app.set_layout(Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(1), Size::Fixed(24)],
+            children: vec![
+                Node::slot(SlotId(70), KindId::browser()),
+                Node::slot(SlotId(71), KindId::new("plugin:git:status")),
+            ],
+        });
+        let id = app.panel_slot().expect("hay panel");
+        assert!(app.focus_slot(id));
+
+        // Un comando de listado no hace nada Y no devuelve el teclado: el
+        // panel sigue teniéndolo, que es lo que el lector ve.
+        app.panel_command("pane.select-all");
+        assert_eq!(app.key_owner, crate::app::KeyOwner::Panel);
+        // Y el cromo sí: soltar el teclado es del panel.
+        app.panel_command("dialog.cancel");
+        assert_eq!(app.key_owner, crate::app::KeyOwner::Panes);
+    }
+
+    /// ¿Es la declaración del panel de git?
+    fn es_panel_de_git(d: &norte_frontend::layout::KindDecl) -> bool {
+        d.id.as_str() == "plugin:git:status"
+    }
+
+    /// Un `PluginInfo` aprobado y activo que aporta un panel.
+    fn plugin_con_panel(id: &str, kind: &str) -> norte_proto::methods::PluginInfo {
+        norte_proto::methods::PluginInfo {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            publisher: String::new(),
+            version: "1.0.0".to_owned(),
+            category: "panel".to_owned(),
+            capabilities: Vec::new(),
+            approved: true,
+            enabled: true,
+            description: None,
+            commands: Vec::new(),
+            columns: Vec::new(),
+            panels: vec![norte_proto::methods::PluginPanelInfo {
+                kind: kind.to_owned(),
+                title: "Git".to_owned(),
+                min_cols: None,
+                min_rows: None,
+            }],
+            has_help: false,
+            manifest_digest: None,
+        }
+    }
 
     /// Un árbol con el registro escondido en la pestaña que no está activa.
     fn app_con_registro_escondido() -> App {

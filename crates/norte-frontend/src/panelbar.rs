@@ -232,7 +232,16 @@ fn buttons_con(
 pub fn es_boton(decl: &crate::layout::KindDecl) -> bool {
     // Un panel de la barra es uno que se enfoca: los que solo se miran no
     // tienen nada que hacer aquí.
-    !ESTRUCTURALES.contains(&decl.id.as_str()) && decl.focusable
+    //
+    // Y no los APORTADOS por un plugin (fase 3): el comando de un botón es
+    // `layout.<kind>`, que para uno aportado sería `layout.plugin:git:status`
+    // y no existe en ningún catálogo. La TUI lo tiraba en silencio y la
+    // ventana contestaba «cmd-not-here» — la misma decisión con dos
+    // respuestas, que es justo lo que el ADR 0077 prohíbe. Entran en la barra
+    // cuando exista el comando que las abre y las cierra.
+    !ESTRUCTURALES.contains(&decl.id.as_str())
+        && decl.focusable
+        && !decl.id.as_str().starts_with("plugin:")
 }
 
 /// El nombre CORTO del panel, en un idioma DICHO.

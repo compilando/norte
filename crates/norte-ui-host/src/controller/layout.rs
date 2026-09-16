@@ -435,6 +435,16 @@ impl Estado {
     /// arranque usa para la disposición que la sesión guardó: ahí los
     /// listados se piden después, una vez la sesión haya dicho dónde estaba
     /// cada uno, y despertarlos aquí pediría el directorio del arranque para
+    /// Recalcula el reparto con el árbol y el registro de AHORA.
+    ///
+    /// Declarar un kind cambia mínimos y enfocabilidad, y hasta la fase 3 el
+    /// reparto solo se rehacía al poner un árbol o al cambiar el viewport: los
+    /// paneles que aportan los plugins llegan DESPUÉS de la primera foto, así
+    /// que el hueco ya colocado se quedaba con el reparto que lo desconocía.
+    pub(super) fn rehacer_reparto(&mut self) {
+        self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
+    }
+
     /// tirarlo un instante después.
     pub(super) fn poner_arbol(&mut self, arbol: Node, activo: Option<SlotId>) {
         let dir = self.hueco().pane.dir().clone();

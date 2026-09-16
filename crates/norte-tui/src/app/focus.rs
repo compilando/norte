@@ -289,6 +289,12 @@ impl App {
             return false;
         };
         self.aterrizar(stop);
+        // Señalar un panel de plugin dice CUÁL, y eso no cabe en
+        // `KeyOwner::Panel`: sin esto, con dos paneles aportados visibles el
+        // teclado iba a uno y `layout.grow` al otro.
+        if stop == FocusStop::Side(KeyOwner::Panel) {
+            self.panel_focus = Some(id);
+        }
         true
     }
 

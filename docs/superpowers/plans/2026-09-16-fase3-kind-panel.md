@@ -70,14 +70,30 @@ tareas; `just ci` una vez antes de fusionar.
 
 ## T3 — El registro de kinds, de verdad abierto
 
-1. `KindRegistry::con_plugins(&[PluginPanelInfo])` (o `builtin()` +
-   `insert` en un solo sitio por frontend) y **los catorce llamantes
-   revisados**: los que solo consultan built-ins se quedan; los que deciden
-   qué se pinta, qué se enfoca y qué ofrece el selector reciben el registro
-   vivo.
-2. Test que recorra los llamantes: un kind de plugin declarado tiene que
-   aparecer en el selector de disposiciones, poder tomar el foco si lo pide, y
-   sobrevivir a guardar y releer la sesión.
+1. `KindRegistry::insert_panels(&[PluginInfo])` en `norte-frontend`, y cada
+   frontend con SU fuente de datos: la TUI una sonda (`spawn_panels`) drenada
+   por el bucle, el host un `Fondo::PanelesDePlugin` pedido en `start`. Esa
+   fuente era el trabajo de verdad, no el cableado.
+2. Los llamantes del registro, revisados. **Eran cuatro en producción, no
+   catorce** — la cuenta original venía de grepear `builtin()` incluyendo
+   tests y el propio `norte-frontend`:
+   - `focus_stop` (TUI) pasaba por `builtin()`, donde un kind aportado no
+     existe: quedaba fuera del anillo de `Tab` y fuera del alcance del ratón.
+   - `draw_layout_picker` / `draw_layout_preview` (TUI) reciben el registro
+     vivo desde `ui.rs`.
+   - `kind_con_teclado` (TUI) devuelve `Option<&str>`: de un panel aportado no
+     puede contestar una constante.
+   - `panel_slot` / `panel_kind` (TUI) resuelven por PREFIJO `plugin:`, porque
+     `plugin:<id>:<kind>` no se conoce al compilar.
+
+   Dos cosas que el plan daba por pendientes y no lo estaban: la barra de
+   paneles (`panelbar`) ya se derivaba de lo declarado, y el host no tiene
+   barrera de foco que abrir. Lo que sí hizo falta y no estaba escrito:
+   `KeyOwner::Panel` en la TUI, sin payload — llevar dentro el `SlotId`
+   rompería las 86 comparaciones por `==`, y `multi: false` garantiza que hay
+   como mucho uno visible.
+3. Test que recorra ese camino: un kind de plugin declarado se encuentra, toma
+   el teclado y aparece en el selector.
 
 ## T4 — Pintado en los dos frontends
 

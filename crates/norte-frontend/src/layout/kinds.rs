@@ -154,12 +154,39 @@ impl KindRegistry {
     /// ha consentido no existe para el reparto, así que su hueco no se coloca
     /// y su botón no sale en la barra.
     ///
-    /// Se AÑADEN, nunca reemplazan: `decls()` promete las de serie primero y
-    /// lo aportado detrás, que es lo que deja aprender la posición de un botón
-    /// con el dedo.
+    /// REEMPLAZA lo aportado, no lo añade: retirar el consentimiento a un
+    /// plugin tiene que retirar su panel en la misma sesión. Añadiendo, un
+    /// plugin desactivado en el gestor conservaba su kind declarado hasta el
+    /// siguiente arranque —su hueco seguía colocándose y tomando foco—, que es
+    /// lo contrario de lo que promete el párrafo de arriba. Las de serie no se
+    /// tocan, y lo aportado se reconstruye entero en cada catálogo.
+    ///
+    /// Dentro de eso el orden se mantiene: `decls()` promete las de serie
+    /// primero y lo aportado detrás.
     pub fn insert_panels(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
+        // El alfabeto de un nombre que va a un `KindId`: ASCII alfanumérico y
+        // `. _ -`, con tope. Deja fuera el espacio, los dos puntos —que son el
+        // separador del propio prefijo—, los controles, los saltos de línea y
+        // cualquier cosa de ancho doble o de derecha a izquierda.
+        let valido = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        };
+        self.decls.retain(|d| !d.id.as_str().starts_with("plugin:"));
         for p in plugins.iter().filter(|p| p.approved && p.enabled) {
             for panel in &p.panels {
+                // El id y el kind son texto de un TERCERO y acaban en un
+                // `KindId`, que no valida nada: de ahí salen el nombre que se
+                // pinta y la clave que se guarda en la sesión. Un kind con un
+                // salto de línea, un carácter de ancho doble o una secuencia
+                // de escape rompe la barra y el fichero de disposición, así
+                // que lo que no encaje en el alfabeto no se declara — el panel
+                // desaparece, que es el fallo seguro.
+                if !valido(&p.id) || !valido(&panel.kind) {
+                    continue;
+                }
                 self.insert(KindDecl {
                     id: panel_kind_id(&p.id, &panel.kind),
                     // Lo que el manifiesto pida, y si no pide nada, el mínimo
@@ -255,6 +282,27 @@ mod tests {
         assert!(reg.get(&KindId::new("terminal")).is_none());
         assert_eq!(reg.min_of(&KindId::new("terminal")), (1, 1));
         assert!(!reg.holds_role(&KindId::new("terminal"), RoleId::Target));
+    }
+
+    /// Un panel APORTADO no sale en la barra, aunque se enfoque.
+    ///
+    /// El comando de un botón es `layout.<kind>`, y para uno aportado sería
+    /// `layout.plugin:git:status`, que no existe en ningún catálogo: la TUI lo
+    /// tiraba en silencio y la ventana contestaba «cmd-not-here». La misma
+    /// decisión con dos respuestas es justo lo que el ADR 0077 prohíbe, así
+    /// que hasta que exista el comando que lo abre y lo cierra, no hay botón.
+    #[test]
+    fn un_panel_de_plugin_no_tiene_boton_en_la_barra() {
+        let mut reg = KindRegistry::builtin();
+        reg.insert_panels(&[panel_de_plugin("git", "status", None, true)]);
+        let d = reg
+            .get(&KindId::new("plugin:git:status"))
+            .expect("está declarado");
+        assert!(d.focusable, "se enfoca");
+        assert!(
+            !crate::panelbar::es_boton(d),
+            "y aun así no sale en la barra"
+        );
     }
 
     /// Los mínimos son lo único que el motor consulta para colapsar, así que

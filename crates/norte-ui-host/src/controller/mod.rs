@@ -498,6 +498,97 @@ fn bombear_avisos_de_plugin(backend: &dyn HostBackend, buzon: mpsc::Sender<Mensa
     });
 }
 
+/// Reenvía al buzón del host TODO lo que el backend empuja por su cuenta:
+/// conexión, sesión en claro, fallos de entrada, avisos de plugin,
+/// aprobaciones y tareas ajenas.
+///
+/// Juntas porque son la misma decisión seis veces —una task que muere con el
+/// canal que la alimenta— y porque entran por el MISMO buzón: un aviso de
+/// conexión perdida tiene que ordenarse con lo que estaba pasando cuando se
+/// perdió. Fuera de `start` por el límite de líneas.
+fn bombear_canales_del_backend(
+    backend: &dyn HostBackend,
+    buzon: &mpsc::Sender<Mensaje>,
+    efectos: crate::commands::Efectos,
+) {
+    // Los dos canales de la conexión son del PRIMER dueño, así que se toman
+    // una vez, aquí.
+    if let Some(mut eventos) = backend.take_conn_events() {
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            while let Some(ev) = eventos.recv().await {
+                if buzon.send(Mensaje::Conexion(ev)).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    // Los avisos de sesión en claro (#44) se toman SIEMPRE: no dependen de si
+    // esta ventana puede escribir. Que un listado que se está LEYENDO viaje
+    // sin cifrar es un hecho para quien lo mira, no un permiso.
+    if let Some(mut degradadas) = backend.take_degraded() {
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            while let Some(d) = degradadas.recv().await {
+                if buzon.send(Mensaje::Degradada(Box::new(d))).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    // Y los fallos (#322), con el mismo criterio: por qué NO se pudo entrar en
+    // una máquina se le dice a quien lo intentó, pueda esta ventana escribir o
+    // no.
+    if let Some(mut fallidas) = backend.take_failed() {
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            while let Some(f) = fallidas.recv().await {
+                if buzon.send(Mensaje::Fallida(Box::new(f))).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    // Los avisos de los hooks (ADR 0100) hablan de ficheros que ya cambiaron,
+    // así que se leen pueda escribir o no.
+    bombear_avisos_de_plugin(backend, buzon.clone());
+    // Las aprobaciones de policy son una MUTACIÓN por delegación: decir que sí
+    // a la operación de un agente. Un frontend que todavía no puede escribir
+    // tampoco puede autorizar que escriba otro, así que en solo lectura el
+    // canal ni se toma (y el diálogo no existe, que es más honesto que uno que
+    // no responde).
+    if efectos == crate::commands::Efectos::Completo
+        && let Some(mut aprobaciones) = backend.take_approvals()
+    {
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            while let Some(req) = aprobaciones.recv().await {
+                if buzon
+                    .send(Mensaje::Aprobacion(Box::new(req)))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+    }
+    if let Some(mut ajenas) = backend.take_foreign_tasks() {
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            while let Some(task) = ajenas.recv().await {
+                if buzon
+                    .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+    }
+}
+
 /// El host: un asa barata de clonar sobre el único escritor.
 #[derive(Clone)]
 pub struct UiHost {
@@ -765,6 +856,15 @@ type Adornos = (
 enum Fondo {
     /// El catálogo de plugins que pidió la AYUDA, para su lateral.
     PluginsDeAyuda(Result<norte_proto::methods::PluginListResult, Error>),
+    /// El catálogo pedido al ARRANCAR, para declarar qué PANELES aportan los
+    /// plugins (fase 3).
+    ///
+    /// Aparte del de la ayuda y del gestor, y no por gusto: esos dos salen
+    /// pronto si su superficie está cerrada, y un panel de plugin tiene que
+    /// poder pintarse sin que nadie haya abierto ni la ayuda ni el gestor.
+    /// Lo que trae es la DECLARACIÓN de qué huecos existen, no el contenido
+    /// de ninguno.
+    PanelesDePlugin(Result<norte_proto::methods::PluginListResult, Error>),
     /// La página de un plugin, pedida al abrirla en la ayuda.
     PaginaDePlugin(
         String,
@@ -1009,6 +1109,15 @@ impl UiHost {
             estado.sembrar_sitios();
             estado.pedir_sitios(&backend, &tx2);
         }
+        // Y qué PANELES aportan los plugins (fase 3). Sin preguntar si hay
+        // hueco para uno: la disposición guardada puede traerlo y ese hueco no
+        // se coloca hasta que su kind está declarado. La única puerta la pone
+        // `pedir_paneles`, y es la de los efectos.
+        //
+        // Llega después de la primera foto, como los volúmenes: declarar un
+        // kind repinta, y esperar a una RPC para enseñar la pantalla sería
+        // pagar por lo que casi nunca hay.
+        Estado::pedir_paneles(&backend, &tx2);
         // Y se sondea lo que ya se ve: el listado local no trae tamaño ni
         // fecha (#52), así que sin esto la primera pantalla nace con dos
         // columnas en blanco y no se llenan hasta que algo la mueva.
@@ -1020,85 +1129,7 @@ impl UiHost {
 
         bombear_tic_de_sesion(tx.clone());
 
-        // Los dos canales de la conexión son del PRIMER dueño, así que se
-        // toman una vez, aquí, y su contenido entra por el mismo buzón que
-        // todo lo demás: un aviso de conexión perdida tiene que ordenarse
-        // con lo que estaba pasando cuando se perdió.
-        if let Some(mut eventos) = backend.take_conn_events() {
-            let buzon = tx.clone();
-            tokio::spawn(async move {
-                while let Some(ev) = eventos.recv().await {
-                    if buzon.send(Mensaje::Conexion(ev)).await.is_err() {
-                        return;
-                    }
-                }
-            });
-        }
-        // Los avisos de sesión en claro (#44) van por el mismo buzón, y se
-        // toman SIEMPRE: no dependen de si esta ventana puede escribir. Que
-        // un listado que se está LEYENDO viaje sin cifrar es un hecho para
-        // quien lo mira, no un permiso.
-        if let Some(mut degradadas) = backend.take_degraded() {
-            let buzon = tx.clone();
-            tokio::spawn(async move {
-                while let Some(d) = degradadas.recv().await {
-                    if buzon.send(Mensaje::Degradada(Box::new(d))).await.is_err() {
-                        return;
-                    }
-                }
-            });
-        }
-        // Y los fallos (#322), por el mismo buzón y con el mismo criterio: por
-        // qué NO se pudo entrar en una máquina se le dice a quien lo intentó,
-        // pueda esta ventana escribir o no.
-        if let Some(mut fallidas) = backend.take_failed() {
-            let buzon = tx.clone();
-            tokio::spawn(async move {
-                while let Some(f) = fallidas.recv().await {
-                    if buzon.send(Mensaje::Fallida(Box::new(f))).await.is_err() {
-                        return;
-                    }
-                }
-            });
-        }
-        // Y los avisos de los hooks (ADR 0100), por el mismo buzón: hablan de
-        // ficheros que ya cambiaron, así que se leen pueda escribir o no.
-        bombear_avisos_de_plugin(backend.as_ref(), tx.clone());
-        // Las aprobaciones de policy son una MUTACIÓN por delegación: decir
-        // que sí a la operación de un agente. Un frontend que todavía no
-        // puede escribir tampoco puede autorizar que escriba otro, así que
-        // en solo lectura el canal ni se toma (y el diálogo no existe, que es
-        // más honesto que uno que no responde).
-        if estado.efectos == crate::commands::Efectos::Completo
-            && let Some(mut aprobaciones) = backend.take_approvals()
-        {
-            let buzon = tx.clone();
-            tokio::spawn(async move {
-                while let Some(req) = aprobaciones.recv().await {
-                    if buzon
-                        .send(Mensaje::Aprobacion(Box::new(req)))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-            });
-        }
-        if let Some(mut ajenas) = backend.take_foreign_tasks() {
-            let buzon = tx.clone();
-            tokio::spawn(async move {
-                while let Some(task) = ajenas.recv().await {
-                    if buzon
-                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-            });
-        }
+        bombear_canales_del_backend(backend.as_ref(), &tx, estado.efectos);
         let host = Self {
             inbox: tx,
             updates: updates.clone(),

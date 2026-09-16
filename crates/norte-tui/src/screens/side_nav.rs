@@ -168,7 +168,32 @@ pub fn on_processes_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifie
     }
 }
 
-/// Teclas del sidebar de sitios (L3), resueltas por el contexto `dialog`.
+/// Teclas de un panel APORTADO por un plugin (fase 3), resueltas por el mismo
+/// camino que las de procesos y filtradas por `App::panel_command`.
+///
+/// Sin este brazo el panel cogía el borde de foco y sus teclas seguían hasta
+/// el resolver de `browse`: el lector creía tener el teclado en el panel y
+/// `F8` abría el diálogo de borrar sobre la selección del listado de detrás.
+pub fn on_panel_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return;
+        }
+        Resolution::Reset => return,
+    };
+    app.panel_command(&cmd);
+}
+
+/// Teclas del sidebar de sitios (L3), resueltas por el contexto`dialog`.
 ///
 /// El sidebar no navega por su cuenta: Enter devuelve una ruta y el `cd` va al
 /// LISTADO enfocado, por el mismo camino que cualquier otro. Es lo que hace

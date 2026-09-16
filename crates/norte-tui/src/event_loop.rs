@@ -320,6 +320,12 @@ pub async fn run(
     for pane in 0..app.panes.len() {
         request_decorations(app, backend, &mut work.decorate, pane);
     }
+    // Qué PANELES aportan los plugins (fase 3): una vez, al arrancar. Lo que
+    // trae es la declaración de qué huecos existen —no el contenido de
+    // ninguno—, y sin ella una disposición guardada que incluya un panel de
+    // plugin se abriría con el hueco sin declarar: ni se coloca, ni se enfoca,
+    // ni sale en la barra.
+    work.panels = Some(crate::probes::spawn_panels(backend));
     let mut dir_watch = norte_frontend::watch::DirWatch::new();
     let mut dir_watch_alive = true;
     loop {
@@ -643,6 +649,21 @@ pub async fn run(
                 work.stat = None;
                 for (pane, path, entry) in res.unwrap_or_default() {
                     app.panes[pane].hydrate(&path, entry.size, entry.mtime_ms);
+                }
+            }
+            res = async {
+                match &mut work.panels {
+                    Some(pr) => (&mut pr.rx).await.ok(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                // El catálogo llegó: los paneles que declaran los plugins
+                // CONSENTIDOS pasan a ser kinds de verdad (fase 3). El hueco
+                // se limpia pase lo que pase — si falló, esta sesión se queda
+                // sin paneles de plugin, que es la pantalla de siempre.
+                work.panels = None;
+                if let Some(Ok(lista)) = res {
+                    app.kinds.insert_panels(&lista.plugins);
                 }
             }
             (epoca, res) = async {

@@ -205,6 +205,43 @@ pub fn spawn_log_tail(backend: &Backend, cursor: Option<u64>, epoca: u64) -> Log
     LogTailProbe { epoca, rx }
 }
 
+/// Lo que se espera al catálogo de plugins, igual que la ventana.
+pub const PLAZO_PANELES: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// El catálogo de plugins en vuelo, para saber qué PANELES aportan (fase 3).
+///
+/// Una por sesión y sin época: no hay panel abierto al que pertenezca —lo que
+/// trae es la declaración de qué huecos existen, que es previa a abrir
+/// ninguno— y se pide una vez al arrancar. Si un día hace falta repetirla
+/// (aprobar un plugin sin reiniciar), el sitio es el mismo.
+pub struct PanelsProbe {
+    /// El catálogo entero: los paneles salen de `PluginInfo.panels`, y el
+    /// filtro de aprobado/activado lo aplica `KindRegistry::insert_panels`,
+    /// que es donde vive esa regla para los dos frontends.
+    pub rx: tokio::sync::oneshot::Receiver<Result<norte_proto::methods::PluginListResult, Error>>,
+}
+
+/// Pide el catálogo para declarar los paneles que aportan los plugins.
+///
+/// Fail-soft como el resto de lo cosmético: si la RPC falla, no hay paneles
+/// de plugin y la pantalla es la de siempre.
+#[must_use]
+pub fn spawn_panels(backend: &Backend) -> PanelsProbe {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    tokio::spawn(async move {
+        // Con el MISMO plazo que la ventana (`PLAZO_PLUGINS`): un daemon que
+        // no contesta deja la sesión sin paneles de plugin, no una sonda
+        // colgada para siempre. La misma decisión tenía dos respuestas.
+        let res = match tokio::time::timeout(PLAZO_PANELES, b.plugins_list()).await {
+            Ok(r) => r,
+            Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+        };
+        let _ = tx.send(res);
+    });
+    PanelsProbe { rx }
+}
+
 /// Una petición `log.level` al daemon en vuelo (#328). Mismo molde y misma
 /// época que [`LogTailProbe`].
 pub struct LogLevelProbe {
