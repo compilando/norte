@@ -292,13 +292,16 @@ pub(crate) fn draw_plugin_panel(
     } else {
         Role::BorderUnfocused
     };
-    // El kind ya pasó el alfabeto de `KindRegistry::insert_panels` (ASCII
-    // alfanumérico, `.`, `_`, `-`), así que no hay nada que enmascarar aquí:
-    // lo hostil se quedó fuera al declararlo, no al pintarlo.
+    // El kind sale del ÁRBOL —un fichero de disposición, `--layout` o la
+    // sesión—, y ahí no le ha exigido un alfabeto nadie: `validate` mira la
+    // forma y conserva los kinds que este binario no conoce (ADR 0059). El
+    // alfabeto se exige al DECLARARLO, que es otro camino. Así que se
+    // enmascara como cualquier nombre que venga de un fichero.
     let titulo = app
         .layout
         .kind_of(id)
         .and_then(|k| crate::panelplugin::partes(k.as_str()).map(|(_, kind)| kind.to_owned()))
+        .map(|k| norte_frontend::display_name(k.as_bytes()).0)
         .unwrap_or_default();
     let block = Block::default()
         .borders(Borders::ALL)

@@ -539,6 +539,24 @@
         "y": 38
       },
       {
+        "focus_index": 11,
+        "height": 20,
+        "role": null,
+        "slot_id": 13,
+        "width": 30,
+        "x": 120,
+        "y": 0
+      },
+      {
+        "focus_index": 12,
+        "height": 18,
+        "role": null,
+        "slot_id": 14,
+        "width": 30,
+        "x": 120,
+        "y": 20
+      },
+      {
         "focus_index": 5,
         "height": 2,
         "role": null,

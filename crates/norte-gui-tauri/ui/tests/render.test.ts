@@ -16,6 +16,7 @@ import type {
   BrowserSlotView,
   HostCatalog,
   LogSlotView,
+  PanelSlotView,
   RowView,
   UiAction,
   ViewSnapshot,
@@ -3382,6 +3383,59 @@ describe("los huecos que no son listados", () => {
     expect(document.querySelector(".processes .slot-note")?.textContent).toBe(
       catalogoReal()["processes-empty"] ?? "",
     );
+  });
+});
+
+describe("el panel de un plugin", () => {
+  function conPanel(
+    lines: PanelSlotView["lines"],
+    hits: PanelSlotView["hits"],
+  ): ViewSnapshot {
+    const v = vista({});
+    v.slots = [...v.slots, { kind: "panel", slot_id: 7, title: "status", lines, hits }];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 40, height: 10, role: null, focus_index: 2 },
+    ];
+    return v;
+  }
+
+  it("pinta lo que el guest describió, con el título del panel", () => {
+    const { screen } = montar();
+    screen.paint(conPanel([[{ text: "rama main", role: null, fg: null, bg: null }]], []));
+    expect(document.querySelector(".panel-line")?.textContent).toBe("rama main");
+  });
+
+  // Un marco que todavía no llegó —la primera petición en vuelo, o un plugin
+  // que falló— deja el hueco con su borde y su título: se sabe que el panel
+  // está y de quién es, en vez de un hueco mudo.
+  it("sin marco todavía, el hueco sigue siendo suyo", () => {
+    const { screen } = montar();
+    screen.paint(conPanel([], []));
+    expect(document.querySelectorAll(".panel-line")).toHaveLength(0);
+    expect(document.querySelector(".panel-plugin")).not.toBeNull();
+  });
+
+  // Lo que viaja es la CELDA. El comando lo resuelve el host contra el marco
+  // que él tiene, con el mismo filtro que el terminal: si el comando cruzara
+  // el cable, podría mandarlo cualquiera que hable con el renderer.
+  it("una zona manda la celda que se pulsó, nunca un comando", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(
+      conPanel(
+        [[{ text: "rama main", role: null, fg: null, bg: null }]],
+        [{ row: 0, col: 5, width: 4 }],
+      ),
+    );
+    const zona = document.querySelector(".panel-hit") as HTMLElement;
+    expect(zona).not.toBeNull();
+    zona.click();
+    expect(enviadas.at(-1)).toEqual({
+      action: "panel_click",
+      slot_id: 7,
+      row: 0,
+      col: 5,
+    });
   });
 });
 

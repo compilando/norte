@@ -153,6 +153,60 @@ impl StyledFrame {
         Self { lines, hits }
     }
 
+    /// El marco que devolvió un guest, ACOTADO y SANEADO.
+    ///
+    /// La conversión vive aquí y no en cada frontend por lo mismo que
+    /// [`crate::ansi::span_de_wire`], que es quien sanea cada tramo: el
+    /// terminal y la ventana tienen que recortar y enmascarar IGUAL. Una
+    /// segunda conversión escrita a mano fue exactamente lo que se coló en el
+    /// terminal —copiaba los campos y se saltaba el enmascarado—, así que la
+    /// ventana no escribe la suya.
+    ///
+    /// ```
+    /// use norte_frontend::frame::StyledFrame;
+    /// use norte_proto::methods::{PanelFrame, PanelHit, SpanWire};
+    ///
+    /// let f = StyledFrame::de_wire(&PanelFrame {
+    ///     plugin_id: "git".to_owned(),
+    ///     lines: vec![vec![SpanWire {
+    ///         text: "rama".to_owned(),
+    ///         role: None,
+    ///         fg: None,
+    ///         bg: None,
+    ///     }]],
+    ///     hits: vec![PanelHit {
+    ///         row: 9,
+    ///         col: 0,
+    ///         width: 4,
+    ///         command: "layout.focus-next".to_owned(),
+    ///         arg: None,
+    ///     }],
+    ///     state: None,
+    /// });
+    /// assert_eq!(f.lines.len(), 1);
+    /// assert!(f.hits.is_empty(), "una zona sobre una fila que no existe se cae");
+    /// ```
+    #[must_use]
+    pub fn de_wire(marco: &norte_proto::methods::PanelFrame) -> Self {
+        let lines = marco
+            .lines
+            .iter()
+            .map(|linea| linea.iter().map(crate::ansi::span_de_wire).collect())
+            .collect();
+        let hits = marco
+            .hits
+            .iter()
+            .map(|h| Hit {
+                row: h.row,
+                col: h.col,
+                width: h.width,
+                command: h.command.clone(),
+                arg: h.arg.clone(),
+            })
+            .collect();
+        Self::clamped(lines, hits)
+    }
+
     /// La zona pulsable que hay en esa celda del marco, si la hay.
     ///
     /// La PRIMERA que case, que es el orden en que el guest las mandó: dos

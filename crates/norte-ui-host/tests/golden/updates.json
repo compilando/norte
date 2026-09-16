@@ -84,6 +84,24 @@
             "y": 38
           },
           {
+            "focus_index": 11,
+            "height": 20,
+            "role": null,
+            "slot_id": 13,
+            "width": 30,
+            "x": 120,
+            "y": 0
+          },
+          {
+            "focus_index": 12,
+            "height": 18,
+            "role": null,
+            "slot_id": 14,
+            "width": 30,
+            "x": 120,
+            "y": 20
+          },
+          {
             "focus_index": 5,
             "height": 2,
             "role": null,
@@ -606,6 +624,24 @@
           "width": 40,
           "x": 80,
           "y": 38
+        },
+        {
+          "focus_index": 11,
+          "height": 20,
+          "role": null,
+          "slot_id": 13,
+          "width": 30,
+          "x": 120,
+          "y": 0
+        },
+        {
+          "focus_index": 12,
+          "height": 18,
+          "role": null,
+          "slot_id": 14,
+          "width": 30,
+          "x": 120,
+          "y": 20
         },
         {
           "focus_index": 5,
@@ -1198,6 +1234,41 @@
         "note": "directorio",
         "slot_id": 12,
         "viewer": null
+      },
+      {
+        "hits": [
+          {
+            "col": 5,
+            "row": 0,
+            "width": 4
+          }
+        ],
+        "kind": "panel",
+        "lines": [
+          [
+            {
+              "bg": null,
+              "fg": null,
+              "role": "muted",
+              "text": "rama "
+            },
+            {
+              "bg": null,
+              "fg": "#7fd88f",
+              "role": null,
+              "text": "main"
+            }
+          ]
+        ],
+        "slot_id": 13,
+        "title": "status"
+      },
+      {
+        "hits": [],
+        "kind": "panel",
+        "lines": [],
+        "slot_id": 14,
+        "title": "status"
       },
       {
         "kind": "unsupported",

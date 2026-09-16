@@ -219,6 +219,20 @@ pub enum UiAction {
         /// Líneas. El renderer manda las que su rueda o su tecla signifiquen.
         delta: i64,
     },
+    /// Se pulsó una CELDA de un panel de plugin (fase 3).
+    ///
+    /// Viaja la celda, no un comando: el host tiene el marco y resuelve qué
+    /// zona era y qué comando le toca, con el mismo filtro que aplica el
+    /// terminal (`norte_frontend::frame::zona_puede`). El renderer cuenta lo
+    /// que pasó; qué significa lo decide quien tiene el estado.
+    PanelClick {
+        /// Qué hueco.
+        slot_id: u32,
+        /// Fila dentro del marco, sin el borde.
+        row: u16,
+        /// Columna dentro del marco, sin el borde.
+        col: u16,
+    },
     /// Desplaza el visor ACOPLADO de un hueco (#291): la rueda sobre él. Las
     /// teclas no pasan por aquí — van por el keymap del visor cuando el hueco
     /// tiene el foco, como en la TUI.

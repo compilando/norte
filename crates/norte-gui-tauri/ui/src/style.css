@@ -2788,6 +2788,55 @@ body {
 
 /* --- El panel de registro (#326) --------------------------------------- */
 
+/* El panel que pinta un PLUGIN (fase 3). Lo de dentro lo describe su guest;
+   el borde y el título son de la ventana. */
+.panel-plugin {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-lines {
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: 2px 6px;
+}
+
+/* `relative` porque las zonas pulsables se colocan ENCIMA de su fila, por
+   columna y ancho en celdas: el guest habla de celdas, no de píxeles. */
+.panel-line {
+  position: relative;
+  white-space: pre;
+  min-height: 1.2em;
+}
+
+/* Una zona es una región del texto que responde, no un botón dibujado: sin
+   fondo ni borde propios, para que el marco lo siga pintando el guest. El
+   foco sí se ve, porque una zona a la que se llega con el tabulador y no se
+   distingue es una zona que nadie usa. */
+.panel-hit {
+  position: absolute;
+  top: 0;
+  left: calc(var(--hit-col) * 1ch);
+  width: calc(var(--hit-width) * 1ch);
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.panel-hit:hover {
+  background: color-mix(in srgb, var(--selection-bg) 30%, transparent);
+}
+
+.panel-hit:focus-visible {
+  outline: 1px solid var(--selection-bg);
+  outline-offset: -1px;
+}
+
 .log {
   overflow: hidden;
   display: flex;

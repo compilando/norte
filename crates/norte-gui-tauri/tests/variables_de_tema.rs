@@ -45,6 +45,12 @@ const NO_SON_COLOR: &[&str] = &[
     // Y un ANCHO: lo que lleva hecho la task de esa fila, en tanto por
     // ciento. Lo pone el renderer fila a fila, no el tema.
     "pct",
+    // Dónde empieza una zona pulsable de un panel de plugin y cuánto ocupa, en
+    // CELDAS (fase 3). Las pone el renderer zona a zona, de lo que dijo el
+    // guest: el marco es texto, y una zona es una región de ese texto. Pedirle
+    // un rol al tema sería pedirle un color para una coordenada.
+    "hit-col",
+    "hit-width",
 ];
 
 /// Huérfanas CONOCIDAS, con dueño y fecha. Vacía desde que los roles `muted`

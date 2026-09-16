@@ -44,6 +44,15 @@ pub struct Firma {
 /// El panel de un plugin, entre repintados.
 #[derive(Debug, Default)]
 pub struct PanelRuntime {
+    /// De QUÉ panel es lo que hay guardado aquí.
+    ///
+    /// Un `SlotId` se reutiliza —cambiar de disposición o restaurar la sesión
+    /// trae ids pequeños y fijos—, así que el hueco puede pasar de un plugin a
+    /// otro. Podar por el árbol no basta: el hueco sigue VIVO, solo que ahora
+    /// es de otro. Sin esto, lo de A se heredaba para B: su marco —con sus
+    /// zonas pulsables— bajo el título de B, y su estado opaco entregado a B
+    /// en la primera petición.
+    pub kind: Option<String>,
     /// El último marco que llegó. Se conserva mientras se pide el siguiente:
     /// un plugin lento deja la foto de antes, no un hueco en blanco.
     pub frame: Option<StyledFrame>,
@@ -71,6 +80,28 @@ pub struct PanelRuntime {
 }
 
 impl PanelRuntime {
+    /// Pone este hueco al servicio de `kind`, tirando lo que fuera de otro.
+    ///
+    /// Un `SlotId` se REUTILIZA: cambiar de disposición o restaurar la sesión
+    /// traen ids pequeños y fijos, así que el hueco 3 puede ser de un plugin
+    /// hoy y de otro dentro de un segundo. Podar por el árbol no lo cubre —el
+    /// hueco sigue vivo, solo que ahora es de otro—, y lo que había no se
+    /// hereda: ni el marco, porque sus zonas pulsables seguirían respondiendo
+    /// bajo el título del nuevo, ni el ESTADO OPACO, que es del primero y cuyo
+    /// consentimiento el lector dio plugin a plugin.
+    ///
+    /// Devuelve si hubo relevo, para quien quiera decirlo.
+    pub fn adoptar(&mut self, kind: &str) -> bool {
+        if self.kind.as_deref() == Some(kind) {
+            return false;
+        }
+        *self = Self {
+            kind: Some(kind.to_owned()),
+            ..Self::default()
+        };
+        true
+    }
+
     /// ¿Hace falta pedir el marco de `firma`?
     ///
     /// No, si ya se está enseñando ese mismo, y no, si ya se pidió: un panel
@@ -144,6 +175,14 @@ pub fn pedir_marco(
                 .map(|n| norte_frontend::display_name(n.as_bytes()).0)
         }),
     };
+    // Y que el kind esté DECLARADO por un plugin consentido: el prefijo lo
+    // escribe quien edite una disposición, y sin esta puerta un
+    // `plugin:loquesea:loquesea` en un fichero bastaba para pedirle al core
+    // que resolviera con el directorio que el lector está mirando.
+    if !app.kinds.decls().iter().any(|d| d.id.as_str() == kind) {
+        return;
+    }
+    app.paneles.entry(slot).adoptar(&kind);
     if !app.paneles.entry(slot).hay_que_pedir(&firma) {
         return;
     }
@@ -223,28 +262,7 @@ pub fn aterrizar(
 /// pedir. Copiarlos a mano —como estaba— dejaba pasar escapes de terminal y
 /// roles del cromo por el único camino que no había mirado nadie.
 fn marco_de_wire(marco: &norte_proto::methods::PanelFrame) -> StyledFrame {
-    let lines = marco
-        .lines
-        .iter()
-        .map(|linea| {
-            linea
-                .iter()
-                .map(norte_frontend::ansi::span_de_wire)
-                .collect()
-        })
-        .collect();
-    let hits = marco
-        .hits
-        .iter()
-        .map(|h| norte_frontend::frame::Hit {
-            row: h.row,
-            col: h.col,
-            width: h.width,
-            command: h.command.clone(),
-            arg: h.arg.clone(),
-        })
-        .collect();
-    StyledFrame::clamped(lines, hits)
+    StyledFrame::de_wire(marco)
 }
 
 /// `plugin:<id>:<kind>` partido en las dos mitades que necesita la RPC.
@@ -327,6 +345,32 @@ mod tests {
         // Pero lo que cambia el contexto sí se pide: el plugin pudo volver, y
         // de todas formas el guest vería otra cosa.
         assert!(p.hay_que_pedir(&firma("mem:///b", None)));
+    }
+
+    /// Un hueco que pasa a ser de OTRO plugin no hereda nada del anterior.
+    ///
+    /// Ni el marco —sus zonas pulsables seguirían respondiendo bajo el título
+    /// del nuevo— ni el estado opaco, que es del primero. Pasa al cambiar de
+    /// disposición o al restaurar la sesión, porque los ids de hueco de un
+    /// preset son pequeños y fijos.
+    #[test]
+    fn un_hueco_que_cambia_de_plugin_no_hereda_nada() {
+        let mut p = PanelRuntime::default();
+        assert!(p.adoptar("plugin:git:status"), "estrena hueco");
+        p.frame = Some(StyledFrame::clamped(Vec::new(), Vec::new()));
+        p.state = Some(b"lo de git".to_vec());
+        p.mostrado = Some(firma("mem:///a", None));
+
+        assert!(!p.adoptar("plugin:git:status"), "el mismo panel no releva");
+        assert!(p.state.is_some(), "y no tira lo suyo");
+
+        assert!(p.adoptar("plugin:otro:cosas"), "otro plugin sí releva");
+        assert!(
+            p.state.is_none(),
+            "el estado opaco del primero no se hereda"
+        );
+        assert!(p.frame.is_none(), "ni su marco, con sus zonas");
+        assert!(p.mostrado.is_none(), "y vuelve a pedir");
     }
 
     /// Un kind de casa no se parte: no es de ningún plugin.

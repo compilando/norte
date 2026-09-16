@@ -1701,6 +1701,8 @@ pub enum SlotView {
     /// listado al que este hueco sigue, leído solo. Kind `viewer` en la
     /// disposición; `preview` en el wire, que es lo que es.
     Preview(Box<PreviewSlotView>),
+    /// El panel que pinta un PLUGIN (fase 3): el marco que describió su guest.
+    Panel(Box<PanelSlotView>),
     /// Un hueco de un tipo que este host todavía no proyecta. Se enseña
     /// vacío y con su nombre: preservar lo que no se entiende es la regla de
     /// la sesión (ADR 0059), y desaparecer sería peor que estar en gris.
@@ -1731,6 +1733,49 @@ pub struct PreviewSlotView {
     /// Por qué no hay fichero, YA DICHO: un directorio, nada bajo el
     /// cursor, un error de lectura. Vacío cuando hay visor.
     pub note: String,
+}
+
+/// El panel que pinta un PLUGIN (fase 3): lo que su guest describió.
+///
+/// El guest no dibuja, DESCRIBE: líneas con estilo y zonas pulsables. El
+/// borde, el título y el foco los pone la ventana, que es lo que impide que un
+/// plugin se haga pasar por otro panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelSlotView {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// Qué panel es: el `<kind>`, sin el prefijo, ENMASCARADO y acotado.
+    ///
+    /// Al declararlo se le exige un alfabeto (`KindRegistry::insert_panels`),
+    /// pero esto no sale de ahí: sale del ÁRBOL, que puede venir de un fichero
+    /// de disposición o de la sesión, y a un kind escrito a mano no le ha
+    /// exigido nada nadie. Se trata como el nombre de cualquier kind que el
+    /// host no conoce.
+    pub title: String,
+    /// Las líneas del marco, cada una con sus tramos. Vacío mientras el primer
+    /// marco no ha llegado, o si el plugin falló: el hueco se pinta con su
+    /// borde y nada dentro, nunca en blanco sin marco.
+    pub lines: Vec<Vec<SpanView>>,
+    /// Las zonas pulsables, en celdas DENTRO del marco.
+    pub hits: Vec<HitView>,
+}
+
+/// Una zona pulsable de un panel de plugin: dónde está, y nada más.
+///
+/// **Sin su comando, a propósito.** El renderer dice DÓNDE se pulsó y el host
+/// resuelve qué zona era y qué comando le toca, con el mismo filtro que el
+/// terminal. Es la regla de esta ventana —el renderer cuenta lo que pasó, el
+/// host decide qué significa—, y aquí además cierra una puerta: un comando que
+/// viajara por el cable sería un comando que puede mandar cualquiera que hable
+/// con el renderer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HitView {
+    /// Fila dentro del marco, contando desde cero.
+    pub row: u16,
+    /// Columna donde empieza.
+    pub col: u16,
+    /// Cuántas celdas ocupa a lo ancho.
+    pub width: u16,
 }
 
 /// El panel de registro (#326): la ventana visible del anillo en memoria.

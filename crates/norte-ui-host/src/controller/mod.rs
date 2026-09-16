@@ -56,6 +56,7 @@ mod menu;
 mod nav;
 mod palette;
 mod panel;
+mod panelplugin;
 mod patches;
 mod places;
 mod preview;
@@ -719,6 +720,16 @@ enum Mensaje {
     /// Lo que un hueco de preview pidió (#291): igual que [`Self::Contenido`]
     /// pero para el visor acoplado, y con el hueco delante.
     PreviewContenido(Box<PreviewContenido>),
+    /// El marco que pintó un panel de plugin (fase 3), con el testigo de la
+    /// petición que lo pidió: uno que no sea el vivo es de un cursor que ya se
+    /// movió.
+    PanelContenido(
+        Box<(
+            u32,
+            RequestToken,
+            Result<Option<norte_proto::methods::PanelFrame>, Error>,
+        )>,
+    ),
     /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
     /// un listado perezoso).
     ///
@@ -1330,6 +1341,12 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
+            Mensaje::PanelContenido(datos) => {
+                let (slot, token, res) = *datos;
+                if let Some(u) = estado.aterrizar_panel(slot, token, res) {
+                    let _ = updates.send(u);
+                }
+            }
             Mensaje::Fondo(f) => {
                 for u in estado.aplicar_de_fondo(*f, &backend, &buzon) {
                     let _ = updates.send(u);
@@ -1484,6 +1501,12 @@ async fn actor(
         // pregunta en cada frame: qué debería estar enseñando cada hueco de
         // preview colocado, y si no es lo que enseña, se pide.
         for u in estado.sondear_previews(&backend, &buzon) {
+            let _ = updates.send(u);
+        }
+        // Y el panel de un plugin (fase 3), por lo mismo y en el mismo sitio:
+        // su guest recibe el directorio y la fila bajo el cursor, así que
+        // cualquier mensaje puede cambiar lo que debería estar enseñando.
+        for u in estado.sondear_paneles(&backend, &buzon) {
             let _ = updates.send(u);
         }
         // Y la hoja de atributos, por lo MISMO y en el mismo sitio: también
@@ -2890,6 +2913,14 @@ struct Estado {
     /// visor con lo leído o la nota que lo sustituye, y lo que está en
     /// vuelo. Por hueco y no uno solo: el registro permite varios.
     previews: std::collections::BTreeMap<u32, preview::EstadoPreview>,
+    /// Lo que cada panel de PLUGIN tiene vivo (fase 3), por hueco: su último
+    /// marco, el estado opaco de su guest y lo que está en vuelo.
+    ///
+    /// El estado opaco es lo ÚNICO que sobrevive entre repintados —el permiso
+    /// de leer se acuña por llamada—, así que se poda con el árbol: un
+    /// `SlotId` se reutiliza, y sin podar el panel de otro plugin heredaría lo
+    /// que guardó el primero.
+    paneles: std::collections::BTreeMap<u32, panelplugin::EstadoPanel>,
     /// Lo ÚLTIMO que se mandó de cada hoja de atributos, por hueco.
     ///
     /// La hoja no pide nada y se calcula entera del listado, así que no tiene
@@ -3391,6 +3422,7 @@ impl Estado {
             log_remoto: logpanel::RegistroRemoto::default(),
             sitios: None,
             previews: std::collections::BTreeMap::new(),
+            paneles: std::collections::BTreeMap::new(),
             hojas: std::collections::BTreeMap::new(),
             gen_sitios: 0,
             ramas: None,
@@ -4000,6 +4032,9 @@ impl Estado {
             UiAction::LogSetLevel { level } => self.nivel_de_registro(level, backend, buzon),
             UiAction::LogSetFilter { filter } => self.filtro_de_registro(filter),
             UiAction::LogScroll { delta } => self.desplazar_registro(*delta),
+            UiAction::PanelClick { slot_id, row, col } => {
+                self.clic_en_panel(*slot_id, *row, *col, backend, buzon)
+            }
             UiAction::PreviewScroll { slot_id, delta } => self.desplazar_preview(*slot_id, *delta),
             UiAction::ViewerScroll { lines, cols } => self.desplazar_visor(*lines, *cols),
             UiAction::LogFollow => self.seguir_registro(),

@@ -35,6 +35,7 @@ mod corpus;
 mod disposiciones;
 mod gestos;
 mod paneles;
+mod paneles_de_plugin;
 mod registro;
 mod renombrar;
 mod revisiones;

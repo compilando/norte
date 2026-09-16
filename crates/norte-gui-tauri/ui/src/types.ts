@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 69;
+export const BRIDGE_VERSION = 70;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -311,6 +311,33 @@ export interface LogLineView {
   source: string;
 }
 
+/** Una zona pulsable de un panel de plugin, en celdas DENTRO del marco.
+ *
+ *  Sin su comando: el renderer manda la CELDA (`panel_click`) y el host
+ *  resuelve qué zona era y qué comando le toca. Un comando que viajara por el
+ *  cable sería un comando que puede mandar cualquiera que hable con el
+ *  renderer. */
+export interface HitView {
+  row: number;
+  col: number;
+  width: number;
+}
+
+/** El panel que pinta un PLUGIN (fase 3).
+ *
+ *  El guest no dibuja: DESCRIBE. El borde, el título y el foco los pone la
+ *  ventana, que es lo que impide que un plugin se haga pasar por otro panel.
+ *  `lines` vacío = todavía no hay marco (la primera petición en vuelo, o el
+ *  plugin falló): se pinta el borde con su título y nada dentro. */
+export interface PanelSlotView {
+  kind: "panel";
+  slot_id: number;
+  /** El `<kind>` que declaró el plugin, sin el prefijo. */
+  title: string;
+  lines: SpanView[][];
+  hits: HitView[];
+}
+
 export interface LogSlotView {
   kind: "log";
   slot_id: number;
@@ -417,6 +444,7 @@ export type SlotView =
   | PreviewSlotView
   | ProcessesSlotView
   | LogSlotView
+  | PanelSlotView
   | UnsupportedSlotView;
 
 export interface PendingView {
@@ -1376,6 +1404,13 @@ export type UiAction =
   | { action: "log_set_filter"; filter: string }
   | { action: "log_scroll"; delta: number }
   | { action: "preview_scroll"; slot_id: number; delta: number }
+  /**
+   * Se pulsó una CELDA de un panel de plugin (fase 3). Viaja la celda y no un
+   * comando: el host tiene el marco y resuelve qué zona era y qué comando le
+   * toca, con el mismo filtro que el terminal. Un comando que cruzara el cable
+   * lo podría mandar cualquiera que hable con el renderer.
+   */
+  | { action: "panel_click"; slot_id: number; row: number; col: number }
   /**
    * La RUEDA sobre el visor a pantalla completa (puente 59). Los dos ejes en
    * una acción porque un solo gesto los produce: la rueda a secas baja, con

@@ -14,7 +14,7 @@ use super::*;
 /// nombre kebab (ya validado contra el tema), el color como `#rrggbb`, el
 /// texto acotado. El enmascarado se hizo a la entrada
 /// (`Viewer::with_plugin_preview_styled`), una sola vez.
-fn span_view(s: &norte_frontend::ansi::StyledSpan) -> crate::dto::SpanView {
+pub(super) fn span_view(s: &norte_frontend::ansi::StyledSpan) -> crate::dto::SpanView {
     crate::dto::SpanView {
         text: clamp_display(s.text.clone()),
         role: s.role.map(|r| r.as_kebab().to_owned()),
@@ -98,6 +98,17 @@ impl Estado {
                     // recortado, señalaba a otra.
                     cursor: self.cursor_del_tablero(),
                 }),
+                // Un panel APORTADO por un plugin (fase 3), por PREFIJO: su
+                // kind es `plugin:<id>:<kind>` y no se conoce al compilar, así
+                // que no puede ser un brazo con su nombre como sus vecinos.
+                // Y bien formado: `plugin:git` —con prefijo y sin la segunda
+                // mitad— lo puede escribir una disposición a mano, y como
+                // panel saldría sin título y sin líneas, o sea una caja muda.
+                // Cayendo al brazo de abajo sale como lo que es: un kind que
+                // este host no sabe pintar, con su nombre.
+                Some(k) if k.starts_with("plugin:") && k.splitn(3, ':').count() == 3 => {
+                    slots.push(SlotView::Panel(Box::new(self.vista_de_panel(id))));
+                }
                 _ => {
                     let nombre =
                         kind.map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
