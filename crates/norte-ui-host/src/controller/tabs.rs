@@ -321,33 +321,68 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Size};
-        let abierto = self
-            .arbol
+        if self.hueco_de_kind(kind).is_some() {
+            return self.cerrar_hueco_de_kind(kind, backend, buzon);
+        }
+        self.abrir_hueco_de_kind(kind, backend, buzon)
+    }
+
+    /// El hueco de ese kind, si el árbol lo tiene.
+    pub(super) fn hueco_de_kind(&self, kind: &str) -> Option<SlotId> {
+        self.arbol
             .slot_ids()
             .into_iter()
-            .find(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == kind));
-        if let Some(id) = abierto {
-            let Some(nuevo) = self.arbol.close_slot(id) else {
-                return (self.aplicada(), Vec::new());
-            };
-            // Cerrar el registro BAJA lo que el proceso captura (#326): el
-            // nivel del anillo se sube en caliente para poder enseñar más, y
-            // solo sube. Sin esto, una sola pulsación de «traza» dejaba el
-            // proceso guardando TRACE en memoria el resto de la sesión —
-            // incluida la cota de `suppaftp`, que es lo único que impide que
-            // ahí dentro aparezca una contraseña de FTP— con la interfaz
-            // diciendo «info» y sin ningún panel donde verlo. Es lo que ya
-            // hace la TUI al cerrar el suyo.
-            if kind == super::logpanel::KIND {
-                if let Some(anillo) = &self.log_ring {
-                    anillo.set_level(self.log_panel.level());
-                }
-                // Y el sondeo se apaga: la época sube, así que el temporizador
-                // en vuelo se deja morir sin rearmarse.
-                self.log_epoca += 1;
+            .find(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == kind))
+    }
+
+    /// Cierra el hueco de ese kind, si está abierto.
+    ///
+    /// La MITAD de [`Self::alternar_hueco`], separada porque el panel de
+    /// procesos se cierra SOLO cuando se vacía el tablero (ADR 0115), y
+    /// reutilizar el interruptor lo reabriría.
+    pub(super) fn cerrar_hueco_de_kind(
+        &mut self,
+        kind: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(id) = self.hueco_de_kind(kind) else {
+            return (self.aplicada(), Vec::new());
+        };
+        let Some(nuevo) = self.arbol.close_slot(id) else {
+            return (self.aplicada(), Vec::new());
+        };
+        // Cerrar el registro BAJA lo que el proceso captura (#326): el nivel
+        // del anillo se sube en caliente para poder enseñar más, y solo sube.
+        // Sin esto, una sola pulsación de «traza» dejaba el proceso guardando
+        // TRACE en memoria el resto de la sesión —incluida la cota de
+        // `suppaftp`, que es lo único que impide que ahí dentro aparezca una
+        // contraseña de FTP— con la interfaz diciendo «info» y sin ningún panel
+        // donde verlo. Es lo que ya hace la TUI al cerrar el suyo.
+        if kind == super::logpanel::KIND {
+            if let Some(anillo) = &self.log_ring {
+                anillo.set_level(self.log_panel.level());
             }
-            return self.aplicar_disposicion(nuevo, backend, buzon);
+            // Y el sondeo se apaga: la época sube, así que el temporizador en
+            // vuelo se deja morir sin rearmarse.
+            self.log_epoca += 1;
+        }
+        self.aplicar_disposicion(nuevo, backend, buzon)
+    }
+
+    /// Abre el hueco de ese kind, o lo deja como está si ya existe.
+    ///
+    /// La otra mitad: la apertura automática del panel de procesos abre SIN
+    /// alternar, o cerraría el panel al empezar la segunda tarea.
+    pub(super) fn abrir_hueco_de_kind(
+        &mut self,
+        kind: &'static str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Size};
+        if self.hueco_de_kind(kind).is_some() {
+            return (self.aplicada(), Vec::new());
         }
         let id = SlotId(self.nuevo_slot());
         let hoja = match kind {

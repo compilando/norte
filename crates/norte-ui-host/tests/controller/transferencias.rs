@@ -22,9 +22,22 @@ pub(super) fn listado_de(
         .unwrap_or_else(|| panic!("el hueco {slot_id} es un listado"))
 }
 
+/// El montaje de dos paneles con destino aparte, EN CAJA.
+///
+/// Doce tests lo esperan, y el futuro de un `async fn` viaja entero en cada
+/// `await`: al crecer el snapshot pasó de los 16 KB que clippy tolera y los
+/// doce sitios se pusieron rojos a la vez. La caja los arregla de una, y en
+/// el sitio correcto —el ayudante— en lugar de repartir doce `Box::pin` por
+/// los tests que solo lo llaman.
+pub(super) fn dos_paneles_con_destino_aparte(
+    backend: Arc<Falso>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = (UiHost, norte_ui_host::ViewSnapshot)>>> {
+    Box::pin(dos_paneles_con_destino_aparte_inner(backend))
+}
+
 /// Dos paneles, con el DESTINO ya en otro directorio: el escenario real de
 /// una copia. Devuelve la foto de después.
-pub(super) async fn dos_paneles_con_destino_aparte(
+async fn dos_paneles_con_destino_aparte_inner(
     backend: Arc<Falso>,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
     let (h, snap) = host_con_layout(backend, "orthodox", (120, 40)).await;

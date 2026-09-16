@@ -64,7 +64,7 @@ use modals::draw_modal;
 pub use modals::{ModalZone, modal_zones};
 use overlays::{
     EXTENSIONS_WIDE_MIN, draw_extensions, draw_palette, draw_plugin_config_panel, draw_settings,
-    draw_wizard,
+    draw_splash, draw_wizard,
 };
 use pane::draw_pane;
 use panels::{
@@ -225,6 +225,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
                 // que no le está pasando nada.
                 app.busy.as_ref().filter(|b| b.visible() && b.affects(i)),
                 pane_footer(app, pane, rect.width).as_deref(),
+                app.chrome.dir_indicator(),
             );
         }
     }
@@ -426,6 +427,13 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     // El asistente de primer arranque (spec 2026-09-10): encima de la
     // paleta y de los ajustes, debajo de un modal, como el resto de overlays
     // que no son una pregunta de seguridad.
+    // La pantalla de arranque va DEBAJO del asistente y encima de todo lo
+    // demás: si los dos estuvieran puestos, el que pregunta algo manda. En la
+    // práctica no coinciden —la puerta del splash cede ante el asistente—,
+    // pero el orden lo dice aquí y no en una invariante que haya que recordar.
+    if let Some(splash) = &app.splash {
+        draw_splash(frame, splash, &app.theme);
+    }
     if let Some(wizard) = &app.wizard {
         draw_wizard(frame, wizard, &app.theme);
     }

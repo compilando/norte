@@ -290,6 +290,16 @@
     "column": "size",
     "slot_id": 1
   },
+  "splash_activate_row": {
+    "action": "splash_activate_row",
+    "number": 3
+  },
+  "splash_close": {
+    "action": "splash_close"
+  },
+  "splash_open": {
+    "action": "splash_open"
+  },
   "toggle_mark": {
     "action": "toggle_mark",
     "generation": 4,

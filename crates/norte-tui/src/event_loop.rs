@@ -32,7 +32,7 @@ use crate::keys::on_key;
 use crate::lua::{RunOutcome, load_lua, start_lua_run};
 use crate::mouse;
 use crate::nav;
-use crate::navigate::{request_decorations, settle_cd};
+use crate::navigate::{apply_cd, cd, request_decorations, settle_cd};
 use crate::overlays::watch_refresh_allowed;
 use crate::paste::route_paste;
 use crate::probes::{DecorateFetch, Probed};
@@ -400,6 +400,62 @@ pub async fn run(
             return Ok(());
         }
         turn::after_frame(app, backend, &mut work, painted.area).await;
+        // La pantalla de arranque `brief` caduca con el reloj del PINTADO, el
+        // mismo que caduca los avisos: medirla con otro sería un plazo que los
+        // tests no pueden fijar. Va después del frame porque lo que promete es
+        // «se ve, y se quita sola», no «se quita antes de verse».
+        crate::splash::tick(app);
+        // La fila que el lector eligió por su número: se navega aquí, donde
+        // está el backend. Hoy toda fila del splash lleva un directorio, así
+        // que esto es un `cd` normal —con su ritual de vuelta— y no una
+        // segunda puerta al despachador.
+        if let Some((_, Some(arg))) = app.pending_splash_row.take() {
+            match norte_proto::VPath::parse(&arg) {
+                Ok(destino) => {
+                    let outcome = cd(
+                        app,
+                        backend,
+                        &mut Console::new(&mut events, terminal),
+                        destino,
+                    )
+                    .await;
+                    apply_cd(
+                        &app.panes,
+                        &mut work.fill,
+                        &mut work.decorate,
+                        &mut work.probed,
+                        &mut work.search,
+                        outcome,
+                    );
+                }
+                // Una fila con una ruta que no parsea no navega y lo dice: la
+                // escribió esta sesión, así que si pasa es un fallo nuestro.
+                Err(_) => app.message = Some(t("err-invalid-path")),
+            }
+        }
+        // El panel de procesos que se abre y se cierra solo (`[ui]
+        // processes_panel = "auto"`, spec 2026-09-15): un panel que ocupa un
+        // tercio de la pantalla para decir «nada en marcha» no se gana el
+        // sitio, y buscar la tecla justo cuando empieza una copia tampoco.
+        //
+        // Abre SIN llevarse el teclado —el lector está en su listado— y solo
+        // cierra lo que abrió él: un panel que abrió una persona se queda.
+        if app.chrome.processes_panel() == norte_config::load::ProcessesPanel::Auto {
+            // Solo TRABAJO abre el panel: una búsqueda tiene su propia lista
+            // y no se gana medio tercio de pantalla (`counts_as_work`).
+            let hay_tareas = app
+                .board
+                .rows()
+                .iter()
+                .any(|r| norte_frontend::tasks::counts_as_work(r.last.kind));
+            if hay_tareas && app.processes_slot().is_none() {
+                app.open_processes(false);
+                app.processes_auto = true;
+            } else if !hay_tareas && app.processes_auto {
+                app.close_processes();
+                app.processes_auto = false;
+            }
+        }
         turn::spawn_probes(app, backend, &mut work);
         tokio::select! {
             _ = session_tick.tick() => {

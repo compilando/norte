@@ -6,8 +6,8 @@ expression: render(&app)
 " Sitios  Visor  Procesos  Detalles  Árbol  Registro                             "
 "┌/casa─────────────────────────────────┐┌/otro─────────────────────────────────┐"
 "│   Nombre▲          Tamaño       Fecha││Nombre▲             Tamaño       Fecha│"
-"│  📁 /docs M                          ││   cosa                1 B            │" Hidden by multi-width symbols: [(4, " ")]
-"│  📁 /src                             ││                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│  📁  docs M                          ││   cosa                1 B            │" Hidden by multi-width symbols: [(4, " ")]
+"│  📁  src                             ││                                      │" Hidden by multi-width symbols: [(4, " ")]
 "│     @enlace                          ││                                      │"
 "│      notas.txt      420 B            ││                                      │"
 "│ !    �.dat            7 B            ││                                      │"

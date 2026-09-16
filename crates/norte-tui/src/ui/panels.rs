@@ -747,6 +747,18 @@ pub(crate) fn draw_processes(
             // faltaba era el par «qué clase de trabajo» + «sobre qué», que ya
             // viaja entero en el progreso.
             let kind = kind_label(p.kind);
+            // Ritmo y tiempo que queda (spec 2026-09-15, fase 2): ninguno viene
+            // del wire —los estima el tablero de sus propios snapshots— y los
+            // dos se callan cuando no se saben. Una barra sin velocidad dice
+            // que algo pasa; con ella, dice si merece la pena esperar.
+            let ritmo = norte_frontend::tasks::human_rate(row.rate.bps());
+            let queda = norte_frontend::tasks::human_eta(row.rate.eta_secs(p));
+            let medida = match (ritmo.is_empty(), queda.is_empty()) {
+                (true, true) => String::new(),
+                (false, true) => format!("{ritmo} "),
+                (true, false) => format!("{queda} "),
+                (false, false) => format!("{ritmo} · {queda} "),
+            };
             // Ancho fijo de la fila: la marca, la clase, la barra, el estado y
             // los CUATRO espacios que los separan. Lo que sobra es del
             // operando, y si no sobra nada se queda vacío en vez de empujar
@@ -755,14 +767,19 @@ pub(crate) fn draw_processes(
             // El `ratatui` recorta la línea al ancho sin decir nada, así que
             // pasarse de uno no rompe el pinta: se come el `✓` del final, que
             // es justo el dato que la fila existe para dar.
-            let fijo = 1 + 4 + kind.chars().count() + 10 + state_txt.chars().count();
+            let fijo = 1
+                + 4
+                + kind.chars().count()
+                + 10
+                + state_txt.chars().count()
+                + medida.chars().count();
             let hueco = usize::from(inner.width).saturating_sub(fijo);
             let operando = operand_text(row, app, hueco);
             let marca = if i == cursor { '▶' } else { ' ' };
             let header = if operando.is_empty() {
-                format!("{marca} {kind} {bar} ")
+                format!("{marca} {kind} {bar} {medida}")
             } else {
-                format!("{marca} {kind} {operando} {bar} ")
+                format!("{marca} {kind} {operando} {bar} {medida}")
             };
             let tail = match role {
                 Some(r) => Span::styled(state_txt, theme.role(r)),

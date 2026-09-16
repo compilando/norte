@@ -122,7 +122,15 @@ pub fn cell_text(cell: &KeyCell, width: usize) -> String {
     if width < num.len() {
         return " ".repeat(width);
     }
+    // Un espacio entre el número y la etiqueta cuando la celda da para él y
+    // para algo que leer (spec 2026-09-15): `1 Ayuda` se lee de un vistazo y
+    // `1Ayuda` hay que separarlo con la vista. En celdas estrechas se cede el
+    // espacio antes que una letra, que es lo que de verdad dice qué hace la
+    // tecla.
+    let separador = usize::from(width >= num.len() + 4);
     let room = width - num.len();
+    let num = format!("{num}{}", " ".repeat(separador));
+    let room = room - separador;
     // Mayúscula inicial ANTES de medir, y se mide lo que se pinta: `ß` sube a
     // `SS` y ocupa dos (revisión m7).
     let mut chars = cell.label.chars();

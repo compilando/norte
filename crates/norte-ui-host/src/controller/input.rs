@@ -329,6 +329,35 @@ impl Estado {
         None
     }
 
+    /// Una tecla con la pantalla de arranque puesta, o `None` si no lo está.
+    ///
+    /// `1`..`9` ABRE la fila que lleva ese número —es lo que la pantalla
+    /// promete en su pie, y sin esto las filas se pintaban numeradas y el
+    /// número no hacía nada—; cualquier otra tecla la quita y no significa
+    /// nada más. Escribir sobre el listado de detrás sería actuar sobre algo
+    /// que el lector no está viendo. El terminal resuelve lo mismo en
+    /// `norte-tui/src/splash.rs`.
+    fn tecla_en_splash(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        self.splash.as_ref()?;
+        // Un dígito CON modificador no es el atajo: `ctrl+1` es un chord del
+        // keymap en cualquier otra pantalla, y aquí sería una casualidad.
+        let digito = (k.key.chars().count() == 1 && !k.ctrl && !k.alt && !k.meta)
+            .then(|| k.key.chars().next())
+            .flatten()
+            .and_then(|c| c.to_digit(10))
+            .filter(|n| *n >= 1);
+        if let Some(n) = digito {
+            let number = u8::try_from(n).unwrap_or(0);
+            return Some(self.activar_fila_de_splash(number, backend, buzon));
+        }
+        Some((self.aplicada(), self.cerrar_splash()))
+    }
+
     /// Una tecla: la resuelve el keymap COMPARTIDO y el host solo ejecuta.
     ///
     /// Los cuatro desenlaces son los del resolver, y ninguno se queda
@@ -342,6 +371,14 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // La pantalla de arranque se quita con LA TECLA QUE SEA, y esa tecla
+        // no hace nada más (ADR 0115). Va la primera de todas porque lo que
+        // está delante manda: escribir la tecla en el listado de detrás sería
+        // actuar sobre algo que el lector no está viendo. Lo mismo hace el
+        // terminal (`norte-tui/src/splash.rs`).
+        if let Some(salida) = self.tecla_en_splash(k, backend, buzon) {
+            return salida;
+        }
         if let Some(salida) = self.tecla_de_un_overlay(k, backend, buzon) {
             return salida;
         }

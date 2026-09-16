@@ -38,6 +38,13 @@ const NO_SON_COLOR: &[&str] = &[
     "font-mono",
     "font-ui",
     "dialog-backdrop",
+    // Una OPACIDAD, no un color: cuánto se apaga el contenido del panel que
+    // no tiene el teclado (ADR 0115). Pedirle un rol al tema sería pedirle
+    // que eligiera un color para algo que no pinta ninguno.
+    "inactive-dim",
+    // Y un ANCHO: lo que lleva hecho la task de esa fila, en tanto por
+    // ciento. Lo pone el renderer fila a fila, no el tema.
+    "pct",
 ];
 
 /// Huérfanas CONOCIDAS, con dueño y fecha. Vacía desde que los roles `muted`

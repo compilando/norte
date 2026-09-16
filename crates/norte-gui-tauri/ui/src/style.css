@@ -386,6 +386,132 @@ body {
   background: var(--panel-focus-bg);
 }
 
+/* El panel que NO tiene el teclado se atenúa (spec 2026-09-15, ADR 0115).
+   Con dos paneles gemelos, el borde de acento es lo único que dice a cuál
+   van las teclas, y en un tema donde `--border` y `--border-focus` se
+   parecen eso es un píxel de diferencia. Atenuar el contenido dice lo mismo
+   a un vistazo y desde el otro lado de la mesa.
+
+   Sobre el CONTENIDO, no sobre `.slot`: opacidad en el hueco entero apagaría
+   también su borde y su título, que son justo lo que tiene que seguir
+   legible.
+
+   Y solo sobre un LISTADO, que es lo que `.scroller` significa: los paneles
+   laterales sustituyen esa clase por la suya (`processes`, `tasks`,
+   `empty`). El rol no sirve para distinguirlos —el listado sin teclado se
+   queda sin rol cuando no hay destino que marcar, igual que un lateral—, así
+   que colgarlo del rol atenuaba el registro y hasta el panel de procesos
+   mientras tenían el teclado. */
+.slot:not([data-role="active"]) .scroller .canvas {
+  opacity: var(--inactive-dim, 0.72);
+}
+
+/* La pantalla de arranque (puente 69, ADR 0115). Se pone DELANTE de todo,
+   con el mismo velo que un diálogo: mientras está puesta, nada de lo de
+   detrás responde, y un clic en cualquier sitio la quita. */
+#splash[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 45%);
+  backdrop-filter: var(--dialog-backdrop, none);
+}
+
+#splash[data-open="false"] {
+  display: none;
+}
+
+.splash {
+  width: min(60ch, 92vw);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 12px 16px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+}
+
+.splash-art {
+  margin: 0;
+  color: var(--title-fg);
+  font-family: var(--font-mono);
+  line-height: 1.1;
+  white-space: pre;
+}
+
+.splash-version,
+.splash-daemon,
+.splash-hint {
+  margin: 2px 0 0;
+  unicode-bidi: isolate;
+}
+
+.splash-daemon,
+.splash-hint {
+  color: var(--info-fg);
+}
+
+.splash-section {
+  margin: 10px 0 2px;
+  padding-bottom: 2px;
+  font-size: 1em;
+  color: var(--title-fg);
+  border-bottom: 1px solid var(--separator, var(--border));
+}
+
+.splash-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.splash-row {
+  display: flex;
+  gap: var(--cell-w);
+  padding: 1px 0;
+  unicode-bidi: isolate;
+}
+
+.splash-row[data-actionable="true"] {
+  cursor: pointer;
+}
+
+.splash-row[data-actionable="true"]:hover {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+/* El número ocupa su celda AUNQUE la fila no lo tenga: más allá de nueve la
+   fila se lee y no se promete, y sin el hueco los nombres bailarían. */
+.splash-number {
+  flex: 0 0 2ch;
+  color: var(--title-fg);
+}
+
+.splash-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.splash-detail {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+
+/* El avance de la task que lleva ESTA fila entre manos (puente 69): una
+   lámina de fondo bajo el nombre, no una barra que empuje al texto. El ancho
+   lo pone quien pinta la fila en `--pct`. */
+.row-progress {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--pct, 0%);
+  background: var(--selection-bg);
+  opacity: 0.35;
+  pointer-events: none;
+}
+
 .slot-title {
   unicode-bidi: isolate;
   flex: 0 0 var(--cell-h);

@@ -44,7 +44,8 @@ async fn el_board_ve_terminar_una_task() {
     // La task termina; el tick la detecta como terminal UNA sola vez.
     let mut terminales = Vec::new();
     for _ in 0..200 {
-        terminales.extend(board.tick());
+        // El reloj del pintado: aquí no se mide ritmo, así que cero vale.
+        terminales.extend(board.tick(0));
         if !terminales.is_empty() {
             break;
         }
@@ -52,7 +53,7 @@ async fn el_board_ve_terminar_una_task() {
     }
     assert_eq!(terminales.len(), 1, "exactamente un evento terminal");
     assert_eq!(terminales[0].state, TaskState::Completed);
-    assert!(board.tick().is_empty(), "no se re-emite");
+    assert!(board.tick(0).is_empty(), "no se re-emite");
 }
 
 #[tokio::test]
@@ -71,7 +72,8 @@ async fn cancelar_la_ultima_en_marcha() {
 
     let mut terminales = Vec::new();
     for _ in 0..200 {
-        terminales.extend(board.tick());
+        // El reloj del pintado: aquí no se mide ritmo, así que cero vale.
+        terminales.extend(board.tick(0));
         if !terminales.is_empty() {
             break;
         }

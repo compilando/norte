@@ -99,6 +99,7 @@
     "name_dim": false,
     "name_italic": false,
     "name_underline": false,
+    "progress": null,
     "selected": false
   },
   "row_kind_file": {
@@ -123,6 +124,7 @@
     "name_dim": false,
     "name_italic": false,
     "name_underline": false,
+    "progress": null,
     "selected": false
   },
   "row_kind_other": {
@@ -147,6 +149,7 @@
     "name_dim": false,
     "name_italic": false,
     "name_underline": false,
+    "progress": null,
     "selected": false
   },
   "row_kind_symlink": {
@@ -171,6 +174,7 @@
     "name_dim": false,
     "name_italic": false,
     "name_underline": false,
+    "progress": null,
     "selected": false
   },
   "slot_state_error": {
@@ -186,6 +190,28 @@
   },
   "slot_state_ready": {
     "state": "ready"
+  },
+  "splash_lleno": {
+    "art": [
+      "   ·   "
+    ],
+    "close_after_ms": 1200,
+    "daemon": "hablando con el core embebido",
+    "hint": "una tecla la quita; 1-9 abre",
+    "revision": "abcdef1",
+    "sections": [
+      {
+        "rows": [
+          {
+            "detail": "12",
+            "label": "casa",
+            "number": 1
+          }
+        ],
+        "title": "A dónde sueles ir"
+      }
+    ],
+    "version": "0.1.0"
   },
   "task_cancelled": "cancelled",
   "task_done": "done",

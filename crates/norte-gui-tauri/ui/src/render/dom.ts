@@ -340,7 +340,27 @@ export function updateRow(
   check.className = "row-check";
   check.setAttribute("aria-hidden", "true");
   check.textContent = row.marked ? "☑" : "☐";
-  el.replaceChildren(check, ...nodes);
+  // La barra de la task que lleva ESTE fichero entre manos (puente 69, ADR
+  // 0115). Detrás del texto y no entre las celdas: la fila ya dice lo que es,
+  // y el avance es un estado suyo, no una columna más. `aria-hidden` porque
+  // el tablero de procesos es quien lo anuncia; repetirlo por fila
+  // convertiría una copia larga en una cantinela para un lector de pantalla.
+  const fondo: Node[] = [];
+  if (row.progress !== null && row.progress !== undefined) {
+    const barra = document.createElement("span");
+    barra.className = "row-progress";
+    barra.setAttribute("aria-hidden", "true");
+    barra.style.setProperty(
+      "--pct",
+      `${String(Math.max(0, Math.min(100, row.progress)))}%`,
+    );
+    // EL PRIMERO de los hermanos, que es lo que lo deja debajo: en esta hoja
+    // no hay `z-index` en ninguna parte, así que el apilado es el orden del
+    // documento, y una lámina pintada al final teñiría el nombre que la fila
+    // está diciendo.
+    fondo.push(barra);
+  }
+  el.replaceChildren(...fondo, check, ...nodes);
 }
 
 /**

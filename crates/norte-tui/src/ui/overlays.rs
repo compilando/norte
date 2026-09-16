@@ -852,6 +852,92 @@ pub(crate) fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette,
 /// El asistente de primer arranque (spec 2026-09-10): una caja con el
 /// título del paso, la pregunta, las filas con el cursor y la línea de
 /// teclas. Mismo idioma visual que la paleta.
+/// La pantalla de arranque (spec 2026-09-15, fase 2): la brújula, qué build
+/// corre y contra qué core, y —en `home`— las filas numeradas de a dónde ir.
+///
+/// Una CAPA sobre el listado y no un modal: lo que hay detrás ya está pintado,
+/// y cualquier tecla la quita. Por eso el pie dice cómo se sale, que es lo
+/// único que un lector necesita saber de ella.
+///
+/// El arte y las secciones vienen del modelo COMPARTIDO
+/// ([`norte_frontend::splash`]), así que la ventana enseña lo mismo; aquí solo
+/// se decide dónde caen las celdas.
+pub(crate) fn draw_splash(
+    frame: &mut Frame<'_>,
+    splash: &norte_frontend::splash::SplashView,
+    theme: &TuiTheme,
+) {
+    use norte_frontend::splash::numbered;
+
+    let lang = norte_i18n::active();
+    let numeradas = numbered(&splash.sections);
+    let arte = splash.art.len();
+    // Arte + versión + daemon + aire + (título + filas) por sección + pie, y
+    // los dos bordes.
+    let filas_secciones: usize = splash
+        .sections
+        .iter()
+        .map(|s| s.rows.len().saturating_add(1))
+        .sum();
+    let alto = u16::try_from(arte + 3 + filas_secciones + 2).unwrap_or(u16::MAX);
+    let ancho = 60.min(frame.area().width.max(20));
+    let area = centered(frame.area(), ancho, alto.min(frame.area().height.max(3)));
+    clear_themed(frame, area, theme);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("splash-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(Line::styled(
+            format!(
+                " {} ",
+                if numeradas.is_empty() {
+                    t("splash-hint")
+                } else {
+                    t("splash-hint-home")
+                }
+            ),
+            theme.role(Role::Info),
+        ))
+        .border_style(theme.role(Role::ModalBorder));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let mut lineas: Vec<Line<'_>> = splash
+        .art
+        .iter()
+        .map(|l| Line::styled((*l).to_owned(), theme.role(Role::Title)))
+        .collect();
+    lineas.push(Line::raw(format!("{} {}", splash.version, splash.revision)));
+    lineas.push(Line::styled(
+        norte_i18n::t_in(lang, splash.daemon.key()),
+        theme.role(Role::Info),
+    ));
+    lineas.push(Line::raw(String::new()));
+    let mut n = 0usize;
+    for seccion in &splash.sections {
+        lineas.push(Line::styled(
+            norte_i18n::t_in(lang, seccion.title_key),
+            theme.role(Role::Title),
+        ));
+        for fila in &seccion.rows {
+            n += 1;
+            // El número solo hasta donde hay tecla que lo llame: más allá, la
+            // fila se lee y no se promete.
+            let marca = if n <= numeradas.len() {
+                format!("{n} ")
+            } else {
+                "  ".to_owned()
+            };
+            let ancho_util = usize::from(inner.width).saturating_sub(marca.len());
+            let texto = middle_ellipsis(&fila.label, ancho_util);
+            lineas.push(Line::raw(format!("{marca}{texto}")));
+        }
+    }
+    frame.render_widget(Paragraph::new(lineas), inner);
+}
+
 pub(crate) fn draw_wizard(
     frame: &mut Frame<'_>,
     wizard: &norte_frontend::wizard::Wizard,

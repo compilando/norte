@@ -38,6 +38,7 @@ mod paneles;
 mod registro;
 mod renombrar;
 mod revisiones;
+mod splash;
 mod sync;
 mod teclas_paleta;
 mod transferencias;

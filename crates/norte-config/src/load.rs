@@ -1259,6 +1259,81 @@ impl DateFormat {
     }
 }
 
+/// `[ui] splash`: what the startup screen does (spec 2026-09-15, phase 2).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SplashMode {
+    /// A cover over the first frame that any key — or the first listing plus a
+    /// moment — takes away. Default: it says which build is running without
+    /// standing between the reader and their files.
+    #[default]
+    Brief,
+    /// No splash at all.
+    Off,
+    /// A start screen that stays until a key: recent and popular directories,
+    /// bookmarks and profiles, each reachable by number.
+    Home,
+}
+
+impl SplashMode {
+    /// The wire string this variant round-trips from/to.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Brief => "brief",
+            Self::Off => "off",
+            Self::Home => "home",
+        }
+    }
+}
+
+/// `[ui] processes_panel`: whether the processes panel opens by itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProcessesPanel {
+    /// Opens when a task starts and closes when the last one is gone.
+    /// Default: a panel that says "nothing running" is a third of the screen
+    /// saying nothing.
+    #[default]
+    Auto,
+    /// Only the command and the panel bar open or close it.
+    Manual,
+}
+
+impl ProcessesPanel {
+    /// The wire string this variant round-trips from/to.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+/// `[ui] dir_indicator`: the `/` a directory row is prefixed with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DirIndicator {
+    /// The slash only when the icon column is closed. Default: an icon
+    /// already says what the row is, and then the slash is noise.
+    #[default]
+    Auto,
+    /// Always, the way it has always been painted.
+    Slash,
+    /// Never.
+    None,
+}
+
+impl DirIndicator {
+    /// The wire string this variant round-trips from/to.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Slash => "slash",
+            Self::None => "none",
+        }
+    }
+}
+
 /// The `[ui]` keys that shape the CHROME around the listings (the key bar,
 /// the panel bar's labels, the pane footer, the date format, notice expiry
 /// and dialog buttons). All presentation-only, so every layer including
@@ -1281,6 +1356,12 @@ pub struct UiChrome {
     pub dialog_buttons: Option<bool>,
     /// `[ui] history_size` (None = 30), within `5..=64`.
     pub history_size: Option<u32>,
+    /// `[ui] splash` (None = brief), validated.
+    pub splash: Option<SplashMode>,
+    /// `[ui] processes_panel` (None = auto), validated.
+    pub processes_panel: Option<ProcessesPanel>,
+    /// `[ui] dir_indicator` (None = auto), validated.
+    pub dir_indicator: Option<DirIndicator>,
 }
 
 impl UiChrome {
@@ -1296,6 +1377,24 @@ impl UiChrome {
     #[must_use]
     pub fn history_size(self) -> usize {
         self.history_size.unwrap_or(Self::DEFAULT_HISTORY_SIZE) as usize
+    }
+
+    /// Effective `splash` (absent = brief).
+    #[must_use]
+    pub fn splash(self) -> SplashMode {
+        self.splash.unwrap_or_default()
+    }
+
+    /// Effective `processes_panel` (absent = auto).
+    #[must_use]
+    pub fn processes_panel(self) -> ProcessesPanel {
+        self.processes_panel.unwrap_or_default()
+    }
+
+    /// Effective `dir_indicator` (absent = auto).
+    #[must_use]
+    pub fn dir_indicator(self) -> DirIndicator {
+        self.dir_indicator.unwrap_or_default()
     }
 
     /// The upper bound of `notice_seconds`: ten minutes is already "never
@@ -1883,6 +1982,41 @@ fn merge_ui_chrome(
             return Err(bad("[ui] history_size inválido: entre 5 y 64"));
         }
         acc.history_size = Some(n);
+    }
+    if let Some(raw) = &ui.splash {
+        acc.splash = Some(match raw.as_str() {
+            "brief" => SplashMode::Brief,
+            "off" => SplashMode::Off,
+            "home" => SplashMode::Home,
+            _ => {
+                return Err(bad(
+                    "[ui] splash inválido: solo se admite «brief», «off» o «home»",
+                ));
+            }
+        });
+    }
+    if let Some(raw) = &ui.processes_panel {
+        acc.processes_panel = Some(match raw.as_str() {
+            "auto" => ProcessesPanel::Auto,
+            "manual" => ProcessesPanel::Manual,
+            _ => {
+                return Err(bad(
+                    "[ui] processes_panel inválido: solo se admite «auto» o «manual»",
+                ));
+            }
+        });
+    }
+    if let Some(raw) = &ui.dir_indicator {
+        acc.dir_indicator = Some(match raw.as_str() {
+            "auto" => DirIndicator::Auto,
+            "slash" => DirIndicator::Slash,
+            "none" => DirIndicator::None,
+            _ => {
+                return Err(bad(
+                    "[ui] dir_indicator inválido: solo se admite «auto», «slash» o «none»",
+                ));
+            }
+        });
     }
     Ok(())
 }
@@ -3166,7 +3300,8 @@ format = "exact"
         std::fs::write(
             user.path().join("norte.toml"),
             "[ui]\nkey_bar = false\npanel_bar_style = \"letters\"\ndate_format = \"iso\"\n\
-             notice_seconds = 30\nhistory_size = 12\n",
+             notice_seconds = 30\nhistory_size = 12\nsplash = \"home\"\n\
+             processes_panel = \"manual\"\ndir_indicator = \"slash\"\n",
         )
         .unwrap();
         let project = tempfile::tempdir().unwrap();
@@ -3187,6 +3322,9 @@ format = "exact"
         assert_eq!(c.date_format(), DateFormat::Relative, "la última capa gana");
         assert_eq!(c.notice_seconds(), 30);
         assert_eq!(c.history_size(), 12);
+        assert_eq!(c.splash(), SplashMode::Home);
+        assert_eq!(c.processes_panel(), ProcessesPanel::Manual);
+        assert_eq!(c.dir_indicator(), DirIndicator::Slash);
         assert!(!c.pane_footer());
         assert!(!c.dialog_buttons());
 
@@ -3197,6 +3335,9 @@ format = "exact"
         assert_eq!(empty.date_format(), DateFormat::Smart);
         assert_eq!(empty.notice_seconds(), 8);
         assert_eq!(empty.history_size(), 30);
+        assert_eq!(empty.splash(), SplashMode::Brief);
+        assert_eq!(empty.processes_panel(), ProcessesPanel::Auto);
+        assert_eq!(empty.dir_indicator(), DirIndicator::Auto);
 
         for bad in [
             "panel_bar_style = \"icons\"",
@@ -3204,6 +3345,9 @@ format = "exact"
             "notice_seconds = 601",
             "history_size = 4",
             "history_size = 65",
+            "splash = \"always\"",
+            "processes_panel = \"si\"",
+            "dir_indicator = \"arrow\"",
         ] {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(dir.path().join("norte.toml"), format!("[ui]\n{bad}\n")).unwrap();

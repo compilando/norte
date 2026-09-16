@@ -298,6 +298,14 @@ pub async fn on_key(
         if let Some(params) = on_search_dialog_key(app, key.modifiers, key.code) {
             launch_search(app, backend, &mut work.fill, &mut work.search, params).await;
         }
+    } else if app.splash.is_some() && !modal_wins(app) {
+        // La pantalla de arranque (spec 2026-09-15): cualquier tecla la quita,
+        // y con `home` un número abre su fila. Va ANTES que el asistente en la
+        // cadena porque solo uno de los dos puede estar puesto —la puerta del
+        // splash cede ante él— y así la rama se lee sin pensar en el otro.
+        if let Some((cmd, arg)) = crate::splash::on_key(app, key.code) {
+            app.pending_splash_row = Some((cmd, arg));
+        }
     } else if app.wizard.is_some() && !modal_wins(app) {
         // El asistente de primer arranque (spec 2026-09-10): teclas FIJAS,
         // como la paleta —no hay preset todavía, es justo lo que pregunta—.

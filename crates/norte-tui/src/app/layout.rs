@@ -660,36 +660,69 @@ impl App {
     /// La franja `tasks` no se toca: sigue ahí, y sigue siendo lo que trae
     /// `orthodox`. Este panel es lo que se abre para ACTUAR sobre una tarea.
     pub fn toggle_processes(&mut self) {
-        use norte_frontend::layout::{Edge, KindId, Node, Size};
         match self.processes_slot() {
             Some(id) if self.key_owner == KeyOwner::Processes && self.se_ve(id) => {
-                if let Some(nuevo) = self.layout.close_slot(id) {
-                    self.layout = nuevo;
-                    self.panes.refresh_visible(&self.layout);
-                    self.history.retain_tree(&self.layout);
-                }
-                self.key_owner = KeyOwner::Panes;
+                self.close_processes();
             }
             Some(id) => {
                 self.revelar(id);
                 self.key_owner = KeyOwner::Processes;
             }
-            None => {
-                let id = self.mint_slot();
-                self.panes
-                    .insert_processes(id, crate::processes::Processes::default());
-                self.layout = self.layout.dock(
-                    self.focused_slot(),
-                    Edge::Bottom,
-                    // Ocho filas: seis de tareas —el tope del `TaskBoard`— más
-                    // el marco. `Auto` es de la franja, que vale cero en
-                    // reposo; un panel que se abre a mano no desaparece.
-                    Size::Fixed(8),
-                    &Node::slot(id, KindId::new(crate::processes::KIND)),
-                );
-                self.panes.refresh_visible(&self.layout);
+            None => self.open_processes(true),
+        }
+    }
+
+    /// Abre el panel de procesos si no estaba, y lo revela si estaba escondido.
+    ///
+    /// La MITAD de [`Self::toggle_processes`], separada porque el automático
+    /// (`[ui] processes_panel = "auto"`, spec 2026-09-15) necesita abrir sin
+    /// alternar: reutilizar el interruptor cerraría el panel justo cuando
+    /// empieza la segunda tarea.
+    ///
+    /// `con_teclado` es lo que distingue las dos puertas: quien lo abre con la
+    /// tecla va a actuar sobre una tarea, y quien lo abre porque acaba de
+    /// empezar una copia está mirando su listado — robarle el teclado ahí sería
+    /// quitarle las flechas a mitad de frase.
+    pub fn open_processes(&mut self, con_teclado: bool) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        if let Some(id) = self.processes_slot() {
+            self.revelar(id);
+            if con_teclado {
                 self.key_owner = KeyOwner::Processes;
             }
+            return;
+        }
+        let id = self.mint_slot();
+        self.panes
+            .insert_processes(id, crate::processes::Processes::default());
+        self.layout = self.layout.dock(
+            self.focused_slot(),
+            Edge::Bottom,
+            // Ocho filas: seis de tareas —el tope del `TaskBoard`— más el
+            // marco. `Auto` es de la franja, que vale cero en reposo; un panel
+            // que se abre a mano no desaparece.
+            Size::Fixed(8),
+            &Node::slot(id, KindId::new(crate::processes::KIND)),
+        );
+        self.panes.refresh_visible(&self.layout);
+        if con_teclado {
+            self.key_owner = KeyOwner::Processes;
+        }
+    }
+
+    /// Cierra el panel de procesos si está abierto, y devuelve el teclado a los
+    /// listados si lo tenía él.
+    pub fn close_processes(&mut self) {
+        let Some(id) = self.processes_slot() else {
+            return;
+        };
+        if let Some(nuevo) = self.layout.close_slot(id) {
+            self.layout = nuevo;
+            self.panes.refresh_visible(&self.layout);
+            self.history.retain_tree(&self.layout);
+        }
+        if self.key_owner == KeyOwner::Processes {
+            self.key_owner = KeyOwner::Panes;
         }
     }
 

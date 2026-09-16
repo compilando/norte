@@ -24,6 +24,40 @@
 //! solo es el respaldo para cuando esa identidad ya no está. Es la misma
 //! distinción que el listado hace entre una `RowKey` y un índice.
 
+/// El porcentaje que le toca a una FILA del listado, si alguna tarea está
+/// trabajando sobre ella (spec 2026-09-15, fase 2).
+///
+/// Lo que se pasa son los operandos de las tareas vivas con su porcentaje —
+/// el tablero lo guarda cada frontend en un tipo suyo, y esta función no
+/// necesita conocerlo—. La coincidencia es por ruta EXACTA, byte a byte: una
+/// copia que trabaja dentro de un directorio no pinta el directorio a medias,
+/// porque «la mitad de esta carpeta» no es lo que el número dice.
+///
+/// Con dos tareas sobre la misma fila manda la MENOS avanzada: lo que falta
+/// para que esa fila esté tranquila es lo que falte a la más atrasada.
+///
+/// ```
+/// use norte_frontend::processes::progress_for;
+/// use norte_proto::VPath;
+/// let vp = |s: &str| VPath::parse(s).unwrap();
+/// let tareas = [(vp("mem:///a"), Some(30_u8)), (vp("mem:///a"), Some(70)), (vp("mem:///b"), None)];
+/// let iter = || tareas.iter().map(|(p, pct)| (p, *pct));
+/// assert_eq!(progress_for(iter(), &vp("mem:///a")), Some(30), "manda la más atrasada");
+/// assert_eq!(progress_for(iter(), &vp("mem:///b")), None, "sin porcentaje, nada que pintar");
+/// assert_eq!(progress_for(iter(), &vp("mem:///c")), None);
+/// ```
+#[must_use]
+pub fn progress_for<'a>(
+    tareas: impl IntoIterator<Item = (&'a norte_proto::VPath, Option<u8>)>,
+    fila: &norte_proto::VPath,
+) -> Option<u8> {
+    tareas
+        .into_iter()
+        .filter(|(ruta, _)| *ruta == fila)
+        .filter_map(|(_, pct)| pct)
+        .min()
+}
+
 /// Qué tarea tiene el cursor del panel de procesos.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Processes {

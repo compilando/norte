@@ -159,7 +159,11 @@ fn la_barra_de_teclas_pinta_lo_atado_y_un_clic_es_la_tecla() {
             .collect()
     };
     let ultima = fila(&app, 15);
-    assert!(ultima.contains("2Copiar"), "la celda atada: {ultima:?}");
+    // Con un espacio entre el número y la etiqueta (spec 2026-09-15): en una
+    // celda que da para él, `2 Copiar` se lee de un vistazo y `2Copiar` hay que
+    // separarlo con la vista. Las ZONAS no cambian — salen de `keybar::layout`,
+    // que reparte la fila igual.
+    assert!(ultima.contains("2 Copiar"), "la celda atada: {ultima:?}");
     assert!(
         ultima.starts_with('1'),
         "la vacía solo lleva el número: {ultima:?}"

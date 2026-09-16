@@ -92,6 +92,8 @@ fn fila(key: u64, nombre: &str, hostile: bool) -> RowView {
         key: RowKey(key),
         display_name: nombre.to_owned(),
         hostile,
+        // Ninguna tarea trabaja sobre esta fila (puente 69).
+        progress: None,
         kind: RowKind::File,
         selected: false,
         marked: false,
@@ -213,6 +215,9 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::MenuClose => "menu_close",
         UiAction::MenuToggle => "menu_toggle",
         UiAction::WizardOpen => "wizard_open",
+        UiAction::SplashOpen => "splash_open",
+        UiAction::SplashClose => "splash_close",
+        UiAction::SplashActivateRow { .. } => "splash_activate_row",
         UiAction::WizardActivateRow { .. } => "wizard_activate_row",
         UiAction::PanelBarActivate { .. } => "panel_bar_activate",
         UiAction::KeyBarActivate { .. } => "key_bar_activate",
@@ -466,11 +471,30 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
                 generation: 3,
             },
         ),
+    ]
+    .into_iter()
+    .chain(acciones_de_cromo())
+    .collect()
+}
+
+/// Las del CROMO: menús, barras, el asistente y la pantalla de arranque.
+///
+/// Separadas de las de overlay solo por tamaño —una lista de cien líneas no
+/// se lee—, y por esa junta y no por otra: estas cuelgan de algo que está
+/// siempre a la vista, no de una pantalla que se abre.
+fn acciones_de_cromo() -> Vec<(&'static str, UiAction)> {
+    vec![
         ("menu_open", UiAction::MenuOpen { menu: 2 }),
         ("menu_point_row", UiAction::MenuPointRow { row: 3 }),
         ("menu_activate_row", UiAction::MenuActivateRow { row: 3 }),
         ("menu_close", UiAction::MenuClose),
         ("wizard_open", UiAction::WizardOpen),
+        ("splash_open", UiAction::SplashOpen),
+        ("splash_close", UiAction::SplashClose),
+        (
+            "splash_activate_row",
+            UiAction::SplashActivateRow { number: 3 },
+        ),
         (
             "wizard_activate_row",
             UiAction::WizardActivateRow { row: 1 },
@@ -730,6 +754,10 @@ fn task_de_referencia() -> TaskView {
         kind: "copy".to_owned(),
         state: TaskStateView::Running,
         percent: Some(40),
+        // Ritmo y ETA (puente 69): con una sola foto no se saben, y entonces
+        // la fila calla en vez de inventar un número.
+        rate: String::new(),
+        eta: String::new(),
         detail: Some("notas.txt".to_owned()),
         detail_hostile: false,
         foreign: false,
@@ -1256,6 +1284,8 @@ fn snapshot_de_referencia() -> ViewSnapshot {
     ViewSnapshot {
         compare: None,
         sync: None,
+        // Sin pantalla de arranque puesta (puente 69).
+        splash: None,
         slots: slots_de_referencia(),
         connection: ConnectionView::Connected,
         layout: disposicion_de_referencia(),
@@ -2441,10 +2471,10 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    // Puente 66: el tema colorea las entradas (`RowView.name_color`,
-    // `name_bold`, `name_dim`, `name_italic`, `name_underline`; spec
-    // 2026-09-11).
-    const FORMA: u64 = 149_794_389_627_969_176;
+    // Puente 69: la pantalla de inicio (`ViewSnapshot.splash`), el ritmo y lo
+    // que queda de cada task (`TaskView.rate`, `TaskView.eta`) y la barra de
+    // progreso por fila (`RowView.progress`; spec 2026-09-15, ADR 0115).
+    const FORMA: u64 = 3_071_755_271_252_752_300;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {
@@ -2587,6 +2617,31 @@ mod variantes {
                 })
                 .expect("json"),
             ),
+            // La pantalla de arranque LLENA (puente 69). En el corpus solo
+            // aparecía como `null` —ningún caso la abre—, y una forma que no
+            // se pinta en ninguna fixture no la vigila el guardián: se podían
+            // renombrar sus filas o quitarle el plazo sin que nada se pusiera
+            // rojo. Con este caso, sus campos son contrato como el resto.
+            (
+                "splash_lleno",
+                serde_json::to_value(norte_ui_host::dto::SplashView {
+                    art: vec!["   ·   ".to_owned()],
+                    version: "0.1.0".to_owned(),
+                    revision: "abcdef1".to_owned(),
+                    daemon: "hablando con el core embebido".to_owned(),
+                    hint: "una tecla la quita; 1-9 abre".to_owned(),
+                    sections: vec![norte_ui_host::dto::SplashSectionView {
+                        title: "A dónde sueles ir".to_owned(),
+                        rows: vec![norte_ui_host::dto::SplashRowView {
+                            number: 1,
+                            label: "casa".to_owned(),
+                            detail: "12".to_owned(),
+                        }],
+                    }],
+                    close_after_ms: Some(1_200),
+                })
+                .expect("json"),
+            ),
             (
                 "cell_text_none",
                 serde_json::to_value(CellView {
@@ -2595,6 +2650,19 @@ mod variantes {
                 })
                 .expect("json"),
             ),
+        ]
+        .into_iter()
+        .chain(formas_vacias_de_reparto())
+        .collect()
+    }
+
+    /// Las formas vacías del REPARTO y del listado: colocaciones, celdas sin
+    /// valor, el salto rápido y lo que un diálogo deja sin poner.
+    ///
+    /// Separadas de las anteriores solo por tamaño: una lista de cien líneas
+    /// no se lee, y el corte cae donde cambia el tema.
+    fn formas_vacias_de_reparto() -> Vec<(&'static str, serde_json::Value)> {
+        vec![
             (
                 "placement_role_none",
                 serde_json::to_value(SlotPlacement {

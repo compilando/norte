@@ -44,6 +44,11 @@ async fn main() -> Result<()> {
     // `--setup` (spec 2026-09-10): volver a abrir el asistente de primer
     // arranque. Se lee ANTES de que `args` se desmonte por campos.
     let cli_setup = args.has("--setup");
+    // `--no-splash` (spec 2026-09-15): sin pantalla de arranque en ESTE
+    // arranque, diga lo que diga `[ui] splash`. Lo mismo que hace
+    // `NORTE_NO_SPLASH` para los pilotos y los tests que abren un `ntc` de
+    // verdad.
+    let cli_no_splash = args.has("--no-splash");
     let (cli_preset, cli_layout, cli_profile, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
         args.text("--preset"),
         // `--layout` NO es texto por contrato: acaba siendo un nombre de
@@ -342,8 +347,16 @@ async fn main() -> Result<()> {
     app.palette_rows = norte_tui::palette::build_rows(&browse_eff, &viewer_eff);
     // El asistente de primer arranque (spec 2026-09-10): sin `norte.toml` de
     // usuario, o con `--setup`. Nunca bajo `--pick`.
-    if norte_tui::wizard::should_open(cli_setup, cli_pick).await {
+    let asistente = norte_tui::wizard::should_open(cli_setup, cli_pick).await;
+    if asistente {
         norte_tui::wizard::open(&mut app, &cfg);
+    }
+    // La pantalla de arranque (spec 2026-09-15, fase 2). DESPUÉS del asistente
+    // y sabiendo si se abrió: los dos taparían el primer frame, y el que
+    // pregunta algo manda.
+    let modo_splash = cfg.common.ui_chrome.splash();
+    if norte_tui::splash::should_open(modo_splash, cli_no_splash, cli_pick, asistente) {
+        norte_tui::splash::open(&mut app, modo_splash, &cfg);
     }
     let mut resolver = Resolver::new(browse_eff);
     let mut viewer_resolver = Resolver::new(viewer_eff);
@@ -619,7 +632,7 @@ fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -
 }
 
 /// Flags booleanos del TUI.
-const BOOL_FLAGS: &[&str] = &["--daemon", "--pick", "--setup"];
+const BOOL_FLAGS: &[&str] = &["--daemon", "--pick", "--setup", "--no-splash"];
 /// Flags con valor del TUI.
 const VALUE_FLAGS: &[&str] = &["--preset", "--layout", "--profile", "--socket", "--cd-file"];
 
@@ -648,6 +661,8 @@ Options:
       --setup            Run the first-start wizard again (keys, theme, icons).
                          It also runs on its own when you have no norte.toml;
                          NORTE_NO_WIZARD=1 keeps it closed
+      --no-splash        No start screen this run, whatever `[ui] splash` says
+                         (NORTE_NO_SPLASH=1 does the same)
   -h, --help             Print help
   -V, --version          Print version
 ";

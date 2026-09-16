@@ -58,6 +58,38 @@ opens it. `0` keeps a message until the next key, as before. Persistent
 warnings — a degraded connection, a journal that cannot open — never expire:
 they are state, not notices.
 
+The start screen
+----------------
+
+Before the first listing, norte shows which build is running and which core
+it talks to, and the first key — or a second or so on its own — takes it away
+(`splash = "brief"`, the default). `"home"` turns it into a start screen that
+stays until you touch it, listing the directories you go to most and your
+bookmarks, each opened by its number (1-9); clicking the row does the same.
+`"off"` shows nothing at all. The first-start wizard wins: with no
+`norte.toml` yet, it asks first and the screen stays away.
+
+The jobs panel
+--------------
+
+With `processes_panel = "auto"` (the default) the panel opens itself as soon
+as there is work running — a copy, a move, a delete — and closes itself a few
+seconds after the last row finishes, without taking the keyboard: you stay in
+your listing. Those seconds are how long a finished row stays on the board, and
+they are deliberate: a panel that vanished at the very moment of the outcome
+would take with it the one place that says something failed. It
+only closes what it opened; one you opened yourself stays. Searching,
+comparing and checksumming do not open it: each of those has a screen of its
+own, and covering it would say the same thing twice. `"manual"` leaves the
+panel as it was, opened and closed by you.
+
+Directories
+-----------
+
+A directory is told apart by its icon and its colour, and also carries a
+slash after the name when there are no icons to look at (`dir_indicator =
+"auto"`, the default). `"slash"` always adds it, `"none"` never does.
+
 Dialog buttons
 --------------
 

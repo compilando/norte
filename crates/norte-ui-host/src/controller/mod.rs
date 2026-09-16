@@ -1359,7 +1359,7 @@ async fn actor(
                 }
             }
             Mensaje::TaskCaducada(id, epoca) => {
-                for u in estado.caducar_task(id, epoca) {
+                for u in estado.caducar_task(id, epoca, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -2599,6 +2599,13 @@ fn clave_de_io(e: &std::io::Error) -> &'static str {
 
 struct TaskViva {
     vista: TaskView,
+    /// El ritmo de ESTA task, estimado de sus propios snapshots (spec
+    /// 2026-09-15, ADR 0115).
+    ///
+    /// No viene del wire: `TaskProgress` dice cuánto va hecho y no a qué
+    /// velocidad. Es por task y no por tablero porque dos copias a la vez van
+    /// a velocidades distintas, y una media de las dos no describe a ninguna.
+    rate: norte_frontend::tasks::Rate,
     /// Cómo pedirle que pare. Cancelar dos veces no es un error.
     cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
     /// Su informe ya se pidió. Lo llevan las clases que TIENEN informe —un
@@ -2699,6 +2706,24 @@ struct Estado {
     /// El asistente de primer arranque (spec 2026-09-10), mientras está
     /// abierto. Un overlay más: se queda las teclas.
     asistente: Option<norte_frontend::wizard::Wizard>,
+    /// La pantalla de arranque (spec 2026-09-15, ADR 0115), mientras está
+    /// puesta. Una CAPA y no un overlay con teclas propias: cualquier tecla o
+    /// clic la quita, y el asistente le gana.
+    splash: Option<norte_frontend::splash::SplashView>,
+    /// Cuándo deja de tapar el `brief`, en milisegundos de época. `None` = no
+    /// caduca solo (`home`), o no hay pantalla puesta.
+    splash_hasta_ms: Option<i64>,
+    /// La pantalla de arranque ya se enseñó en ESTA sesión del host.
+    ///
+    /// El host sobrevive al webview —una recarga, un renderer que se
+    /// reinicia—, y el renderer manda `splash_open` cada vez que arranca. Sin
+    /// esta marca, recargar a media sesión tapaba lo que estabas mirando con
+    /// una pantalla de bienvenida que en modo `home` se queda hasta que la
+    /// toques.
+    splash_visto: bool,
+    /// El panel de procesos lo abrió el AUTOMÁTICO (`[ui] processes_panel`),
+    /// así que el automático puede cerrarlo. Uno que abrió el lector se queda.
+    procesos_auto: bool,
     /// Las últimas claves lanzadas desde la paleta, la más reciente primero
     /// (spec 2026-09-10). Viven en la sesión de UI, como en el terminal.
     paleta_recientes: Vec<String>,
@@ -3299,6 +3324,10 @@ impl Estado {
             locale,
             paleta: None,
             asistente: None,
+            splash: None,
+            splash_hasta_ms: None,
+            splash_visto: false,
+            procesos_auto: false,
             paleta_recientes: Vec::new(),
             popular: norte_frontend::history::Popular::default(),
             volumenes_pie: Vec::new(),
@@ -3892,6 +3921,11 @@ impl Estado {
             UiAction::MenuClose => self.cerrar_menu(),
             UiAction::MenuToggle => self.alternar_menu(),
             UiAction::WizardOpen => self.abrir_asistente(),
+            UiAction::SplashOpen => self.abrir_splash(),
+            UiAction::SplashClose => (self.aplicada(), self.cerrar_splash()),
+            UiAction::SplashActivateRow { number } => {
+                self.activar_fila_de_splash(*number, backend, buzon)
+            }
             UiAction::WizardActivateRow { row } => {
                 self.activar_fila_de_asistente(*row, backend, buzon)
             }

@@ -160,6 +160,136 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
   };
 }
 
+describe("la pantalla de arranque", () => {
+  /** Una pantalla con una sección de una fila numerada. */
+  function conSplash(closeAfterMs: number | null): ViewSnapshot {
+    const v = vista({});
+    v.splash = {
+      art: ["   ·   "],
+      version: "0.1.0",
+      revision: "abcdef1",
+      daemon: "hablando con el core embebido",
+      hint: "una tecla la quita; 1-9 abre",
+      sections: [
+        {
+          title: "A dónde sueles ir",
+          rows: [{ number: 1, label: "casa", detail: "12" }],
+        },
+      ],
+      close_after_ms: closeAfterMs,
+    };
+    return v;
+  }
+
+  it("pinta el arte, las secciones y sus filas numeradas", () => {
+    const { screen } = montar();
+    screen.paint(conSplash(null));
+    const caja = document.querySelector(".splash");
+    expect(caja).not.toBeNull();
+    // El arte NO se lee en voz alta: una brújula de barras y guiones se
+    // deletrea como ruido.
+    expect(document.querySelector(".splash-art")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(document.querySelector(".splash-section")?.textContent).toBe(
+      "A dónde sueles ir",
+    );
+    expect(document.querySelector(".splash-number")?.textContent).toBe("1");
+    expect(document.querySelector(".splash-label")?.textContent).toBe("casa");
+  });
+
+  it("un clic en cualquier sitio la quita", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conSplash(null));
+    const raiz =
+      document.getElementById("splash") ??
+      document.querySelector(".splash")?.parentElement;
+    (raiz as HTMLElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(enviadas.at(-1)).toEqual({ action: "splash_close" });
+  });
+
+  it("un clic en una fila numerada la abre, y no cuenta además como cierre", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conSplash(null));
+    const fila = document.querySelector(".splash-row") as HTMLElement;
+    fila.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(enviadas.at(-1)).toEqual({ action: "splash_activate_row", number: 1 });
+    // Una sola acción: el clic de la fila no burbujea hasta el velo, o el
+    // host recibiría «ábrela» y «quítala» y la navegación se perdería.
+    expect(enviadas).toHaveLength(1);
+  });
+
+  it("el plazo del modo breve la quita sola, sin que nadie toque nada", () => {
+    vi.useFakeTimers();
+    try {
+      const { screen, enviadas } = montar();
+      screen.paint(conSplash(1200));
+      expect(enviadas).toHaveLength(0);
+      vi.advanceTimersByTime(1199);
+      expect(enviadas).toHaveLength(0);
+      vi.advanceTimersByTime(1);
+      expect(enviadas.at(-1)).toEqual({ action: "splash_close" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("el plazo NO se rearma en cada repintado", () => {
+    vi.useFakeTimers();
+    try {
+      const { screen, enviadas } = montar();
+      const v = conSplash(1200);
+      screen.paint(v);
+      vi.advanceTimersByTime(600);
+      // Otro parche cualquiera: el host manda la vista ENTERA cada vez, y
+      // durante el arranque no paran de llegar. Si cada pintada rearmara el
+      // plazo, «1,2 segundos» sería «1,2 segundos tras el último parche», y
+      // con una tarea en marcha la pantalla no se iría nunca.
+      screen.paint(JSON.parse(JSON.stringify(v)) as ViewSnapshot);
+      vi.advanceTimersByTime(600);
+      expect(enviadas.at(-1)).toEqual({ action: "splash_close" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("al quitarse, el plazo pendiente se desarma", () => {
+    vi.useFakeTimers();
+    try {
+      const { screen, enviadas } = montar();
+      screen.paint(conSplash(1200));
+      // El host ya la quitó (una tecla): el temporizador que quedaba vivo
+      // mandaría un cierre de una pantalla que ya no está.
+      screen.paint(vista({}));
+      vi.advanceTimersByTime(5000);
+      expect(enviadas).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("el panel sin el teclado se atenúa", () => {
+  // El atenuado es CSS y cuelga de `.scroller`: solo un listado conserva esa
+  // clase, y los paneles laterales la sustituyen por la suya. Por rol no se
+  // pueden distinguir —un listado sin destino que marcar se queda sin rol,
+  // igual que un lateral—, así que este invariante es lo único que impide
+  // que el registro o el propio panel de procesos se pinten apagados
+  // mientras tienen el teclado.
+  it("un panel lateral no conserva la clase del listado", () => {
+    const { screen, root } = montar();
+    const v = vista({});
+    v.slots = [...v.slots, { kind: "processes", slot_id: 7, cursor: null } as never];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 40, height: 10, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    expect(root.querySelectorAll(".scroller")).toHaveLength(1);
+    expect(root.querySelectorAll(".processes").length).toBeGreaterThan(0);
+  });
+});
+
 describe("repintar sin cambios (el parpadeo al desplazarse)", () => {
   // Cada respuesta a un scroll trae la vista ENTERA. Rehacer los nodos que no
   // cambiaron se veía como un parpadeo sutil en WebKitGTK: lo que se pinta
@@ -238,6 +368,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
   const aiRename = document.createElement("div");
+  const splash = document.createElement("div");
   document.body.append(
     root,
     panelBar,
@@ -256,6 +387,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     viewer,
     dialogs,
     aiRename,
+    splash,
   );
   document.documentElement.style.setProperty("--cell-h", `${CELL_H}px`);
   document.documentElement.style.setProperty("--cell-w", "8px");
@@ -283,6 +415,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     viewer,
     dialogs,
     aiRename,
+    splash,
     catalogo(),
     (a: UiAction) => enviadas.push(a),
     opciones.imageBytes ?? (() => Promise.resolve(new ArrayBuffer(0))),
@@ -3206,6 +3339,8 @@ describe("los huecos que no son listados", () => {
         kind: "copy",
         state: "running",
         percent: 40,
+        rate: "",
+        eta: "",
         detail: "a.txt",
         detail_hostile: false,
         foreign: false,
@@ -3215,6 +3350,8 @@ describe("los huecos que no son listados", () => {
         kind: "delete",
         state: "running",
         percent: 10,
+        rate: "",
+        eta: "",
         detail: "b.txt",
         detail_hostile: false,
         foreign: false,
@@ -3738,6 +3875,8 @@ describe("el tablero de tareas", () => {
         kind: "copy",
         state: "running",
         percent: 40,
+        rate: "",
+        eta: "",
         detail: "⟨mem⟩/casa/caf�.txt",
         detail_hostile: true,
         foreign: false,

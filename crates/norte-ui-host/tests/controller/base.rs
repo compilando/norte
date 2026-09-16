@@ -1738,6 +1738,108 @@ async fn una_task_terminada_se_va_del_tablero_sola() {
     assert!(vacio, "la terminada caducó y se fue del tablero");
 }
 
+/// ¿Hay un panel de procesos colocado en esta foto?
+fn hay_procesos(snap: &norte_ui_host::ViewSnapshot) -> bool {
+    snap.slots
+        .iter()
+        .any(|s| matches!(s, SlotView::Processes { .. }))
+}
+
+/// El panel de procesos se abre solo al ENCOLAR y se va cuando la fila caduca.
+///
+/// Las dos mitades del gesto, y la segunda es la que faltaba: el host solo
+/// reevaluaba desde `progreso`, y cuando la última fila caduca ya no llega
+/// ningún progreso más — así que el panel que se abrió solo se quedaba puesto
+/// el resto de la sesión. El terminal no tenía el fallo porque su bucle
+/// reevalúa en cada vuelta; era la clase de divergencia que el ADR 0077
+/// persigue, y ningún test la veía porque todos miraban el PRIMER evento.
+///
+/// Reloj virtual, como el del TTL de aquí arriba y por lo mismo.
+#[tokio::test(start_paused = true)]
+async fn el_panel_de_procesos_se_abre_solo_y_se_cierra_al_caducar_la_fila() {
+    let backend = arbol();
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    assert!(
+        !hay_procesos(&snap),
+        "sin nada encolado, el panel no ocupa sitio"
+    );
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    assert_eq!(siguientes_tasks(&mut sub).await.len(), 1);
+
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    // Un tic de progreso: es donde el host reevalúa el panel. Abrirlo ya en el
+    // REGISTRO se probó y se revirtió —abrir un panel republica la foto
+    // entera, y hacerlo al encolar la mete en medio de cada operación que el
+    // lector acaba de pedir—; está escrito en el ADR 0115.
+    tx.send_modify(|p| p.bytes_done = 1);
+    // HASTA que aparezca, no en la primera foto: el progreso viaja por el
+    // buzón del actor y el `Resync` entra en ese mismo buzón, así que
+    // afirmar sobre «la siguiente» sería afirmar sobre la que llegue antes.
+    let mut abierto = false;
+    for _ in 0..6 {
+        if hay_procesos(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await) {
+            abierto = true;
+            break;
+        }
+    }
+    assert!(abierto, "se abrió solo en cuanto hubo trabajo en marcha");
+
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    // Otra vez HASTA, no «la siguiente»: el bucle de arriba dejó un `Resync`
+    // en camino, y su foto llega entre el desenlace y quien lo espera.
+    let mut terminada = false;
+    for _ in 0..6 {
+        if siguientes_tasks(&mut sub)
+            .await
+            .first()
+            .is_some_and(|t| t.state == norte_ui_host::dto::TaskStateView::Done)
+        {
+            terminada = true;
+            break;
+        }
+    }
+    assert!(
+        terminada,
+        "primero se VE terminada, con el panel todavía puesto"
+    );
+
+    // El mismo salto a mano que el test del TTL, y por el mismo motivo.
+    tokio::time::advance(std::time::Duration::from_secs(11)).await;
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    // Hasta que se vaya: entre el desenlace y la caducidad pasan otras cosas
+    // (el relistado del directorio que el borrado dejó viejo), y afirmar
+    // sobre «la siguiente foto» sería afirmar sobre la que pase primero.
+    let mut cerrado = false;
+    for _ in 0..6 {
+        if !hay_procesos(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await) {
+            cerrado = true;
+            break;
+        }
+    }
+    assert!(
+        cerrado,
+        "y se cerró solo cuando la última fila caducó: un panel que se abre \
+         solo y no se cierra nunca ocupa un tercio de la pantalla para decir \
+         que no pasa nada"
+    );
+}
+
 /// Cancelar es idempotente: pedirlo dos veces no es un error.
 #[tokio::test]
 async fn cancelar_es_idempotente() {

@@ -297,6 +297,10 @@ pub(crate) fn draw_pane(
     // El pie del panel (spec 2026-09-10), ya redactado por el llamante, que
     // es quien tiene los volúmenes y el ajuste. `None` = apagado.
     footer: Option<&str>,
+    // `[ui] dir_indicator` (spec 2026-09-15): qué hacer con la `/` de las
+    // carpetas. Llega la CLAVE y no el booleano porque `auto` depende de algo
+    // que solo se sabe aquí: si este listado abrió la columna de iconos.
+    dir_indicator: norte_config::load::DirIndicator,
 ) {
     let border_style = if focused {
         theme.role(Role::BorderFocus)
@@ -333,7 +337,11 @@ pub(crate) fn draw_pane(
         // esquinas.
         let room = usize::from(area.width.saturating_sub(4));
         let text = format!(" {} ", middle_ellipsis(footer, room));
-        block = block.title_bottom(Line::styled(text, theme.role(Role::BorderUnfocused)));
+        // Con el rol del borde de SU panel, no siempre el del panel sin foco
+        // (spec 2026-09-15): el pie va escrito ENCIMA del borde, y pintarlo
+        // siempre atenuado lo dejaba ilegible justo en el panel que el lector
+        // está mirando.
+        block = block.title_bottom(Line::styled(text, border_style));
     }
     // Filtro activo: SOLO los índices visibles, con el cursor visual en la
     // posición DENTRO del filtrado. En Jump (quick_visible = None) el
@@ -352,6 +360,7 @@ pub(crate) fn draw_pane(
     // La columna de iconos la decide el LISTADO, una vez: si alguna fila
     // tiene icono, todas llevan el hueco.
     let icons = pane.any_icon();
+    let dir_slash = pinta_barra(dir_indicator, icons);
     let items: Vec<ListItem<'_>> = match pane.quick_visible() {
         Some(vis) => vis
             .iter()
@@ -368,6 +377,7 @@ pub(crate) fn draw_pane(
                     now_ms,
                     pane.is_parent_row(i),
                     icons,
+                    dir_slash,
                 )
             })
             .collect(),
@@ -387,6 +397,7 @@ pub(crate) fn draw_pane(
                     now_ms,
                     pane.is_parent_row(i),
                     icons,
+                    dir_slash,
                 )
             })
             .collect(),
@@ -432,7 +443,25 @@ pub(crate) fn draw_pane(
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 
+/// ¿Se pinta la `/` delante de un directorio? (`[ui] dir_indicator`, spec
+/// 2026-09-15.)
+///
+/// `auto` la quita cuando la columna de iconos está abierta: el icono ya dice
+/// qué es la fila, y la barra solo gasta una celda del nombre.
+fn pinta_barra(indicator: norte_config::load::DirIndicator, icons: bool) -> bool {
+    match indicator {
+        norte_config::load::DirIndicator::Slash => true,
+        norte_config::load::DirIndicator::None => false,
+        norte_config::load::DirIndicator::Auto => !icons,
+    }
+}
+
+// Cuatro booleanos: son cuatro HECHOS del listado que la fila no puede
+// deducir (marcada, fila de subir, columna de iconos abierta, barra de
+// directorio), y agruparlos en un struct movería la lista a otro sitio sin
+// quitar ninguno. Mismo criterio que el `too_many_arguments` de `draw_pane`.
 #[expect(
+    clippy::fn_params_excessive_bools,
     clippy::too_many_arguments,
     reason = "fila de render: cada arg es una fuente de pintado, no API"
 )]
@@ -461,6 +490,10 @@ pub(crate) fn entry_item<'a>(
     // fila tiene icono, así que todas llevan el hueco, con o sin él, para
     // que los nombres sigan alineados. La decide el pane, no la fila.
     icons: bool,
+    // Pinta la `/` delante de un directorio (`[ui] dir_indicator`, spec
+    // 2026-09-15). Llega DECIDIDA: quien pinta el listado sabe si la columna
+    // de iconos está abierta, y `auto` significa «solo si no lo está».
+    dir_slash: bool,
 ) -> ListItem<'a> {
     let name = entry.path.file_name().map_or(&[][..], |n| n.as_bytes());
     // #57: con reinterpretación activa, los nombres no-UTF8 se decodifican
@@ -473,10 +506,17 @@ pub(crate) fn entry_item<'a>(
     } else {
         norte_frontend::display_name_with(name, reinterpret)
     };
+    // `[ui] dir_indicator` (spec 2026-09-15): la `/` de una carpeta es de
+    // cuando no había iconos. Con la columna de iconos abierta, el icono ya
+    // dice qué es la fila y la barra solo gasta una celda del nombre; `auto` la
+    // quita ahí y la conserva donde sigue haciendo falta. El `@` del enlace no
+    // se toca: no hay icono que lo diga.
     let kind_glyph = match entry.kind {
-        EntryKind::Dir => "/",
+        EntryKind::Dir if dir_slash => "/",
         EntryKind::Symlink => "@",
-        EntryKind::File | EntryKind::Other => " ",
+        // Un directorio SIN barra se pinta como un fichero: el hueco se queda,
+        // para que los nombres sigan alineados.
+        EntryKind::Dir | EntryKind::File | EntryKind::Other => " ",
     };
     let badge = Span::styled(
         if hostile { HOSTILE_BADGE } else { " " },
@@ -672,6 +712,8 @@ mod entry_item_columns_tests {
             None,
             0,
             false,
+            // (columna de iconos, barra de directorio)
+            false,
             false,
         );
         // Renderiza a un buffer del ancho EXACTO del presupuesto: si la
@@ -724,7 +766,10 @@ mod entry_item_columns_tests {
             None,
             0,
             false,
+            // (columna de iconos, barra de directorio: con icono, `auto` la
+            // quita — es justo lo que este test pinta)
             true,
+            false,
         );
         let area = Rect::new(0, 0, 24, 1);
         let mut buf = Buffer::empty(area);
@@ -803,6 +848,7 @@ mod draw_pane_attr_tests {
                     false,
                     None,
                     None,
+                    norte_config::load::DirIndicator::default(),
                 );
             })
             .expect("draw");
@@ -883,6 +929,7 @@ mod draw_pane_attr_tests {
                     false,
                     None,
                     None,
+                    norte_config::load::DirIndicator::default(),
                 );
             })
             .expect("draw");
@@ -943,6 +990,7 @@ mod draw_pane_attr_tests {
                         false,
                         busy,
                         None,
+                        norte_config::load::DirIndicator::default(),
                     );
                 })
                 .expect("draw");
@@ -1030,6 +1078,7 @@ mod draw_pane_attr_tests {
                     false,
                     Some(&busy),
                     None,
+                    norte_config::load::DirIndicator::default(),
                 );
             })
             .expect("draw");
@@ -1078,6 +1127,7 @@ mod draw_pane_attr_tests {
                     false,
                     Some(&busy),
                     None,
+                    norte_config::load::DirIndicator::default(),
                 );
             })
             .expect("draw");
@@ -1155,7 +1205,19 @@ mod entry_item_tests {
     fn a_marked_row_starts_with_the_mark_gutter() {
         let entry = e("mem:///a", EntryKind::File);
         let theme = TuiTheme::default();
-        let marked = entry_item(&entry, &theme, None, None, true, &[], None, 0, false, false);
+        let marked = entry_item(
+            &entry,
+            &theme,
+            None,
+            None,
+            true,
+            &[],
+            None,
+            0,
+            false,
+            false,
+            true,
+        );
         let plain = entry_item(
             &entry,
             &theme,
@@ -1167,6 +1229,7 @@ mod entry_item_tests {
             0,
             false,
             false,
+            true,
         );
         assert_eq!(first_span_text(&marked), "*");
         assert_eq!(first_span_text(&plain), " ");
@@ -1178,7 +1241,19 @@ mod entry_item_tests {
     fn the_gutter_precedes_the_hostile_badge() {
         let entry = e_hostile();
         let theme = TuiTheme::default();
-        let item = entry_item(&entry, &theme, None, None, true, &[], None, 0, false, false);
+        let item = entry_item(
+            &entry,
+            &theme,
+            None,
+            None,
+            true,
+            &[],
+            None,
+            0,
+            false,
+            false,
+            true,
+        );
         let texts = span_texts(&item);
         assert_eq!(texts[0], "*");
         assert_eq!(texts[1], HOSTILE_BADGE);

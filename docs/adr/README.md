@@ -119,3 +119,4 @@ edits.
 | [0111](0111-the-window-package-is-built-on-ubuntu-22-04.md) | The window package is built on Ubuntu 22.04, and that sets its floor | superseded in part by 0112 |
 | [0112](0112-release-artefacts-are-built-in-one-pinned-image-and-smoked-per-distribution.md) | Release artefacts are built in one pinned image and smoked per distribution | accepted |
 | [0114](0114-a-panel-history-is-walked-listed-marked-and-counted.md) | A panel's history is walked, listed, marked and counted | accepted |
+| [0115](0115-the-start-screen-is-the-hosts-and-a-panel-that-opens-itself-closes-itself.md) | The start screen is the host's, and a panel that opens itself closes itself | accepted |

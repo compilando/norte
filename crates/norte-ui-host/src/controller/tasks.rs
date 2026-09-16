@@ -42,7 +42,13 @@ impl Estado {
     /// - que no deba un refresco (`afectados`), que es el invariante que el
     ///   desalojo por tope ya afirma: tirar la fila se llevaría por delante la
     ///   relectura del directorio que esa mutación cambió.
-    pub(super) fn caducar_task(&mut self, id: u64, epoca: u64) -> Vec<BridgeEnvelope<UiUpdate>> {
+    pub(super) fn caducar_task(
+        &mut self,
+        id: u64,
+        epoca: u64,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let quitar = self.tasks.get(&id).is_some_and(|t| {
             t.epoca == epoca && Self::terminal(t.vista.state) && t.afectados.is_empty()
         });
@@ -50,10 +56,18 @@ impl Estado {
             return Vec::new();
         }
         self.tasks.remove(&id);
-        vec![self.parche(vec![ViewChange::Tasks {
+        let mut envios = vec![self.parche(vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
             cursor: self.cursor_del_tablero(),
-        }])]
+        }])];
+        // Y AQUÍ se cierra el panel que se abrió solo (ADR 0115). Preguntarlo
+        // solo desde `progreso` dejaba la mitad del gesto sin hacer: cuando la
+        // última fila caduca no llega ningún progreso más, así que nadie
+        // volvía a mirar y el panel se quedaba puesto el resto de la sesión.
+        // El terminal no tenía el fallo porque su bucle reevalúa la misma
+        // condición en cada vuelta — la divergencia que el ADR 0077 persigue.
+        envios.extend(self.procesos_automaticos(backend, buzon));
+        envios
     }
 
     pub(super) fn desalojar_del_tablero(&mut self) {
@@ -297,6 +311,9 @@ impl Estado {
             id,
             TaskViva {
                 vista,
+                // El ritmo empieza de cero: hace falta una segunda foto para
+                // que haya velocidad, y hasta entonces la fila calla.
+                rate: norte_frontend::tasks::Rate::default(),
                 cancel: task.cancel,
                 afectados,
                 reintento,
@@ -399,7 +416,18 @@ impl Estado {
         let ajena = viva.vista.foreign;
         let era_terminal = Self::terminal(viva.vista.state);
         let epoca = viva.epoca;
+        // El ritmo ANTES de proyectar: se mide entre esta foto y la anterior
+        // (spec 2026-09-15, ADR 0115). El wire no lo trae, así que lo estima
+        // quien mira — y lo escribe el host, para que la ventana y el terminal
+        // digan la misma velocidad con las mismas unidades.
+        viva.rate.observe(p, super::ahora_ms());
+        let (ritmo, queda) = (
+            norte_frontend::tasks::human_rate(viva.rate.bps()),
+            norte_frontend::tasks::human_eta(viva.rate.eta_secs(p)),
+        );
         viva.vista = Self::vista_de(p);
+        viva.vista.rate = ritmo;
+        viva.vista.eta = queda;
         // De quién es la task no lo dice el progreso: lo dice de dónde vino.
         viva.vista.foreign = ajena;
         // Leído de la vista que se acaba de proyectar: volver a construirla
@@ -414,6 +442,12 @@ impl Estado {
         if acabo && !era_terminal {
             Self::programar_caducidad(p.task_id.get(), epoca, buzon);
         }
+        // El panel que se abre y se cierra solo (`[ui] processes_panel =
+        // "auto"`, ADR 0115): un panel que ocupa sitio para decir «nada en
+        // marcha» no se lo gana, y buscar el botón justo cuando empieza una
+        // copia tampoco. Solo cierra lo que abrió él, y va por las DOS MITADES
+        // del gesto, nunca por el interruptor.
+        let del_panel = self.procesos_automaticos(backend, buzon);
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
             cursor: self.cursor_del_tablero(),
@@ -477,7 +511,12 @@ impl Estado {
             self.abrir_lo_creado(p, backend, buzon);
             self.avisar_del_desenlace(p);
         }
-        vec![self.parche(cambios)]
+        // El panel automático viaja DETRÁS del parche y aparte: abrir o cerrar
+        // un hueco rehace el reparto entero, así que son envolturas ya hechas
+        // —con su propia foto— y no un cambio más de esta lista.
+        let mut fuera = vec![self.parche(cambios)];
+        fuera.extend(del_panel);
+        fuera
     }
 
     /// El TOTAL de un recuento, que es lo único que ese recuento produce
@@ -1546,9 +1585,55 @@ impl Estado {
         self.tasks.iter().skip(sobran)
     }
 
+    /// Abre o cierra el panel de procesos por su cuenta, y dice qué cambió.
+    ///
+    /// Las dos MITADES del gesto, nunca el interruptor: reutilizar
+    /// `alternar_hueco` cerraría el panel al empezar la segunda tarea y
+    /// reabriría el que el lector acaba de cerrar (ADR 0115).
+    pub(super) fn procesos_automaticos(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if self.config.common.ui_chrome.processes_panel()
+            != norte_config::load::ProcessesPanel::Auto
+        {
+            return Vec::new();
+        }
+        let hay = self.hay_trabajo();
+        let abierto = self.hueco_de_kind("processes").is_some();
+        if hay && !abierto {
+            self.procesos_auto = true;
+            return self.abrir_hueco_de_kind("processes", backend, buzon).1;
+        }
+        if !hay && abierto && self.procesos_auto {
+            self.procesos_auto = false;
+            return self.cerrar_hueco_de_kind("processes", backend, buzon).1;
+        }
+        Vec::new()
+    }
+
     /// Cuántas filas tiene el tablero PINTADO.
     pub(super) fn filas_de_tablero(&self) -> usize {
         self.tasks.len().min(MAX_TASKS)
+    }
+
+    /// `true` si hay TRABAJO en marcha, que es lo único que abre el panel solo.
+    ///
+    /// No es `filas_de_tablero() > 0`: el tablero lista también las clases
+    /// observacionales —una búsqueda, una suma, un tamaño de directorio—, y
+    /// abrir medio tercio de pantalla por una búsqueda tapa la lista de
+    /// hallazgos para decir lo que esa lista ya dice. La TUI no las metió
+    /// nunca en su tablero, así que sin esta cuenta aparte los dos frontends
+    /// abrían el panel en escenarios distintos; la regla vive una sola vez, en
+    /// [`norte_frontend::tasks::counts_as_work`] (ADR 0077, ADR 0115).
+    ///
+    /// Pregunta al progreso EN VIVO porque es donde está la clase tipada; la
+    /// vista proyectada solo lleva su nombre.
+    fn hay_trabajo(&self) -> bool {
+        self.tasks
+            .values()
+            .any(|t| norte_frontend::tasks::counts_as_work(t.progreso.borrow().kind))
     }
 
     /// Los ids de las tasks PINTADAS, en el orden en que se pintan.

@@ -45,6 +45,12 @@ pub struct TaskRow {
     /// trajo esto. Guardando el último visto, la fila sigue nombrando su
     /// operando después de acabar.
     pub operand: Option<VPath>,
+    /// El ritmo de esta task, estimado de sus propios snapshots (spec
+    /// 2026-09-15, fase 2).
+    ///
+    /// Por FILA y no por tablero: dos copias a la vez van a velocidades
+    /// distintas, y una media de las dos no describe a ninguna.
+    pub rate: norte_frontend::tasks::Rate,
     /// Cuándo se vio terminal por primera vez, en el reloj INYECTADO del
     /// pintado ([`crate::app::App::now_ms`]). `None` mientras siga viva.
     terminal_at_ms: Option<i64>,
@@ -149,6 +155,7 @@ impl TaskBoard {
             retry,
             trash_target,
             operand,
+            rate: norte_frontend::tasks::Rate::default(),
             terminal_at_ms: None,
             reported: false,
         });
@@ -169,10 +176,14 @@ impl TaskBoard {
     /// Copia los últimos snapshots y devuelve las tasks que ACABAN de
     /// terminar (el estado terminal siempre se publica — contrato del
     /// `ProgressReporter`).
-    pub fn tick(&mut self) -> Vec<Finished> {
+    pub fn tick(&mut self, now_ms: i64) -> Vec<Finished> {
         let mut out = Vec::new();
         for row in &mut self.rows {
             row.last = row.rx.borrow().clone();
+            // El ritmo se mide con el reloj del PINTADO, el mismo que caduca
+            // las filas: un snapshot no trae hora, y medir con otro reloj sería
+            // un número que los tests no pueden fijar.
+            row.rate.observe(&row.last, now_ms);
             // El operando NO se borra cuando el snapshot deja de traerlo: ver
             // la nota de `TaskRow::operand`.
             if row.last.current.is_some() {
@@ -359,7 +370,7 @@ mod has_active_tests {
         board.prune_terminal(0);
         assert_eq!(board.rows().len(), 2);
 
-        assert_eq!(board.tick().len(), 1, "la terminal emite su Finished");
+        assert_eq!(board.tick(0).len(), 1, "la terminal emite su Finished");
         board.prune_terminal(0);
         assert_eq!(board.rows().len(), 2, "recién terminada, todavía se ve");
 
@@ -378,7 +389,7 @@ mod has_active_tests {
     fn el_sello_no_se_refresca_en_cada_pase() {
         let mut board = TaskBoard::default();
         board.push(&task_ref(1, TaskState::Completed), None);
-        board.tick();
+        board.tick(0);
         for t in 0..10 {
             board.prune_terminal(t * 1_000);
         }
@@ -410,14 +421,14 @@ mod has_active_tests {
         ));
         let mut board = TaskBoard::default();
         board.push(&TaskRef::synthetic_for_tests(TaskId::new(7), rx), None);
-        board.tick();
+        board.tick(0);
         assert_eq!(
             board.rows()[0].operand.as_ref().map(VPath::to_wire),
             Some("mem:///a".to_owned())
         );
 
         tx.send(progress(TaskState::Completed, None)).unwrap();
-        board.tick();
+        board.tick(0);
         assert_eq!(
             board.rows()[0].operand.as_ref().map(VPath::to_wire),
             Some("mem:///a".to_owned()),

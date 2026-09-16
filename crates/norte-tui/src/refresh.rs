@@ -56,7 +56,7 @@ pub async fn on_tick(
     backend: &Backend,
     events: &mut crate::console::Console<'_>,
 ) -> [bool; 2] {
-    let finished = app.board.tick();
+    let finished = app.board.tick(app.now_ms());
     // Cada tick, no solo cuando algo acaba: la fila que caduca terminó en un
     // tick ANTERIOR, así que colgar la limpieza de `finished` la dejaría en
     // pantalla hasta que otra task cualquiera volviera a pasar por aquí.

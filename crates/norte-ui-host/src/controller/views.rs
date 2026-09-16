@@ -46,6 +46,11 @@ impl Estado {
                 _ => TaskStateView::Queued,
             },
             percent: porcentaje,
+            // Vacíos aquí a propósito: el ritmo es de la TASK VIVA, que guarda
+            // las fotos anteriores, y esta función solo ve una. Los rellena
+            // `progreso`, que es quien tiene las dos.
+            rate: String::new(),
+            eta: String::new(),
             detail: p.current.as_ref().map(|path| {
                 let (texto, _hostil) = norte_frontend::path_display(path);
                 clamp_display(texto)
@@ -129,6 +134,7 @@ impl Estado {
             profiles: self.vista_perfiles(),
             palette: self.vista_paleta(),
             wizard: self.vista_asistente(),
+            splash: self.vista_splash(),
             whichkey: self.vista_whichkey(),
             help: self.vista_ayuda(),
             settings: self.vista_ajustes(),

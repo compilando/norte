@@ -63,6 +63,14 @@ pub struct ViewSnapshot {
     /// Puente 63.
     #[serde(default)]
     pub wizard: Option<WizardView>,
+    /// La pantalla de arranque (spec 2026-09-15, ADR 0115), si está puesta.
+    /// Puente 69 (con `RowView::progress` y el ritmo de `TaskView`).
+    ///
+    /// Del HOST y no del webview: lo que la hace valer la pena —dónde estabas,
+    /// a dónde sueles ir— solo lo sabe este lado, y una segunda pantalla de
+    /// arranque en el renderer acabaría diciendo otra cosa.
+    #[serde(default)]
+    pub splash: Option<SplashView>,
     /// El panel de continuaciones, si hay un prefijo a medias.
     pub whichkey: Option<WhichKeyView>,
     /// La ayuda, si está abierta. Como el visor, ocupa la pantalla: mientras
@@ -2077,6 +2085,14 @@ pub struct RowView {
     /// El nombre pintado difiere del real: bytes lossy o controles
     /// enmascarados (spec §6). El renderer DEBE marcarlo.
     pub hostile: bool,
+    /// Por dónde va la tarea que trabaja sobre ESTA fila, 0–100 (puente 69,
+    /// spec 2026-09-15). `None` = ninguna tarea la está tocando.
+    ///
+    /// Lo resuelve el host con `processes::progress_for`, que casa por ruta
+    /// exacta: una copia DENTRO de un directorio no pinta el directorio a
+    /// medias, porque «la mitad de esta carpeta» no es lo que el número dice.
+    #[serde(default)]
+    pub progress: Option<u8>,
     /// Qué es.
     pub kind: RowKind,
     /// Bajo el cursor.
@@ -2775,7 +2791,56 @@ pub struct DialogChoice {
     pub destructive: bool,
 }
 
-/// Una task, tal como se pinta en el tablero.
+/// La pantalla de arranque (puente 69, ADR 0115).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SplashView {
+    /// El arte, una línea por fila. Viene del modelo compartido, así que la
+    /// brújula es la misma que pinta el terminal.
+    pub art: Vec<String>,
+    /// Qué build corre.
+    pub version: String,
+    /// Y con qué revisión se compiló.
+    pub revision: String,
+    /// Contra qué core habla, ya traducido.
+    pub daemon: String,
+    /// El pie: cómo se quita, y si los números hacen algo.
+    pub hint: String,
+    /// Las secciones, ya filtradas: ninguna viene vacía.
+    pub sections: Vec<SplashSectionView>,
+    /// Cuánto le queda puesta, en milisegundos, o `None` si se queda hasta
+    /// que alguien la quite.
+    ///
+    /// El plazo lo decide el host —es suyo el modo `brief` y suyo el reloj—,
+    /// pero quien lo cumple es el renderer: aquí no hay bucle de eventos que
+    /// despierte solo, como sí lo hay en el terminal, y una pantalla que se
+    /// promete breve y se queda puesta hasta que tocas una tecla es peor que
+    /// no prometer nada. Así que el número CRUZA, en vez de que el renderer
+    /// se invente el suyo: dos relojes con la misma constante escrita dos
+    /// veces es exactamente la divergencia que el ADR 0077 persigue.
+    pub close_after_ms: Option<u32>,
+}
+
+/// Una sección de la pantalla de arranque (puente 69).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SplashSectionView {
+    /// El título, ya traducido y saneado.
+    pub title: String,
+    /// Sus filas, en el orden en que se pintan.
+    pub rows: Vec<SplashRowView>,
+}
+
+/// Una fila de la pantalla de arranque (puente 69).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SplashRowView {
+    /// El número que la abre, o `0` si la fila no tiene tecla.
+    pub number: u8,
+    /// Lo que se lee, ya saneado.
+    pub label: String,
+    /// El detalle a la derecha (una ruta, un número de visitas).
+    pub detail: String,
+}
+
+/// Una task del tablero.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskView {
     /// Id de la task en el daemon.
@@ -2786,6 +2851,16 @@ pub struct TaskView {
     pub state: TaskStateView,
     /// Porcentaje 0–100 si se sabe.
     pub percent: Option<u8>,
+    /// El ritmo, ya escrito (`1.2 MiB/s`), o vacío si no se sabe. Puente 69.
+    ///
+    /// Escrito por el HOST y no un número: `human_rate` es del crate
+    /// compartido, así que el terminal y la ventana dicen la misma velocidad
+    /// con las mismas unidades, y el renderer no elige redondeos.
+    #[serde(default)]
+    pub rate: String,
+    /// Lo que queda, ya escrito (`1m 20s`), o vacío. Puente 69.
+    #[serde(default)]
+    pub eta: String,
     /// Descripción corta ya saneada (qué se está moviendo).
     pub detail: Option<String>,
     /// [`Self::detail`] difiere de la ruta real. Se marca por el mismo motivo
@@ -3028,6 +3103,11 @@ pub enum ViewChange {
     Palette {
         /// La paleta, o `None` si se cerró.
         palette: Option<PaletteView>,
+    },
+    /// La pantalla de arranque se puso o se quitó (puente 69).
+    Splash {
+        /// La pantalla, o `None` si se quitó.
+        splash: Option<SplashView>,
     },
     /// El asistente de primer arranque se abrió, se movió o se cerró.
     Wizard {

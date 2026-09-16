@@ -481,6 +481,14 @@
             "null"
           ]
         },
+        "dir_indicator": {
+          "default": null,
+          "description": "The `/` in front of a directory row: `\"auto\"` (default — only when the\nicon column is closed, since an icon already says what the row is),\n`\"slash\"` (always) or `\"none\"`.\n\n[`crate::load::load`] rejects other values.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "editor": {
           "default": null,
           "description": "The editor `pane.edit` launches, as an argv TEMPLATE with the same\nfield codes as `openers.toml` (`%f` the file, `%d` the pane's\ndirectory): `editor = [\"zed\", \"%f\"]`. Absent = `$VISUAL`, then\n`$EDITOR`, then the POSIX fallback, which is what norte did before\nthis key existed.\n\n**Never honoured from the PROJECT layer**, and that is not a detail:\nthis key names a program to execute, so a cloned repository could\notherwise choose what runs when you press F4. Same fail-closed rule as\n`openers.toml` and `[daemon]`.",
@@ -617,6 +625,14 @@
             "null"
           ]
         },
+        "processes_panel": {
+          "default": null,
+          "description": "Whether the processes panel opens by itself: `\"auto\"` (default — it\nopens when a task starts and closes when the last one is gone) or\n`\"manual\"` (only the command and the panel bar move it). Opening or\nclosing it by hand while a task runs wins until that task ends.\n\n[`crate::load::load`] rejects other values.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "quick_search": {
           "default": null,
           "description": "Quick-search mode for `/`: `\"filter\"` narrows the listing (the default),\nwhile `\"jump\"` moves the cursor without changing the listing.\n\n[`crate::load::load`] rejects other values so its diagnostic can\ninclude the source configuration path. Invalid values never silently\nfall back.",
@@ -638,6 +654,14 @@
           "description": "Whether panes show hidden entries at startup (#107): unix dot-entries,\ndecided on the raw bytes of the last path segment. Absent = `true`\n(show everything — the conservative default: nothing the provider\nlists silently disappears until the user asks). `pane.toggle-hidden`\n(Ctrl+H) flips it per pane at runtime; this key only seeds the\ninitial state.",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "splash": {
+          "default": null,
+          "description": "What the startup screen does: `\"brief\"` (default — a cover any key\ntakes away, with the build and where you were), `\"off\"` (none) or\n`\"home\"` (a start screen that stays until a key, with recent and\npopular directories, bookmarks and profiles by number).\n\n[`crate::load::load`] rejects other values. The first-run wizard wins\nover it, and `--no-splash` or `NORTE_NO_SPLASH` turn it off for one run.",
+          "type": [
+            "string",
             "null"
           ]
         },
