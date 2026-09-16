@@ -16,7 +16,8 @@
 //! # El `arg` es el nombre en forma WIRE, nunca lo que se pinta
 //! Lo pintado pasa por [`crate::display_name`], que enmascara: un nombre con
 //! bytes de control se ve como `�` y ESA forma no identifica ningún fichero. El
-//! `arg` lleva [`Segment::to_wire`], que es reversible, y quien lo recibe
+//! `arg` lleva [`Segment::to_wire`](norte_proto::Segment::to_wire), que es
+//! reversible, y quien lo recibe
 //! resuelve `padre.join(Segment::parse_wire(arg))`. Un nombre no-UTF8, uno en
 //! NFD o uno llamado `!` llegan enteros o no llegan.
 
@@ -452,10 +453,211 @@ fn zonas(children: &[DirUsageChild], rects: &[Rect]) -> Vec<Hit> {
     hits
 }
 
+/// Cuántos mapas se recuerdan a la vez.
+///
+/// Cada uno llega hasta [`DIR_USAGE_MAX_CHILDREN`] hijos, así que esto no es
+/// una cuenta de conveniencia: sin tope, pasear por un árbol grande se va
+/// guardando cada directorio visitado durante toda la sesión.
+///
+/// [`DIR_USAGE_MAX_CHILDREN`]: norte_proto::methods::DIR_USAGE_MAX_CHILDREN
+pub const CACHE_MAX: usize = 8;
+
+/// Lo que ya se midió, para que volver a un directorio pinte en el acto.
+///
+/// Medir un árbol cuesta segundos o minutos; volver al padre y bajar otra vez
+/// es lo más normal del mundo. Esto guarda el ÚLTIMO informe de cada
+/// directorio, acotado a [`CACHE_MAX`].
+///
+/// # El ping no dice QUÉ cambió, así que se olvida todo
+/// La vigilancia de directorios entrega un `()` por ráfaga —«algo cambió en
+/// algún directorio vigilado»— y nada más. Con eso NO se puede invalidar una
+/// entrada concreta: elegir una sería inventarse cuál, y dejar las demás sería
+/// pintar tamaños viejos como si fueran de ahora. Por eso [`Self::invalidar`]
+/// lo tira todo, y [`Self::olvidar`] existe aparte para quien SÍ sabe qué
+/// directorio tocó.
+///
+/// # Vive en el consumidor, no en un singleton
+/// Igual que `Tree`: el hueco que enseña el mapa tiene el suyo. Un mapa es de
+/// quien lo mira, y dos huecos enseñando directorios distintos no comparten
+/// nada. La REGLA —cuándo se olvida— es lo que los dos frontends comparten;
+/// el cableado lo pone cada uno desde su propio camino de refresco, porque hoy
+/// solo el terminal tiene vigilancia nativa.
+#[derive(Debug, Default)]
+pub struct Cache {
+    /// Del más reciente al más viejo. `Vec` y no un mapa: son ocho.
+    entradas: Vec<(
+        norte_proto::VPath,
+        norte_proto::methods::FsDirUsageReportResult,
+    )>,
+}
+
+impl Cache {
+    /// Una caché vacía.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// El último mapa medido de `dir`, si se recuerda.
+    #[must_use]
+    pub fn get(
+        &self,
+        dir: &norte_proto::VPath,
+    ) -> Option<&norte_proto::methods::FsDirUsageReportResult> {
+        self.entradas.iter().find(|(p, _)| p == dir).map(|(_, r)| r)
+    }
+
+    /// Guarda —o reemplaza— el mapa de `dir`, y desaloja el más viejo si hace
+    /// falta.
+    ///
+    /// **Un informe incompleto no se guarda.** Un mapa cancelado a media
+    /// medición es un fragmento correcto para enseñar AHORA, con su aviso
+    /// delante; guardarlo lo convertiría en la respuesta que se pinta mañana
+    /// sin aviso ninguno.
+    pub fn put(
+        &mut self,
+        dir: norte_proto::VPath,
+        informe: norte_proto::methods::FsDirUsageReportResult,
+    ) {
+        if !informe.listed {
+            return;
+        }
+        self.entradas.retain(|(p, _)| *p != dir);
+        self.entradas.insert(0, (dir, informe));
+        self.entradas.truncate(CACHE_MAX);
+    }
+
+    /// Olvida TODO: es la respuesta a un aviso que no dice qué cambió.
+    pub fn invalidar(&mut self) {
+        self.entradas.clear();
+    }
+
+    /// Olvida un directorio concreto, para quien sí sabe cuál tocó (una copia,
+    /// un borrado, un renombrado hecho desde aquí).
+    pub fn olvidar(&mut self, dir: &norte_proto::VPath) {
+        self.entradas.retain(|(p, _)| p != dir);
+    }
+
+    /// Cuántos mapas se recuerdan.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entradas.len()
+    }
+
+    /// ¿No se recuerda ninguno?
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entradas.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use norte_proto::Segment;
+    use norte_proto::VPath;
+    use norte_proto::methods::FsDirUsageReportResult;
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire válido")
+    }
+
+    /// Un informe TERMINADO de `bytes` bytes.
+    fn informe(bytes: u64) -> FsDirUsageReportResult {
+        FsDirUsageReportResult {
+            total_bytes: bytes,
+            listed: true,
+            ..FsDirUsageReportResult::default()
+        }
+    }
+
+    /// Lo medido se recuerda: volver a un directorio pinta en el acto en vez de
+    /// volver a recorrer un árbol que tardó minutos.
+    #[test]
+    fn lo_medido_se_recuerda_por_directorio() {
+        let mut cache = Cache::new();
+        cache.put(vp("mem:///a"), informe(10));
+        cache.put(vp("mem:///b"), informe(20));
+        assert_eq!(cache.get(&vp("mem:///a")).map(|r| r.total_bytes), Some(10));
+        assert_eq!(cache.get(&vp("mem:///b")).map(|r| r.total_bytes), Some(20));
+        assert!(cache.get(&vp("mem:///c")).is_none());
+    }
+
+    /// Un mapa que no llegó a listarse NO se guarda.
+    ///
+    /// Como fragmento que se enseña ahora, con su aviso delante, es correcto.
+    /// Guardado, se convierte en la respuesta que se pinta mañana sin aviso
+    /// ninguno: un directorio que parece tener un hijo porque la medición se
+    /// cortó en el primero.
+    #[test]
+    fn un_mapa_a_medias_no_se_guarda() {
+        let mut cache = Cache::new();
+        let fragmento = FsDirUsageReportResult {
+            total_bytes: 5,
+            listed: false,
+            ..FsDirUsageReportResult::default()
+        };
+        cache.put(vp("mem:///a"), fragmento);
+        assert!(
+            cache.is_empty(),
+            "un fragmento no es una respuesta guardable"
+        );
+    }
+
+    /// El aviso de la vigilancia no dice QUÉ cambió, así que se olvida todo.
+    ///
+    /// Invalidar solo una entrada sería inventarse cuál; dejar las demás sería
+    /// pintar tamaños viejos como si fueran de ahora.
+    #[test]
+    fn un_aviso_sin_nombre_lo_olvida_todo() {
+        let mut cache = Cache::new();
+        cache.put(vp("mem:///a"), informe(10));
+        cache.put(vp("mem:///b"), informe(20));
+        cache.invalidar();
+        assert!(cache.is_empty());
+    }
+
+    /// Quien SÍ sabe qué directorio tocó olvida solo ese.
+    #[test]
+    fn quien_sabe_que_cambio_olvida_solo_eso() {
+        let mut cache = Cache::new();
+        cache.put(vp("mem:///a"), informe(10));
+        cache.put(vp("mem:///b"), informe(20));
+        cache.olvidar(&vp("mem:///a"));
+        assert!(cache.get(&vp("mem:///a")).is_none());
+        assert_eq!(cache.get(&vp("mem:///b")).map(|r| r.total_bytes), Some(20));
+    }
+
+    /// El tope desaloja al más viejo: pasear por un árbol grande no puede ir
+    /// guardando cada directorio de la sesión, con hasta 4096 hijos cada uno.
+    #[test]
+    fn el_tope_desaloja_al_mas_viejo() {
+        let mut cache = Cache::new();
+        for i in 0..CACHE_MAX + 3 {
+            cache.put(vp(&format!("mem:///d{i}")), informe(i as u64));
+        }
+        assert_eq!(cache.len(), CACHE_MAX);
+        assert!(
+            cache.get(&vp("mem:///d0")).is_none(),
+            "el primero que entró ya no está"
+        );
+        assert!(
+            cache
+                .get(&vp(&format!("mem:///d{}", CACHE_MAX + 2)))
+                .is_some(),
+            "el último sí"
+        );
+    }
+
+    /// Volver a medir el mismo directorio REEMPLAZA, no duplica.
+    #[test]
+    fn volver_a_medir_reemplaza() {
+        let mut cache = Cache::new();
+        cache.put(vp("mem:///a"), informe(10));
+        cache.put(vp("mem:///a"), informe(99));
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(&vp("mem:///a")).map(|r| r.total_bytes), Some(99));
+    }
 
     fn hijo(name: &str, bytes: u64, kind: EntryKind) -> DirUsageChild {
         DirUsageChild {
