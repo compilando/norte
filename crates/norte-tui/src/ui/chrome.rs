@@ -304,7 +304,10 @@ fn con_nombres(app: &App, buttons: &[norte_frontend::panelbar::PanelButton], bar
 ///
 /// Traduce `KeyOwner` a kind: la barra razona en kinds porque es lo que el
 /// registro le da, y `KeyOwner` es cosa de la TUI.
-fn kind_con_teclado(app: &App) -> Option<&'static str> {
+/// El préstamo es de `app` y no `'static` desde la fase 3: el kind de un panel
+/// de plugin es `plugin:<id>:<kind>`, una cadena que vive en el árbol y no se
+/// conoce al compilar.
+fn kind_con_teclado(app: &App) -> Option<&str> {
     match app.key_owner() {
         crate::app::KeyOwner::Panes => None,
         crate::app::KeyOwner::Places => Some("places"),
@@ -312,6 +315,8 @@ fn kind_con_teclado(app: &App) -> Option<&'static str> {
         crate::app::KeyOwner::Processes => Some(crate::processes::KIND),
         crate::app::KeyOwner::Tree => Some(crate::tree::KIND),
         crate::app::KeyOwner::Log => Some(crate::logview::KIND),
+        // Cuál es lo dice el reparto, no el enum: hay como mucho uno visible.
+        crate::app::KeyOwner::Panel => app.panel_kind(),
     }
 }
 

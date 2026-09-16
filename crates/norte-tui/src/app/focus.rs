@@ -247,10 +247,18 @@ impl App {
     /// dejan un panel al que se llega con el ratón y no con el teclado.
     #[must_use]
     fn focus_stop(&self, id: norte_frontend::layout::SlotId) -> Option<FocusStop> {
-        let kinds = norte_frontend::layout::KindRegistry::builtin();
+        // El registro VIVO de la app, no uno de serie recién hecho: desde la
+        // fase 3 lleva dentro los paneles que aportan los plugins, y con
+        // `builtin()` un panel aportado no pasaba ni esta puerta — quedaba
+        // fuera del anillo del `Tab` y fuera del alcance del ratón.
         let kind = self.layout.kind_of(id)?;
-        if !kinds.get(kind).is_some_and(|d| d.takes_keys) {
+        if !self.kinds.get(kind).is_some_and(|d| d.takes_keys) {
             return None;
+        }
+        // Un panel de plugin se resuelve por PREFIJO, antes que la tabla de
+        // nombres de casa: su kind no se conoce al compilar.
+        if kind.as_str().starts_with("plugin:") {
+            return Some(FocusStop::Side(KeyOwner::Panel));
         }
         match kind.as_str() {
             "browser" => (0..self.panes.len())

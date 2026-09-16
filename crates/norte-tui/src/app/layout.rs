@@ -100,6 +100,11 @@ impl App {
             KeyOwner::Processes => self.slot_of_kind_visible(crate::processes::KIND).is_some(),
             KeyOwner::Tree => self.slot_of_kind_visible(crate::tree::KIND).is_some(),
             KeyOwner::Log => self.slot_of_kind_visible(crate::logview::KIND).is_some(),
+            // Un panel de plugin sigue teniendo el teclado mientras se VEA.
+            // Si el plugin se desactiva, o su hueco se va detrás de una
+            // pestaña, las teclas vuelven a los listados como con cualquier
+            // otro panel.
+            KeyOwner::Panel => self.panel_slot().is_some(),
         };
         if !sigue {
             self.key_owner = KeyOwner::Panes;
@@ -726,7 +731,35 @@ impl App {
         }
     }
 
-    /// El hueco del panel de registro, si está abierto.
+    /// El hueco del panel de PLUGIN que el lector ve, si hay alguno.
+    ///
+    /// Por PREFIJO y no por igualdad, al revés que sus hermanos: el kind de un
+    /// panel de plugin es `plugin:<id>:<kind>` y no se conoce al compilar. Con
+    /// `multi: false` en su declaración hay como mucho uno visible, que es lo
+    /// que permite que [`crate::app::KeyOwner::Panel`] no tenga que decir cuál
+    /// es.
+    ///
+    /// VISIBLE y no «existe»: un panel escondido detrás de una pestaña tiene
+    /// el teclado igual de inútil que uno cerrado (#329).
+    #[must_use]
+    pub fn panel_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.layout.visible_slot_ids().into_iter().find(|id| {
+            self.layout
+                .kind_of(*id)
+                .is_some_and(|k| k.as_str().starts_with("plugin:"))
+        })
+    }
+
+    /// El kind del panel de plugin visible, si lo hay.
+    #[must_use]
+    pub fn panel_kind(&self) -> Option<&str> {
+        let id = self.panel_slot()?;
+        self.layout
+            .kind_of(id)
+            .map(norte_frontend::layout::KindId::as_str)
+    }
+
+    /// El hueco del panel de registro, exista o no en pantalla.
     #[must_use]
     pub fn log_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::logview::KIND)
@@ -1032,6 +1065,9 @@ impl App {
             KeyOwner::Tree => self.tree_slot(),
             KeyOwner::Processes => self.processes_slot(),
             KeyOwner::Log => self.log_slot(),
+            // Un panel de plugin se agranda como cualquier otro lateral: la
+            // tecla es la misma y el hueco lo dice el reparto.
+            KeyOwner::Panel => self.panel_slot(),
             KeyOwner::Panes | KeyOwner::Preview => None,
         }
         .unwrap_or_else(|| self.focused_slot())

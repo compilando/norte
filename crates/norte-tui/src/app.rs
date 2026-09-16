@@ -233,6 +233,15 @@ pub enum KeyOwner {
     Tree,
     /// El panel de registro (#323).
     Log,
+    /// Un panel aportado por un PLUGIN (fase 3, ADR 0115/0116).
+    ///
+    /// SIN decir cuál, a propósito. `KeyOwner` se compara por igualdad en
+    /// ochenta y seis sitios —`keys.rs`, `ui.rs`, `dispatch.rs`— y una
+    /// variante con carga los rompería todos; y no hace falta: un panel de
+    /// plugin se declara `multi: false`, así que hay como mucho uno visible y
+    /// el reparto ya sabe cuál es. Quién lo pinta se pregunta al árbol, que
+    /// es donde vive esa verdad.
+    Panel,
 }
 
 /// Las celdas de la barra de teclas de las tres pantallas (spec
