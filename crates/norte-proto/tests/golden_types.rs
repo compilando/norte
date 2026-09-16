@@ -1198,7 +1198,16 @@ fn golden_methods() {
     // 207 → 209 en 0.72.0 (ADR 0105): + `plugin_decorate_params_with_kinds`
     // y `plugin_decorate_result_icon` — los nombres de wire de la clase y
     // del hueco, que sin fixtura no congelaba nada.
-    assert_eq!(fixtures.len(), 209, "[methods.json] fixtures sin caso Rust");
+    // 209 → 214 en 0.74.0 (fase 3): los cinco de `plugin.panel_render`. Tres
+    // son UNA POR VARIANTE de `PanelEvent`: el enum va etiquetado Y aplanado
+    // sobre los params, así que su forma de wire —`{"event": "click", "row":
+    // 2, …}`— no la congela nada más que esto, y renombrar un caso o mover
+    // un campo no pondría nada en rojo. El cuarto lleva líneas y zonas de
+    // verdad (un tramo es un `SpanWire`, el mismo de una preview estilada, no
+    // un gemelo con el color en otra codificación). Y el quinto es el marco
+    // AUSENTE: el campo viaja con `flatten`, así que «sin panel» es `{}` y no
+    // `null` — la fixtura vacía es lo único que lo deja escrito.
+    assert_eq!(fixtures.len(), 214, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -1980,6 +1989,7 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
             description: None,
             commands: Vec::new(),
             columns: Vec::new(),
+            panels: Vec::new(),
             has_help: true,
             manifest_digest: None,
         },
@@ -2156,6 +2166,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
             description: None,
             commands: vec![],
             columns: vec![],
+            panels: vec![],
             has_help: false,
             manifest_digest: None,
         },
@@ -2181,6 +2192,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
             description: None,
             commands: vec![],
             columns: vec![],
+            panels: vec![],
             has_help: false,
             manifest_digest: None,
         },
@@ -2216,6 +2228,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
                 id: "git-status".into(),
                 header: "Git".into(),
             }],
+            panels: vec![],
             has_help: false,
             manifest_digest: None,
         },
@@ -2236,6 +2249,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
             description: None,
             commands: vec![],
             columns: vec![],
+            panels: vec![],
             has_help: false,
             manifest_digest: Some(
                 "7aec1a5a3d48445efc60e4ede6a6257fc1b2a651f2c89e625228982440307376".into(),
@@ -2258,6 +2272,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
                 description: None,
                 commands: vec![],
                 columns: vec![],
+                panels: vec![],
                 has_help: false,
                 manifest_digest: None,
             }],
@@ -2292,6 +2307,85 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
+/// Familia `plugin.panel_render` (0.74.0, fase 3): el marco que un plugin
+/// pinta en un hueco del reparto.
+///
+/// Los tres `params` son UNO POR VARIANTE de [`PanelEvent`]: es un enum
+/// etiquetado, y su forma de wire —`{"event": "click", "row": …}`— no la fija
+/// nada más que esto. El `result` vacío va aparte porque el campo viaja con
+/// `#[serde(flatten)]`: «sin marco» es `{}` y no `null`, y quien lo lea
+/// comparando con `null` no vería jamás un panel ausente.
+fn check_methods_plugin_panel(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        PanelEvent, PanelFrame, PanelHit, PluginPanelRenderParams, PluginPanelRenderResult,
+        SpanWire,
+    };
+
+    let base = |event: PanelEvent| PluginPanelRenderParams {
+        plugin_id: "org.norte.git-panel".into(),
+        kind: "git".into(),
+        dir: vpath("file:///home/user/proyecto"),
+        cols: 40,
+        rows: 8,
+        lang: "es".into(),
+        cursor_name: Some("README.md".into()),
+        state: None,
+        event,
+    };
+    check_one(
+        fixtures,
+        "plugin_panel_render_params",
+        &base(PanelEvent::Refresh),
+    );
+    check_one(
+        fixtures,
+        "plugin_panel_render_params_click",
+        &PluginPanelRenderParams {
+            // Con estado: son bytes opacos del guest, y en el wire viajan en
+            // base64 con techo al deserializar.
+            state: Some(b"rama=main".to_vec()),
+            ..base(PanelEvent::Click { row: 2, col: 5 })
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_panel_render_params_command",
+        &base(PanelEvent::Command {
+            command: "nav.enter".into(),
+        }),
+    );
+    check_one(
+        fixtures,
+        "plugin_panel_render_result",
+        &PluginPanelRenderResult {
+            frame: Some(PanelFrame {
+                plugin_id: "org.norte.git-panel".into(),
+                // El tramo es un `SpanWire`, el MISMO de una preview
+                // estilada: un color es tres bytes, no una cadena hex.
+                lines: vec![vec![SpanWire {
+                    text: "main".into(),
+                    role: Some("title".into()),
+                    fg: None,
+                    bg: None,
+                }]],
+                hits: vec![PanelHit {
+                    row: 0,
+                    col: 0,
+                    width: 4,
+                    command: "nav.enter".into(),
+                    arg: Some("file:///home/user/proyecto/.git".into()),
+                }],
+                state: Some(b"rama=main".to_vec()),
+            }),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_panel_render_result_none",
+        &PluginPanelRenderResult { frame: None },
+    );
+}
+
 /// Familia `plugin.*` de GESTIÓN (0.13.0, M4-P3): listar y aprobar/activar.
 fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
@@ -2302,6 +2396,7 @@ fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
     check_one(fixtures, "plugin_list_params", &PluginListParams {});
     check_methods_plugin_info(fixtures);
     check_methods_plugin_notice(fixtures);
+    check_methods_plugin_panel(fixtures);
     check_one(
         fixtures,
         "plugin_set_approval_params",
@@ -4454,7 +4549,10 @@ fn method_names_frozen() {
     // 0.73.0 (ADR 0107): `plugin.thumbnail`, la miniatura de un fichero por
     // un plugin del kind nuevo. Abierto, como `plugin.preview`.
     assert_eq!(methods::PLUGIN_THUMBNAIL, "plugin.thumbnail");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.73.0");
+    // 0.74.0 (fase 3): `plugin.panel_render`, el marco que un plugin del kind
+    // `panel` pinta en un hueco del reparto. Abierto, como sus gemelos.
+    assert_eq!(methods::PLUGIN_PANEL_RENDER, "plugin.panel_render");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.74.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

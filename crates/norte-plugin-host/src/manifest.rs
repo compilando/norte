@@ -41,6 +41,14 @@ pub enum Category {
     /// de un previewer; recibe bytes acotados y devuelve un raster que el
     /// host verifica antes de pintarlo.
     Thumbnail,
+    /// Pinta un PANEL entero del reparto (fase 3 del programa 2026-09-15,
+    /// paquete `norte:panel`, world `norte-panel`). Los paneles que aporta
+    /// van en `[[contributions.panel]]`, cada uno con su `kind` y su tamaño
+    /// mínimo; el hueco se llama `plugin:<id>:<kind>` y no puede chocar con
+    /// uno de casa. El guest describe líneas con estilo y zonas pulsables que
+    /// nombran COMANDOS del catálogo: un clic suyo no puede hacer nada que el
+    /// lector no pudiera hacer con una tecla.
+    Panel,
 }
 
 impl Category {
@@ -56,6 +64,7 @@ impl Category {
             Category::Decorator => "decorator",
             Category::Renamer => "renamer",
             Category::Thumbnail => "thumbnail",
+            Category::Panel => "panel",
         }
     }
 
@@ -76,6 +85,10 @@ impl Category {
             Category::Renamer => 6,
             // Y el siguiente detrás (ADR 0107): un tag es para siempre.
             Category::Thumbnail => 7,
+            // Y el siguiente detrás, por lo mismo: los manifiestos que ya
+            // están aprobados no pueden moverse porque exista una categoría
+            // más.
+            Category::Panel => 8,
         }
     }
 }
@@ -106,6 +119,29 @@ pub struct ColumnContrib {
     pub id: String,
     /// Cabecera visible.
     pub header: String,
+}
+
+/// Un PANEL declarado (fase 3 del programa 2026-09-15): un hueco del reparto
+/// cuyo contenido pinta el guest.
+///
+/// El `kind` es estable dentro del plugin y el hueco acaba llamándose
+/// `plugin:<id>:<kind>`, que es lo que impide que choque con uno de casa. El
+/// tamaño mínimo lo declara el plugin porque lo sabe él —un panel de dos
+/// columnas no dice nada—, y el reparto colapsa el `Split` que lo contiene
+/// cuando no cabe, igual que con cualquier kind.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelContrib {
+    /// Id estable dentro del plugin.
+    pub kind: String,
+    /// Título legible. Texto del plugin — NO confiable.
+    pub title: String,
+    /// Ancho mínimo en celdas, si el panel pide uno.
+    #[serde(default, rename = "min-cols")]
+    pub min_cols: Option<u16>,
+    /// Alto mínimo en celdas, si el panel pide uno.
+    #[serde(default, rename = "min-rows")]
+    pub min_rows: Option<u16>,
 }
 
 /// Un provider declarado: el scheme que sirve (`webdav`, …).
@@ -285,6 +321,13 @@ pub struct Contributions {
     /// manifiestos anteriores no lo traen y su digest no se mueve.
     #[serde(default)]
     pub renamer: Vec<RenamerContrib>,
+    /// Paneles que el plugin pinta (fase 3 del programa 2026-09-15). Sigue el
+    /// patrón OPCIONAL del digest, como `decorator` y `[config]`: un
+    /// manifiesto sin `[[contributions.panel]]` digesta byte a byte igual que
+    /// antes de que esta categoría existiera, así que las aprobaciones que el
+    /// lector ya dio no se resetean por la sola aparición del campo.
+    #[serde(default)]
+    pub panel: Vec<PanelContrib>,
     /// Fabricantes de miniaturas (ADR 0107).
     #[serde(default)]
     pub thumbnail: Vec<ThumbnailContrib>,
@@ -357,6 +400,26 @@ impl Contributions {
                 for m in &c.mimetypes {
                     update_str(h, m);
                 }
+            }
+        }
+        // Y los paneles, con el mismo trato: detrás y solo si hay, para que
+        // ningún manifiesto existente cambie de digest por la sola aparición
+        // de la categoría. Entra el `kind` (es el hueco que el plugin ocupa),
+        // el título (lo que el lector lee en la barra) y los mínimos: un
+        // panel que tras la aprobación pide media pantalla ya no es el panel
+        // que se aprobó.
+        if !self.panel.is_empty() {
+            h.update(b"panel:\n");
+            h.update((self.panel.len() as u64).to_le_bytes());
+            for c in &self.panel {
+                update_str(h, &c.kind);
+                update_str(h, &c.title);
+                // Presencia + valor, como el puerto de un provider: «sin
+                // mínimo» y «mínimo cero» no son lo mismo.
+                h.update([u8::from(c.min_cols.is_some())]);
+                h.update(c.min_cols.unwrap_or_default().to_le_bytes());
+                h.update([u8::from(c.min_rows.is_some())]);
+                h.update(c.min_rows.unwrap_or_default().to_le_bytes());
             }
         }
     }

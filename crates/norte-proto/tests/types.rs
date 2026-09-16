@@ -1317,10 +1317,15 @@ fn version_ventana_actual() {
     // roto.
     // 0.73.0 (ADR 0107): un cliente 0.72 no sabe pedir `plugin.thumbnail` y
     // no lo pide; el visor se queda sin miniatura, que es lo que tenía.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.73.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.72.0"), "N-1");
+    // 0.74.0 (fase 3): un cliente 0.73 no sabe pedir `plugin.panel_render` y
+    // no lo pide, así que un hueco de panel se queda con su aviso — lo mismo
+    // que ve cuando el plugin que lo pinta está desinstalado. Y lee `panels`
+    // vacío en cada `PluginInfo`, o sea «este plugin no ofrece paneles», que
+    // es exactamente lo que ese cliente podía saber antes de que existieran.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.74.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.73.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.71.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.72.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -1381,6 +1386,7 @@ fn plugin_types_roundtrip() {
             description: None,
             commands: vec![],
             columns: vec![],
+            panels: vec![],
             has_help: false,
             manifest_digest: None,
         }],
@@ -1443,6 +1449,7 @@ fn plugin_info_none_description_omitted_on_wire() {
         description: None,
         commands: vec![],
         columns: vec![],
+        panels: vec![],
         has_help: false,
         manifest_digest: None,
     };

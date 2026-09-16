@@ -2803,6 +2803,13 @@ async fn dispatch(
         // plugin.thumbnail (ADR 0107): ABIERTO, con el mismo gate de lectura
         // que sus gemelos — una miniatura LEE el fichero.
         methods::PLUGIN_THUMBNAIL => handle_plugin_thumbnail(req.params, &conn.actor, shared).await,
+        // plugin.panel_render (0.74.0, fase 3): ABIERTO como sus gemelos. El
+        // gate de lectura va sobre el DIRECTORIO que el panel acompaña: lo
+        // que el guest lea de verdad pasa además por `norte:location`, con su
+        // prefijo consentido y su presupuesto.
+        methods::PLUGIN_PANEL_RENDER => {
+            handle_plugin_panel_render(req.params, &conn.actor, shared).await
+        }
         // plugin.decorate / plugin.column_values (G3b, ADR 0037): ABIERTOS
         // como el resto de `plugin.preview*`, con el mismo gate de lectura
         // (#80) extendido al lote entero (`read_gate_all`).
@@ -4014,6 +4021,155 @@ async fn handle_plugin_thumbnail(
             bytes: thumb.bytes,
             width: thumb.width,
             height: thumb.height,
+        }),
+    })
+}
+
+/// `plugin.panel_render` (0.74.0, fase 3): el marco que un plugin `panel`
+/// pinta en un hueco del reparto.
+///
+/// Mismo trato que sus gemelos cosméticos: ABIERTO, con gate de lectura sobre
+/// el directorio que el panel acompaña, y SIN MARCO ante cualquier tropiezo
+/// —sin plugin, sin consentimiento, guest roto, atrapado o tardón—, que en el
+/// wire es `{}` y no `null` (el resultado va con `flatten`). Un panel que no
+/// contesta deja el hueco con el último marco que tuviera; no tumba nada.
+///
+/// Lo que el guest LEE de verdad no pasa por aquí: pasa por `norte:location`,
+/// con su prefijo consentido, su presupuesto de llamadas y su auditoría.
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_panel_render(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginPanelRenderParams = parse_params(params)?;
+    read_gate(actor, &p.dir, shared)?;
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_panel(&p.plugin_id, &p.kind)
+    };
+    let Some((id, _name, wasm, caps, settings)) = resolved else {
+        return to_value(&methods::PluginPanelRenderResult { frame: None });
+    };
+
+    // El estado que el guest se guardó la última vez. El wire ya lo trae
+    // decodificado y ACOTADO (`PANEL_MAX_STATE_BYTES` al deserializar): un
+    // estado que no cabe invalida el mensaje entero en vez de llegar hasta
+    // aquí, que es lo que impide que un cliente cualquiera haga que el daemon
+    // decodifique y copie megas al guest.
+    let state = p.state.clone().unwrap_or_default();
+    let contexto = norte_plugin_host::panel_iface::PanelContext {
+        cols: p.cols,
+        rows: p.rows,
+        lang: p.lang.clone(),
+        cursor_name: p.cursor_name.clone(),
+    };
+    let evento = match &p.event {
+        methods::PanelEvent::Click { row, col } => {
+            norte_plugin_host::panel_iface::PanelEvent::Click(
+                norte_plugin_host::panel_iface::Cell {
+                    row: *row,
+                    col: *col,
+                },
+            )
+        }
+        methods::PanelEvent::Command { command } => {
+            norte_plugin_host::panel_iface::PanelEvent::Command(command.clone())
+        }
+        // `Refresh` Y lo que este daemon no conoce, juntos a propósito: son
+        // el mismo caso. `PanelEvent` es `#[non_exhaustive]` para poder
+        // crecer sin romper a nadie, así que un cliente más nuevo puede
+        // mandar una variante futura, y el destino correcto es el evento
+        // NEUTRO — el panel se repinta con lo que hay. Descartarla dejaría el
+        // hueco congelado sin decir por qué.
+        _ => norte_plugin_host::panel_iface::PanelEvent::Refresh,
+    };
+
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let kind = p.kind.clone();
+    // La raíz de la ubicación es `p.dir` MISMO, no su padre. Columnas sube un
+    // nivel porque lo que le llega son ficheros y necesita el directorio que
+    // los contiene; aquí el parámetro ya ES el directorio, y subir daría al
+    // guest un nivel por encima de lo que el lector está mirando — que es
+    // exactamente el fallo que el gate de columnas documenta (#239).
+    //
+    // Y solo el HUMANO sube a buscar la raíz del proyecto (`.git`): un agente
+    // está acotado a su scope, y trepar por encima es lo que el gate de
+    // lectura impide.
+    let dir = p.dir.clone();
+    let climb = matches!(actor, Actor::User);
+    let outcome = tokio::task::spawn_blocking(move || {
+        // El mint de PRODUCCIÓN, que trae las raíces protegidas de la policy;
+        // sin permiso no se acuña nada y el panel se pinta con lo que el
+        // contexto le cuenta, que es una degradación honesta.
+        let mint = crate::plugins::LocationMint::new(norte_vfs_local::Bounds::default());
+        let host: Option<Arc<dyn norte_plugin_host::LocationHost>> = caps
+            .location
+            .granted()
+            .then(|| Arc::clone(&mint) as Arc<dyn norte_plugin_host::LocationHost>);
+        let mut inst = runtime.instantiate_panel(&wasm, caps.clone(), host)?;
+        inst.set_settings(settings);
+        // La sesión vive lo que dura ESTA llamada y se retira sola al caer:
+        // lo que se conserva entre repintados es el estado opaco del guest,
+        // nunca el permiso de leer.
+        let sesion = caps
+            .location
+            .granted()
+            .then(|| mint.mint_for(&dir, caps.location_root_marker.as_deref(), climb))
+            .flatten();
+        let refe = sesion
+            .as_ref()
+            .map(crate::plugins::LocationSession::as_ref_panel);
+        inst.render_panel(&kind, &contexto, refe.as_ref(), &state, &evento)
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "panel task panicked"))?;
+    let marco = match outcome {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(plugin = %id, error = %e, "panel runtime failed");
+            return to_value(&methods::PluginPanelRenderResult { frame: None });
+        }
+    };
+
+    let lines = marco
+        .lines
+        .into_iter()
+        .map(|linea| {
+            linea
+                .into_iter()
+                .map(|s| methods::SpanWire {
+                    text: s.text,
+                    role: s.role,
+                    // El MISMO tipo que una preview estilada, y con la misma
+                    // forma de color: tres bytes, no una cadena hex. Una
+                    // segunda codificación del mismo concepto es la que
+                    // alguien acaba validando distinto.
+                    fg: s.fg.map(|(r, g, b)| [r, g, b]),
+                    bg: s.bg.map(|(r, g, b)| [r, g, b]),
+                })
+                .collect()
+        })
+        .collect();
+    let hits = marco
+        .hits
+        .into_iter()
+        .map(|h| methods::PanelHit {
+            row: h.row,
+            col: h.col,
+            width: h.width,
+            command: h.command,
+            arg: h.arg,
+        })
+        .collect();
+    to_value(&methods::PluginPanelRenderResult {
+        frame: Some(methods::PanelFrame {
+            plugin_id: id,
+            lines,
+            hits,
+            // Los bytes tal cual: el wire los codifica y los acota por su
+            // cuenta (`panel_state_wire`). Un estado vacío no viaja.
+            state: (!marco.state.is_empty()).then_some(marco.state),
         }),
     })
 }

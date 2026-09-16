@@ -138,6 +138,22 @@ struct ProtocolSchema {
     plugin_list_params: PluginListParams,
     plugin_list_result: PluginListResult,
     plugin_notice: PluginNotice,
+    // `PanelEvent` tampoco es alcanzable, y por lo mismo que `PanelFrame`:
+    // va APLANADO dentro de los params, y el generador no arrastra lo que
+    // `flatten` esconde. Sin esta línea el artefacto publicaría un método
+    // cuya petición no describe del todo.
+    panel_event: methods::PanelEvent,
+    // Sin `panel_span`: un tramo de panel es un `SpanWire`, el mismo que el
+    // de una preview estilada, y ese ya está en el artefacto.
+    //
+    // `PanelFrame` no es alcanzable desde el resultado: viaja con
+    // `#[serde(flatten)]` dentro de `PluginPanelRenderResult`, y el generador
+    // no lo arrastra. Se declara aquí, como cualquier otro tipo de primer
+    // nivel, o el artefacto publicaría un método cuya respuesta no describe.
+    panel_frame: methods::PanelFrame,
+    plugin_panel_info: methods::PluginPanelInfo,
+    plugin_panel_render_params: methods::PluginPanelRenderParams,
+    plugin_panel_render_result: methods::PluginPanelRenderResult,
     plugin_load_error: PluginLoadError,
     plugin_preview: PluginPreview,
     plugin_preview_params: PluginPreviewParams,

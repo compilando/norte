@@ -8,26 +8,28 @@
 //! un plugin no puede hacer por un clic nada que el lector no pudiera hacer
 //! con una tecla, así que la policy queda intacta (regla dura 9).
 //!
-//! Las cotas viven aquí y no en el puente porque las dos superficies —el
-//! terminal y la ventana— tienen que recortar IGUAL: un marco que el terminal
-//! acepta y la ventana rechaza es la clase de divergencia que el ADR 0077
-//! persigue.
+//! Las cotas son las del PROTOCOLO (`norte_proto::methods::PANEL_MAX_*`), y
+//! aquí solo se reexportan: las dos superficies —el terminal y la ventana—
+//! tienen que recortar IGUAL, y un marco que una acepta y la otra rechaza es
+//! la divergencia que el ADR 0077 persigue. Escribir los números otra vez en
+//! este crate sería tener dos que deben coincidir y nadie obliga a ello.
 
 use crate::ansi::StyledSpan;
 
 /// Tope de líneas de un marco.
 ///
-/// Un panel de ocho filas que manda mil líneas está describiendo algo que
-/// nadie va a leer; el tope acota el gasto de un guest que se equivoca sin
-/// convertirlo en un error (recortar es fail-soft, como el resto de lo
-/// cosmético).
-pub const MAX_LINES: usize = 256;
+/// Es la del PROTOCOLO, reexportada: un panel de ocho filas que manda mil
+/// líneas describe algo que nadie va a leer, y el tope acota ese gasto sin
+/// convertirlo en un error (recortar es fail-soft, como todo lo cosmético).
+/// Declararla aquí otra vez sería el mismo número escrito en dos sitios, que
+/// es exactamente lo que diverge al primer cambio.
+pub use norte_proto::methods::PANEL_MAX_LINES as MAX_LINES;
 
-/// Tope de tramos por línea.
-pub const MAX_SPANS_PER_LINE: usize = 256;
+/// Tope de tramos por línea. La del protocolo; ver [`MAX_LINES`].
+pub use norte_proto::methods::PANEL_MAX_SPANS_PER_LINE as MAX_SPANS_PER_LINE;
 
-/// Tope de zonas pulsables de un marco.
-pub const MAX_HITS: usize = 128;
+/// Tope de zonas pulsables de un marco. La del protocolo; ver [`MAX_LINES`].
+pub use norte_proto::methods::PANEL_MAX_HITS as MAX_HITS;
 
 /// Una zona pulsable del marco: al pulsarla corre un comando del catálogo.
 ///

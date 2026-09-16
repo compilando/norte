@@ -973,6 +973,7 @@ mod help_key_tests {
                 kind: norte_proto::methods::PluginCommandKind::Command,
             }],
             columns: Vec::new(),
+            panels: Vec::new(),
             has_help: true,
             manifest_digest: None,
         };

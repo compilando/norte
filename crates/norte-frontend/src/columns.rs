@@ -148,6 +148,7 @@ mod validated_plugin_requests_tests {
                     header: (*c).to_owned(),
                 })
                 .collect(),
+            panels: Vec::new(),
             has_help: false,
             manifest_digest: None,
         }

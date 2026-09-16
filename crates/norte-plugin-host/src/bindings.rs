@@ -101,3 +101,23 @@ pub mod thumbnail_world {
         },
     });
 }
+
+/// El world de un plugin de PANEL (fase 3 del programa 2026-09-15, paquete
+/// `norte:panel`): exporta `panel` e importa las tres interfaces de siempre,
+/// servidas por el mismo `HostState`.
+///
+/// CON `location`, al revés que el de miniaturas: un panel útil casi siempre
+/// lee algo del sitio donde está —la rama de `.git`, un `README`—, y esa es
+/// la capacidad acotada y auditada con la que se hace. Sin ella solo podría
+/// pintar lo que el contexto le cuenta.
+pub mod panel_world {
+    wasmtime::component::bindgen!({
+        world: "norte:panel/norte-panel",
+        path: "wit",
+        with: {
+            "norte:host/host-log": crate::bindings::norte::host::host_log,
+            "norte:host/host-config": crate::bindings::norte::host::host_config,
+            "norte:location/location": crate::bindings::columns_world::norte::location::location,
+        },
+    });
+}

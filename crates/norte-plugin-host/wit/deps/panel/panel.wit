@@ -1,0 +1,144 @@
+// `norte:panel` (fase 3 del programa 2026-09-15): un PANEL entero pintado por
+// un plugin — un hueco del reparto cuyo contenido lo describe un guest.
+//
+// Paquete APARTE de `norte:plugin`, por lo mismo que `norte:thumbnail` y
+// `norte:renamer` (ADR 0094): el host sirve UNA versión de cada paquete, así
+// que subir `norte:plugin` invalidaría todos los guests instalados, y ninguno
+// de ellos pinta paneles. Un paquete nuevo estrena su versión y no toca a
+// nadie.
+//
+// El guest no dibuja: DESCRIBE. Manda líneas de tramos con estilo y una lista
+// de zonas pulsables, y cada zona nombra un COMANDO del catálogo. Nunca una
+// acción libre: lo que un clic en un panel de plugin puede hacer es
+// exactamente lo que el lector podría hacer con una tecla, así que la policy
+// queda intacta (regla dura 9) y el despacho es el de siempre.
+//
+// Tampoco recibe teclas crudas. Lo que le llega es el COMANDO que el keymap
+// ya resolvió: un plugin no puede atar `ctrl+s` por su cuenta ni leer lo que
+// el lector teclea en otro panel.
+package norte:panel@0.1.0;
+
+interface panel {
+    /// Un tramo de texto con estilo, GEMELO del `span` de `norte:plugin`.
+    ///
+    /// Se redeclara en vez de importarse porque son paquetes distintos y WIT
+    /// no comparte tipos entre ellos; los campos son los mismos a propósito,
+    /// para que el host lo convierta al MISMO `StyledSpan` que ya usan los
+    /// previews estilados y las dos superficies lo pinten con el código que
+    /// ya existe.
+    ///
+    /// `role` es un nombre semántico del tema (`title`, `warning`, …): si no
+    /// está en el conjunto cerrado, se ignora en silencio y queda el color
+    /// crudo — un plugin no ensancha el vocabulario del tema. `fg`/`bg` son
+    /// el respaldo; cuando hay rol, manda el rol (ADR 0037).
+    record span {
+        text: string,
+        role: option<string>,
+        fg: option<tuple<u8, u8, u8>>,
+        bg: option<tuple<u8, u8, u8>>,
+    }
+
+    /// Una celda del marco: fila y columna DENTRO del panel, desde cero.
+    record cell {
+        row: u16,
+        col: u16,
+    }
+
+    /// Una zona pulsable: desde `col` y `width` celdas a lo ancho, en `row`.
+    ///
+    /// El comando es el del catálogo (`nav.enter`, `pane.reload`, …). Uno que
+    /// no exista no es un error del host: el despacho normal ya sabe decir
+    /// «aquí no se puede», y con la misma frase que para una tecla.
+    ///
+    /// Una zona de varias filas se describe con una zona POR FILA: así no hay
+    /// que definir qué pasa cuando dos rectángulos se solapan en dos
+    /// dimensiones, y el host puede resolver un clic con una comparación.
+    record hit {
+        row: u16,
+        col: u16,
+        width: u16,
+        command: string,
+        arg: option<string>,
+    }
+
+    /// Lo que el guest devuelve: el marco y su estado.
+    ///
+    /// `state` son bytes OPACOS que el host guarda por hueco y devuelve en la
+    /// siguiente llamada. El host no los interpreta —no son suyos— y los
+    /// acota: un guest que quiera recordar más de lo que cabe se queda sin
+    /// memoria entre repintados, que es un problema suyo y no del host.
+    record frame {
+        lines: list<list<span>>,
+        hits: list<hit>,
+        state: list<u8>,
+    }
+
+    /// Lo que se le cuenta al guest de dónde está pintando.
+    ///
+    /// `cursor-name` es el nombre de la fila bajo el cursor del panel con el
+    /// teclado, ya en texto pintable — no una ruta: quien quiera leer el
+    /// disco usa `norte:location`, que es la capacidad que se concede y se
+    /// audita.
+    record panel-context {
+        cols: u32,
+        rows: u32,
+        lang: string,
+        cursor-name: option<string>,
+    }
+
+    /// Por qué se le llama.
+    ///
+    /// `refresh` es un repintado sin gesto detrás (cambió el directorio, el
+    /// cursor, el tamaño). `click` trae la celda. `command` trae el comando
+    /// que el keymap resolvió mientras el panel tenía el teclado.
+    variant panel-event {
+        refresh,
+        click(cell),
+        command(string),
+    }
+
+    /// El permiso de LEER, tal y como cruza al guest: un token opaco que el
+    /// host acuña para esta llamada y retira al acabar, y el prefijo que dice
+    /// qué parte de la raíz está mirando el lector.
+    ///
+    /// Gemelo del de `norte:plugin`, redeclarado porque WIT no comparte tipos
+    /// entre paquetes. Los dos campos hacen falta por lo mismo que allí: con
+    /// un `location-root-marker` en el manifiesto la raíz abierta es el
+    /// ANCESTRO que contiene el marcador (`.git`), no el directorio visible,
+    /// y sin `prefix` el guest no sabría —ni podría averiguar— dónde está
+    /// parado dentro de ella.
+    ///
+    /// `none` = sin permiso: el panel se pinta con lo que el contexto le
+    /// cuenta. Es una degradación honesta, no un error.
+    record location-ref {
+        token: string,
+        prefix: list<u8>,
+    }
+
+    /// Pinta el panel `kind` (el declarado en `[[contributions.panel]]`).
+    ///
+    /// Un `Err` no tumba nada: el host se queda con el último marco y lo
+    /// dice. Lo mismo si el guest tarda — lo cosmético se degrada, nunca
+    /// bloquea.
+    render: func(
+        kind: string,
+        context: panel-context,
+        location: option<location-ref>,
+        state: list<u8>,
+        event: panel-event,
+    ) -> result<frame, string>;
+}
+
+/// World de un plugin de panel: expone `panel` e importa el registro, su
+/// configuración y `norte:location`.
+///
+/// `location` porque un panel útil casi siempre lee algo del sitio donde está
+/// —la rama de `.git`, un `README`—, y es la capacidad ACOTADA con la que ya
+/// se hace eso: prefijo consentido, presupuesto de llamadas y auditoría. Sin
+/// ella, un panel solo podría pintar lo que el contexto le cuenta.
+world norte-panel {
+    import norte:host/host-log@0.1.0;
+    import norte:host/host-config@0.1.0;
+    import norte:location/location@0.2.0;
+    export panel;
+}

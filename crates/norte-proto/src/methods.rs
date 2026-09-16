@@ -1166,7 +1166,23 @@ use crate::{
 /// Un **cliente 0.73 contra un daemon 0.72** recibe `MethodNotFound` y lo
 /// trata como «sin miniatura», que es lo que había. Un cliente 0.72 contra
 /// un daemon 0.73 no lo pide.
-pub const PROTOCOL_VERSION: &str = "0.73.0";
+/// # 0.74.0 — `plugin.panel_render` (fase 3 del programa 2026-09-15)
+///
+/// Un método nuevo: el MARCO que un plugin `panel` pinta en un hueco del
+/// reparto ([`PluginPanelRenderParams`], [`PluginPanelRenderResult`]), y
+/// [`PluginInfo`] gana `panels` (`Vec<`[`PluginPanelInfo`]`>`) para que un
+/// frontend sepa qué huecos ofrece un plugin antes de abrirlos. Aditivo:
+/// ningún mensaje que existía cambia, y el campo nuevo tiene `default`.
+///
+/// El resultado viaja con `#[serde(flatten)]`, así que «sin marco» es `{}` en
+/// el wire y NO `null` — igual que sus gemelos `plugin.preview*`.
+///
+/// Un **cliente 0.74 contra un daemon 0.73** recibe `MethodNotFound` y lo
+/// trata como «este panel no se puede pintar» — el hueco queda con su aviso,
+/// que es lo mismo que pasa con un plugin desinstalado. Y ve `panels` vacío,
+/// o sea ningún panel que ofrecer, que es lo que había. Un cliente 0.73
+/// contra un daemon 0.74 no pide ninguna de las dos cosas.
+pub const PROTOCOL_VERSION: &str = "0.74.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2105,6 +2121,16 @@ pub const PLUGIN_PREVIEW_STYLED: &str = "plugin.preview_styled";
 /// verificadas por el plugin-host antes de cruzar. Sin plugin que case,
 /// `null`: la ventana se queda con lo que tenía. Abierto, como su gemelo.
 pub const PLUGIN_THUMBNAIL: &str = "plugin.thumbnail";
+/// `plugin.panel_render` (0.74.0, fase 3): el MARCO que un plugin `panel`
+/// pinta en un hueco del reparto.
+///
+/// El guest no dibuja: describe líneas con estilo y zonas pulsables que
+/// nombran comandos del catálogo, así que un clic suyo no puede hacer nada
+/// que el lector no pudiera hacer con una tecla. Cosmético y fail-soft como
+/// la preview: sin plugin, sin consentimiento o con el guest roto, lo que
+/// vuelve es `{}` —el resultado va con `flatten`, así que «nada» es un objeto
+/// vacío y no `null`— y el hueco se queda con el último marco que tuviera.
+pub const PLUGIN_PANEL_RENDER: &str = "plugin.panel_render";
 /// `plugin.decorate` — decoraciones tipo git-status por entrada, aportadas
 /// por plugins `decorator` APROBADOS y ACTIVADOS (0.27.0, G3, ADR 0037):
 /// batched sobre una página visible, POSICIONAL 1:1 con `params.paths`
@@ -7423,6 +7449,29 @@ pub struct PluginColumnInfo {
     pub header: String,
 }
 
+/// Un PANEL que un plugin ofrece (0.74.0, fase 3): un hueco del reparto cuyo
+/// contenido pinta el guest.
+///
+/// El `kind` es el del manifiesto; el hueco acaba llamándose
+/// `plugin:<id>:<kind>`, que es lo que impide que choque con uno de casa. Los
+/// mínimos los declara el plugin porque los sabe él, y el reparto colapsa el
+/// hueco cuando no caben, igual que con cualquier otro kind.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPanelInfo {
+    /// Id del panel dentro del plugin (el mismo `kind` que espera
+    /// [`PLUGIN_PANEL_RENDER`]).
+    pub kind: String,
+    /// Título legible. Texto del plugin — NO confiable.
+    pub title: String,
+    /// Ancho mínimo en celdas, si el panel pide uno.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_cols: Option<u16>,
+    /// Alto mínimo en celdas, si el panel pide uno.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_rows: Option<u16>,
+}
+
 /// `true` si `id` es un identificador de plugin reverse-DNS válido: uno o más
 /// segmentos `[A-Za-z0-9-]+` separados por puntos, con al menos un punto,
 /// ningún segmento vacío (ni punto inicial ni final), y longitud total
@@ -7512,6 +7561,16 @@ pub struct PluginInfo {
     /// deserializar aquí (mismo criterio aditivo que `commands` en 0.26.0).
     #[serde(default)]
     pub columns: Vec<PluginColumnInfo>,
+    /// Paneles que el plugin pinta (0.74.0, fase 3); vacío si no aporta
+    /// ninguno. Mismo criterio aditivo que `columns` y `commands`: un peer
+    /// N-1 no emite el campo y aquí se toma por su default (`vec![]`), o sea
+    /// «ningún panel que ofrecer», que es lo que había antes de la categoría.
+    ///
+    /// Es DESCUBRIMIENTO, no concesión: se lista sin gatear por aprobado ni
+    /// habilitado, porque qué huecos pide un plugin es justo lo que un humano
+    /// mira ANTES de aprobarlo — igual que sus comandos y sus columnas.
+    #[serde(default)]
+    pub panels: Vec<PluginPanelInfo>,
     /// El ancla de aprobación del manifiesto Y del binario, tal como el daemon
     /// la calcula AHORA (0.53.0, #282). Hex sha256, o `None` en un peer viejo.
     ///
@@ -7907,7 +7966,234 @@ pub struct PluginThumbnailResult {
     pub thumbnail: Option<PluginThumbnail>,
 }
 
+/// Tope de líneas de un marco de panel (0.74.0).
+///
+/// Las cotas viven en el proto y no en cada frontend porque son del CONTRATO:
+/// dos superficies que recortaran distinto enseñarían paneles distintos para
+/// el mismo plugin, que es la divergencia que el ADR 0077 persigue.
+pub const PANEL_MAX_LINES: usize = 256;
+
+/// Tope de tramos por línea de un marco de panel (0.74.0).
+pub const PANEL_MAX_SPANS_PER_LINE: usize = 256;
+
+/// Tope de zonas pulsables de un marco de panel (0.74.0).
+pub const PANEL_MAX_HITS: usize = 128;
+
+/// Tope del texto de UN tramo de un marco de panel (0.74.0): 4 KiB.
+///
+/// El mismo que el de una preview estilada, y por lo mismo: sin él, un marco
+/// de 256×256 tramos no tiene techo de tamaño aunque cada cota de cuenta esté
+/// puesta. El host lo recorta al recibirlo del guest.
+pub const PANEL_MAX_SPAN_TEXT: usize = 4 * 1024;
+
+/// Tope del estado OPACO que un panel se guarda entre repintados (0.74.0).
+///
+/// El host no lo interpreta —no es suyo— pero sí lo acota: un guest que
+/// quiera recordar más de lo que cabe se queda sin memoria entre llamadas,
+/// que es un problema suyo y no del proceso que lo hospeda.
+pub const PANEL_MAX_STATE_BYTES: usize = 64 * 1024;
+
+/// Por qué se le pide un marco a un panel (0.74.0, fase 3).
+///
+/// La etiqueta es `event` y NO `kind`, que es la de los otros dos enums
+/// etiquetados del protocolo. A propósito: `kind` ya significa «cuál de los
+/// paneles del plugin» dos campos más arriba en los mismos params, y un
+/// lector que viera `"kind": "click"` junto a `"kind": "git"` tendría que
+/// pararse a pensar cuál es cuál. Quien venga a alinearlo con la casa está
+/// cambiando el wire.
+///
+/// `#[non_exhaustive]` porque va a crecer —desplazar, ganar el foco— y sin él
+/// cada `match` de aguas abajo convierte una variante nueva en una rotura.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum PanelEvent {
+    /// Un repintado sin gesto detrás: cambió el directorio, el cursor o el
+    /// tamaño del hueco.
+    Refresh,
+    /// Alguien pulsó dentro del panel, en esa celda del MARCO.
+    Click {
+        /// Fila dentro del marco, desde cero.
+        row: u16,
+        /// Columna dentro del marco, desde cero.
+        col: u16,
+    },
+    /// El keymap resolvió un comando mientras el panel tenía el teclado.
+    ///
+    /// El comando y no la tecla: un plugin no ata chords por su cuenta ni lee
+    /// lo que se teclea en otro sitio.
+    Command {
+        /// Id del comando del catálogo.
+        command: String,
+    },
+}
+
+/// Parámetros de [`PLUGIN_PANEL_RENDER`] (0.74.0, fase 3).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPanelRenderParams {
+    /// Qué plugin lo pinta.
+    pub plugin_id: String,
+    /// Cuál de sus paneles ([`PluginPanelInfo::kind`]).
+    pub kind: String,
+    /// El directorio que el panel acompaña: el del listado con el teclado.
+    ///
+    /// Va para que el guest sepa DÓNDE está; leer ahí sigue pidiendo
+    /// `norte:location`, con su prefijo consentido y su presupuesto.
+    pub dir: VPath,
+    /// Ancho del hueco en celdas.
+    pub cols: u32,
+    /// Alto del hueco en celdas.
+    pub rows: u32,
+    /// El idioma del lector (`es`, `en`), para que el guest escriba en él.
+    ///
+    /// Viaja aunque el host no traduzca nada del plugin: lo que el panel
+    /// pinta es texto suyo, y sin saber el idioma lo escribiría siempre en
+    /// uno — que es justo lo que la ayuda y el cromo dejaron de hacer.
+    pub lang: String,
+    /// El nombre de la fila bajo el cursor, ya pintable, si hay alguna.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_name: Option<String>,
+    /// El estado opaco que el guest devolvió la última vez, si lo hubo.
+    ///
+    /// Viaja en base64 y se ACOTA al deserializar a
+    /// [`PANEL_MAX_STATE_BYTES`]: por encima, el mensaje entero es inválido.
+    /// El tope va aquí y no solo a la vuelta del guest porque esto lo manda
+    /// un CLIENTE —cualquiera que hable el socket—, y sin él bastaría con
+    /// devolver un estado enorme para que el daemon lo decodificara y se lo
+    /// copiara al guest.
+    #[serde(
+        default,
+        with = "panel_state_wire",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<String>", extend("contentEncoding" = "base64"))
+    )]
+    pub state: Option<Vec<u8>>,
+    /// Por qué se le llama.
+    ///
+    /// APLANADO sobre los params: en el wire es `{"event": "click", "row": 2,
+    /// "col": 5}` y no `{"event": {"event": "click", …}}`. Anidado, la clave
+    /// `event` salía dos veces —el campo y su etiqueta se llaman igual—, que
+    /// es de esas cosas que un implementador lee dos veces para creérselas.
+    #[serde(flatten)]
+    pub event: PanelEvent,
+}
+
+/// Una zona pulsable de un marco de panel (0.74.0).
+///
+/// Nombra un COMANDO del catálogo, nunca una acción libre: lo que un clic en
+/// un panel de plugin puede hacer es lo que el lector podría hacer con una
+/// tecla, así que la policy no se ensancha por tener paneles.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelHit {
+    /// Fila dentro del marco, desde cero.
+    pub row: u16,
+    /// Columna donde empieza, desde cero.
+    pub col: u16,
+    /// Cuántas celdas ocupa a lo ancho.
+    pub width: u16,
+    /// El comando del catálogo que ejecuta.
+    pub command: String,
+    /// Su argumento, si lo lleva.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arg: Option<String>,
+}
+
+/// Un marco de panel ya recortado por el daemon (0.74.0).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelFrame {
+    /// Id del plugin que lo pintó.
+    pub plugin_id: String,
+    /// Las líneas, de arriba abajo.
+    ///
+    /// El tramo es el MISMO tipo que el de una preview estilada
+    /// ([`SpanWire`]), no un gemelo: así el frontend lo pinta con el código
+    /// que ya tiene, y el protocolo no acaba con dos formas de decir «este
+    /// texto va de este color» — la segunda siempre sería la que alguien
+    /// olvida validar igual.
+    pub lines: Vec<Vec<SpanWire>>,
+    /// Las zonas pulsables.
+    #[serde(default)]
+    pub hits: Vec<PanelHit>,
+    /// El estado opaco que el guest quiere para la próxima vez.
+    ///
+    /// Mismo trato que a la ida ([`PluginPanelRenderParams::state`]): base64
+    /// con techo al deserializar. El host no lo interpreta —no es suyo— pero
+    /// sí lo acota, en los dos sentidos.
+    #[serde(
+        default,
+        with = "panel_state_wire",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<String>", extend("contentEncoding" = "base64"))
+    )]
+    pub state: Option<Vec<u8>>,
+}
+
+/// Resultado de [`PLUGIN_PANEL_RENDER`]: el marco, o NADA si no hay panel que
+/// lo pinte, no está consentido, o el guest no supo.
+///
+/// En el wire eso es `{plugin_id, lines, …}` (hubo marco) o `{}` (no lo hubo):
+/// el campo va con `#[serde(flatten)]`, así que «nada» es un objeto VACÍO y
+/// nunca `null` — mismo trato que `plugin.preview` y su gemelo estilado.
+/// Quien lo lea comparando con `null` no verá jamás un marco ausente.
+///
+/// Que falte no es un error: el hueco se queda con el último marco que tuviera
+/// y lo dice. Un panel es cosmético, y lo cosmético se degrada.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPanelRenderResult {
+    /// El marco, o `None`.
+    #[serde(flatten)]
+    pub frame: Option<PanelFrame>,
+}
+
 /// Los bytes de una miniatura como base64 (0.73.0), con techo al leer.
+/// El estado OPACO de un panel en el wire (0.74.0): base64 con techo al leer.
+///
+/// Sobre `Option` porque el estado falta la primera vez que un panel se pinta,
+/// y eso no es un error: un guest que empieza de cero es el caso normal.
+mod panel_state_wire {
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    use crate::attrs::{decode_bytes_b64_lenient, encode_bytes_b64};
+
+    #[expect(
+        clippy::ref_option,
+        reason = "serde `with` fija la firma con el tipo del campo, `&Option<Vec<u8>>`"
+    )]
+    pub(super) fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(bytes) => s.serialize_str(&encode_bytes_b64(bytes)),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Vec<u8>>, D::Error> {
+        let Some(raw) = Option::<String>::deserialize(d)? else {
+            return Ok(None);
+        };
+        let bytes = decode_bytes_b64_lenient(&raw)
+            .ok_or_else(|| serde::de::Error::custom("estado de panel: base64 inválido"))?;
+        if bytes.len() > super::PANEL_MAX_STATE_BYTES {
+            return Err(serde::de::Error::custom(
+                "estado de panel: por encima del techo del wire",
+            ));
+        }
+        Ok(Some(bytes))
+    }
+}
+
 mod thumb_wire {
     use serde::{Deserialize as _, Deserializer, Serializer};
 

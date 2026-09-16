@@ -695,6 +695,23 @@ impl PluginRegistry {
                                 header: c.header.clone(),
                             })
                             .collect(),
+                        // Y los paneles (0.74.0, fase 3), con el MISMO criterio
+                        // que las columnas: orden del manifiesto y puro
+                        // descubrimiento, sin gatear por aprobado ni
+                        // habilitado. Qué huecos pide un plugin es justo lo
+                        // que un humano mira ANTES de aprobarlo.
+                        panels: e
+                            .manifest
+                            .contributions
+                            .panel
+                            .iter()
+                            .map(|p| norte_proto::methods::PluginPanelInfo {
+                                kind: p.kind.clone(),
+                                title: p.title.clone(),
+                                min_cols: p.min_cols,
+                                min_rows: p.min_rows,
+                            })
+                            .collect(),
                         // El ancla que el humano está MIRANDO (#282): es lo que
                         // devuelve al confirmar, y lo que el daemon compara con la
                         // suya antes de conceder. Cubre `category` y
@@ -1177,6 +1194,45 @@ impl PluginRegistry {
     pub fn resolve_thumbnailer(&self, mime: &str) -> Option<ResolvedPreviewer> {
         let exact = self.thumbnailer_matching(|pat| pat == mime);
         exact.or_else(|| self.thumbnailer_matching(|pat| mimetype_matches(pat, mime)))
+    }
+
+    /// El plugin consentido que pinta ese panel, si lo hay (0.74.0, fase 3).
+    ///
+    /// Por id Y kind, no por orden: un panel se abre por su nombre de hueco
+    /// (`plugin:<id>:<kind>`), así que aquí no hay nada que resolver por
+    /// prioridad — o ese plugin ofrece ese panel, o no hay marco.
+    ///
+    /// Fail-closed con el digest vigente, como los demás: un plugin cuyo
+    /// manifiesto cambió tras aprobarse no pinta hasta que se vuelva a
+    /// consentir.
+    #[must_use]
+    pub fn resolve_panel(&self, plugin_id: &str, kind: &str) -> Option<ResolvedPreviewer> {
+        self.catalog.plugins.iter().find_map(|e| {
+            if e.manifest.id != plugin_id {
+                return None;
+            }
+            let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+            if !Self::approval_is_current(&st, e) || !st.enabled {
+                return None;
+            }
+            if !e
+                .manifest
+                .contributions
+                .panel
+                .iter()
+                .any(|p| p.kind == kind)
+            {
+                return None;
+            }
+            let wasm = Self::verified_wasm(&e.dir)?;
+            Some((
+                e.manifest.id.clone(),
+                e.manifest.name.clone(),
+                wasm,
+                e.manifest.capabilities.clone(),
+                e.settings.clone(),
+            ))
+        })
     }
 
     fn thumbnailer_matching(&self, casa: impl Fn(&str) -> bool) -> Option<ResolvedPreviewer> {
@@ -3954,6 +4010,20 @@ impl LocationSession {
     /// El par (token, prefijo) tal y como cruza al guest.
     pub(crate) fn as_ref(&self) -> norte_plugin_host::columns_iface::LocationRef {
         norte_plugin_host::columns_iface::LocationRef {
+            token: self.token.clone(),
+            prefix: self.prefix.clone(),
+        }
+    }
+
+    /// El mismo par, para un guest de PANEL (fase 3).
+    ///
+    /// Un método aparte y no un genérico porque los dos tipos son distintos
+    /// aunque tengan la misma forma: `norte:panel` es otro paquete WIT, y WIT
+    /// no comparte tipos entre paquetes (ADR 0094). Lo que se comparte es la
+    /// sesión —un solo token, una sola retirada en su `Drop`—, que es lo que
+    /// de verdad importa que no se duplique.
+    pub(crate) fn as_ref_panel(&self) -> norte_plugin_host::panel_iface::LocationRef {
+        norte_plugin_host::panel_iface::LocationRef {
             token: self.token.clone(),
             prefix: self.prefix.clone(),
         }

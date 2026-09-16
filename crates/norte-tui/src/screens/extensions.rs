@@ -416,6 +416,7 @@ mod extensions_help_tests {
             description: None,
             commands: Vec::new(),
             columns: Vec::new(),
+            panels: Vec::new(),
             has_help,
             manifest_digest: None,
         }
@@ -561,6 +562,7 @@ mod aprobacion_tests {
             description: None,
             commands: Vec::new(),
             columns: Vec::new(),
+            panels: Vec::new(),
             has_help: false,
             manifest_digest: None,
         }

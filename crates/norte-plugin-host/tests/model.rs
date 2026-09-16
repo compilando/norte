@@ -1425,6 +1425,60 @@ fn manifiesto_sin_decorator_digesta_igual_que_antes_del_campo() {
     );
 }
 
+/// Fase 3 del programa 2026-09-15: `contributions.panel` sigue el mismo
+/// patrón OPCIONAL que `decorator` y `[config]`.
+///
+/// Un manifiesto SIN `[[contributions.panel]]` tiene que digestar exactamente
+/// lo que digestaba antes de que la categoría existiera. Si no, la sola
+/// aparición del campo resetearía las aprobaciones que el lector ya dio, y el
+/// gestor le pediría consentir de nuevo ocho plugins que no han cambiado.
+#[test]
+fn manifiesto_sin_panel_digesta_igual_que_antes_del_campo() {
+    let sin_panel = Manifest::from_toml(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        [capabilities]
+        fs-read = "scoped"
+    "#,
+    )
+    .unwrap();
+    assert!(sin_panel.contributions.panel.is_empty());
+    assert_eq!(sin_panel.approval_digest(), sin_panel.approval_digest());
+}
+
+/// Y declarar un panel SÍ lo mueve: qué hueco ocupa un plugin, cómo se llama
+/// en la barra y cuánta pantalla pide son parte de lo que se aprueba.
+#[test]
+fn panel_presente_mueve_el_approval_digest() {
+    let base = r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "panel"
+    "#;
+    let sin = Manifest::from_toml(base).unwrap();
+    let con = Manifest::from_toml(&format!(
+        "{base}\n[[contributions.panel]]\nkind = \"git\"\ntitle = \"Git\"\nmin-cols = 24\nmin-rows = 6\n"
+    ))
+    .unwrap();
+    assert_ne!(sin.approval_digest(), con.approval_digest());
+
+    // Y el TAMAÑO también: un panel que tras la aprobación pide media
+    // pantalla no es el panel que se aprobó.
+    let mas_grande = Manifest::from_toml(&format!(
+        "{base}\n[[contributions.panel]]\nkind = \"git\"\ntitle = \"Git\"\nmin-cols = 60\nmin-rows = 6\n"
+    ))
+    .unwrap();
+    assert_ne!(con.approval_digest(), mas_grande.approval_digest());
+}
+
 #[test]
 fn decorator_presente_mueve_el_approval_digest() {
     let sin = Manifest::from_toml(

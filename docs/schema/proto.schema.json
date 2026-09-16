@@ -3023,6 +3023,155 @@
         }
       ]
     },
+    "PanelEvent": {
+      "description": "Por qué se le pide un marco a un panel (0.74.0, fase 3).\n\nLa etiqueta es `event` y NO `kind`, que es la de los otros dos enums\netiquetados del protocolo. A propósito: `kind` ya significa «cuál de los\npaneles del plugin» dos campos más arriba en los mismos params, y un\nlector que viera `\"kind\": \"click\"` junto a `\"kind\": \"git\"` tendría que\npararse a pensar cuál es cuál. Quien venga a alinearlo con la casa está\ncambiando el wire.\n\n`#[non_exhaustive]` porque va a crecer —desplazar, ganar el foco— y sin él\ncada `match` de aguas abajo convierte una variante nueva en una rotura.",
+      "oneOf": [
+        {
+          "description": "Un repintado sin gesto detrás: cambió el directorio, el cursor o el\ntamaño del hueco.",
+          "properties": {
+            "event": {
+              "const": "refresh",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Alguien pulsó dentro del panel, en esa celda del MARCO.",
+          "properties": {
+            "col": {
+              "description": "Columna dentro del marco, desde cero.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "event": {
+              "const": "click",
+              "type": "string"
+            },
+            "row": {
+              "description": "Fila dentro del marco, desde cero.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "event",
+            "row",
+            "col"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "El keymap resolvió un comando mientras el panel tenía el teclado.\n\nEl comando y no la tecla: un plugin no ata chords por su cuenta ni lee\nlo que se teclea en otro sitio.",
+          "properties": {
+            "command": {
+              "description": "Id del comando del catálogo.",
+              "type": "string"
+            },
+            "event": {
+              "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "command"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PanelFrame": {
+      "description": "Un marco de panel ya recortado por el daemon (0.74.0).",
+      "properties": {
+        "hits": {
+          "default": [],
+          "description": "Las zonas pulsables.",
+          "items": {
+            "$ref": "#/$defs/PanelHit"
+          },
+          "type": "array"
+        },
+        "lines": {
+          "description": "Las líneas, de arriba abajo.\n\nEl tramo es el MISMO tipo que el de una preview estilada\n([`SpanWire`]), no un gemelo: así el frontend lo pinta con el código\nque ya tiene, y el protocolo no acaba con dos formas de decir «este\ntexto va de este color» — la segunda siempre sería la que alguien\nolvida validar igual.",
+          "items": {
+            "items": {
+              "$ref": "#/$defs/SpanWire"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "plugin_id": {
+          "description": "Id del plugin que lo pintó.",
+          "type": "string"
+        },
+        "state": {
+          "contentEncoding": "base64",
+          "description": "El estado opaco que el guest quiere para la próxima vez.\n\nMismo trato que a la ida ([`PluginPanelRenderParams::state`]): base64\ncon techo al deserializar. El host no lo interpreta —no es suyo— pero\nsí lo acota, en los dos sentidos.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "plugin_id",
+        "lines"
+      ],
+      "type": "object"
+    },
+    "PanelHit": {
+      "description": "Una zona pulsable de un marco de panel (0.74.0).\n\nNombra un COMANDO del catálogo, nunca una acción libre: lo que un clic en\nun panel de plugin puede hacer es lo que el lector podría hacer con una\ntecla, así que la policy no se ensancha por tener paneles.",
+      "properties": {
+        "arg": {
+          "description": "Su argumento, si lo lleva.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "col": {
+          "description": "Columna donde empieza, desde cero.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "command": {
+          "description": "El comando del catálogo que ejecuta.",
+          "type": "string"
+        },
+        "row": {
+          "description": "Fila dentro del marco, desde cero.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "description": "Cuántas celdas ocupa a lo ancho.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "row",
+        "col",
+        "width",
+        "command"
+      ],
+      "type": "object"
+    },
     "PendingApproval": {
       "description": "Una aprobación pendiente (elemento de [`PolicyPendingResult`]).",
       "properties": {
@@ -3428,6 +3577,14 @@
           "description": "Nombre legible para mostrar.",
           "type": "string"
         },
+        "panels": {
+          "default": [],
+          "description": "Paneles que el plugin pinta (0.74.0, fase 3); vacío si no aporta\nninguno. Mismo criterio aditivo que `columns` y `commands`: un peer\nN-1 no emite el campo y aquí se toma por su default (`vec![]`), o sea\n«ningún panel que ofrecer», que es lo que había antes de la categoría.\n\nEs DESCUBRIMIENTO, no concesión: se lista sin gatear por aprobado ni\nhabilitado, porque qué huecos pide un plugin es justo lo que un humano\nmira ANTES de aprobarlo — igual que sus comandos y sus columnas.",
+          "items": {
+            "$ref": "#/$defs/PluginPanelInfo"
+          },
+          "type": "array"
+        },
         "publisher": {
           "description": "Publicador declarado en el manifiesto.",
           "type": "string"
@@ -3526,6 +3683,199 @@
         "plugin_id",
         "kind"
       ],
+      "type": "object"
+    },
+    "PluginPanelInfo": {
+      "description": "Un PANEL que un plugin ofrece (0.74.0, fase 3): un hueco del reparto cuyo\ncontenido pinta el guest.\n\nEl `kind` es el del manifiesto; el hueco acaba llamándose\n`plugin:<id>:<kind>`, que es lo que impide que choque con uno de casa. Los\nmínimos los declara el plugin porque los sabe él, y el reparto colapsa el\nhueco cuando no caben, igual que con cualquier otro kind.",
+      "properties": {
+        "kind": {
+          "description": "Id del panel dentro del plugin (el mismo `kind` que espera\n[`PLUGIN_PANEL_RENDER`]).",
+          "type": "string"
+        },
+        "min_cols": {
+          "description": "Ancho mínimo en celdas, si el panel pide uno.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_rows": {
+          "description": "Alto mínimo en celdas, si el panel pide uno.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Título legible. Texto del plugin — NO confiable.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "title"
+      ],
+      "type": "object"
+    },
+    "PluginPanelRenderParams": {
+      "description": "Parámetros de [`PLUGIN_PANEL_RENDER`] (0.74.0, fase 3).",
+      "oneOf": [
+        {
+          "description": "Un repintado sin gesto detrás: cambió el directorio, el cursor o el\ntamaño del hueco.",
+          "properties": {
+            "event": {
+              "const": "refresh",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Alguien pulsó dentro del panel, en esa celda del MARCO.",
+          "properties": {
+            "col": {
+              "description": "Columna dentro del marco, desde cero.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "event": {
+              "const": "click",
+              "type": "string"
+            },
+            "row": {
+              "description": "Fila dentro del marco, desde cero.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "event",
+            "row",
+            "col"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "El keymap resolvió un comando mientras el panel tenía el teclado.\n\nEl comando y no la tecla: un plugin no ata chords por su cuenta ni lee\nlo que se teclea en otro sitio.",
+          "properties": {
+            "command": {
+              "description": "Id del comando del catálogo.",
+              "type": "string"
+            },
+            "event": {
+              "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "command"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "cols": {
+          "description": "Ancho del hueco en celdas.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cursor_name": {
+          "description": "El nombre de la fila bajo el cursor, ya pintable, si hay alguna.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dir": {
+          "$ref": "#/$defs/VPath",
+          "description": "El directorio que el panel acompaña: el del listado con el teclado.\n\nVa para que el guest sepa DÓNDE está; leer ahí sigue pidiendo\n`norte:location`, con su prefijo consentido y su presupuesto."
+        },
+        "kind": {
+          "description": "Cuál de sus paneles ([`PluginPanelInfo::kind`]).",
+          "type": "string"
+        },
+        "lang": {
+          "description": "El idioma del lector (`es`, `en`), para que el guest escriba en él.\n\nViaja aunque el host no traduzca nada del plugin: lo que el panel\npinta es texto suyo, y sin saber el idioma lo escribiría siempre en\nuno — que es justo lo que la ayuda y el cromo dejaron de hacer.",
+          "type": "string"
+        },
+        "plugin_id": {
+          "description": "Qué plugin lo pinta.",
+          "type": "string"
+        },
+        "rows": {
+          "description": "Alto del hueco en celdas.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "contentEncoding": "base64",
+          "description": "El estado opaco que el guest devolvió la última vez, si lo hubo.\n\nViaja en base64 y se ACOTA al deserializar a\n[`PANEL_MAX_STATE_BYTES`]: por encima, el mensaje entero es inválido.\nEl tope va aquí y no solo a la vuelta del guest porque esto lo manda\nun CLIENTE —cualquiera que hable el socket—, y sin él bastaría con\ndevolver un estado enorme para que el daemon lo decodificara y se lo\ncopiara al guest.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "plugin_id",
+        "kind",
+        "dir",
+        "cols",
+        "rows",
+        "lang"
+      ],
+      "type": "object"
+    },
+    "PluginPanelRenderResult": {
+      "description": "Resultado de [`PLUGIN_PANEL_RENDER`]: el marco, o NADA si no hay panel que\nlo pinte, no está consentido, o el guest no supo.\n\nEn el wire eso es `{plugin_id, lines, …}` (hubo marco) o `{}` (no lo hubo):\nel campo va con `#[serde(flatten)]`, así que «nada» es un objeto VACÍO y\nnunca `null` — mismo trato que `plugin.preview` y su gemelo estilado.\nQuien lo lea comparando con `null` no verá jamás un marco ausente.\n\nQue falte no es un error: el hueco se queda con el último marco que tuviera\ny lo dice. Un panel es cosmético, y lo cosmético se degrada.",
+      "properties": {
+        "hits": {
+          "default": [],
+          "description": "Las zonas pulsables.",
+          "items": {
+            "$ref": "#/$defs/PanelHit"
+          },
+          "type": "array"
+        },
+        "lines": {
+          "description": "Las líneas, de arriba abajo.\n\nEl tramo es el MISMO tipo que el de una preview estilada\n([`SpanWire`]), no un gemelo: así el frontend lo pinta con el código\nque ya tiene, y el protocolo no acaba con dos formas de decir «este\ntexto va de este color» — la segunda siempre sería la que alguien\nolvida validar igual.",
+          "items": {
+            "items": {
+              "$ref": "#/$defs/SpanWire"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "plugin_id": {
+          "description": "Id del plugin que lo pintó.",
+          "type": "string"
+        },
+        "state": {
+          "contentEncoding": "base64",
+          "description": "El estado opaco que el guest quiere para la próxima vez.\n\nMismo trato que a la ida ([`PluginPanelRenderParams::state`]): base64\ncon techo al deserializar. El host no lo interpreta —no es suyo— pero\nsí lo acota, en los dos sentidos.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "PluginPreview": {
@@ -6089,6 +6439,12 @@
     "pair_transform": {
       "$ref": "#/$defs/PairTransform"
     },
+    "panel_event": {
+      "$ref": "#/$defs/PanelEvent"
+    },
+    "panel_frame": {
+      "$ref": "#/$defs/PanelFrame"
+    },
     "pending_approval": {
       "$ref": "#/$defs/PendingApproval"
     },
@@ -6148,6 +6504,15 @@
     },
     "plugin_notice": {
       "$ref": "#/$defs/PluginNotice"
+    },
+    "plugin_panel_info": {
+      "$ref": "#/$defs/PluginPanelInfo"
+    },
+    "plugin_panel_render_params": {
+      "$ref": "#/$defs/PluginPanelRenderParams"
+    },
+    "plugin_panel_render_result": {
+      "$ref": "#/$defs/PluginPanelRenderResult"
     },
     "plugin_preview": {
       "$ref": "#/$defs/PluginPreview"
@@ -6499,6 +6864,11 @@
     "plugin_list_params",
     "plugin_list_result",
     "plugin_notice",
+    "panel_event",
+    "panel_frame",
+    "plugin_panel_info",
+    "plugin_panel_render_params",
+    "plugin_panel_render_result",
     "plugin_load_error",
     "plugin_preview",
     "plugin_preview_params",
