@@ -141,7 +141,7 @@ impl App {
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
         self.panes.refresh_visible(&self.layout);
-        self.history.retain_tree(&self.layout);
+        self.podar_por_arbol();
     }
 
     /// Cierra la pestaña enfocada. Sin efecto si el pane no está en un grupo.
@@ -150,7 +150,7 @@ impl App {
         if let Some(nuevo) = self.layout.close_tab(focus) {
             self.layout = nuevo;
             self.panes.refresh_visible(&self.layout);
-            self.history.retain_tree(&self.layout);
+            self.podar_por_arbol();
         }
     }
 
@@ -168,7 +168,7 @@ impl App {
         let dest = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
         self.layout = self.layout.set_active_for(focus, dest);
         self.panes.refresh_visible(&self.layout);
-        self.history.retain_tree(&self.layout);
+        self.podar_por_arbol();
         // #329: cambiar de pestaña puede esconder el panel que tenía el
         // teclado, y entonces las teclas iban a algo que ya no está en
         // pantalla. No lo cierra nadie, así que sin esto no había quien lo
@@ -182,7 +182,7 @@ impl App {
         if self.layout.tabs_of(focus).is_some() {
             self.layout = self.layout.set_active_for(focus, n.saturating_sub(1));
             self.panes.refresh_visible(&self.layout);
-            self.history.retain_tree(&self.layout);
+            self.podar_por_arbol();
             // Mismo motivo que en `tab_cycle` (#329).
             self.settle_key_owner();
         }
@@ -196,7 +196,7 @@ impl App {
         if self.layout.tabs_of(focus).is_some() {
             self.layout = self.layout.move_tab(focus, delta);
             self.panes.refresh_visible(&self.layout);
-            self.history.retain_tree(&self.layout);
+            self.podar_por_arbol();
         }
     }
 
@@ -247,10 +247,18 @@ impl App {
     /// dejan un panel al que se llega con el ratón y no con el teclado.
     #[must_use]
     fn focus_stop(&self, id: norte_frontend::layout::SlotId) -> Option<FocusStop> {
-        let kinds = norte_frontend::layout::KindRegistry::builtin();
+        // El registro VIVO de la app, no uno de serie recién hecho: desde la
+        // fase 3 lleva dentro los paneles que aportan los plugins, y con
+        // `builtin()` un panel aportado no pasaba ni esta puerta — quedaba
+        // fuera del anillo del `Tab` y fuera del alcance del ratón.
         let kind = self.layout.kind_of(id)?;
-        if !kinds.get(kind).is_some_and(|d| d.takes_keys) {
+        if !self.kinds.get(kind).is_some_and(|d| d.takes_keys) {
             return None;
+        }
+        // Un panel de plugin se resuelve por PREFIJO, antes que la tabla de
+        // nombres de casa: su kind no se conoce al compilar.
+        if kind.as_str().starts_with("plugin:") {
+            return Some(FocusStop::Side(KeyOwner::Panel));
         }
         match kind.as_str() {
             "browser" => (0..self.panes.len())
@@ -281,6 +289,12 @@ impl App {
             return false;
         };
         self.aterrizar(stop);
+        // Señalar un panel de plugin dice CUÁL, y eso no cabe en
+        // `KeyOwner::Panel`: sin esto, con dos paneles aportados visibles el
+        // teclado iba a uno y `layout.grow` al otro.
+        if stop == FocusStop::Side(KeyOwner::Panel) {
+            self.panel_focus = Some(id);
+        }
         true
     }
 

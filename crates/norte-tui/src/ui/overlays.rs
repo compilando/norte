@@ -1260,6 +1260,7 @@ mod plugin_description_line_tests {
             description: description.map(str::to_owned),
             commands: Vec::new(),
             columns: Vec::new(),
+            panels: Vec::new(),
             has_help: false,
             manifest_digest: None,
         }

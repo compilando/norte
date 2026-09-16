@@ -1083,13 +1083,8 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     if let Some(after) = column_gesture(app, ev) {
         return after;
     }
-    // Pulsar un panel le da el TECLADO, y va ANTES que todos los caminos
-    // especializados de abajo: de quién es el teclado lo decide el hueco que
-    // hay bajo el puntero, no lo que cada camino sepa hacer después con el
-    // click. Puesto en cada camino, el panel al que ninguno atiende —el visor
-    // acoplado, la hoja, el árbol— se quedaría sin poder recibirlo.
-    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
-        enfocar_lo_pulsado(app, ev.column, ev.row);
+    if let Some(after) = pulsar_panel(app, ev) {
+        return after;
     }
     // Las barras de pestañas se atienden ANTES: sus celdas son cromo para el
     // hit test del listado, así que un click ahí caería en «este panel,
@@ -1171,6 +1166,73 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
         _ => {}
     }
     After::Nothing
+}
+
+/// Pulsar un panel: le da el TECLADO y, si cayó en una zona de un panel de
+/// plugin, ejecuta su comando (fase 3).
+///
+/// El foco va ANTES que todos los caminos especializados de `handle_at`: de
+/// quién es el teclado lo decide el hueco que hay bajo el puntero, no lo que
+/// cada camino sepa hacer después con el click. Puesto en cada camino, el panel
+/// al que ninguno atiende —el visor acoplado, la hoja, el árbol— se quedaría
+/// sin poder recibirlo.
+///
+/// La zona va por el MISMO camino que un botón de la barra de paneles, que es
+/// el mismo que su atajo de teclado: un plugin no ejecuta nada por su cuenta
+/// —nombra un comando del catálogo y lo despacha norte—, así que un clic aquí
+/// no puede hacer nada que una tecla no pudiera. La policy queda intacta
+/// (regla dura 9).
+fn pulsar_panel(app: &mut App, ev: MouseEvent) -> Option<After> {
+    if !matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
+        return None;
+    }
+    enfocar_lo_pulsado(app, ev.column, ev.row);
+    let cmd = zona_de_panel_en(app, ev.column, ev.row)?;
+    // Y se suelta el gesto en vuelo, como la barra: sin esto, un clic en una
+    // fila y otro en la zona dentro de la ventana del doble clic se leían como
+    // uno solo.
+    app.mouse.drag.cancel();
+    app.mouse.last_click = None;
+    app.pending_panel_command = Some(cmd);
+    Some(After::PanelBar)
+}
+
+/// El comando de la zona pulsable del panel de plugin que hay en `(col, row)`,
+/// si la hay (fase 3).
+///
+/// Las coordenadas del marco son las de DENTRO del borde: el guest describe su
+/// contenido y no sabe dónde cayó su hueco, así que la cuenta —restar el
+/// origen del hueco y el borde— la hace quien pintó, que es esta casa.
+///
+/// El argumento del `Hit` todavía no viaja: el catálogo de comandos del
+/// terminal no toma parámetros, así que una zona ejecuta su comando y nada
+/// más. Cuando exista un comando con operando, entra por aquí.
+fn zona_de_panel_en(app: &App, col: u16, row: u16) -> Option<String> {
+    let slot = app.panel_slot()?;
+    let rect = app.mouse.slots.iter().find(|s| s.slot == slot)?;
+    if !rect.contains(col, row) {
+        return None;
+    }
+    // DENTRO del borde por los cuatro lados. `checked_sub` solo cuida el
+    // arriba-izquierda: sin acotar por el otro lado, un clic en el borde
+    // derecho daba la columna siguiente a la última de dentro, y una zona que
+    // ocupa el ancho entero —el caso normal de una etiqueta pulsable— se
+    // disparaba al pulsar el propio marco, por ejemplo yendo a arrastrarlo.
+    let dentro_x = col
+        .checked_sub(rect.x.saturating_add(1))
+        .filter(|x| *x < rect.width.saturating_sub(2))?;
+    let dentro_y = row
+        .checked_sub(rect.y.saturating_add(1))
+        .filter(|y| *y < rect.height.saturating_sub(2))?;
+    let marco = app.paneles.get(slot)?.frame.as_ref()?;
+    marco
+        .hit_at(dentro_y, dentro_x)
+        .map(|h| h.command.clone())
+        // El comando lo elige el PLUGIN, igual que la etiqueta, y nada los ata:
+        // una zona que pone «Actualizar» podía nombrar `pane.unpack`. El filtro
+        // deja el clic con el mismo alcance que la tecla de un panel enfocado
+        // (`ALLOW_PANEL`), que es lo que esta casa promete.
+        .filter(|c| norte_frontend::frame::zona_puede(c))
 }
 
 /// Le da el teclado al panel que hay bajo `(col, row)`.

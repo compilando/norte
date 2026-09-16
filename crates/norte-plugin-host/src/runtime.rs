@@ -576,6 +576,33 @@ impl PluginRuntime {
         })
     }
 
+    /// Instancia un guest de PANEL (world `norte-panel`, fase 3 del programa
+    /// 2026-09-15) con el MISMO sandbox y límites que [`Self::instantiate`].
+    ///
+    /// # Errors
+    /// Igual que [`Self::instantiate`].
+    pub fn instantiate_panel(
+        &self,
+        wasm_path: &Path,
+        caps: Capabilities,
+        location: Option<Arc<dyn LocationHost>>,
+    ) -> Result<PanelInstance, RuntimeError> {
+        use crate::bindings::panel_world::NortePanel;
+        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        // La ubicación se enchufa ANTES de instanciar, como en columnas y
+        // renamers. Sin esta línea el world importa `norte:location` y cada
+        // llamada del guest contesta «no disponible»: una capacidad linkada y
+        // muerta, y un panel de git que no puede leer `.git/HEAD`.
+        store.data_mut().location = location;
+        let bindings = NortePanel::instantiate(&mut store, &component, &linker)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        Ok(PanelInstance {
+            store,
+            bindings,
+            epoch_deadline: self.epoch_deadline,
+        })
+    }
+
     /// Instancia un guest de MINIATURAS (world `norte-thumbnail`, ADR 0107)
     /// con el MISMO sandbox y límites que [`Self::instantiate`]. Devuelve
     /// una [`ThumbnailInstance`] para llamar a `render`.
@@ -1546,6 +1573,135 @@ pub struct Thumbnail {
     pub width: u32,
     /// Ídem.
     pub height: u32,
+}
+
+/// El marco que un guest de PANEL describió, ya ACOTADO por el host (fase 3).
+///
+/// Lo que cruza de aquí en adelante cabe en las cotas del proto: un guest que
+/// mande mil líneas está describiendo algo que nadie va a leer, y recortar es
+/// fail-soft — un panel es cosmético, y lo cosmético se degrada en vez de
+/// tumbar la pantalla.
+///
+/// Sin `PartialEq`: los tipos que `bindgen!` genera para el guest no lo
+/// derivan, y comparar dos marcos por igualdad no lo necesita nadie —lo que
+/// se compara es lo que ya cruzó el puente, que sí tiene sus propios tipos.
+#[derive(Debug, Clone)]
+pub struct PanelFrame {
+    /// Las líneas, de arriba abajo.
+    pub lines: Vec<Vec<panel_iface::Span>>,
+    /// Las zonas pulsables que sobrevivieron al recorte.
+    pub hits: Vec<panel_iface::Hit>,
+    /// El estado opaco que el guest quiere para la próxima vez.
+    pub state: Vec<u8>,
+}
+
+/// Los tipos del guest de panel (world `norte-panel`), para nombrarlos sin
+/// repetir la ruta entera de los bindings.
+pub use crate::bindings::panel_world::exports::norte::panel::panel as panel_iface;
+
+/// Una instancia viva de un guest de PANEL (fase 3, world `norte-panel`):
+/// su `Store` y los bindings para llamar a `render`.
+pub struct PanelInstance {
+    store: Store<HostState>,
+    bindings: crate::bindings::panel_world::NortePanel,
+    /// Los ticks de época de CADA llamada. Ver [`PluginInstance::rearm`].
+    epoch_deadline: u64,
+}
+
+impl std::fmt::Debug for PanelInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PanelInstance").finish_non_exhaustive()
+    }
+}
+
+impl PanelInstance {
+    fn rearm(&mut self) {
+        self.store.set_epoch_deadline(self.epoch_deadline);
+    }
+
+    /// Instala los valores VALIDADOS de `[config]` que el guest verá vía
+    /// `host-config::get`/`all`. Llamar ANTES de `render`.
+    pub fn set_settings(&mut self, settings: BTreeMap<String, String>) {
+        self.store.data_mut().settings = settings;
+    }
+
+    /// Pide el marco de un panel y lo ACOTA antes de devolverlo.
+    ///
+    /// El recorte es del host y no del guest: las cotas viven en el proto
+    /// porque son del contrato, y dos superficies que recortaran distinto
+    /// enseñarían paneles distintos para el mismo plugin. Una zona pulsable
+    /// que apunte a una línea que el recorte se llevó se va con ella — un
+    /// botón invisible que ejecuta algo es peor que un botón que falta.
+    ///
+    /// # Errors
+    /// - [`RuntimeError::Guest`] si el guest dijo que no (`Err`).
+    /// - [`RuntimeError::Trap`] / [`RuntimeError::Deadline`] si atrapó o se
+    ///   pasó de tiempo.
+    /// - [`RuntimeError::ReturnTooLarge`] si el estado pasa de su techo.
+    pub fn render_panel(
+        &mut self,
+        kind: &str,
+        context: &panel_iface::PanelContext,
+        location: Option<&panel_iface::LocationRef>,
+        state: &[u8],
+        event: &panel_iface::PanelEvent,
+    ) -> Result<PanelFrame, RuntimeError> {
+        self.rearm();
+        let out = self
+            .bindings
+            .norte_panel_panel()
+            .call_render(&mut self.store, kind, context, location, state, event)
+            .map_err(|e| map_call_error(&e))?
+            // El motivo del guest es texto suyo y va al registro: acotado
+            // como cualquier línea de `host-log`.
+            .map_err(|mut m| {
+                if m.len() > MAX_LOG_CHARS {
+                    let corte = (0..=MAX_LOG_CHARS)
+                        .rev()
+                        .find(|i| m.is_char_boundary(*i))
+                        .unwrap_or(0);
+                    m.truncate(corte);
+                }
+                RuntimeError::Guest(m)
+            })?;
+        if out.state.len() > norte_proto::methods::PANEL_MAX_STATE_BYTES {
+            return Err(RuntimeError::ReturnTooLarge {
+                len: out.state.len(),
+                cap: norte_proto::methods::PANEL_MAX_STATE_BYTES,
+            });
+        }
+        let mut lines = out.lines;
+        lines.truncate(norte_proto::methods::PANEL_MAX_LINES);
+        for linea in &mut lines {
+            linea.truncate(norte_proto::methods::PANEL_MAX_SPANS_PER_LINE);
+            // Y el TEXTO de cada tramo: sin este recorte, un marco con todas
+            // sus cuentas dentro de tope —256 líneas de 256 tramos— sigue sin
+            // tamaño máximo, porque cada tramo lleva una cadena libre. Se
+            // corta en un límite de carácter, no de byte, o el recorte
+            // partiría un UTF-8 por la mitad.
+            for tramo in linea.iter_mut() {
+                if tramo.text.len() > norte_proto::methods::PANEL_MAX_SPAN_TEXT {
+                    let corte = (0..=norte_proto::methods::PANEL_MAX_SPAN_TEXT)
+                        .rev()
+                        .find(|i| tramo.text.is_char_boundary(*i))
+                        .unwrap_or(0);
+                    tramo.text.truncate(corte);
+                }
+            }
+        }
+        let alto = lines.len();
+        let hits: Vec<panel_iface::Hit> = out
+            .hits
+            .into_iter()
+            .filter(|h| usize::from(h.row) < alto && h.width > 0)
+            .take(norte_proto::methods::PANEL_MAX_HITS)
+            .collect();
+        Ok(PanelFrame {
+            lines,
+            hits,
+            state: out.state,
+        })
+    }
 }
 
 /// Una instancia viva de un guest de MINIATURAS (ADR 0107, world

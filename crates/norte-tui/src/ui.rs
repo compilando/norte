@@ -68,8 +68,8 @@ use overlays::{
 };
 use pane::draw_pane;
 use panels::{
-    draw_log, draw_metadata, draw_places, draw_preview, draw_processes, draw_tasks, draw_tree,
-    draw_viewer,
+    draw_log, draw_metadata, draw_places, draw_plugin_panel, draw_preview, draw_processes,
+    draw_tasks, draw_tree, draw_viewer,
 };
 use pickers::{
     draw_columns_picker, draw_connections_picker, draw_layout_picker, draw_profile_picker,
@@ -298,6 +298,14 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
         let sigue = crate::metadata::follows(app, &res);
         draw_metadata(frame, rect, e.as_ref(), sigue.as_ref(), app, false);
     }
+    // El panel de un PLUGIN (fase 3) se resuelve por PREFIJO: su kind no se
+    // conoce al compilar, así que no pasa por `placed_of_kind`.
+    if let Some(id) = app.panel_slot()
+        && let Some(rect) = geometry::slot_rect(&res, id)
+    {
+        let con_teclado = app.key_owner() == crate::app::KeyOwner::Panel;
+        draw_plugin_panel(frame, rect, app, id, con_teclado);
+    }
     draw_tasks(frame, tasks_area, app);
     draw_status(frame, status_area, app);
 }
@@ -393,7 +401,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         draw_profile_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }
     if let Some(p) = &app.layout_picker {
-        draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker);
+        draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker, &app.kinds);
     }
     // #140: el selector de conexiones, mismo allowlist y mismo hint que los
     // otros dos — es una lista con cursor que no muta nada.

@@ -839,6 +839,12 @@ pub async fn dispatch(
                 // el tope del manifiesto.
                 let mut plugins = list.plugins;
                 crate::app::clamp_plugin_descriptions(&mut plugins);
+                // Y el catálogo que el gestor acaba de traer vuelve a declarar
+                // los paneles (fase 3): aprobar un plugin aquí tiene que
+                // colocar su panel en esta sesión, y desactivarlo tiene que
+                // quitarlo. Pedirlo solo al arrancar dejaba lo segundo sin
+                // pasar nunca.
+                app.kinds.insert_panels(&plugins);
                 app.extensions = Some(ExtensionManager {
                     plugins,
                     errors: list.errors,
@@ -875,6 +881,9 @@ pub async fn dispatch(
                     // `app.extensions` — un solo punto de entrada, mismo tope.
                     let mut plugins = list.plugins;
                     crate::app::clamp_plugin_descriptions(&mut plugins);
+                    // Mismo catálogo, misma declaración de paneles que en el
+                    // brazo del gestor (fase 3).
+                    app.kinds.insert_panels(&plugins);
                     rows.extend(crate::palette::plugin_rows(&plugins));
                 }
                 Err(e) => app.message = Some(error_message(&e)),

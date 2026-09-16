@@ -695,6 +695,23 @@ impl PluginRegistry {
                                 header: c.header.clone(),
                             })
                             .collect(),
+                        // Y los paneles (0.74.0, fase 3), con el MISMO criterio
+                        // que las columnas: orden del manifiesto y puro
+                        // descubrimiento, sin gatear por aprobado ni
+                        // habilitado. Qué huecos pide un plugin es justo lo
+                        // que un humano mira ANTES de aprobarlo.
+                        panels: e
+                            .manifest
+                            .contributions
+                            .panel
+                            .iter()
+                            .map(|p| norte_proto::methods::PluginPanelInfo {
+                                kind: p.kind.clone(),
+                                title: p.title.clone(),
+                                min_cols: p.min_cols,
+                                min_rows: p.min_rows,
+                            })
+                            .collect(),
                         // El ancla que el humano está MIRANDO (#282): es lo que
                         // devuelve al confirmar, y lo que el daemon compara con la
                         // suya antes de conceder. Cubre `category` y
@@ -1177,6 +1194,45 @@ impl PluginRegistry {
     pub fn resolve_thumbnailer(&self, mime: &str) -> Option<ResolvedPreviewer> {
         let exact = self.thumbnailer_matching(|pat| pat == mime);
         exact.or_else(|| self.thumbnailer_matching(|pat| mimetype_matches(pat, mime)))
+    }
+
+    /// El plugin consentido que pinta ese panel, si lo hay (0.74.0, fase 3).
+    ///
+    /// Por id Y kind, no por orden: un panel se abre por su nombre de hueco
+    /// (`plugin:<id>:<kind>`), así que aquí no hay nada que resolver por
+    /// prioridad — o ese plugin ofrece ese panel, o no hay marco.
+    ///
+    /// Fail-closed con el digest vigente, como los demás: un plugin cuyo
+    /// manifiesto cambió tras aprobarse no pinta hasta que se vuelva a
+    /// consentir.
+    #[must_use]
+    pub fn resolve_panel(&self, plugin_id: &str, kind: &str) -> Option<ResolvedPreviewer> {
+        self.catalog.plugins.iter().find_map(|e| {
+            if e.manifest.id != plugin_id {
+                return None;
+            }
+            let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+            if !Self::approval_is_current(&st, e) || !st.enabled {
+                return None;
+            }
+            if !e
+                .manifest
+                .contributions
+                .panel
+                .iter()
+                .any(|p| p.kind == kind)
+            {
+                return None;
+            }
+            let wasm = Self::verified_wasm(&e.dir)?;
+            Some((
+                e.manifest.id.clone(),
+                e.manifest.name.clone(),
+                wasm,
+                e.manifest.capabilities.clone(),
+                e.settings.clone(),
+            ))
+        })
     }
 
     fn thumbnailer_matching(&self, casa: impl Fn(&str) -> bool) -> Option<ResolvedPreviewer> {
@@ -3958,6 +4014,20 @@ impl LocationSession {
             prefix: self.prefix.clone(),
         }
     }
+
+    /// El mismo par, para un guest de PANEL (fase 3).
+    ///
+    /// Un método aparte y no un genérico porque los dos tipos son distintos
+    /// aunque tengan la misma forma: `norte:panel` es otro paquete WIT, y WIT
+    /// no comparte tipos entre paquetes (ADR 0094). Lo que se comparte es la
+    /// sesión —un solo token, una sola retirada en su `Drop`—, que es lo que
+    /// de verdad importa que no se duplique.
+    pub(crate) fn as_ref_panel(&self) -> norte_plugin_host::panel_iface::LocationRef {
+        norte_plugin_host::panel_iface::LocationRef {
+            token: self.token.clone(),
+            prefix: self.prefix.clone(),
+        }
+    }
 }
 
 impl Drop for LocationSession {
@@ -4013,6 +4083,194 @@ impl norte_plugin_host::LocationHost for LocationMint {
                 kind: kind_to_wire(e.kind),
             })
             .collect())
+    }
+}
+
+/// Lo que cambia de un repintado a otro: dónde mira el panel, qué tamaño
+/// tiene, qué se guardó el guest y qué acaba de pasar.
+///
+/// Juntos en una estructura y no como seis parámetros porque son UNA cosa —la
+/// llamada— y porque separados eran ocho argumentos, que es más de los que
+/// nadie lee de corrido.
+#[derive(Debug, Clone, Copy)]
+pub struct PanelCall<'a> {
+    /// El directorio que el panel está mirando. Es la raíz de la ubicación
+    /// TAL CUAL, no su padre (#239).
+    pub dir: &'a norte_proto::VPath,
+    /// Si se puede subir buscando la marca de raíz del proyecto. Solo el
+    /// humano.
+    pub climb: bool,
+    /// Cuál de los paneles del plugin se pinta.
+    pub kind: &'a str,
+    /// Tamaño, idioma y fila bajo el cursor.
+    pub contexto: &'a norte_plugin_host::panel_iface::PanelContext,
+    /// Lo que el guest se guardó la última vez, opaco.
+    pub state: &'a [u8],
+    /// Qué provocó este repintado.
+    pub evento: &'a norte_plugin_host::panel_iface::PanelEvent,
+}
+
+/// Pinta el panel `kind` de un plugin YA resuelto, bloqueando.
+///
+/// La misma función para el daemon y para el backend embebido, y eso es el
+/// punto: son dos caminos hasta el mismo guest, y escribir dos veces cuándo se
+/// acuña una ubicación —o hasta cuándo vive— es la divergencia que persigue el
+/// ADR 0077. Aquí el `ntc` sin daemon y el `ntc` con daemon no pueden pintar
+/// distinto.
+///
+/// Devuelve el id junto al marco porque el tuple ya lo traía y quien lo manda
+/// al wire lo necesita.
+///
+/// `climb` solo lo pone el HUMANO: un agente está acotado a su scope, y trepar
+/// por encima buscando la raíz del proyecto es lo que el gate de lectura
+/// impide.
+///
+/// # Errors
+/// Lo que diga el runtime: instanciar puede fallar y el guest puede reventar o
+/// pasarse de época. Un fallo aquí es «no hay marco», nunca una pantalla con
+/// un error — lo cosmético se degrada.
+pub fn render_panel_blocking(
+    runtime: &norte_plugin_host::PluginRuntime,
+    resuelto: ResolvedPreviewer,
+    llamada: &PanelCall<'_>,
+) -> Result<(String, norte_plugin_host::PanelFrame), norte_plugin_host::RuntimeError> {
+    let &PanelCall {
+        dir,
+        climb,
+        kind,
+        contexto,
+        state,
+        evento,
+    } = llamada;
+    let (id, _name, wasm, caps, settings) = resuelto;
+    // El mint de PRODUCCIÓN, que trae las raíces protegidas de la policy; sin
+    // permiso no se acuña nada y el panel se pinta con lo que el contexto le
+    // cuenta, que es una degradación honesta.
+    let mint = LocationMint::new(norte_vfs_local::Bounds::default());
+    let host: Option<std::sync::Arc<dyn norte_plugin_host::LocationHost>> =
+        caps.location.granted().then(|| {
+            std::sync::Arc::clone(&mint) as std::sync::Arc<dyn norte_plugin_host::LocationHost>
+        });
+    let mut inst = runtime.instantiate_panel(&wasm, caps.clone(), host)?;
+    inst.set_settings(settings);
+    // La sesión vive lo que dura ESTA llamada y se retira sola al caer: lo que
+    // se conserva entre repintados es el estado opaco del guest, nunca el
+    // permiso de leer.
+    let sesion = caps
+        .location
+        .granted()
+        .then(|| mint.mint_for(dir, caps.location_root_marker.as_deref(), climb))
+        .flatten();
+    let refe = sesion.as_ref().map(LocationSession::as_ref_panel);
+    let marco = inst.render_panel(kind, contexto, refe.as_ref(), state, evento)?;
+    Ok((id, marco))
+}
+
+/// El marco que devolvió el guest, en la forma del wire.
+///
+/// Compartida por el mismo motivo que [`render_panel_blocking`]: dos copias de
+/// esta traducción acabarían discrepando en algo pequeño —el color como tres
+/// bytes o como cadena, el estado vacío viajando o no— y la discrepancia solo
+/// se vería con un plugin delante.
+#[must_use]
+pub fn panel_frame_to_wire(
+    plugin_id: String,
+    marco: norte_plugin_host::PanelFrame,
+) -> norte_proto::methods::PanelFrame {
+    let lines = marco
+        .lines
+        .into_iter()
+        .map(|linea| {
+            linea
+                .into_iter()
+                .map(|s| norte_proto::methods::SpanWire {
+                    text: s.text,
+                    role: s.role,
+                    // El MISMO tipo que una preview estilada, y con la misma
+                    // forma de color: tres bytes, no una cadena hex. Una
+                    // segunda codificación del mismo concepto es la que
+                    // alguien acaba validando distinto.
+                    fg: s.fg.map(|(r, g, b)| [r, g, b]),
+                    bg: s.bg.map(|(r, g, b)| [r, g, b]),
+                })
+                .collect()
+        })
+        .collect();
+    let hits = marco
+        .hits
+        .into_iter()
+        .map(|h| norte_proto::methods::PanelHit {
+            row: h.row,
+            col: h.col,
+            width: h.width,
+            command: h.command,
+            arg: h.arg,
+        })
+        .collect();
+    norte_proto::methods::PanelFrame {
+        plugin_id,
+        lines,
+        hits,
+        // Los bytes tal cual: el wire los codifica y los acota por su cuenta
+        // (`panel_state_wire`). Un estado vacío no viaja.
+        state: (!marco.state.is_empty()).then_some(marco.state),
+    }
+}
+
+/// El evento del wire, en la forma que entiende el guest.
+///
+/// `Refresh` Y lo que este binario no conoce, juntos a propósito: son el mismo
+/// caso. [`norte_proto::methods::PanelEvent`] es `#[non_exhaustive]` para poder
+/// crecer sin romper a nadie, así que un cliente más nuevo puede mandar una
+/// variante futura, y el destino correcto es el evento NEUTRO — el panel se
+/// repinta con lo que hay. Descartarla dejaría el hueco congelado sin decir por
+/// qué.
+#[must_use]
+pub fn panel_event_to_host(
+    ev: &norte_proto::methods::PanelEvent,
+) -> norte_plugin_host::panel_iface::PanelEvent {
+    use norte_plugin_host::panel_iface as pif;
+    match ev {
+        norte_proto::methods::PanelEvent::Click { row, col } => pif::PanelEvent::Click(pif::Cell {
+            row: *row,
+            col: *col,
+        }),
+        norte_proto::methods::PanelEvent::Command { command } => {
+            pif::PanelEvent::Command(command.clone())
+        }
+        _ => pif::PanelEvent::Refresh,
+    }
+}
+
+#[cfg(test)]
+mod panel_helpers_tests {
+    use norte_plugin_host::panel_iface as pif;
+    use norte_proto::methods::PanelEvent;
+
+    /// Cada evento del wire llega al guest como el suyo, y lo que este binario
+    /// no conoce llega como el NEUTRO.
+    ///
+    /// La última parte es la que importa: `PanelEvent` es `#[non_exhaustive]`
+    /// para poder crecer, así que un cliente más nuevo puede mandar una
+    /// variante que este daemon no tiene. Descartarla dejaría el hueco
+    /// congelado sin decir por qué; repintar con lo que hay es la degradación
+    /// honesta. El test existe porque ese comodín se lee como un descuido.
+    #[test]
+    fn un_evento_desconocido_se_traduce_al_neutro() {
+        assert!(matches!(
+            super::panel_event_to_host(&PanelEvent::Click { row: 2, col: 5 }),
+            pif::PanelEvent::Click(pif::Cell { row: 2, col: 5 })
+        ));
+        assert!(matches!(
+            super::panel_event_to_host(&PanelEvent::Command {
+                command: "git.fetch".to_owned()
+            }),
+            pif::PanelEvent::Command(c) if c == "git.fetch"
+        ));
+        assert!(matches!(
+            super::panel_event_to_host(&PanelEvent::Refresh),
+            pif::PanelEvent::Refresh
+        ));
     }
 }
 

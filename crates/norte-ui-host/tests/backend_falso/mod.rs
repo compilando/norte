@@ -241,6 +241,14 @@ pub struct Falso {
     pub valores_de_columna: HashMap<(String, String), String>,
     /// Lo que se pidió a `plugin.column_values`, en orden.
     pub columnas_pedidas: std::sync::Mutex<Vec<(String, String, Vec<VPath>)>>,
+    /// El marco que contesta `plugin.panel_render` (fase 3). `None` = ningún
+    /// plugin consentido pinta ese panel, que es el caso de casi todos los
+    /// tests.
+    pub marco_de_panel: Option<norte_proto::methods::PanelFrame>,
+    /// Lo que se pidió a `plugin.panel_render`, en orden: con esto se
+    /// comprueba QUÉ se le cuenta al guest —el directorio, el tamaño sin
+    /// marco, la fila bajo el cursor— y que no se le pide dos veces lo mismo.
+    pub paneles_pedidos: std::sync::Mutex<Vec<norte_proto::methods::PluginPanelRenderParams>>,
     /// Lo que contesta una búsqueda, por patrón: `(glob, hallazgos)`.
     pub hallazgos: HashMap<String, Vec<VPath>>,
     /// Los patrones que se buscaron, en orden.
@@ -1074,6 +1082,19 @@ impl HostBackend for Falso {
                 .map(|p| tabla.get(&(column.clone(), p.to_wire())).cloned())
                 .collect())
         })
+    }
+
+    fn plugin_panel_render(
+        &self,
+        params: norte_proto::methods::PluginPanelRenderParams,
+    ) -> BoxFuture<'static, Result<Option<norte_proto::methods::PanelFrame>, Error>> {
+        self.paneles_pedidos
+            .lock()
+            .expect("mutex de paneles")
+            .push(params);
+        self.latido();
+        let marco = self.marco_de_panel.clone();
+        Box::pin(async move { Ok(marco) })
     }
 
     fn volumes(&self) -> BoxFuture<'static, Result<Vec<norte_proto::methods::Volume>, Error>> {

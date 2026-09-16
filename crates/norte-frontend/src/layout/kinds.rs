@@ -30,6 +30,26 @@ const ROLES_BROWSER: &[RoleId] = &[RoleId::Active, RoleId::Target];
 /// Ningún rol.
 const SIN_ROLES: &[RoleId] = &[];
 
+/// El nombre de hueco de un panel aportado por un plugin (fase 3).
+///
+/// `plugin:<id>:<kind>`, y el prefijo es la garantía: [`KindId`] es un
+/// `String` sin validar, así que lo único que impide que un plugin declare un
+/// panel llamado `browser` y secuestre el listado es que su nombre real nunca
+/// empieza por `plugin:`. Los dos frontends lo forman AQUÍ y no cada uno por
+/// su cuenta, que es como dos superficies acaban abriendo huecos distintos
+/// para el mismo panel.
+///
+/// ```
+/// use norte_frontend::layout::panel_kind_id;
+///
+/// let id = panel_kind_id("org.norte.git-panel", "git");
+/// assert_eq!(id.as_str(), "plugin:org.norte.git-panel:git");
+/// ```
+#[must_use]
+pub fn panel_kind_id(plugin_id: &str, kind: &str) -> KindId {
+    KindId::new(format!("plugin:{plugin_id}:{kind}"))
+}
+
 /// Los kinds que este binario sabe pintar.
 ///
 /// ABIERTO por construcción: [`KindRegistry::get`] devuelve `None` para lo que
@@ -122,6 +142,74 @@ impl KindRegistry {
         self.decls.iter().find(|d| &d.id == id)
     }
 
+    /// Declara los paneles que aportan los plugins CONSENTIDOS (fase 3).
+    ///
+    /// Un panel se llama `plugin:<id>:<kind>`, y ese prefijo es lo que impide
+    /// que choque con uno de casa: `KindId` no valida nada —es un `String`—,
+    /// así que la garantía la da el NOMBRE, no el tipo. Un plugin llamado
+    /// `browser` no puede secuestrar el listado.
+    ///
+    /// Solo los aprobados Y activados, con el mismo criterio que las columnas
+    /// (`validated_plugin_requests`): un panel de un plugin que el lector no
+    /// ha consentido no existe para el reparto, así que su hueco no se coloca
+    /// y su botón no sale en la barra.
+    ///
+    /// REEMPLAZA lo aportado, no lo añade: retirar el consentimiento a un
+    /// plugin tiene que retirar su panel en la misma sesión. Añadiendo, un
+    /// plugin desactivado en el gestor conservaba su kind declarado hasta el
+    /// siguiente arranque —su hueco seguía colocándose y tomando foco—, que es
+    /// lo contrario de lo que promete el párrafo de arriba. Las de serie no se
+    /// tocan, y lo aportado se reconstruye entero en cada catálogo.
+    ///
+    /// Dentro de eso el orden se mantiene: `decls()` promete las de serie
+    /// primero y lo aportado detrás.
+    pub fn insert_panels(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
+        // El alfabeto de un nombre que va a un `KindId`: ASCII alfanumérico y
+        // `. _ -`, con tope. Deja fuera el espacio, los dos puntos —que son el
+        // separador del propio prefijo—, los controles, los saltos de línea y
+        // cualquier cosa de ancho doble o de derecha a izquierda.
+        let valido = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        };
+        self.decls.retain(|d| !d.id.as_str().starts_with("plugin:"));
+        for p in plugins.iter().filter(|p| p.approved && p.enabled) {
+            for panel in &p.panels {
+                // El id y el kind son texto de un TERCERO y acaban en un
+                // `KindId`, que no valida nada: de ahí salen el nombre que se
+                // pinta y la clave que se guarda en la sesión. Un kind con un
+                // salto de línea, un carácter de ancho doble o una secuencia
+                // de escape rompe la barra y el fichero de disposición, así
+                // que lo que no encaje en el alfabeto no se declara — el panel
+                // desaparece, que es el fallo seguro.
+                if !valido(&p.id) || !valido(&panel.kind) {
+                    continue;
+                }
+                self.insert(KindDecl {
+                    id: panel_kind_id(&p.id, &panel.kind),
+                    // Lo que el manifiesto pida, y si no pide nada, el mínimo
+                    // de un panel lateral cualquiera: por debajo de eso no
+                    // cabe ni una línea con su marco.
+                    min: (panel.min_cols.unwrap_or(20), panel.min_rows.unwrap_or(4)),
+                    // Se enfoca y toma teclas: un panel que no pudiera recibir
+                    // una tecla no podría ofrecer nada que no fuera un clic, y
+                    // el guest recibe COMANDOS precisamente para eso.
+                    focusable: true,
+                    takes_keys: true,
+                    // Uno de cada: dos copias del mismo panel de git no son un
+                    // layout, son un fallo. Mismo criterio que los laterales
+                    // de casa.
+                    multi: false,
+                    // Ningún rol: un panel de plugin no es el destino de una
+                    // copia, igual que el sidebar o el árbol.
+                    roles: SIN_ROLES,
+                });
+            }
+        }
+    }
+
     /// Añade o reemplaza una declaración.
     pub fn insert(&mut self, decl: KindDecl) {
         if let Some(slot) = self.decls.iter_mut().find(|d| d.id == decl.id) {
@@ -196,6 +284,27 @@ mod tests {
         assert!(!reg.holds_role(&KindId::new("terminal"), RoleId::Target));
     }
 
+    /// Un panel APORTADO no sale en la barra, aunque se enfoque.
+    ///
+    /// El comando de un botón es `layout.<kind>`, y para uno aportado sería
+    /// `layout.plugin:git:status`, que no existe en ningún catálogo: la TUI lo
+    /// tiraba en silencio y la ventana contestaba «cmd-not-here». La misma
+    /// decisión con dos respuestas es justo lo que el ADR 0077 prohíbe, así
+    /// que hasta que exista el comando que lo abre y lo cierra, no hay botón.
+    #[test]
+    fn un_panel_de_plugin_no_tiene_boton_en_la_barra() {
+        let mut reg = KindRegistry::builtin();
+        reg.insert_panels(&[panel_de_plugin("git", "status", None, true)]);
+        let d = reg
+            .get(&KindId::new("plugin:git:status"))
+            .expect("está declarado");
+        assert!(d.focusable, "se enfoca");
+        assert!(
+            !crate::panelbar::es_boton(d),
+            "y aun así no sale en la barra"
+        );
+    }
+
     /// Los mínimos son lo único que el motor consulta para colapsar, así que
     /// declararlos mal se nota en toda la pantalla.
     #[test]
@@ -227,6 +336,118 @@ mod tests {
         assert!(!d.multi);
         assert!(d.roles.is_empty());
         assert!(!reg.holds_role(&KindId::new("places"), RoleId::Target));
+    }
+
+    fn panel_de_plugin(
+        id: &str,
+        kind: &str,
+        min: Option<(u16, u16)>,
+        ok: bool,
+    ) -> norte_proto::methods::PluginInfo {
+        use norte_proto::methods::PluginInfo;
+        PluginInfo {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            publisher: String::new(),
+            version: "1.0.0".to_owned(),
+            category: "panel".to_owned(),
+            capabilities: Vec::new(),
+            approved: ok,
+            enabled: ok,
+            description: None,
+            commands: Vec::new(),
+            columns: Vec::new(),
+            panels: vec![norte_proto::methods::PluginPanelInfo {
+                kind: kind.to_owned(),
+                title: "Git".to_owned(),
+                min_cols: min.map(|(c, _)| c),
+                min_rows: min.map(|(_, r)| r),
+            }],
+            has_help: false,
+            manifest_digest: None,
+        }
+    }
+
+    /// Un panel de un plugin SIN consentir no existe para el reparto.
+    ///
+    /// Mismo criterio que las columnas: el hueco no se coloca y su botón no
+    /// sale en la barra hasta que el lector aprueba y activa el plugin.
+    #[test]
+    fn un_panel_sin_consentir_no_aporta_kind() {
+        let mut reg = KindRegistry::builtin();
+        reg.insert_panels(&[panel_de_plugin("org.norte.git", "git", None, false)]);
+        assert!(
+            reg.get(&panel_kind_id("org.norte.git", "git")).is_none(),
+            "sin aprobar ni activar, no hay panel"
+        );
+    }
+
+    /// Consentido, el kind existe, lleva el prefijo que impide colisiones y
+    /// toma teclas.
+    #[test]
+    fn un_panel_consentido_es_un_kind_con_su_prefijo() {
+        let mut reg = KindRegistry::builtin();
+        reg.insert_panels(&[panel_de_plugin("org.norte.git", "git", None, true)]);
+        let decl = reg
+            .get(&panel_kind_id("org.norte.git", "git"))
+            .expect("el panel está declarado");
+        assert_eq!(decl.id.as_str(), "plugin:org.norte.git:git");
+        assert!(decl.focusable && decl.takes_keys);
+        assert!(!decl.multi, "uno de cada panel, como los laterales de casa");
+    }
+
+    /// El tamaño lo decide el MANIFIESTO cuando lo dice, y hay respaldo
+    /// cuando calla: un panel sin mínimos declarados no puede quedarse sin
+    /// ninguno, o el reparto lo colocaría en dos columnas.
+    #[test]
+    fn los_minimos_del_manifiesto_mandan_y_hay_respaldo() {
+        let mut reg = KindRegistry::builtin();
+        reg.insert_panels(&[
+            panel_de_plugin("org.norte.git", "git", Some((40, 9)), true),
+            panel_de_plugin("org.norte.otro", "x", None, true),
+        ]);
+        assert_eq!(
+            reg.get(&panel_kind_id("org.norte.git", "git"))
+                .expect("está")
+                .min,
+            (40, 9)
+        );
+        assert_eq!(
+            reg.get(&panel_kind_id("org.norte.otro", "x"))
+                .expect("está")
+                .min,
+            (20, 4)
+        );
+    }
+
+    /// Lo aportado va DETRÁS de lo de serie.
+    ///
+    /// No es cosmético: la barra de paneles pinta en el orden del registro, y
+    /// que los de siempre estén donde siempre es lo que deja aprender la
+    /// posición de un botón con el dedo.
+    #[test]
+    fn lo_aportado_no_se_cuela_delante_de_lo_de_serie() {
+        let antes: Vec<String> = KindRegistry::builtin()
+            .decls()
+            .iter()
+            .map(|d| d.id.as_str().to_owned())
+            .collect();
+        let mut reg = KindRegistry::builtin();
+        reg.insert_panels(&[panel_de_plugin("org.norte.git", "git", None, true)]);
+        let despues: Vec<String> = reg
+            .decls()
+            .iter()
+            .map(|d| d.id.as_str().to_owned())
+            .collect();
+        assert_eq!(
+            &despues[..antes.len()],
+            &antes[..],
+            "los de serie, intactos"
+        );
+        assert_eq!(
+            despues.last().map(String::as_str),
+            Some("plugin:org.norte.git:git")
+        );
     }
 
     /// `insert` REEMPLAZA: dos declaraciones del mismo kind harían que `get`

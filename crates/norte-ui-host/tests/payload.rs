@@ -225,6 +225,10 @@ fn filas_de(s: &norte_ui_host::dto::SlotView) -> usize {
         // El visor acoplado (#291) lleva las líneas del fichero, ENTERAS
         // hasta el tope del puente: cuentan, y la cota de arriba las acota.
         SlotView::Preview(p) => p.viewer.as_ref().map_or(0, |v| v.lines.len()),
+        // El panel de un PLUGIN lleva las líneas que describió su guest, y
+        // cuentan como cualquier otra: el tope de líneas es del protocolo
+        // (`PANEL_MAX_LINES`), pero quien las paga es este mensaje.
+        SlotView::Panel(p) => p.lines.len(),
         // El panel de procesos no lleva sus filas en el hueco: las lleva
         // `ViewSnapshot::tasks`, que es una sola lista para toda la pantalla.
         SlotView::Processes { .. } | SlotView::Unsupported { .. } => 0,

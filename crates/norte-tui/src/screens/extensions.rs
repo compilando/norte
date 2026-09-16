@@ -416,6 +416,7 @@ mod extensions_help_tests {
             description: None,
             commands: Vec::new(),
             columns: Vec::new(),
+            panels: Vec::new(),
             has_help,
             manifest_digest: None,
         }
@@ -516,6 +517,9 @@ async fn relistar_extensiones(app: &mut App, backend: &Backend) {
         Ok(list) => {
             let mut plugins = list.plugins;
             crate::app::clamp_plugin_descriptions(&mut plugins);
+            // Este es el refresco de después de aprobar, activar o desinstalar
+            // (fase 3): si el catálogo se relee, lo aportado se redeclara.
+            app.kinds.insert_panels(&plugins);
             let config = app.extensions.as_mut().and_then(|m| m.config.take());
             let tope = plugins.len().saturating_sub(1);
             app.extensions = Some(crate::app::ExtensionManager {
@@ -561,6 +565,7 @@ mod aprobacion_tests {
             description: None,
             commands: Vec::new(),
             columns: Vec::new(),
+            panels: Vec::new(),
             has_help: false,
             manifest_digest: None,
         }

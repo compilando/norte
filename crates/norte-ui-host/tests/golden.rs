@@ -173,6 +173,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::DirectoryPicked { .. } => "directory_picked",
         UiAction::WindowFocus { .. } => "window_focus",
         UiAction::FilesDropped { .. } => "files_dropped",
+        UiAction::PanelClick { .. } => "panel_click",
         UiAction::TreeActivateRow { .. } => "tree_activate_row",
         UiAction::TreeToggleRow { .. } => "tree_toggle_row",
         UiAction::RefreshSlot { .. } => "refresh_slot",
@@ -229,6 +230,11 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
 }
 
 /// Las que nombran una fila: llevan clave Y generación (ADR 0068).
+///
+/// Crece con cada acción nueva, y es lo que debe hacer: como
+/// [`slots_de_referencia`], es UNA lista de literales sin lógica dentro, y
+/// repartirla escondería justo lo que este fichero enseña de un vistazo.
+#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
 fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
     vec![
         (
@@ -258,6 +264,17 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("log_scroll", UiAction::LogScroll { delta: -3 }),
+        (
+            "panel_click",
+            UiAction::PanelClick {
+                slot_id: 13,
+                // Celdas DENTRO del marco: el renderer ya restó el borde, y
+                // el host resuelve con ellas qué zona era. El comando no
+                // viaja.
+                row: 2,
+                col: 7,
+            },
+        ),
         (
             "program_finished",
             UiAction::ProgramFinished {
@@ -795,8 +812,13 @@ fn disposicion_de_referencia() -> LayoutView {
     }
 }
 
-/// Dónde cae cada hueco del corpus. Aparte porque son once, y el tope de
-/// líneas por función es un tope, no una sugerencia.
+/// Dónde cae cada hueco del corpus.
+///
+/// Aparte de la foto porque son trece, y crece con cada hueco nuevo: como
+/// [`slots_de_referencia`] y [`acciones_de_fila`], es UNA lista de literales
+/// sin lógica dentro, y repartirla escondería justo lo que este fichero enseña
+/// de un vistazo — dónde cae cada hueco, entero y en un sitio.
+#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
 fn colocaciones_de_referencia() -> Vec<SlotPlacement> {
     vec![
         SlotPlacement {
@@ -847,6 +869,30 @@ fn colocaciones_de_referencia() -> Vec<SlotPlacement> {
             height: 2,
             role: None,
             focus_index: 4,
+        },
+        // Los dos paneles de PLUGIN (fase 3) también se colocan, y por el
+        // mismo motivo que sus vecinos: el contrato se comprueba pintando, y
+        // un hueco que el corpus nombra y no coloca es un hueco que el
+        // renderer nunca intenta pintar — pasaría el test sin saber hacerlo.
+        SlotPlacement {
+            slot_id: 13,
+            x: 120,
+            y: 0,
+            width: 30,
+            height: 20,
+            role: None,
+            focus_index: 11,
+        },
+        // Y el que todavía no tiene marco, que es la forma que se ve en cada
+        // arranque hasta que su guest contesta.
+        SlotPlacement {
+            slot_id: 14,
+            x: 120,
+            y: 20,
+            width: 30,
+            height: 18,
+            role: None,
+            focus_index: 12,
         },
         SlotPlacement {
             slot_id: 8,
@@ -1164,6 +1210,41 @@ fn slots_de_referencia() -> Vec<SlotView> {
             slot_id: 12,
             viewer: None,
             note: "directorio".to_owned(),
+        })),
+        // El panel de un PLUGIN (fase 3): tramos con estilo y zonas SIN su
+        // comando — el renderer dice dónde se pulsó y el host resuelve qué
+        // era, así que por el cable no viaja nada ejecutable.
+        SlotView::Panel(Box::new(norte_ui_host::dto::PanelSlotView {
+            slot_id: 13,
+            title: "status".to_owned(),
+            lines: vec![vec![
+                norte_ui_host::dto::SpanView {
+                    text: "rama ".to_owned(),
+                    role: Some("muted".to_owned()),
+                    fg: None,
+                    bg: None,
+                },
+                norte_ui_host::dto::SpanView {
+                    text: "main".to_owned(),
+                    role: None,
+                    fg: Some("#7fd88f".to_owned()),
+                    bg: None,
+                },
+            ]],
+            hits: vec![norte_ui_host::dto::HitView {
+                row: 0,
+                col: 5,
+                width: 4,
+            }],
+        })),
+        // Y uno todavía SIN marco: la primera petición en vuelo, o un plugin
+        // que falló. Es la forma que el renderer tiene que saber pintar —
+        // borde y título, nada dentro— y la que se veía en cada arranque.
+        SlotView::Panel(Box::new(norte_ui_host::dto::PanelSlotView {
+            slot_id: 14,
+            title: "status".to_owned(),
+            lines: Vec::new(),
+            hits: Vec::new(),
         })),
         SlotView::Unsupported {
             slot_id: 2,
@@ -2471,10 +2552,10 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
     /// bump, que es justo la parada que este test existe para forzar.
-    // Puente 69: la pantalla de inicio (`ViewSnapshot.splash`), el ritmo y lo
-    // que queda de cada task (`TaskView.rate`, `TaskView.eta`) y la barra de
-    // progreso por fila (`RowView.progress`; spec 2026-09-15, ADR 0115).
-    const FORMA: u64 = 3_071_755_271_252_752_300;
+    // Puente 70: el panel que pinta un PLUGIN (`SlotView::Panel` con sus
+    // `lines`/`hits`) y el clic sobre una de sus zonas (`UiAction::PanelClick`,
+    // que manda la CELDA y no un comando; fase 3).
+    const FORMA: u64 = 4_341_186_948_902_806_012;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

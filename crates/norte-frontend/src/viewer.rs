@@ -362,19 +362,7 @@ impl Viewer {
     ) -> Self {
         let styled: Vec<crate::ansi::StyledLine> = lines
             .iter()
-            .map(|line| {
-                line.iter()
-                    .map(|span| crate::ansi::StyledSpan {
-                        text: crate::display_name(span.text.as_bytes()).0,
-                        role: span
-                            .role
-                            .as_deref()
-                            .and_then(norte_theme::Role::from_kebab_requestable),
-                        fg: span.fg.map(|[r, g, b]| (r, g, b)),
-                        bg: span.bg.map(|[r, g, b]| (r, g, b)),
-                    })
-                    .collect()
-            })
+            .map(|line| line.iter().map(crate::ansi::span_de_wire).collect())
             .collect();
         let plugin_name = crate::display_name(&plugin_name.into_bytes()).0;
         let mut v = Self::base(path, Vec::new(), false);

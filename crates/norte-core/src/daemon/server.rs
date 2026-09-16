@@ -2803,6 +2803,13 @@ async fn dispatch(
         // plugin.thumbnail (ADR 0107): ABIERTO, con el mismo gate de lectura
         // que sus gemelos — una miniatura LEE el fichero.
         methods::PLUGIN_THUMBNAIL => handle_plugin_thumbnail(req.params, &conn.actor, shared).await,
+        // plugin.panel_render (0.74.0, fase 3): ABIERTO como sus gemelos. El
+        // gate de lectura va sobre el DIRECTORIO que el panel acompaña: lo
+        // que el guest lea de verdad pasa además por `norte:location`, con su
+        // prefijo consentido y su presupuesto.
+        methods::PLUGIN_PANEL_RENDER => {
+            handle_plugin_panel_render(req.params, &conn.actor, shared).await
+        }
         // plugin.decorate / plugin.column_values (G3b, ADR 0037): ABIERTOS
         // como el resto de `plugin.preview*`, con el mismo gate de lectura
         // (#80) extendido al lote entero (`read_gate_all`).
@@ -4015,6 +4022,92 @@ async fn handle_plugin_thumbnail(
             width: thumb.width,
             height: thumb.height,
         }),
+    })
+}
+
+/// `plugin.panel_render` (0.74.0, fase 3): el marco que un plugin `panel`
+/// pinta en un hueco del reparto.
+///
+/// Mismo trato que sus gemelos cosméticos: ABIERTO, con gate de lectura sobre
+/// el directorio que el panel acompaña, y SIN MARCO ante cualquier tropiezo
+/// —sin plugin, sin consentimiento, guest roto, atrapado o tardón—, que en el
+/// wire es `{}` y no `null` (el resultado va con `flatten`). Un panel que no
+/// contesta deja el hueco con el último marco que tuviera; no tumba nada.
+///
+/// Lo que el guest LEE de verdad no pasa por aquí: pasa por `norte:location`,
+/// con su prefijo consentido, su presupuesto de llamadas y su auditoría.
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_panel_render(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginPanelRenderParams = parse_params(params)?;
+    read_gate(actor, &p.dir, shared)?;
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_panel(&p.plugin_id, &p.kind)
+    };
+    // El tuple entero, sin abrir: lo que hace con él —acuñar la ubicación,
+    // instanciar, pintar— es la MISMA función que usa el backend embebido, y
+    // abrirlo aquí sería empezar a decidir por separado (ADR 0077).
+    let Some(resuelto) = resolved else {
+        return to_value(&methods::PluginPanelRenderResult { frame: None });
+    };
+    let id_para_log = resuelto.0.clone();
+
+    // El estado que el guest se guardó la última vez. El wire ya lo trae
+    // decodificado y ACOTADO (`PANEL_MAX_STATE_BYTES` al deserializar): un
+    // estado que no cabe invalida el mensaje entero en vez de llegar hasta
+    // aquí, que es lo que impide que un cliente cualquiera haga que el daemon
+    // decodifique y copie megas al guest.
+    let state = p.state.clone().unwrap_or_default();
+    let contexto = norte_plugin_host::panel_iface::PanelContext {
+        cols: p.cols,
+        rows: p.rows,
+        lang: p.lang.clone(),
+        cursor_name: p.cursor_name.clone(),
+    };
+    let evento = crate::plugins::panel_event_to_host(&p.event);
+
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let kind = p.kind.clone();
+    // La raíz de la ubicación es `p.dir` MISMO, no su padre. Columnas sube un
+    // nivel porque lo que le llega son ficheros y necesita el directorio que
+    // los contiene; aquí el parámetro ya ES el directorio, y subir daría al
+    // guest un nivel por encima de lo que el lector está mirando — que es
+    // exactamente el fallo que el gate de columnas documenta (#239).
+    //
+    // Y solo el HUMANO sube a buscar la raíz del proyecto (`.git`): un agente
+    // está acotado a su scope, y trepar por encima es lo que el gate de
+    // lectura impide.
+    let dir = p.dir.clone();
+    let climb = matches!(actor, Actor::User);
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::plugins::render_panel_blocking(
+            &runtime,
+            resuelto,
+            &crate::plugins::PanelCall {
+                dir: &dir,
+                climb,
+                kind: &kind,
+                contexto: &contexto,
+                state: &state,
+                evento: &evento,
+            },
+        )
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "panel task panicked"))?;
+    let (id, marco) = match outcome {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(plugin = %id_para_log, error = %e, "panel runtime failed");
+            return to_value(&methods::PluginPanelRenderResult { frame: None });
+        }
+    };
+    to_value(&methods::PluginPanelRenderResult {
+        frame: Some(crate::plugins::panel_frame_to_wire(id, marco)),
     })
 }
 

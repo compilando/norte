@@ -43,6 +43,7 @@ import * as viewer from "./render/viewer";
 import * as help from "./render/help";
 import * as splash from "./render/splash";
 import * as log from "./render/log";
+import * as panelPlugin from "./render/panel";
 import * as search from "./render/search";
 import * as menus from "./render/menus";
 import * as places from "./render/places";
@@ -776,6 +777,10 @@ export class Screen {
       this.paintLog(dom, slot);
       return;
     }
+    if (slot.kind === "panel") {
+      this.paintPanel(dom, slot);
+      return;
+    }
     if (slot.kind === "unsupported") {
       // El nombre del kind sale del fichero de disposición del usuario: si el
       // host lo enmascaró, se dice — el mismo criterio que el resto.
@@ -844,6 +849,9 @@ export class Screen {
 
   /** En `render/log.ts`. */
   readonly paintLog = log.paintLog;
+
+  /** En `render/panel.ts`. */
+  readonly paintPanel = panelPlugin.paintPanel;
 
   /** En `render/log.ts`. */
   readonly selectorDeFuente = log.selectorDeFuente;

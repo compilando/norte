@@ -1,0 +1,32 @@
+# El plugin oficial de PANEL: el estado del repositorio en un hueco entero
+# (fase 3 del programa 2026-09-15, ADR 0116).
+#
+# NO es miembro del workspace, igual que el resto de `plugins/`: compila a
+# `wasm32-wasip2` con su propio lockfile y perfil. Como `git-status`, sí tiene
+# tests propios que corren en el HOST — leer `.git/HEAD` y la última línea de
+# `.git/logs/HEAD` es código puro, y probarlo dentro de un wasm sería pagar un
+# runtime para no ganar nada.
+[workspace]
+
+[package]
+name = "git-panel"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "AGPL-3.0-only"
+description = "Panel de estado del repositorio para norte, como plugin WASM"
+
+[lib]
+# `cdylib` es lo que hace un componente; `rlib` es lo que hace testeable el
+# parser desde el host.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# wit-bindgen GUEST-side: los bindings salen del MISMO WIT que el host
+# (symlink `wit` -> ../../crates/norte-plugin-host/wit).
+wit-bindgen = "0.46"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true

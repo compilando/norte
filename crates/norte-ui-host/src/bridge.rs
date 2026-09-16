@@ -337,7 +337,21 @@ use serde::{Deserialize, Serialize};
 ///   dice qué fichero lleva entre manos, y esa fila es la que el lector está
 ///   mirando. Es `Option` porque una fila sin task detrás no tiene barra, que
 ///   es casi todas.
-pub const BRIDGE_VERSION: u32 = 69;
+/// - **70**: el panel que pinta un PLUGIN (fase 3, proto 0.74.0). Llega
+///   `SlotView::Panel` con `PanelSlotView`: el `title` —el `<kind>` que
+///   declaró el plugin, sin prefijo—, las `lines` que su guest describió
+///   (tramos `SpanView`, los mismos que una preview estilada) y los `hits`,
+///   las zonas pulsables. Un `HitView` lleva `row`/`col`/`width` y **no lleva
+///   su comando**: el renderer manda la CELDA con la acción `panel_click
+///   { slot_id, row, col }` y el host resuelve contra el marco que él tiene
+///   qué zona era y qué comando le toca, filtrado por
+///   `norte_frontend::frame::zona_puede`. Un comando que viajara por el cable
+///   sería un comando que puede mandar cualquiera que hable con el renderer,
+///   y el plugin elige la etiqueta Y el comando sin que nada los ate.
+///   `lines` vacío es el panel que todavía no tiene marco —la primera
+///   petición en vuelo, o un plugin que falló—: se pinta su borde con su
+///   título, nunca un hueco mudo.
+pub const BRIDGE_VERSION: u32 = 70;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

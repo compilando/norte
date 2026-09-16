@@ -2243,6 +2243,26 @@ impl RemoteBackend {
         }
     }
 
+    /// `plugin.panel_render` contra el daemon (0.74.0, fase 3):
+    /// `MethodNotFound` —un daemon 0.73 que no lo tiene— cae a SIN marco, que
+    /// deja el hueco con lo último que pintó. Cualquier otro error se
+    /// propaga.
+    ///
+    /// # Errors
+    /// Los del wire, traducidos a la taxonomía; nunca `MethodNotFound`.
+    pub async fn plugin_panel_render(
+        &self,
+        params: methods::PluginPanelRenderParams,
+    ) -> Result<Option<methods::PanelFrame>, Error> {
+        let client = self.client().await?;
+        let call = client
+            .call::<_, methods::PluginPanelRenderResult>(methods::PLUGIN_PANEL_RENDER, &params);
+        match tokio::time::timeout(CALL_TIMEOUT, call).await {
+            Ok(res) => map_panel_result(res),
+            Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+        }
+    }
+
     /// `plugin.decorate` contra el daemon (G3b, ADR 0037): `MethodNotFound`
     /// (mismos DOS triggers documentados en el ADR — un daemon 0.27 que aún
     /// no cableó el handler, o un cliente que decide no llamarlo) cae a SIN
@@ -2414,6 +2434,27 @@ impl RemoteBackend {
 /// (`to_taxonomy`, que SÍ mira `rpc.data` para los `APP_ERROR`).
 /// Traduce el `Result` crudo de `plugin.thumbnail` (ADR 0107) al contrato
 /// de [`RemoteBackend::plugin_thumbnail`]: `METHOD_NOT_FOUND` → `Ok(None)`.
+/// Traduce el `Result` crudo de `plugin.panel_render` (0.74.0, fase 3) al
+/// contrato de [`RemoteBackend::plugin_panel_render`]: `METHOD_NOT_FOUND` →
+/// `Ok(None)`, el mismo destino que «ningún plugin pinta este panel».
+///
+/// Extraída de la función por lo mismo que su hermana: así la promesa de
+/// compatibilidad N-1 se puede probar construyendo un [`ClientError::Rpc`] a
+/// mano, sin levantar un socket ni un daemon viejo.
+fn map_panel_result(
+    res: Result<methods::PluginPanelRenderResult, ClientError>,
+) -> Result<Option<methods::PanelFrame>, Error> {
+    match res {
+        Ok(r) => Ok(r.frame),
+        Err(ClientError::Rpc(ref rpc))
+            if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(to_taxonomy(e)),
+    }
+}
+
 fn map_thumbnail_result(
     res: Result<methods::PluginThumbnailResult, ClientError>,
 ) -> Result<Option<methods::PluginThumbnail>, Error> {
@@ -2817,6 +2858,36 @@ mod tests {
 
     fn vpd(wire: &str) -> VPath {
         VPath::parse(wire).expect("wire válido")
+    }
+
+    /// Un daemon que no conoce `plugin.panel_render` deja el hueco SIN marco,
+    /// no roto (0.74.0, fase 3).
+    ///
+    /// Es la promesa de compatibilidad N-1 que la nota de versión escribe con
+    /// palabras, comprobada aquí sin socket ni daemon viejo: un cliente 0.74
+    /// contra un daemon 0.73 recibe `MethodNotFound`, y eso tiene que
+    /// significar «ningún plugin pinta este panel» —el mismo destino que
+    /// cuando no hay plugin— y no un error que tumbe la pantalla.
+    #[test]
+    fn un_daemon_sin_el_metodo_deja_el_panel_sin_marco() {
+        let no_esta = ClientError::Rpc(norte_proto::wire::RpcError::protocol(
+            norte_proto::wire::codes::METHOD_NOT_FOUND,
+            "método desconocido",
+        ));
+        assert!(
+            map_panel_result(Err(no_esta))
+                .expect("degrada, no falla")
+                .is_none(),
+            "un daemon N-1 deja el hueco con lo que ya pintó"
+        );
+    }
+
+    /// Y cualquier OTRO error sí se propaga: degradar en silencio ante un
+    /// fallo real es indistinguible de «este panel no existe».
+    #[test]
+    fn otro_error_del_wire_no_se_confunde_con_un_panel_ausente() {
+        let roto = ClientError::ConnectionClosed;
+        assert!(map_panel_result(Err(roto)).is_err());
     }
 
     /// Lo que el `transfer` va a preguntar: el ancla del directorio listado.

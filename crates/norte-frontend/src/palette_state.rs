@@ -396,6 +396,7 @@ mod palette_tests {
                 kind: norte_proto::methods::PluginCommandKind::Command,
             }],
             columns: Vec::new(),
+            panels: Vec::new(),
             has_help: false,
             manifest_digest: None,
         };

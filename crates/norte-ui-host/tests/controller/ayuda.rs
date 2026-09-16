@@ -368,6 +368,7 @@ pub(super) fn extension(id: &str, name: &str, has_help: bool) -> norte_proto::me
         description: None,
         commands: Vec::new(),
         columns: Vec::new(),
+        panels: Vec::new(),
         has_help,
         // El ancla que el core manda (#282): la ventana la devuelve al
         // confirmar, y sin ella en el doble el hilo entero no se ejercitaría.

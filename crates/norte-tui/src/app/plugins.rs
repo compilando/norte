@@ -179,6 +179,7 @@ mod clamp_plugin_descriptions_tests {
             description: description.map(str::to_owned),
             commands: Vec::new(),
             columns: Vec::new(),
+            panels: Vec::new(),
             has_help: false,
             manifest_digest: None,
         }

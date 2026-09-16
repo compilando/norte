@@ -944,6 +944,7 @@
     "enabled": true,
     "id": "org.norte.demo",
     "name": "Demo Previewer",
+    "panels": [],
     "publisher": "norte",
     "version": "0.1.0"
   },
@@ -960,6 +961,7 @@
     "enabled": true,
     "id": "org.norte.rename-log",
     "name": "Rename log",
+    "panels": [],
     "publisher": "norte",
     "version": "0.1.0"
   },
@@ -989,6 +991,7 @@
     "enabled": true,
     "id": "org.norte.demo",
     "name": "Demo Previewer",
+    "panels": [],
     "publisher": "norte",
     "version": "0.1.0"
   },
@@ -1004,6 +1007,7 @@
     "id": "org.norte.demo",
     "manifest_digest": "7aec1a5a3d48445efc60e4ede6a6257fc1b2a651f2c89e625228982440307376",
     "name": "Demo Previewer",
+    "panels": [],
     "publisher": "norte",
     "version": "0.1.0"
   },
@@ -1019,6 +1023,7 @@
     "has_help": true,
     "id": "acme.ftp",
     "name": "FTP",
+    "panels": [],
     "publisher": "ACME",
     "version": "0.1.0"
   },
@@ -1042,6 +1047,7 @@
         "enabled": false,
         "id": "org.norte.demo",
         "name": "Demo Previewer",
+        "panels": [],
         "publisher": "norte",
         "version": "0.1.0"
       }
@@ -1070,6 +1076,62 @@
     "plugin_id": "org.norte.rename-log",
     "text": "renamed 3 files"
   },
+  "plugin_panel_render_params": {
+    "cols": 40,
+    "cursor_name": "README.md",
+    "dir": "file:///home/user/proyecto",
+    "event": "refresh",
+    "kind": "git",
+    "lang": "es",
+    "plugin_id": "org.norte.git-panel",
+    "rows": 8
+  },
+  "plugin_panel_render_params_click": {
+    "col": 5,
+    "cols": 40,
+    "cursor_name": "README.md",
+    "dir": "file:///home/user/proyecto",
+    "event": "click",
+    "kind": "git",
+    "lang": "es",
+    "plugin_id": "org.norte.git-panel",
+    "row": 2,
+    "rows": 8,
+    "state": "cmFtYT1tYWlu"
+  },
+  "plugin_panel_render_params_command": {
+    "cols": 40,
+    "command": "nav.enter",
+    "cursor_name": "README.md",
+    "dir": "file:///home/user/proyecto",
+    "event": "command",
+    "kind": "git",
+    "lang": "es",
+    "plugin_id": "org.norte.git-panel",
+    "rows": 8
+  },
+  "plugin_panel_render_result": {
+    "hits": [
+      {
+        "arg": "file:///home/user/proyecto/.git",
+        "col": 0,
+        "command": "nav.enter",
+        "row": 0,
+        "width": 4
+      }
+    ],
+    "lines": [
+      [
+        {
+          "role": "title",
+          "text": "main"
+        }
+      ]
+    ],
+    "plugin_id": "org.norte.git-panel",
+    "state": "cmFtYT1tYWlu"
+  },
+  "plugin_panel_render_result_none": {},
   "plugin_preview_params": {
     "path": "file:///home/user/doc.md"
   },

@@ -105,3 +105,27 @@ camino: apagar va en la dirección segura.
 
 Tras conceder o revocar, la lista se vuelve a pedir al núcleo. Lo que ves es
 lo que el núcleo cree, no lo que esta pantalla esperaba que pasara.
+
+## Una extensión que pinta un panel entero
+
+Algunas extensiones aportan un PANEL: un hueco de la pantalla cuyo contenido
+describen ellas. Sale en el selector de disposiciones como cualquier otro
+panel, y lo colocas donde quieras — al lado de un listado, debajo, o en una
+pestaña.
+
+La extensión no dibuja. Describe líneas de texto, y norte las pinta dentro de
+un marco suyo, con su título y su borde de foco. Una extensión no puede pintar
+ese marco, ni escribir en ese título, ni hacer que su panel parezca otro.
+
+Un panel puede ofrecer zonas pulsables. Una zona ejecuta un comando de norte,
+nunca algo propio de la extensión, y solo del conjunto pequeño que cualquier
+panel puede nombrar: moverse entre paneles, abrir o cerrar otro, cambiar el
+tamaño. La extensión elige la etiqueta y el comando, y nada ata la una al
+otro — así que norte rehúsa cualquier cosa que no te dejaría hacer con una
+tecla mientras ese panel tiene el teclado.
+
+Lo que un panel recuerda entre repintados es un dato suyo que norte guarda y
+le devuelve tal cual, sin leerlo. El permiso de leer el disco no va en eso: se
+acuña para cada repintado y se retira al acabar. Un panel cuya extensión
+apagues deja de existir para la disposición, y uno que deje de contestar se
+queda con lo último que pintó en vez de parpadear en blanco.

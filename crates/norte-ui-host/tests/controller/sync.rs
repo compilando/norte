@@ -1165,7 +1165,12 @@ async fn un_renamer_que_rehusa_dice_por_que_en_la_barra() {
 /// Lo que hace un comando lo decide el PLUGIN: puede escribir. Una ventana
 /// montada sin efectos no lo lanza, y por tanto tampoco lo ofrece — es la
 /// misma regla que ya se aplica a los comandos propios: ofrecer lo que se va
-/// a rehusar es prometer algo que no se hará. El catálogo ni se pide.
+/// a rehusar es prometer algo que no se hará.
+///
+/// Lo que SÍ se pide es el catálogo (fase 3): trae la declaración de qué
+/// paneles aportan los plugins, y sin ella una disposición guardada con un
+/// panel deja una caja en blanco que el lector no puede identificar. Pedirlo
+/// no es ofrecerlo — lo que este test fija es que no se ofrece ni se lanza.
 #[tokio::test]
 async fn en_solo_lectura_no_se_ejecuta_un_comando_de_extension() {
     let mut ext = extension("acme.ftp", "FTP de ACME", false);
@@ -1189,14 +1194,9 @@ async fn en_solo_lectura_no_se_ejecuta_un_comando_de_extension() {
         );
         asentar().await;
     }
-    // Y el catálogo ni se pidió: la puerta se cierra antes del viaje.
-    assert_eq!(
-        backend
-            .catalogos_pedidos
-            .load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "una ventana sin efectos no va a preguntar por comandos que no va a lanzar"
-    );
+    // Y nada se ejecutó, que es lo que la regla protege. El catálogo sí viaja
+    // —`pedir_paneles` lo pide para declarar kinds, también sin efectos—, así
+    // que contar viajes dejó de decir nada sobre lo que se ofrece.
     assert!(backend.ejecutados.lock().expect("ejecutados").is_empty());
 }
 

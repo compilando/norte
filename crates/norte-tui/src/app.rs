@@ -233,6 +233,15 @@ pub enum KeyOwner {
     Tree,
     /// El panel de registro (#323).
     Log,
+    /// Un panel aportado por un PLUGIN (fase 3, ADR 0115/0116).
+    ///
+    /// SIN decir cuál, a propósito. `KeyOwner` se compara por igualdad en
+    /// ochenta y seis sitios —`keys.rs`, `ui.rs`, `dispatch.rs`— y una
+    /// variante con carga los rompería todos; y no hace falta: un panel de
+    /// plugin se declara `multi: false`, así que hay como mucho uno visible y
+    /// el reparto ya sabe cuál es. Quién lo pinta se pregunta al árbol, que
+    /// es donde vive esa verdad.
+    Panel,
 }
 
 /// Las celdas de la barra de teclas de las tres pantallas (spec
@@ -1011,13 +1020,33 @@ pub struct App {
     pub splash: Option<norte_frontend::splash::SplashView>,
     // (la constante del plazo vive fuera del struct: ver `SPLASH_BRIEF_MS`)
     /// Cuándo deja de tapar el splash `brief`, en el reloj del pintado
-    /// ([`crate::app::SPLASH_BRIEF_MS`] desde que se puso). `None` = no caduca
+    /// ([`App::SPLASH_BRIEF_MS`] desde que se puso). `None` = no caduca
     /// solo (`home`), o no hay splash.
     pub splash_until_ms: Option<i64>,
     /// El panel de procesos lo abrió el AUTOMÁTICO (`[ui] processes_panel =
     /// "auto"`), así que el automático puede cerrarlo. Un panel que abrió el
     /// lector no se cierra solo: lo abrió para mirarlo.
     pub processes_auto: bool,
+    /// Qué panel de plugin tiene el teclado, cuando [`KeyOwner::Panel`] lo
+    /// dice (fase 3).
+    ///
+    /// `KeyOwner::Panel` no lleva el hueco dentro —llevarlo rompería las 86
+    /// comparaciones por `==` que hay contra los otros dueños—, y `multi:
+    /// false` no lo enforza nadie: dos plugins pueden aportar un panel cada
+    /// uno y una disposición guardada puede colocar los dos. Sin este campo,
+    /// «el panel» era el PRIMERO visible, así que `layout.grow` agrandaba uno
+    /// y el borde de foco lo pintaba en otro.
+    ///
+    /// `None` = el primero visible, que es lo correcto cuando el teclado llegó
+    /// por el anillo y no señalando un hueco concreto.
+    pub panel_focus: Option<norte_frontend::layout::SlotId>,
+    /// Lo que cada panel de plugin tiene vivo: su marco, su estado opaco y qué
+    /// pidió (fase 3).
+    ///
+    /// Por HUECO y no un solo campo, aunque hoy solo pueda haber un panel de
+    /// plugin visible: el estado del guest pertenece a su hueco, y con
+    /// pestañas hay más huecos vivos que visibles — igual que los historiales.
+    pub paneles: norte_frontend::layout::BySlot<crate::panelplugin::PanelRuntime>,
     /// La fila del splash que el lector acaba de elegir con su número, hasta
     /// que el bucle la despache. Como el resto de intenciones pendientes: la
     /// tecla decide, y quien tiene el backend delante ejecuta.
@@ -1210,6 +1239,8 @@ impl App {
             splash: None,
             splash_until_ms: None,
             processes_auto: false,
+            panel_focus: None,
+            paneles: norte_frontend::layout::BySlot::new(),
             pending_splash_row: None,
             mouse: crate::mouse::MouseState::default(),
             settings: None,

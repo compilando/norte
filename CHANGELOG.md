@@ -9,7 +9,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
-- **A start screen, and a processes panel that earns its place** (ADR 0115).
+- **A plugin can paint a whole panel** (protocol 0.74.0, WIT
+  `norte:panel@0.1.0`, window bridge 70). A consented plugin contributes a
+  panel kind, `plugin:<id>:<kind>`, that a layout can place like any other:
+  the terminal and the window both declare it, give it the keyboard, offer it
+  in the layout picker and paint the frame its guest describes — styled lines
+  plus clickable zones. The guest does not draw; it DESCRIBES, and the border,
+  the title and the focus ring stay ours, so a plugin cannot impersonate
+  another panel. A zone runs a command from the catalogue, filtered to the
+  same scope the panel's keys have: the plugin chooses the label and the
+  command, and nothing ties them together, so a zone labelled "Refresh" cannot
+  name something that copies files. What the guest remembers between repaints
+  is an opaque blob it gets back untouched; the permission to read is minted
+  per call and dies with it. A slow or broken plugin keeps its last frame
+  instead of blinking, and one that is gone leaves a box with its title rather
+  than a silent gap.
   `[ui] splash` is `brief` (a cover any key takes away, with the build, the
   core it talks to and a compass), `home` (it stays until a key, with the
   directories you go to most and your bookmarks, each opened by its number) or

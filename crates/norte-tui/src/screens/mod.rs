@@ -24,6 +24,6 @@ pub use pickers::{
 pub use profile_save::profile_save_as;
 pub use settings::{on_settings_key, persist_setting, plugin_config_summaries};
 pub use side_nav::{
-    drain_places_drives, on_nav_popup_key, on_places_key, on_processes_key, on_tree_key,
-    open_drive_popup, refresh_places_drives,
+    drain_places_drives, on_nav_popup_key, on_panel_key, on_places_key, on_processes_key,
+    on_tree_key, open_drive_popup, refresh_places_drives,
 };

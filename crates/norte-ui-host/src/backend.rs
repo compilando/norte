@@ -640,6 +640,16 @@ pub trait HostBackend: Send + Sync + 'static {
         paths: Vec<VPath>,
     ) -> BoxFuture<'static, Result<Vec<Option<String>>, Error>>;
 
+    /// El marco que un plugin pinta para su panel (0.74.0, fase 3).
+    ///
+    /// `None` cuando ningún plugin consentido pinta ese panel, que es el mismo
+    /// caso que un daemon más viejo sin el método: en los dos el hueco se
+    /// queda con lo que tuviera. Fail-soft como todo lo que decora.
+    fn plugin_panel_render(
+        &self,
+        params: methods::PluginPanelRenderParams,
+    ) -> BoxFuture<'static, Result<Option<methods::PanelFrame>, Error>>;
+
     /// Los volúmenes del HOST: discos, montajes de red, medios extraíbles.
     ///
     /// No es una llamada de provider y por eso no vive en la familia `fs.*`:
@@ -1053,6 +1063,22 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<Vec<Option<String>>, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.plugin_column_values(&plugin, &column, &paths).await })
+    }
+
+    fn plugin_panel_render(
+        &self,
+        params: methods::PluginPanelRenderParams,
+    ) -> BoxFuture<'static, Result<Option<methods::PanelFrame>, Error>> {
+        let backend = self.clone();
+        // El método INHERENTE del `RemoteBackend`, que gana a este del trait
+        // por tener el mismo nombre y la misma firma. Sus vecinos se
+        // distinguen solos porque toman referencias; este no, así que si
+        // alguien renombra o borra el inherente, esta línea pasa a llamarse a
+        // sí misma —compila, y revienta la pila del actor en la primera
+        // llamada—.
+        Box::pin(
+            async move { norte_client::RemoteBackend::plugin_panel_render(&backend, params).await },
+        )
     }
 
     fn search(

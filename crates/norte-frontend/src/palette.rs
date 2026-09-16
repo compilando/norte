@@ -238,6 +238,7 @@ mod tests {
                 })
                 .collect(),
             columns: Vec::new(),
+            panels: Vec::new(),
             has_help: false,
             manifest_digest: None,
         }

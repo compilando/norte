@@ -3016,6 +3016,86 @@ impl Backend {
         }
     }
 
+    /// El marco que un plugin pinta para su panel (0.74.0, fase 3).
+    ///
+    /// Embebido TAMBIÉN, y no solo con daemon: el mismo `ntc` no puede enseñar
+    /// un panel de git cuando hay daemon y una caja vacía cuando no lo hay.
+    /// Lo que corre es la misma función que el daemon (`render_panel_blocking`),
+    /// con el mismo mint y la misma vida de la sesión de ubicación.
+    ///
+    /// `climb` es `true` aquí porque embebido quien mira es la persona que
+    /// abrió el panel — el caso de `Actor::User` en el daemon—, así que subir a
+    /// buscar la raíz del proyecto (`.git`) es lo correcto.
+    ///
+    /// Fail-soft: sin plugin que lo pinte, o si el guest falla, no hay marco.
+    ///
+    /// Embebido cuesta un DESCUBRIMIENTO del catálogo por llamada —leer el
+    /// directorio de plugins y parsear cada `plugin.toml`—, donde el daemon
+    /// tiene su registro en memoria. Se paga por cambio de contexto (otro
+    /// directorio, otra fila, otro tamaño), no por frame, porque una firma que
+    /// ya se pidió o que ya volvió vacía no se repite.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo. Con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`; embebido, `Io{retryable:false}`
+    /// si el catálogo no se puede leer e `Internal` si el motor de wasm no
+    /// arranca o la tarea bloqueante se cae.
+    pub async fn plugin_panel_render(
+        &self,
+        params: norte_proto::methods::PluginPanelRenderParams,
+    ) -> Result<Option<norte_proto::methods::PanelFrame>, Error> {
+        match self {
+            Self::Embedded(_) => {
+                let dir_cfg = crate::connect::config_dir();
+                tokio::task::spawn_blocking(
+                    move || -> Result<Option<norte_proto::methods::PanelFrame>, Error> {
+                        let reg = crate::PluginRegistry::discover(&dir_cfg)
+                            .map_err(|_| Error::Io { retryable: false })?;
+                        let Some(resuelto) = reg.resolve_panel(&params.plugin_id, &params.kind)
+                        else {
+                            return Ok(None);
+                        };
+                        // El motor es de PROCESO, como en el daemon (#224):
+                        // construir uno por repintado compila el motor otra vez
+                        // y arranca un hilo de época por frame.
+                        let (runtime, _) = columnas_de_proceso()?;
+                        let contexto = norte_plugin_host::panel_iface::PanelContext {
+                            cols: params.cols,
+                            rows: params.rows,
+                            lang: params.lang.clone(),
+                            cursor_name: params.cursor_name.clone(),
+                        };
+                        let evento = crate::plugins::panel_event_to_host(&params.event);
+                        let state = params.state.clone().unwrap_or_default();
+                        match crate::plugins::render_panel_blocking(
+                            runtime,
+                            resuelto,
+                            &crate::plugins::PanelCall {
+                                dir: &params.dir,
+                                climb: true,
+                                kind: &params.kind,
+                                contexto: &contexto,
+                                state: &state,
+                                evento: &evento,
+                            },
+                        ) {
+                            Ok((id, marco)) => {
+                                Ok(Some(crate::plugins::panel_frame_to_wire(id, marco)))
+                            }
+                            // Un guest que falla deja el panel sin marco, no la
+                            // pantalla con un error.
+                            Err(_) => Ok(None),
+                        }
+                    },
+                )
+                .await
+                .map_err(|_| Error::Internal { panic: true })?
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugin_panel_render(params).await,
+        }
+    }
+
     /// Esquema `[config]` + valores efectivos de `id` (0.28.0, G3c, ADR
     /// 0037): cierra la deuda P2 (`settings` era host-only). Id desconocido
     /// devuelve `keys: []` (mismo criterio indulgente que
@@ -3263,6 +3343,12 @@ fn run_error_to_taxonomy(e: &crate::plugins::PluginRunError) -> Error {
 /// Si el motor wasmtime no se puede configurar en esta plataforma. El fallo se
 /// recuerda: reintentarlo por cada página sería pagar el fallo N veces para
 /// llegar al mismo sitio.
+/// El motor de wasm y el pool de columnas de ESTE proceso.
+///
+/// Lo usan las columnas y, desde la fase 3, los paneles de plugin, que se
+/// quedan solo con el motor: construir un `PluginRuntime` por llamada compila
+/// el motor otra vez y arranca un hilo de época por pintado. El nombre dice
+/// «columnas» por quién llegó primero.
 fn columnas_de_proceso() -> Result<
     (
         &'static norte_plugin_host::PluginRuntime,

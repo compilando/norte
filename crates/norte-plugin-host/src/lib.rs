@@ -49,15 +49,16 @@ pub use manifest::{
     CONFIG_ENUM_MAX_VALUES, CONFIG_KEY_MAX_CHARS, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS,
     CORE_SCHEMES, Category, ColumnContrib, CommandContrib, ConfigKeySpec, Contributions,
     DecoratorContrib, DecoratorSlot, HOOK_EVENTS, HookContrib, Manifest, ManifestError,
-    PreviewerContrib, ProviderContrib, RenamerContrib, SIDECAR_MAX_NAMES, ThumbnailContrib,
-    is_valid_plugin_id, is_valid_sidecar_name, scheme_claimable,
+    PanelContrib, PreviewerContrib, ProviderContrib, RenamerContrib, SIDECAR_MAX_NAMES,
+    ThumbnailContrib, is_valid_plugin_id, is_valid_sidecar_name, scheme_claimable,
 };
 pub use runtime::{
     ColumnsInstance, DecoratorInstance, HookInstance, LocationHost, MAX_ARTIFACT_BYTES,
-    MAX_HOOK_EFFECTS, MAX_RENAME_PROPOSALS, MAX_SIDECAR_BYTES, MAX_SIDECAR_EFFECTS, PluginInstance,
-    PluginRuntime, ProviderInstance, RenamerInstance, RuntimeError, THUMB_MAX_BYTES,
-    THUMB_MAX_EDGE, Thumbnail, ThumbnailInstance, columns_iface, decorator_iface, hook_iface,
-    location_iface, previewer_iface, provider_iface, renamer_iface, thumbnail_iface,
+    MAX_HOOK_EFFECTS, MAX_RENAME_PROPOSALS, MAX_SIDECAR_BYTES, MAX_SIDECAR_EFFECTS, PanelFrame,
+    PanelInstance, PluginInstance, PluginRuntime, ProviderInstance, RenamerInstance, RuntimeError,
+    THUMB_MAX_BYTES, THUMB_MAX_EDGE, Thumbnail, ThumbnailInstance, columns_iface, decorator_iface,
+    hook_iface, location_iface, panel_iface, previewer_iface, provider_iface, renamer_iface,
+    thumbnail_iface,
 };
 /// Handle opaco de un `writer` resource del guest (#30 stage 2b-write): el
 /// adapter host lo lleva en su `ByteSink` y lo pasa a los métodos

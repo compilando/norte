@@ -372,6 +372,9 @@ pub(crate) fn draw_layout_picker(
     p: &norte_frontend::layout_picker::LayoutPicker,
     theme: &TuiTheme,
     hint: &str,
+    // El registro vivo, para la miniatura de la derecha: ver
+    // [`draw_layout_preview`].
+    kinds: &norte_frontend::layout::KindRegistry,
 ) {
     let rows: Vec<String> = p
         .rows()
@@ -476,7 +479,7 @@ pub(crate) fn draw_layout_picker(
         return; // un frame estrecho se queda con la lista, que es lo que se elige
     }
     if let Some(row) = p.current() {
-        draw_layout_preview(frame, halves[1], row, theme);
+        draw_layout_preview(frame, halves[1], row, theme, kinds);
     }
 }
 
@@ -491,12 +494,16 @@ pub(crate) fn draw_layout_preview(
     area: Rect,
     row: &norte_frontend::layout_picker::Row,
     theme: &TuiTheme,
+    // El registro VIVO, no uno de serie recién hecho: desde la fase 3 lleva
+    // dentro los paneles que aportan los plugins, y sin él una disposición
+    // guardada que incluya uno se dibujaba aquí con el hueco en blanco — la
+    // miniatura decía una cosa y la pantalla de verdad otra.
+    kinds: &norte_frontend::layout::KindRegistry,
 ) {
-    use norte_frontend::layout::KindRegistry;
     use norte_frontend::layout_picker::preview;
 
     if let Some(tree) = row.tree.as_ref() {
-        let lines = preview(tree, area.width, area.height, &KindRegistry::builtin());
+        let lines = preview(tree, area.width, area.height, kinds);
         let text: Vec<Line<'_>> = lines.into_iter().map(Line::raw).collect();
         frame.render_widget(Paragraph::new(text), area);
     } else if let Some(problema) = row.problem.as_deref() {

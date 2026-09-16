@@ -32,8 +32,8 @@ use crate::overlays::{close_stale_overlays, help_owns_keys, modal_wins, palette_
 use crate::refresh::{after_panes_refresh, reap_search_run, refresh_panes};
 use crate::screens::{
     HelpDispatch, on_columns_key, on_connections_picker_key, on_extensions_key, on_help_key,
-    on_layout_picker_key, on_nav_popup_key, on_places_key, on_processes_key, on_profile_picker_key,
-    on_settings_key, on_theme_picker_key, on_tree_key, run_plugin_command,
+    on_layout_picker_key, on_nav_popup_key, on_panel_key, on_places_key, on_processes_key,
+    on_profile_picker_key, on_settings_key, on_theme_picker_key, on_tree_key, run_plugin_command,
 };
 use crate::shortcuts_editor::{Maps, on_shortcuts_key};
 use crate::trail::{nav_enter_target, nav_stalled};
@@ -268,6 +268,11 @@ pub async fn on_key(
         // sus teclas son de una letra y tienen que llegar aquí y no al
         // listado, donde `d` es otra cosa.
         crate::logview::apply(app, dialog_resolver, key.modifiers, key.code);
+    } else if app.key_owner() == crate::app::KeyOwner::Panel && !modal_wins(app) {
+        // Panel de plugin (fase 3), por el mismo motivo que los dos de
+        // arriba: sin este brazo las teclas caían al listado de detrás
+        // mientras la pantalla decía que el teclado estaba aquí.
+        on_panel_key(app, dialog_resolver, key.modifiers, key.code);
     } else if app.nav_popup.is_some() && !modal_wins(app) {
         // Popup historial/hotlist (spec 2026-07-18): Enter
         // sobre un item NAVEGA por el flujo de cd normal —

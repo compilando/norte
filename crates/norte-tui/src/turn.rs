@@ -558,6 +558,12 @@ pub async fn after_frame(
             slots: ui::panel_slots(app, painted),
         },
     );
+    // El panel de un PLUGIN (fase 3) se repinta cuando cambia algo que su
+    // guest vería: el directorio, el tamaño del hueco o la fila señalada. Una
+    // petición viva por hueco, y la siguiente SUSTITUYE a la anterior —soltar
+    // el receptor es la cancelación—, que es la misma regla que el preview de
+    // aquí abajo.
+    crate::panelplugin::pedir_marco(app, backend, work, painted);
     // L3: el visor acoplado sigue al cursor del listado activo. Lo que se
     // pide sale de `preview::want`, que devuelve `None` cuando el hueco no
     // se colocó — cerrado, detrás de una pestaña, o colapsado por falta de

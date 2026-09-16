@@ -237,6 +237,7 @@ rpc_catalogo! {
     PLUGIN_PREVIEW, Request, Direct, methods::PluginPreviewParams, methods::PluginPreviewResult;
     PLUGIN_PREVIEW_STYLED, Request, Direct, methods::PluginPreviewStyledParams, methods::PluginPreviewStyledResult;
     PLUGIN_THUMBNAIL, Request, Direct, methods::PluginThumbnailParams, methods::PluginThumbnailResult;
+    PLUGIN_PANEL_RENDER, Request, Direct, methods::PluginPanelRenderParams, methods::PluginPanelRenderResult;
     PLUGIN_DECORATE, Request, Direct, methods::PluginDecorateParams, methods::PluginDecorateResult;
     PLUGIN_COLUMN_VALUES, Request, Direct, methods::PluginColumnValuesParams, methods::PluginColumnValuesResult;
     PLUGIN_RENAME_PLAN, Request, Direct, methods::PluginRenamePlanParams, methods::AiRenamePlanResult;

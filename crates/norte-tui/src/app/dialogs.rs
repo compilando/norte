@@ -275,6 +275,38 @@ pub const ALLOW_LOG: &[&str] = &[
     "app.quit",
 ];
 
+/// ALLOWLIST de un panel APORTADO por un plugin (fase 3).
+///
+/// Solo CROMO, y a propósito: mientras el guest no reciba comandos (T4), un
+/// panel de plugin con el teclado no tiene nada propio que hacer con una
+/// tecla. Sin esta lista las teclas caían al resolver de `browse` y actuaban
+/// sobre el LISTADO de detrás mientras el borde de foco decía que el teclado
+/// estaba en el panel — el fallo de #243, y aquí peor: procesos y registro
+/// filtran por su allowlist, así que allí lo destructivo ya estaba fuera; un
+/// panel sin embudo dejaba `F8` vivo sobre la selección del listado.
+///
+/// `dialog.cancel` suelta el teclado y NO cierra nada, como en procesos: el
+/// panel lo puso una disposición, no esta pulsación.
+pub const ALLOW_PANEL: &[&str] = &[
+    "layout.grow",
+    "layout.shrink",
+    "dialog.cancel",
+    "dialog.pane",
+    "pane.switch",
+    "layout.focus-next",
+    "layout.focus-prev",
+    "layout.places",
+    "layout.preview",
+    "layout.processes",
+    "layout.metadata",
+    "layout.log",
+    "pane.tree",
+    "app.menu",
+    // Salir, por el mismo motivo que en el registro: la tecla que peor puede
+    // morirse dentro de un panel.
+    "app.quit",
+];
+
 /// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,
 /// main.rs), unión de lo que History, Hotlist y Volumes aceptan: `add`/
 /// `remove` los filtra el caller a `kind == Hotlist` (nada que nombrar ni

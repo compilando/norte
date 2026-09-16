@@ -1498,6 +1498,7 @@ fn plugin(id: &str, name: &str, category: &str) -> norte_proto::methods::PluginI
         description: None,
         commands: Vec::new(),
         columns: Vec::new(),
+        panels: Vec::new(),
         has_help: false,
         manifest_digest: None,
     }

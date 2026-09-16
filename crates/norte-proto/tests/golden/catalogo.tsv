@@ -46,6 +46,7 @@ plugin.get_config	Request	Direct	methods::PluginGetConfigParams	methods::PluginG
 plugin.help	Request	Direct	methods::PluginHelpParams	methods::PluginHelpResult	
 plugin.list	Request	Direct	methods::PluginListParams	methods::PluginListResult	
 plugin.notice	Notification	Direct	methods::PluginNotice	()	
+plugin.panel_render	Request	Direct	methods::PluginPanelRenderParams	methods::PluginPanelRenderResult	
 plugin.preview	Request	Direct	methods::PluginPreviewParams	methods::PluginPreviewResult	
 plugin.preview_styled	Request	Direct	methods::PluginPreviewStyledParams	methods::PluginPreviewStyledResult	
 plugin.rename_plan	Request	Direct	methods::PluginRenamePlanParams	methods::AiRenamePlanResult	

@@ -166,6 +166,12 @@
     "action": "panel_bar_activate",
     "button": 2
   },
+  "panel_click": {
+    "action": "panel_click",
+    "col": 7,
+    "row": 2,
+    "slot_id": 13
+  },
   "parent": {
     "action": "parent",
     "slot_id": 1
