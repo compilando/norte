@@ -104,3 +104,28 @@ disabling goes in the safe direction.
 
 After granting or revoking, the list is asked of the core again. What you see
 is what the core believes, not what this screen expected to happen.
+
+## An extension that paints a whole panel
+
+Some extensions contribute a PANEL: a slot of the screen whose contents they
+describe. It appears in the layout picker like any other panel, and you place
+it where you want — beside a listing, below it, or in a tab.
+
+The extension does not draw. It describes lines of text, and norte paints
+them inside a border of its own, with its own title and its own focus ring. An
+extension cannot draw that border, write in that title, or make its panel look
+like another one.
+
+A panel may offer clickable zones. A zone runs a command of norte's, never
+something of the extension's own, and only from the small set any panel may
+name: moving between panels, opening or closing another one, resizing. The
+extension chooses the label and the command, and nothing ties the two
+together — so norte refuses anything it would not let you do with a key while
+that panel has the keyboard.
+
+What a panel remembers between repaints is a blob of its own that norte stores
+and hands back untouched, without reading it. The permission to read the disk
+is not part of that: it is minted for each repaint and withdrawn when it ends.
+A panel whose extension you disable stops existing for the layout, and one
+that stops answering keeps the last thing it painted rather than blinking
+empty.
