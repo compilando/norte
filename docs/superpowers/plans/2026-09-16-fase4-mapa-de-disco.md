@@ -91,6 +91,32 @@ un treemap. Pulsar un rectángulo entra en ese hijo.
 4. `Backend::dir_usage` + `dir_usage_report` (embebido y remoto) y el método
    del SDK.
 
+### Lo que T2 dejó dicho (`f5a94171`)
+
+Hecho, con cuatro revisores encima. Tres cosas que las tareas siguientes NO
+tienen que volver a descubrir:
+
+- **`Hit.arg` lleva la forma WIRE del `Segment`**, no `display_lossy` ni un
+  `String` supuesto UTF-8, y quien lo recibe resuelve
+  `padre.join(Segment::parse_wire(arg))`. El informe no trae la raíz a
+  propósito, así que el cliente reconstruye — y ahí es donde un nombre no-UTF8,
+  uno en NFD o uno llamado `!` se vuelve inalcanzable o abre el fichero
+  equivocado. El terminal ENMASCARA para pintar: esa forma no puede ser la que
+  vuelve.
+- **`TaskKind::DirUsage` no tiene etiqueta en ningún frontend**, y nada se
+  pondrá rojo por ello: los dos `match` acaban en comodín (`panels.rs` →
+  `"task"`, `clase_de_task` → `"unknown"`) porque `TaskKind` es
+  `#[non_exhaustive]`, y el guard de la ventana es una lista escrita a mano.
+  Hace falta el arm en los dos, `gui-task-kind-dir-usage` en ambos locales, y
+  un hermano de `DirSize` en `refresh.rs::habla_por_su_informe`.
+- **La poda por `walk_exclusions` no está probada, y no se puede probar hoy.**
+  Lee el directorio de config del proceso por la función libre
+  `protected_roots()`, no por el inyectable
+  `ScopeRegistry::with_protected_roots`, así que un test sobre `mem://` pasa
+  con la poda y sin ella. Tampoco la prueban `fs.search`, `fs.compare` ni
+  `archive.pack`, que la usan desde antes. Primero la costura; fingir el test
+  es peor que no tenerlo.
+
 ## T3 — El treemap, compartido
 
 1. `norte_frontend::treemap::squarify(children, cols, rows) -> StyledFrame`:
