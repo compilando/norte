@@ -173,6 +173,7 @@ fn main() -> ExitCode {
                 norte_gui_tauri::catalog::catalogo(boot.host.instance(), boot.lang, &boot.theme);
             cat.appearance = boot.appearance;
             cat.first_run = boot.first_run;
+            cat.no_splash = boot.no_splash;
             cat.theme_light = boot.theme_light;
             cat.theme_dark = boot.theme_dark;
             AppState::Ready(Box::new(Bridge::new(

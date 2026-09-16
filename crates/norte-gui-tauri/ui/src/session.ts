@@ -217,6 +217,9 @@ export class Session {
       case "wizard":
         s.wizard = c.wizard;
         return true;
+      case "splash":
+        s.splash = c.splash;
+        return true;
       case "palette":
         s.palette = c.palette;
         return true;

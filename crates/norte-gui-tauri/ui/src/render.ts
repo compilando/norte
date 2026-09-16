@@ -41,6 +41,7 @@ import * as extensions from "./render/extensions";
 import * as settings from "./render/settings";
 import * as viewer from "./render/viewer";
 import * as help from "./render/help";
+import * as splash from "./render/splash";
 import * as log from "./render/log";
 import * as search from "./render/search";
 import * as menus from "./render/menus";
@@ -74,6 +75,21 @@ export class Screen {
   pendingLogRows: number | null = null;
   /// La página de ayuda que se pintó, para conservar su scroll.
   helpPintada: string | null = null;
+
+  /**
+   * El plazo del modo `brief`, si hay uno armado.
+   *
+   * En la clase y no en el módulo: dos `Screen` en el mismo proceso —los dos
+   * ficheros de test montan la suya— compartirían un temporizador y se lo
+   * pisarían. Y se arma UNA vez por aparición, no en cada repintado: el host
+   * manda la vista entera en cada parche, y rearmarlo en cada uno convertía
+   * «1,2 segundos» en «1,2 segundos después del último parche», que durante
+   * el arranque es justo cuando no paran de llegar.
+   */
+  splashPlazo: ReturnType<typeof setTimeout> | null = null;
+
+  /** La pantalla de arranque ya está puesta: el plazo, si lo había, ya corre. */
+  splashPuesto = false;
   /// El `blob:` de la imagen que se está enseñando, para REVOCARLO.
   ///
   /// Un object URL sin revocar es un búfer retenido mientras viva el
@@ -130,6 +146,7 @@ export class Screen {
     readonly viewerRoot: HTMLElement,
     readonly dialogsRoot: HTMLElement,
     readonly aiRenameRoot: HTMLElement,
+    readonly splashRoot: HTMLElement,
     readonly catalog: HostCatalog,
     readonly send: Send,
     /**
@@ -255,6 +272,9 @@ export class Screen {
     this.paintViewer(view.viewer);
     this.paintAiRename(view.ai_rename);
     this.paintDialogs(view.dialogs);
+    // LA ÚLTIMA: la pantalla de arranque se pone delante de todo lo demás, y
+    // en esta hoja el apilado es el orden del documento.
+    this.paintSplash(view.splash ?? null);
   }
 
   /** En `render/menus.ts`. */
@@ -270,6 +290,9 @@ export class Screen {
 
   /** En `render/menus.ts`. */
   readonly paintWhichKey = menus.paintWhichKey;
+
+  /** En `render/splash.ts`. */
+  readonly paintSplash = splash.paintSplash;
 
   /** En `render/help.ts`. */
   readonly paintHelp = help.paintHelp;

@@ -441,7 +441,13 @@ pub async fn run(
         // Abre SIN llevarse el teclado —el lector está en su listado— y solo
         // cierra lo que abrió él: un panel que abrió una persona se queda.
         if app.chrome.processes_panel() == norte_config::load::ProcessesPanel::Auto {
-            let hay_tareas = !app.board.rows().is_empty();
+            // Solo TRABAJO abre el panel: una búsqueda tiene su propia lista
+            // y no se gana medio tercio de pantalla (`counts_as_work`).
+            let hay_tareas = app
+                .board
+                .rows()
+                .iter()
+                .any(|r| norte_frontend::tasks::counts_as_work(r.last.kind));
             if hay_tareas && app.processes_slot().is_none() {
                 app.open_processes(false);
                 app.processes_auto = true;

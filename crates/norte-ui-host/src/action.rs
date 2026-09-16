@@ -619,6 +619,28 @@ pub enum UiAction {
     /// Lo manda el renderer al arrancar cuando el catálogo dice
     /// `first_run`: no hay `norte.toml` de usuario todavía.
     WizardOpen,
+    /// Pone la pantalla de arranque, si la configuración la quiere.
+    ///
+    /// La manda el renderer al arrancar, como `wizard_open`: el host es quien
+    /// sabe si `[ui] splash` dice `brief`, `home` u `off`, y quien cede ante
+    /// el asistente de primer arranque. El renderer no decide, solo avisa de
+    /// que este es el arranque.
+    SplashOpen,
+    /// Quita la pantalla de arranque (puente 69, ADR 0115).
+    ///
+    /// La manda el renderer ante cualquier tecla, cualquier clic, o cuando
+    /// vence el plazo que la propia pantalla trajo (`close_after_ms`). No es
+    /// un comando del keymap a propósito: no se ata una tecla para quitarla,
+    /// se quita con la que sea, que es lo que una persona intenta.
+    SplashClose,
+    /// Abre lo que dice una fila NUMERADA de la pantalla de arranque.
+    ///
+    /// El número es el que la fila enseña (1..=9), no su índice: es lo que el
+    /// lector teclea, y contarlo aquí desde cero sería pedirle que reste.
+    SplashActivateRow {
+        /// El número pintado en la fila.
+        number: u8,
+    },
     /// Elige una fila del asistente Y la confirma: lo que hace un click.
     WizardActivateRow {
         /// Qué fila, en el orden en que viajaron.

@@ -86,6 +86,22 @@ cerrar; `just ci` una vez antes de fusionar.
   splash) y `protocol-guardian` NO hace falta (no se toca el wire), pero sí una
   revisión del PUENTE en la misma pasada.
 
+## Estado al cerrar (2026-09-16)
+
+T1–T4 hechas. Dos cosas salieron distintas de lo planeado, y las dos están en
+el ADR 0115:
+
+- **La apertura automática vive en el progreso, no en el registro.** Abrir un
+  panel cambia el reparto, y cambiar el reparto republica la FOTO entera
+  (`aplicar_disposicion`), así que hacerlo al encolar mete una foto en medio
+  de cada operación que el lector acaba de pedir. Lo que sí faltaba —y era un
+  BLOCKER de la revisión— es el CIERRE: se reevalúa también al caducar la
+  fila, porque cuando la última se va no llega ningún progreso más.
+- **`--no-splash` y `NORTE_NO_SPLASH` también en la ventana.** No estaban en el
+  plan; el CHANGELOG los prometía para la fase y solo existían en el terminal,
+  así que cada captura automática habría salido con la pantalla encima. Viajan
+  en el catálogo, como `first_run`.
+
 ## T5 — Gate
 
 `just ci-fast` + `just gui-ci` tras T2 y al cerrar; `just ci` antes de

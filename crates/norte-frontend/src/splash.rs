@@ -116,6 +116,17 @@ pub fn sections(fuentes: &[&dyn SplashSource]) -> Vec<SplashSection> {
         .collect()
 }
 
+/// Cuánto tapa el splash `brief` como MUCHO, en milisegundos.
+///
+/// Compartido porque es parte de lo que la pantalla PROMETE: «se ve, y se
+/// quita sola». Dos plazos distintos serían dos arranques distintos, y el que
+/// tardara más se leería como que esa superficie va más lenta.
+///
+/// No es de los temporizadores que prohíbe la ADR 0006 —aquello va de resolver
+/// TECLAS—: aquí ninguna tecla espera al reloj, porque cualquiera lo quita
+/// antes.
+pub const BRIEF_MS: i64 = 1_200;
+
 /// Cuántas filas del splash se pueden elegir por número.
 ///
 /// Nueve, y no diez: `0` no es la décima de nada, y una lista que empieza en

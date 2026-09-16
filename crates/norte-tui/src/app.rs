@@ -1393,7 +1393,11 @@ impl App {
     /// quita el splash antes—. Es el plazo que impide que una portada se quede
     /// puesta cuando el primer listado tarda: 1,2 s se leen de una vez y no se
     /// sienten como un arranque lento.
-    pub const SPLASH_BRIEF_MS: i64 = 1_200;
+    ///
+    /// El número es el COMPARTIDO: dos plazos distintos serían dos arranques
+    /// distintos, y el que tardara más se leería como que el terminal va más
+    /// lento que la ventana.
+    pub const SPLASH_BRIEF_MS: i64 = norte_frontend::splash::BRIEF_MS;
 
     /// El reloj del pintado.
     #[must_use]

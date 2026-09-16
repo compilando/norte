@@ -9,7 +9,7 @@ import { catalogoReal, golden } from "./fixtures";
 /** Una pantalla montada sobre un DOM limpio, con el catálogo de verdad. */
 function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   document.body.replaceChildren();
-  const nodos = Array.from({ length: 20 }, () => document.createElement("div"));
+  const nodos = Array.from({ length: 21 }, () => document.createElement("div"));
   const root = document.createElement("main");
   document.body.append(root, ...nodos);
   document.documentElement.style.setProperty("--cell-h", "20px");
@@ -44,6 +44,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     viewer,
     dialogs,
     aiRename,
+    splash,
   ] = nodos;
   const panelBar = document.createElement("div");
   const screen = new Screen(
@@ -69,6 +70,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     viewer as HTMLElement,
     dialogs as HTMLElement,
     aiRename as HTMLElement,
+    splash as HTMLElement,
     catalog,
     (a: UiAction) => enviadas.push(a),
   );

@@ -15,10 +15,19 @@ independently through `PROTOCOL_VERSION`.
   directories you go to most and your bookmarks, each opened by its number) or
   `off`; `--no-splash` and `NORTE_NO_SPLASH` turn it off for one run, and the
   first-run wizard still comes first. `[ui] processes_panel = "auto"` opens the
-  processes panel when a task starts and closes it when the last one is gone —
-  without taking the keyboard, and never closing a panel you opened yourself.
+  processes panel when a task starts and closes it a few seconds after the
+  last row finishes — the seconds a finished row stays on the board, so the
+  panel never vanishes at the very moment that says something failed. It takes
+  the keyboard from nothing, and never closes a panel you opened yourself.
   Its rows now say how fast the task is going and how long is left, computed
-  from successive snapshots because the protocol carries no rate.
+  from successive snapshots because the protocol carries no rate. Searching,
+  comparing or checksumming never open it: each has a surface of its own, and
+  the rule that tells work from observation is shared by both frontends.
+  In the window the same screen opens at start-up and goes away on any key,
+  any click or its own deadline — which travels on the bridge, since nothing
+  there wakes on a clock — its numbered rows open a place with a click as well
+  as with `1`..`9`, the row of a listing carries the progress bar of the task
+  working on that file, and the pane without the keyboard is dimmed.
 - **Chrome that was lying.** `[ui] dir_indicator` drops the `/` in front of a
   directory when the icon column already says what the row is (`auto`, the
   default), the pane footer is painted in its own pane's border colour instead

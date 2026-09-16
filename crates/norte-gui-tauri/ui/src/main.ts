@@ -52,6 +52,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const viewerEl = doc.getElementById("viewer");
   const dialogsEl = doc.getElementById("dialogs");
   const aiRenameEl = doc.getElementById("ai-rename");
+  const splashEl = doc.getElementById("splash");
   const fatalEl = doc.getElementById("fatal");
   if (
     screenEl === null ||
@@ -76,6 +77,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     viewerEl === null ||
     dialogsEl === null ||
     aiRenameEl === null ||
+    splashEl === null ||
     fatalEl === null
   ) {
     throw new Error("el documento no tiene los anclajes del renderer");
@@ -155,6 +157,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     viewerEl,
     dialogsEl,
     aiRenameEl,
+    splashEl,
     catalog,
     send,
     () => port.imageBytes(),
@@ -278,6 +281,16 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   // dice que este arranque es el primero.
   if (catalog.first_run === true) {
     send({ action: "wizard_open" });
+  }
+  // Y la pantalla de arranque (ADR 0115), por la misma puerta: si la quiere
+  // —`[ui] splash`— lo sabe el host, que también es quien le cede el sitio al
+  // asistente. Aquí solo se avisa de que este es el arranque.
+  //
+  // Salvo que este arranque la haya apagado (`--no-splash`,
+  // `NORTE_NO_SPLASH`): eso lo ve el proceso de la ventana, no el host, y sin
+  // esta puerta cada captura automática saldría con la pantalla encima.
+  if (catalog.no_splash !== true) {
+    send({ action: "splash_open" });
   }
 
   // Alt solo va a la barra de menús (puente 68). Se mira ANTES del filtro de

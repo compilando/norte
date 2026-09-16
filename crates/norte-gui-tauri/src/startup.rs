@@ -72,6 +72,7 @@ OPCIONES:
     --socket <RUTA>      Socket del daemon (por defecto, el del sistema)
     --layout <NOMBRE>    Disposición de arranque (por defecto, la de la config)
     --preset <NOMBRE>    Preset de teclado (por defecto, el de la config)
+    --no-splash          Sin pantalla de inicio en este arranque
     --profile <NOMBRE>   Perfil de configuración (por defecto, ninguno)
     -h, --help           Esta ayuda
     -V, --version        La versión
@@ -236,6 +237,9 @@ pub struct Cli {
     /// Bytes intactos por lo mismo que [`Self::layout`], y con más motivo: un
     /// nombre de perfil acaba siendo un DIRECTORIO (`profiles/<nombre>/`).
     pub profile: Option<std::ffi::OsString>,
+    /// Sin pantalla de arranque en ESTE arranque, diga lo que diga `[ui]
+    /// splash`. Para pilotos y capturas, igual que en el terminal.
+    pub no_splash: bool,
     /// Se pidió la ayuda.
     pub help: bool,
     /// Se pidió la versión.
@@ -254,7 +258,7 @@ where
 {
     let crudo = norte_frontend::cli::parse(
         args,
-        &[],
+        &["--no-splash"],
         &["--socket", "--layout", "--preset", "--profile"],
     );
     if let Some(flag) = crudo.unknown {
@@ -266,6 +270,7 @@ where
         layout: crudo.os_text("--layout").map(std::ffi::OsString::from),
         preset: crudo.os_text("--preset").map(std::ffi::OsString::from),
         profile: crudo.os_text("--profile").map(std::ffi::OsString::from),
+        no_splash: crudo.has("--no-splash"),
         help: crudo.help,
         version: crudo.version,
     })
@@ -288,6 +293,13 @@ pub struct Boot {
     /// No hay `norte.toml` de usuario (spec 2026-09-10): el catálogo lo
     /// lleva y el renderer abre el asistente de primer arranque.
     pub first_run: bool,
+    /// Esta ventana arranca SIN pantalla de inicio, diga lo que diga `[ui]
+    /// splash` (ADR 0115): `--no-splash` o `NORTE_NO_SPLASH`.
+    ///
+    /// Se decide aquí y viaja en el catálogo, como `first_run`: el host no
+    /// mira el entorno del proceso ni la línea de órdenes —no son suyos—, y
+    /// el renderer solo necesita saber si avisar del arranque o callarse.
+    pub no_splash: bool,
     /// `[ui] theme_light` / `theme_dark` ya resueltos a variables (spec
     /// 2026-09-11, V6), o `None` cuando la clave no está o su tema no carga
     /// — entonces la ventana pinta `theme` en ese esquema, y se avisa.
@@ -863,6 +875,11 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     } else {
         false
     };
+    // Sin pantalla de inicio en ESTE arranque (ADR 0115): la bandera, o la
+    // variable que usan los pilotos y las capturas. Misma pareja que el
+    // terminal, porque una ventana que ignora `NORTE_NO_SPLASH` deja una
+    // pantalla encima de cada captura automática.
+    let no_splash = cli.no_splash || std::env::var_os("NORTE_NO_SPLASH").is_some();
     Ok(Boot {
         host,
         snapshot,
@@ -870,6 +887,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         theme,
         appearance: crate::catalog::Appearance::de(&cfg.common),
         first_run,
+        no_splash,
         theme_light,
         theme_dark,
     })

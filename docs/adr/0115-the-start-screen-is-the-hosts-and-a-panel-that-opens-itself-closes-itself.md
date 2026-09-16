@@ -102,3 +102,41 @@ afford it (`2 Copiar`, not `2Copiar`) — the mouse zones come from
 - `SPLASH_BRIEF_MS` is a deadline, not a key resolution: ADR 0006 forbids the
   latter, and no key here waits for the clock — any key removes the cover
   first.
+- **The brief deadline CROSSES the bridge** as `SplashView.close_after_ms`, a
+  remaining duration rather than an instant. The window has no event loop that
+  wakes on its own the way the terminal's does, so the host decides the
+  deadline and the renderer is what keeps it — and the number travels instead
+  of being written twice, which is the divergence ADR 0077 exists to stop. Two
+  clocks in two processes cannot compare instants anyway.
+- **The panel opens on the first progress and closes when the last row
+  EXPIRES**, not when the last task ends. Closing at expiry keeps it up for the
+  seconds a finished row stays on the board: a panel that vanished the instant
+  a copy failed would take the only surface that says so with it. It is also
+  what the terminal does, where the same condition is re-evaluated every loop
+  turn against a board that keeps finished rows until it prunes them — so the
+  window must re-evaluate wherever the board changes shape, and re-evaluating
+  only on progress was the bug: when the last row expires no further progress
+  arrives, so the panel that opened itself stayed open for the rest of the
+  session.
+- **Opening it at registration instead was tried and reverted.** It would cover
+  the task that waits its turn and never publishes a second snapshot, but
+  opening a panel changes the layout, and changing the layout republishes the
+  WHOLE view (`aplicar_disposicion` says so in its own rustdoc). Doing that at
+  registration drops a full snapshot into the middle of every operation the
+  reader started — a sync apply, a copy — where the next thing they are waiting
+  for is the answer to what they just asked. The theoretical gap it closes does
+  not arise with a real backend: a registered task publishes its initial
+  progress, and one that is born terminal is handled by `nacio_terminal`.
+- **Only WORK opens the panel by itself**, and that rule lives once, in
+  `norte_frontend::tasks::counts_as_work`. The window's task registry holds
+  every task the daemon announces — a search included — while the TUI's board
+  never held the observational ones, because each of those has a surface of
+  its own. Without the shared predicate the same configuration opened the panel
+  in one frontend and not the other, and a search covered the very list of
+  findings it was producing.
+- Three actions join the window's vocabulary: `splash_open` (the renderer says
+  "this is the start"; the host decides whether the configuration wants a
+  screen and still cedes to the first-run wizard), `splash_close` (any key, any
+  click, or the deadline) and `splash_activate_row` (a click on a numbered
+  row). A digit `1`..`9` is handled before the keymap sees it, so the numbers
+  the screen prints are numbers that work.

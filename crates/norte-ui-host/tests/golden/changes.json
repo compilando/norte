@@ -800,6 +800,7 @@
         "name_dim": false,
         "name_italic": false,
         "name_underline": false,
+        "progress": null,
         "selected": false
       }
     ],
@@ -979,9 +980,11 @@
       {
         "detail": "notas.txt",
         "detail_hostile": false,
+        "eta": "",
         "foreign": false,
         "kind": "copy",
         "percent": 40,
+        "rate": "",
         "state": "running",
         "task_id": 7
       }

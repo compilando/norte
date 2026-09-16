@@ -321,7 +321,23 @@ use serde::{Deserialize, Serialize};
 ///   menú abierto o lo abre como `app.menu`, y no hace nada con una pantalla
 ///   que se queda las teclas delante. Cruza como acción propia porque un
 ///   modificador solo no es un chord del keymap.
-pub const BRIDGE_VERSION: u32 = 68;
+/// - **69**: la pantalla de inicio y lo que una task tarda (spec
+///   2026-09-15, ADR 0115). Tres formas nuevas, todas aditivas:
+///   `ViewSnapshot.splash` (con su `ViewChange::Splash`), `TaskView.rate` y
+///   `TaskView.eta`, y `RowView.progress`.
+///
+///   El ritmo NO viene del wire: `TaskProgress` dice cuánto va hecho y no a
+///   qué velocidad, así que lo estima cada frontend de sus propias fotos
+///   (`norte_frontend::tasks::Rate`). Cruza ya formateado —`"12,3 MiB/s"`,
+///   `"1m 04s"`— y no como números porque el renderer no tiene el locale ni
+///   las unidades, y dos frontends redondeando por su cuenta divergen en la
+///   última cifra sin que nada lo cace.
+///
+///   `RowView.progress` es la barra DENTRO de la fila del listado: la task
+///   dice qué fichero lleva entre manos, y esa fila es la que el lector está
+///   mirando. Es `Option` porque una fila sin task detrás no tiene barra, que
+///   es casi todas.
+pub const BRIDGE_VERSION: u32 = 69;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

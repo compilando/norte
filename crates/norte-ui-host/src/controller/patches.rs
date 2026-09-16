@@ -75,6 +75,11 @@ impl Estado {
     pub(super) fn filas_de(&self, hueco: &Hueco) -> Vec<RowView> {
         let primera = usize::try_from(hueco.primera_visible).unwrap_or(0);
         let cuantas = usize::try_from(hueco.visibles).unwrap_or(0);
+        // UNA vez por lote, no una por fila: recorre el mapa de tasks entero y
+        // clona un `VPath` por task viva. Dentro de `fila` eso era un recorrido
+        // y un clon por ENTRADA visible, en cada repintado, y los repintados
+        // los provoca justo lo que llena esa lista: el progreso.
+        let operandos = self.operandos_vivos();
         hueco
             .pane
             .entries()
@@ -82,7 +87,7 @@ impl Estado {
             .enumerate()
             .skip(primera)
             .take(cuantas.min(MAX_ROWS_PER_BATCH))
-            .map(|(i, e)| self.fila(hueco, i, e))
+            .map(|(i, e)| self.fila(hueco, i, e, &operandos))
             .collect()
     }
 
@@ -433,7 +438,19 @@ impl Estado {
         }
     }
 
-    pub(super) fn fila(&self, hueco: &Hueco, i: usize, e: &Entry) -> RowView {
+    /// Una fila del listado, con los operandos vivos YA calculados.
+    ///
+    /// Los recibe en vez de pedirlos: `operandos_vivos` recorre el mapa de
+    /// tasks y clona una ruta por task viva, y hacer eso por fila convertía
+    /// un repintado de cincuenta filas con veinte tareas en mil recorridos y
+    /// mil clones.
+    pub(super) fn fila(
+        &self,
+        hueco: &Hueco,
+        i: usize,
+        e: &Entry,
+        operandos: &[(VPath, Option<u8>)],
+    ) -> RowView {
         let bytes = e
             .path
             .file_name()
@@ -477,6 +494,13 @@ impl Estado {
                 EntryKind::Symlink => RowKind::Symlink,
                 EntryKind::Other => RowKind::Other,
             },
+            // Por dónde va la tarea que trabaja sobre ESTA fila (spec
+            // 2026-09-15): lo decide el crate compartido, que casa por ruta
+            // exacta y se queda con la menos avanzada.
+            progress: norte_frontend::processes::progress_for(
+                operandos.iter().map(|(r, p)| (r, *p)),
+                &e.path,
+            ),
             selected: i == hueco.pane.cursor(),
             marked: hueco.pane.is_marked(e),
             cells: self.celdas(hueco, e),
@@ -499,6 +523,27 @@ impl Estado {
             name_italic: estilo.italic,
             name_underline: estilo.underline,
         }
+    }
+
+    /// Sobre qué está trabajando cada task viva, con su porcentaje.
+    ///
+    /// La ruta es la del ÚLTIMO progreso (`current`), que es lo que el wire
+    /// dice que se está tocando ahora; una task terminada no cuenta, porque su
+    /// fila ya no está esperando a nadie.
+    pub(super) fn operandos_vivos(&self) -> Vec<(VPath, Option<u8>)> {
+        self.tasks
+            .values()
+            .filter(|t| !Self::terminal(t.vista.state))
+            .filter_map(|t| {
+                // El progreso EN VIVO y no la vista: la vista es una foto que
+                // se proyecta al salir el mensaje del buzón, y la fila de un
+                // listado se pinta mucho más a menudo que eso.
+                let p = t.progreso.borrow();
+                p.current
+                    .as_ref()
+                    .map(|ruta| (ruta.clone(), norte_frontend::tasks::progress_pct(&p)))
+            })
+            .collect()
     }
 
     /// El catálogo de la localización de un path, si ya llegó.

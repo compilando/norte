@@ -58,6 +58,37 @@ insignia lo abre. `0` mantiene un mensaje hasta la siguiente tecla, como
 antes. Los avisos persistentes — una conexión degradada, un journal que no
 abre — no caducan: son estado, no aviso.
 
+La pantalla de arranque
+-----------------------
+
+Antes del primer listado, norte enseña qué build corre y contra qué core
+habla, y se quita con la primera tecla o sola en poco más de un segundo
+(`splash = "brief"`, el de serie). `"home"` la convierte en una pantalla de
+inicio que se queda hasta que la toques, con los directorios a los que más
+vas y tus favoritos, cada uno abierto por su número (1-9); un clic en la fila
+hace lo mismo. `"off"` no enseña nada. El asistente de primer arranque le
+gana: si aún no tienes `norte.toml`, se pregunta antes y la pantalla no sale.
+
+El panel de procesos
+--------------------
+
+Con `processes_panel = "auto"` (el de serie) el panel se abre solo en cuanto
+hay trabajo en marcha —una copia, un movimiento, un borrado— y se cierra solo
+unos segundos después de que la última fila acabe, sin llevarse el teclado:
+sigues en tu listado. Esos segundos son los que la fila terminada se queda en el
+tablero, y son a propósito: un panel que desapareciera en el instante del
+desenlace se llevaría por delante el único sitio donde se lee que algo falló. Solo cierra lo
+que abrió él; uno que abriste tú se queda. Buscar, comparar o sumar no lo
+abren: eso tiene su propia pantalla, y taparla con el panel sería decir dos
+veces lo mismo. `"manual"` lo deja como estaba, abierto y cerrado por ti.
+
+Directorios
+-----------
+
+Un directorio se distingue por su icono y su color, y además lleva una barra
+al final del nombre cuando no hay iconos que mirar (`dir_indicator = "auto"`,
+el de serie). `"slash"` la pone siempre y `"none"` nunca.
+
 Botones en los diálogos
 -----------------------
 

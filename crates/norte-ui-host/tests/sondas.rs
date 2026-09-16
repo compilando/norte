@@ -202,8 +202,18 @@ async fn arranca() -> (UiHost, ViewSnapshot) {
     .expect("arranca")
 }
 
+/// La observación de un kind, EN CAJA.
+///
+/// El futuro de un `async fn` viaja entero en cada `await`, y este monta un
+/// host y guarda dos fotos: al crecer el snapshot pasó de los 16 KB que
+/// clippy tolera. La caja va aquí, en la raíz, y no en los dos bucles que lo
+/// llaman.
+fn observa(kind: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Observacion> + '_>> {
+    Box::pin(observa_inner(kind))
+}
+
 /// Abre el panel de `kind`, mueve el cursor del listado, y mira qué pasó.
-async fn observa(kind: &str) -> Observacion {
+async fn observa_inner(kind: &str) -> Observacion {
     let (host, primera) = arranca().await;
     let mut sub = host.subscribe();
 

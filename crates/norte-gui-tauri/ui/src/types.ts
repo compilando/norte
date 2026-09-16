@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 68;
+export const BRIDGE_VERSION = 69;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -76,10 +76,43 @@ export interface CellView {
   text: string | null;
 }
 
+/** La pantalla de arranque (puente 69): la pinta el host, no el webview. */
+export interface SplashView {
+  art: string[];
+  version: string;
+  revision: string;
+  daemon: string;
+  hint: string;
+  sections: SplashSectionView[];
+  /**
+   * Lo que le queda puesta, en milisegundos, o `null` si se queda hasta que
+   * alguien la quite.
+   *
+   * El plazo lo decide el host y lo CUMPLE este renderer: aquí es donde hay
+   * temporizadores. Viene como duración y no como instante porque los dos
+   * relojes son de procesos distintos.
+   */
+  close_after_ms?: number | null;
+}
+
+export interface SplashSectionView {
+  title: string;
+  rows: SplashRowView[];
+}
+
+export interface SplashRowView {
+  /** El número que la abre, o 0 si la fila no tiene tecla. */
+  number: number;
+  label: string;
+  detail: string;
+}
+
 export interface RowView {
   key: RowKey;
   display_name: string;
   hostile: boolean;
+  /** Por dónde va la tarea que trabaja sobre esta fila, 0–100 (puente 69). */
+  progress?: number | null;
   kind: RowKind;
   selected: boolean;
   marked: boolean;
@@ -518,6 +551,10 @@ export interface TaskView {
   kind: string;
   state: TaskStateView;
   percent: number | null;
+  /** El ritmo ya escrito por el host (`1.2 MiB/s`); vacío si no se sabe. */
+  rate: string;
+  /** Lo que queda, ya escrito (`1m 20s`); vacío si no se sabe. */
+  eta: string;
   detail: string | null;
   detail_hostile: boolean;
   foreign: boolean;
@@ -1191,6 +1228,8 @@ export interface ViewSnapshot {
   /** El asistente de primer arranque (puente 63), si está abierto. Opcional:
    *  un host anterior no lo manda. */
   wizard?: WizardView | null;
+  /** La pantalla de arranque (puente 69, ADR 0115), si está puesta. */
+  splash?: SplashView | null;
   whichkey: WhichKeyView | null;
   help: HelpView | null;
   settings: SettingsView | null;
@@ -1262,6 +1301,7 @@ export type ViewChange =
   | { change: "profiles"; profiles: ProfilePickerView | null }
   | { change: "palette"; palette: PaletteView | null }
   | { change: "wizard"; wizard: WizardView | null }
+  | { change: "splash"; splash: SplashView | null }
   | { change: "help"; help: HelpView | null }
   | { change: "settings"; settings: SettingsView | null }
   | { change: "extensions"; extensions: ExtensionsView | null }
@@ -1396,6 +1436,9 @@ export type UiAction =
   | { action: "menu_toggle" }
   | { action: "wizard_open" }
   | { action: "wizard_activate_row"; row: number }
+  | { action: "splash_open" }
+  | { action: "splash_close" }
+  | { action: "splash_activate_row"; number: number }
   | { action: "panel_bar_activate"; button: number }
   | { action: "key_bar_activate"; key: number }
   | { action: "resize_slot"; slot_id: number; cells: number }
@@ -1430,6 +1473,10 @@ export interface HostCatalog {
   /** No hay `norte.toml` de usuario todavía (puente 63): el renderer abre el
    *  asistente de primer arranque al pintar la primera foto. */
   first_run?: boolean;
+  /** Esta ventana arranca sin pantalla de inicio (puente 69, ADR 0115):
+   *  `--no-splash` o `NORTE_NO_SPLASH`. Lo decide el arranque, que es quien
+   *  ve la línea de órdenes y el entorno; aquí solo se calla el aviso. */
+  no_splash?: boolean;
   /** `[ui] theme_light` / `theme_dark` ya resueltos a variables (spec
    *  2026-09-11, V6): el renderer aplica el que casa con
    *  `prefers-color-scheme`, y `theme` cuando no hay variante para ese

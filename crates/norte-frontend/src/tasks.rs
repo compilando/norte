@@ -186,9 +186,119 @@ pub fn human_eta(secs: Option<u64>) -> String {
     }
 }
 
+/// `true` si esta clase de task es TRABAJO de tablero.
+///
+/// El panel de procesos es de lo que el lector puso a correr y puede parar:
+/// copias, movimientos, borrados, empaquetados, una sincronización. Las
+/// clases *observacionales* —buscar, comparar, medir un directorio, sumar,
+/// indexar, planear una sincronización— no lo son: cada una tiene su propia
+/// superficie (la lista de hallazgos, la ficha de sumas, el plan), y ahí es
+/// donde se ven y se cancelan.
+///
+/// La distinción existe porque el panel puede ABRIRSE SOLO (ADR 0115), y
+/// abrirlo por una búsqueda tapa media pantalla para decir lo que la lista de
+/// hallazgos ya está diciendo. La TUI nunca metió esas clases en su tablero
+/// —viven en `work.search`, `work.checksum`—, así que sin esta regla escrita
+/// los dos frontends contaban cosas distintas: es la clase de divergencia que
+/// el ADR 0077 pide matar en la REGLA, no en cada cableado.
+///
+/// ```
+/// use norte_frontend::tasks::counts_as_work;
+/// use norte_proto::TaskKind;
+///
+/// assert!(counts_as_work(TaskKind::Copy));
+/// assert!(!counts_as_work(TaskKind::Search));
+/// ```
+#[must_use]
+pub fn counts_as_work(kind: norte_proto::TaskKind) -> bool {
+    !matches!(
+        kind,
+        norte_proto::TaskKind::Search
+            | norte_proto::TaskKind::Compare
+            | norte_proto::TaskKind::DirSize
+            | norte_proto::TaskKind::Checksum
+            | norte_proto::TaskKind::Index
+            | norte_proto::TaskKind::Embed
+            | norte_proto::TaskKind::SyncPlan
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cada clase del wire decide, A MANO, si es trabajo de tablero.
+    ///
+    /// El `match` de [`counts_as_work`] es por exclusión, así que una clase
+    /// NUEVA cuenta como trabajo sin que nadie lo piense — que es el valor
+    /// por defecto correcto (una clase nueva suele mutar, y un panel que no
+    /// se abre nunca es una función que no existe), pero no puede ser una
+    /// decisión silenciosa. Este `match` sin brazo comodín rompe la
+    /// compilación del test en cuanto el enum crece, y obliga a elegir.
+    #[test]
+    fn cada_clase_decide_a_mano_si_es_trabajo() {
+        use norte_proto::TaskKind as K;
+        for kind in [
+            K::Copy,
+            K::Move,
+            K::Delete,
+            K::Undo,
+            K::Search,
+            K::Mkdir,
+            K::Create,
+            K::Index,
+            K::Embed,
+            K::RenameBatch,
+            K::Compare,
+            K::DirSize,
+            K::Checksum,
+            K::SetMode,
+            K::Pack,
+            K::TestArchive,
+            K::Split,
+            K::Combine,
+            K::SyncPlan,
+            K::Sync,
+        ] {
+            let esperado = match kind {
+                // TRABAJO: mueve bytes o cambia el disco, y se para desde el
+                // panel.
+                K::Copy
+                | K::Move
+                | K::Delete
+                | K::Undo
+                | K::Mkdir
+                | K::Create
+                | K::RenameBatch
+                | K::SetMode
+                | K::Pack
+                | K::TestArchive
+                | K::Split
+                | K::Combine
+                | K::Sync => true,
+                // OBSERVACIÓN: cada una tiene su propia superficie —la lista
+                // de hallazgos, la ficha de sumas, el plan—, y taparla con el
+                // panel sería decir dos veces lo mismo.
+                K::Search
+                | K::Compare
+                | K::DirSize
+                | K::Checksum
+                | K::Index
+                | K::Embed
+                | K::SyncPlan => false,
+                // Sin comodín A PROPÓSITO: ver el rustdoc de este test.
+                otra => panic!(
+                    "clase nueva en el wire ({otra:?}): decide aquí si abre \
+                     el panel de procesos, y escríbelo en `counts_as_work`"
+                ),
+            };
+            assert_eq!(
+                counts_as_work(kind),
+                esperado,
+                "{kind:?} cambió de lado sin que nadie lo dijera"
+            );
+        }
+    }
 
     fn progreso(bytes: Option<u64>, entradas: Option<u64>) -> norte_proto::TaskProgress {
         norte_proto::TaskProgress {

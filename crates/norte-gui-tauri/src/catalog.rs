@@ -68,6 +68,13 @@ pub struct HostCatalog {
     /// trae, y no traerlo es «no es el primero».
     #[serde(default)]
     pub first_run: bool,
+    /// Esta ventana arranca sin pantalla de inicio (ADR 0115): `--no-splash`
+    /// o `NORTE_NO_SPLASH`. Lo decide el arranque, que es quien ve la línea
+    /// de órdenes y el entorno; el renderer solo calla el aviso de arranque.
+    /// Con `default`: un catálogo anterior no lo trae, y no traerlo es «sí,
+    /// enséñala si la configuración la quiere».
+    #[serde(default)]
+    pub no_splash: bool,
     /// `[ui] theme_light` / `theme_dark` ya resueltos a variables (spec
     /// 2026-09-11, V6): el renderer aplica el que casa con
     /// `prefers-color-scheme`, y `theme` cuando no hay variante para ese
@@ -152,6 +159,7 @@ pub fn catalogo(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog
             .unwrap_or(250),
         appearance: Appearance::default(),
         first_run: false,
+        no_splash: false,
         theme_light: None,
         theme_dark: None,
     }
