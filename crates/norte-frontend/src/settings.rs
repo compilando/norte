@@ -290,6 +290,26 @@ const CATALOG: &[SettingDef] = &[
         kind: SettingKind::Int { min: 5, max: 64 },
         applies_live: true,
     },
+    // Spec 2026-09-15, fase 2: la pantalla de arranque, el panel de procesos
+    // que se abre solo y la `/` de las carpetas.
+    SettingDef {
+        id: "ui.splash",
+        section: Section::General,
+        kind: SettingKind::Enum(&["brief", "off", "home"]),
+        applies_live: true,
+    },
+    SettingDef {
+        id: "ui.processes-panel",
+        section: Section::General,
+        kind: SettingKind::Enum(&["auto", "manual"]),
+        applies_live: true,
+    },
+    SettingDef {
+        id: "ui.dir-indicator",
+        section: Section::General,
+        kind: SettingKind::Enum(&["auto", "slash", "none"]),
+        applies_live: true,
+    },
     SettingDef {
         id: "ui.dialog-buttons",
         section: Section::General,
@@ -431,6 +451,9 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         "ui.date-format" => cfg.common.ui_chrome.date_format().as_str().to_owned(),
         "ui.notice-seconds" => cfg.common.ui_chrome.notice_seconds().to_string(),
         "ui.history-size" => cfg.common.ui_chrome.history_size().to_string(),
+        "ui.splash" => cfg.common.ui_chrome.splash().as_str().to_owned(),
+        "ui.processes-panel" => cfg.common.ui_chrome.processes_panel().as_str().to_owned(),
+        "ui.dir-indicator" => cfg.common.ui_chrome.dir_indicator().as_str().to_owned(),
         "ui.dialog-buttons" => cfg.common.ui_chrome.dialog_buttons().to_string(),
         // Vacío = sin variante: la ventana pinta `theme` en los dos esquemas.
         "ui.theme-light" => cfg.common.ui_theme_light.clone().unwrap_or_default(),

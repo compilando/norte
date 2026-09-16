@@ -79,6 +79,7 @@ pub mod shell;
 pub mod shortcuts;
 mod sort;
 pub mod space;
+pub mod splash;
 pub mod subshell;
 pub mod sync;
 pub mod tasks;

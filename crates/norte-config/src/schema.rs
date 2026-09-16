@@ -411,6 +411,30 @@ pub struct UiSection {
     /// restart without a word.
     #[serde(default)]
     pub history_size: Option<u32>,
+    /// What the startup screen does: `"brief"` (default — a cover any key
+    /// takes away, with the build and where you were), `"off"` (none) or
+    /// `"home"` (a start screen that stays until a key, with recent and
+    /// popular directories, bookmarks and profiles by number).
+    ///
+    /// [`crate::load::load`] rejects other values. The first-run wizard wins
+    /// over it, and `--no-splash` or `NORTE_NO_SPLASH` turn it off for one run.
+    #[serde(default)]
+    pub splash: Option<String>,
+    /// Whether the processes panel opens by itself: `"auto"` (default — it
+    /// opens when a task starts and closes when the last one is gone) or
+    /// `"manual"` (only the command and the panel bar move it). Opening or
+    /// closing it by hand while a task runs wins until that task ends.
+    ///
+    /// [`crate::load::load`] rejects other values.
+    #[serde(default)]
+    pub processes_panel: Option<String>,
+    /// The `/` in front of a directory row: `"auto"` (default — only when the
+    /// icon column is closed, since an icon already says what the row is),
+    /// `"slash"` (always) or `"none"`.
+    ///
+    /// [`crate::load::load`] rejects other values.
+    #[serde(default)]
+    pub dir_indicator: Option<String>,
     /// `[ui.columns]` (#108 block 4): column selection and sort order.
     #[serde(default)]
     pub columns: Option<UiColumnsSection>,
