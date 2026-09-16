@@ -1,0 +1,32 @@
+[plugin]
+id = "org.norte.git-panel"
+name = "Git panel"
+publisher = "norte"
+version = "0.1.0"
+category = "panel"
+description = "El estado del repositorio en un panel: rama, commit y los últimos movimientos."
+
+# El hueco se llamará `plugin:org.norte.git-panel:status`. El mínimo lo declara
+# quien lo sabe: por debajo de veinticuatro columnas un hash y una rama no caben
+# en la misma línea, y con menos de seis filas no queda sitio para un solo
+# movimiento del reflog bajo la cabecera.
+[[contributions.panel]]
+kind = "status"
+title = "Git"
+min-cols = 24
+min-rows = 6
+
+[capabilities]
+# Leer bajo la ubicación, y que la ubicación sea la raíz del repositorio: sin
+# el marcador, el token confina al directorio visible y `.git` queda arriba,
+# fuera de alcance (ADR 0057). Es la misma declaración que `git-status`, por la
+# misma razón.
+location = "read"
+location-root-marker = ".git"
+
+# Cuántos movimientos del reflog se enseñan. Cero los apaga: en un panel
+# estrecho la rama y el commit ya son todo lo que cabe.
+[config.moves]
+type = "int"
+default = 5
+description = "Cuántos movimientos recientes del reflog enseñar."

@@ -564,6 +564,23 @@ plugin-git-status *ARGS:
     cp $origen/target/wasm32-wasip2/release/git_status.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
+# El panel oficial de git (`plugins/git-panel`, fase 3): un hueco entero
+# pintado por un plugin. Mismo montaje que el resto: stage en
+# `target/plugin-stage/` y `norte plugin install` desde ahí. Instalar NO
+# aprueba, y hasta que se apruebe su panel no existe para el reparto.
+plugin-git-panel *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flag=""; [ "{{ARGS}}" = "force" ] && flag="--force"
+    origen=plugins/git-panel
+    cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
+    stage=target/plugin-stage/git-panel
+    rm -rf "$stage" && mkdir -p "$stage"
+    cp $origen/plugin.toml "$stage/plugin.toml"
+    [ -f $origen/help.md ] && cp $origen/help.md "$stage/help.md" || true
+    cp $origen/target/wasm32-wasip2/release/git_panel.wasm "$stage/plugin.wasm"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
+
 # El decorator de iconos por tipo de fichero (`plugins/file-icons`, demo D1).
 plugin-file-icons *ARGS:
     #!/usr/bin/env bash
