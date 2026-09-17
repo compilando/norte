@@ -303,6 +303,12 @@ viewer-plugin-preview-lossy = [lossy decode]
 # junto a la posición de scroll (`pos`) en 80 columnas — ni siquiera solo,
 # en ES. Acortado a lo que quepa en los dos idiomas con `pos` al lado.
 viewer-image-needs-previewer = no image previewer approved yet — press F12
+# Task 5b (fase 5 WOW, review finding from T6): counterpart of the key above
+# for `Modo::Kitty`, which needs a `thumbnail` plugin approved (not a
+# `previewer`) — the help topic tells the two extensions apart, and pointing
+# the reader at the wrong one is worse than not warning at all. Same 80
+# column budget with `pos` next to it.
+viewer-image-needs-thumbnail = no image thumbnail plugin approved yet — press F12
 eol-mixed = mixed EOL
 eol-none = no EOL
 

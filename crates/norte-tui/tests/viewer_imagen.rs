@@ -16,6 +16,20 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire de test")
 }
 
+/// Bytes de un PNG que `norte_encoding::detect` clasifica como BINARIO, no
+/// sólo los 8 de la firma mágica: con solo la firma, sin ningún byte NUL, la
+/// heurística de detección los toma por texto de 8 bytes en una codificación
+/// de un byte (`Viewer::recompute` entonces pone `self.image = None`, rama
+/// texto) y `is_image()` sale `false` aunque los bytes SÍ empiecen por la
+/// firma PNG — regresión real, cazada al escribir estos tests. Mismo patrón
+/// que ya usaba `fila_de_estado_con_png_sin_previewer` (firma + `IHDR` +
+/// relleno de ceros hasta 40 bytes).
+fn png_bytes_binarios() -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
+    bytes.resize(40, 0);
+    bytes
+}
+
 fn app_en(dir: &VPath) -> App {
     App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -271,6 +285,115 @@ fn en_off_no_se_avisa_porque_lo_pidio_el_lector() {
     assert!(aviso_de_imagen(Modo::Nada, false).is_none());
 }
 
+/// Task 5b (hallazgo de revisión de la 6): el mismo agujero de Task 5, pero
+/// en `Modo::Kitty`. El docstring de `aviso_de_imagen` decía que en Kitty
+/// "el terminal ya pinta píxeles por su cuenta" y por tanto no había nada
+/// que avisar — falso: los píxeles los da un plugin `thumbnail`
+/// (`plugins/image-thumb`), igual de aprobable y ausente por defecto que el
+/// previewer de `Modo::Bloques`. Sin uno aprobado, `Modo::Kitty` caía en
+/// hexview tan silenciosamente como el agujero que Task 5 tapó en la otra
+/// rama.
+#[test]
+fn en_kitty_sin_miniatura_el_visor_lo_dice() {
+    let aviso = aviso_de_imagen(Modo::Kitty, false);
+    assert!(
+        aviso.is_some(),
+        "hay que decir que falta aprobar el plugin de miniaturas"
+    );
+}
+
+#[test]
+fn con_miniatura_colocada_no_se_avisa_de_nada_en_kitty() {
+    assert!(aviso_de_imagen(Modo::Kitty, true).is_none());
+}
+
+/// Las dos ramas piden aprobar EXTENSIONES distintas (`previewer` contra
+/// `thumbnail`): un aviso que reutilizara el texto de `Modo::Bloques` en
+/// `Modo::Kitty` mandaría al lector a aprobar la equivocada, que es peor que
+/// no avisar (el encargo lo llama explícitamente).
+#[test]
+fn el_aviso_de_bloques_y_el_de_kitty_son_textos_distintos() {
+    let bloques = aviso_de_imagen(Modo::Bloques, false).expect("bloques avisa");
+    let kitty = aviso_de_imagen(Modo::Kitty, false).expect("kitty avisa");
+    assert_ne!(
+        bloques, kitty,
+        "cada modo pide aprobar una extensión distinta"
+    );
+}
+
+/// Contraparte de `no_hace_falta_avisar_de_imagen` para `Modo::Kitty`: usa
+/// el plugin `thumbnail`, no el `previewer`, así que la condición de «ya se
+/// ve» es distinta — una miniatura COLOCADA para ESTE fichero, no un
+/// previewer que sustituyó la vista cruda.
+#[test]
+fn no_hace_falta_avisar_de_miniatura_cuando_no_es_imagen() {
+    use norte_tui::viewer_open::no_hace_falta_avisar_de_miniatura;
+    let v = norte_tui::viewer::Viewer::new(vp("mem:///x.txt"), b"hola mundo".to_vec(), false);
+    assert!(
+        no_hace_falta_avisar_de_miniatura(&v, None),
+        "no es una imagen: nada que avisar"
+    );
+}
+
+#[test]
+fn no_hace_falta_avisar_de_miniatura_cuando_ya_hay_una_colocada() {
+    use norte_tui::viewer_open::no_hace_falta_avisar_de_miniatura;
+    let path = vp("mem:///x.png");
+    let v = norte_tui::viewer::Viewer::new(path.clone(), png_bytes_binarios(), false);
+    let imagen = ImagenColocada {
+        path,
+        bytes: vec![0u8; 4],
+        width: 8,
+        height: 4,
+        id: 1,
+        puesta_en: None,
+    };
+    assert!(
+        no_hace_falta_avisar_de_miniatura(&v, Some(&imagen)),
+        "ya hay píxeles puestos: nada que avisar"
+    );
+}
+
+/// La miniatura colocada es de OTRO fichero (el lector ya se movió, o T4
+/// todavía no la ha reemplazado): sigue haciendo falta avisar del que se ve
+/// AHORA.
+#[test]
+fn no_hace_falta_avisar_de_miniatura_compara_el_path() {
+    use norte_tui::viewer_open::no_hace_falta_avisar_de_miniatura;
+    let v = norte_tui::viewer::Viewer::new(vp("mem:///x.png"), png_bytes_binarios(), false);
+    let de_otro_fichero = ImagenColocada {
+        path: vp("mem:///otro.png"),
+        bytes: vec![0u8; 4],
+        width: 8,
+        height: 4,
+        id: 1,
+        puesta_en: None,
+    };
+    assert!(
+        !no_hace_falta_avisar_de_miniatura(&v, Some(&de_otro_fichero)),
+        "la miniatura colocada es de OTRO fichero: sigue faltando la de éste"
+    );
+}
+
+/// Medios bloques pintados (un previewer de plugin sustituyó la vista cruda,
+/// como en `Modo::Bloques`) también apagan `is_image()`: si ESO ya se ve, no
+/// hay nada que avisar del plugin de miniaturas tampoco, aunque no haya
+/// `ImagenColocada`.
+#[test]
+fn no_hace_falta_avisar_de_miniatura_cuando_un_previewer_ya_sustituyo_la_vista() {
+    use norte_tui::viewer_open::no_hace_falta_avisar_de_miniatura;
+    let v = norte_frontend::viewer::Viewer::with_plugin_preview_styled(
+        vp("mem:///x.png"),
+        "un-previewer".to_owned(),
+        &[],
+        false,
+    );
+    assert!(
+        no_hace_falta_avisar_de_miniatura(&v, None),
+        "un previewer ya pintó algo: nada que avisar del plugin de miniaturas"
+    );
+}
+
 /// Renderiza la app con un PNG en hexview (sin previewer) y devuelve la
 /// última fila del terminal (la barra de estado del visor a pantalla
 /// completa, `status_area`), a 80 columnas — el ancho de referencia de la
@@ -346,5 +469,113 @@ fn el_aviso_no_se_come_la_posicion_de_scroll_en_ingles() {
     assert!(
         fila.contains("F12"),
         "y el aviso sigue presente a la vez, en EN: {fila:?}"
+    );
+}
+
+/// Task 5b: el mismo render que `fila_de_estado_con_png_sin_previewer`, pero
+/// forzando `images = "kitty"` (`Images::Kitty` manda igual sin sonda, ver
+/// `kitty_forzado_manda_aunque_la_sonda_dijera_que_no`) y SIN colocar
+/// `app.viewer_imagen` — el caso real: `Modo::Kitty` pidió la miniatura por
+/// el plugin `thumbnail` y no había ninguno aprobado, así que
+/// `viewer_for_width` devolvió `None` y nada se colocó.
+fn fila_de_estado_con_png_en_kitty_sin_miniatura() -> String {
+    let dir = vp("mem:///");
+    let mut app = app_en(&dir);
+    app.chrome.images = Some(Images::Kitty);
+    let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
+    bytes.resize(40, 0);
+    let mut v = norte_tui::viewer::Viewer::new(vp("mem:///x.png"), bytes, false);
+    v.scroll_down(1);
+    app.viewer = Some(v);
+    // A propósito NO se pone `app.viewer_imagen`: es justo el estado que
+    // deja `viewer_for_width` sin plugin `thumbnail` aprobado.
+
+    let area = Rect::new(0, 0, 80, 16);
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+            .expect("terminal de test");
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, &app))
+        .expect("draw");
+    let buf = terminal.backend().buffer();
+    let status_y = area.height - 1;
+    (0..area.width)
+        .map(|x| buf[(x, status_y)].symbol().chars().next().unwrap_or(' '))
+        .collect()
+}
+
+/// El defecto que reportó la revisión de T6: en `Modo::Kitty` sin plugin de
+/// miniaturas, el visor se quedaba en hexview SIN ningún aviso — exactamente
+/// el agujero que Task 5 tapó en `Modo::Bloques`, reabierto en la otra rama.
+/// Mismo presupuesto de 80 columnas: el aviso Y `pos` visibles a la vez.
+#[test]
+fn en_kitty_sin_miniatura_el_visor_lo_dice_y_no_se_come_la_posicion() {
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
+    let fila = fila_de_estado_con_png_en_kitty_sin_miniatura();
+    assert!(
+        fila.contains("2/3"),
+        "el aviso no debe comerse la posición, en ES: {fila:?}"
+    );
+    assert!(
+        fila.contains("F12"),
+        "y el aviso de miniatura sigue presente a la vez, en ES: {fila:?}"
+    );
+}
+
+/// Mismo caso, en EN — proceso aparte bajo nextest.
+#[test]
+fn en_kitty_sin_miniatura_el_visor_lo_dice_y_no_se_come_la_posicion_en_ingles() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let fila = fila_de_estado_con_png_en_kitty_sin_miniatura();
+    assert!(
+        fila.contains("2/3"),
+        "el aviso no debe comerse la posición, en EN: {fila:?}"
+    );
+    assert!(
+        fila.contains("F12"),
+        "y el aviso de miniatura sigue presente a la vez, en EN: {fila:?}"
+    );
+}
+
+/// Con la miniatura YA colocada (píxeles puestos), el aviso de Kitty NO debe
+/// salir — «si la imagen se está viendo... no hay nada que avisar» (encargo).
+/// El hueco de contenido va en blanco (T4), pero la barra de estado sigue
+/// siendo la normal (encoding/EOL/…), sin el texto de F12.
+#[test]
+fn en_kitty_con_miniatura_colocada_no_sale_el_aviso() {
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
+    let dir = vp("mem:///");
+    let mut app = app_en(&dir);
+    app.chrome.images = Some(Images::Kitty);
+    let path = vp("mem:///x.png");
+    app.viewer = Some(norte_tui::viewer::Viewer::new(
+        path.clone(),
+        b"\x89PNG\r\n\x1a\n".to_vec(),
+        false,
+    ));
+    app.viewer_imagen = Some(ImagenColocada {
+        path,
+        bytes: vec![0u8; 4],
+        width: 8,
+        height: 4,
+        id: 1,
+        puesta_en: None,
+    });
+
+    let area = Rect::new(0, 0, 80, 16);
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+            .expect("terminal de test");
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, &app))
+        .expect("draw");
+    let buf = terminal.backend().buffer();
+    let status_y = area.height - 1;
+    let fila: String = (0..area.width)
+        .map(|x| buf[(x, status_y)].symbol().chars().next().unwrap_or(' '))
+        .collect();
+    assert!(
+        !fila.contains("F12"),
+        "con píxeles ya colocados no hay nada que avisar: {fila:?}"
     );
 }

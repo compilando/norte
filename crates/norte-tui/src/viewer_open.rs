@@ -45,35 +45,49 @@ pub fn modo_efectivo(cfg: norte_config::Images, soporta: bool) -> Modo {
     }
 }
 
-/// El aviso de la barra del visor cuando `Bloques` no tiene quién pinte.
+/// El aviso de la barra del visor cuando el hueco no tiene quién pinte la
+/// imagen.
 ///
 /// El piloto de verdad encontró este agujero: sin previewer aprobado, un PNG
 /// en `Modo::Bloques` cae a hexview exactamente igual que un fichero que
 /// nadie sabe interpretar, y nada en pantalla distingue los dos casos. Un
 /// hexview silencioso es indistinguible de «norte no sabe hacerlo».
 ///
-/// `no_hace_falta_avisar` es `true` cuando este hueco NO necesita el aviso,
-/// por CUALQUIERA de dos motivos DISTINTOS que aquí colapsan al mismo
-/// booleano: el fichero no es una imagen (nada que ver con un previewer), o
-/// sí lo es y un previewer de plugin ya la sustituyó. El llamante pasa
-/// [`no_hace_falta_avisar_de_imagen`] — que calcula exactamente eso, con el
-/// porqué de que no sea un simple «¿hay previewer?» documentado ahí — en vez
-/// de repetir la expresión inline en el sitio de llamada (ronda de arreglo
-/// 1: un `hay_previewer` calculado ahí, con ese nombre, invitaba a
+/// `no_hace_falta_avisar` es `true` cuando este hueco NO necesita el aviso.
+/// El llamante decide QUÉ significa eso según `modo` — pasando
+/// [`no_hace_falta_avisar_de_imagen`] en [`Modo::Bloques`] o
+/// [`no_hace_falta_avisar_de_miniatura`] en [`Modo::Kitty`] — en vez de
+/// repetir la expresión inline en el sitio de llamada (ronda de arreglo 1,
+/// fase 5: un `hay_previewer` calculado ahí, con ese nombre, invitaba a
 /// «simplificarlo» a `viewer.preview_plugin().is_some()`, que pierde el
 /// primer motivo y avisaría para cualquier fichero no-imagen).
 ///
-/// En [`Modo::Kitty`] el terminal ya pinta píxeles por su cuenta y en
-/// [`Modo::Nada`] el lector pidió hexview él mismo (`images = "off"`): en
-/// los dos no hay nada que aprobar, así que el aviso sólo sale en
-/// [`Modo::Bloques`].
+/// Task 5b (hallazgo de revisión de T6): el docstring original de esta
+/// función decía que en [`Modo::Kitty`] «el terminal ya pinta píxeles por su
+/// cuenta… no hay nada que aprobar». Es FALSO — los bytes que coloca Kitty
+/// los da un plugin `thumbnail` (`plugins/image-thumb`), tan opcional y
+/// aprobable como el `previewer` de [`Modo::Bloques`]; sin uno aprobado el
+/// lector se queda en hexview igual de silenciosamente que en la otra rama,
+/// que es exactamente el agujero que esta función existe para tapar. Los dos
+/// modos avisan ahora, con textos DISTINTOS: piden aprobar EXTENSIONES
+/// distintas, y mandar al lector a aprobar la equivocada es peor que no
+/// avisar. En [`Modo::Nada`] el lector pidió hexview él mismo
+/// (`images = "off"`): ahí no hay nada que aprobar y no se avisa.
 #[must_use]
 pub fn aviso_de_imagen(modo: Modo, no_hace_falta_avisar: bool) -> Option<String> {
-    (modo == Modo::Bloques && !no_hace_falta_avisar).then(|| t("viewer-image-needs-previewer"))
+    if no_hace_falta_avisar {
+        return None;
+    }
+    match modo {
+        Modo::Bloques => Some(t("viewer-image-needs-previewer")),
+        Modo::Kitty => Some(t("viewer-image-needs-thumbnail")),
+        Modo::Nada => None,
+    }
 }
 
-/// Si `viewer` NO necesita el aviso de [`aviso_de_imagen`] — el segundo
-/// parámetro que ese sitio de llamada le pasa.
+/// Si `viewer` NO necesita el aviso de [`aviso_de_imagen`] en [`Modo::Bloques`]
+/// — el segundo parámetro que ese sitio de llamada le pasa cuando el modo es
+/// ese.
 ///
 /// Es `!viewer.is_image()`, y [`Viewer::is_image`] ya hace el AND de las dos
 /// condiciones que hacen falta: `plugin_preview.is_none() && image.is_some()`
@@ -90,9 +104,31 @@ pub fn aviso_de_imagen(modo: Modo, no_hace_falta_avisar: bool) -> Option<String>
 /// IMAGEN que falta para cualquier fichero que no sea una imagen en
 /// `Modo::Bloques` — justo la regresión que centralizar este cálculo aquí,
 /// con este nombre, existe para prevenir.
+///
+/// Ver [`no_hace_falta_avisar_de_miniatura`] para la contraparte de
+/// [`Modo::Kitty`], que pide un plugin `thumbnail`, no un `previewer`.
 #[must_use]
 pub fn no_hace_falta_avisar_de_imagen(viewer: &Viewer) -> bool {
     !viewer.is_image()
+}
+
+/// Si `viewer` NO necesita el aviso de [`aviso_de_imagen`] en [`Modo::Kitty`]
+/// — la contraparte de [`no_hace_falta_avisar_de_imagen`] para el plugin
+/// `thumbnail` en vez del `previewer`.
+///
+/// `true` cuando CUALQUIERA de dos cosas distintas ya hace innecesario el
+/// aviso: `!viewer.is_image()` — el fichero no es una imagen, o SÍ lo es
+/// pero un previewer de plugin ya sustituyó la vista y medios bloques ya se
+/// están pintando («si la imagen se está viendo… no hay nada que avisar»,
+/// igual que en [`Modo::Bloques`]) — O `imagen` trae una miniatura ya
+/// COLOCADA para ESTE fichero. Comparar el `path` de `imagen` contra el de
+/// `viewer` importa: el lector puede seguir viendo el hexview de un fichero
+/// mientras la miniatura de OTRO (el que veía antes) sigue viva en
+/// [`App::viewer_imagen`] a la espera de que el run loop la borre — esa
+/// miniatura vieja no dice nada sobre si ÉSTE fichero tiene la suya.
+#[must_use]
+pub fn no_hace_falta_avisar_de_miniatura(viewer: &Viewer, imagen: Option<&ImagenColocada>) -> bool {
+    !viewer.is_image() || imagen.is_some_and(|imagen| imagen.path == viewer.path)
 }
 
 /// Una miniatura ya pedida y lista para colocar (T4 la coloca/borra).

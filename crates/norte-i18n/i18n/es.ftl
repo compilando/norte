@@ -305,6 +305,12 @@ viewer-plugin-preview-lossy = [decodificación con pérdida]
 # junto a la posición de scroll (`pos`) en 80 columnas — ni siquiera solo.
 # Acortado a lo que quepa en los dos idiomas con `pos` al lado.
 viewer-image-needs-previewer = falta aprobar una extensión de vista previa de imagen — F12
+# Task 5b (fase 5 WOW, hallazgo de revisión de T6): la contraparte de la
+# clave de arriba para `Modo::Kitty`, que pide aprobar un plugin `thumbnail`
+# (no un `previewer`) — la ayuda distingue las dos extensiones, y mandar al
+# lector a aprobar la equivocada es peor que no avisar. Mismo presupuesto de
+# 80 columnas con `pos` al lado.
+viewer-image-needs-thumbnail = falta aprobar una extensión de miniaturas de imagen — F12
 eol-mixed = EOL mixto
 eol-none = sin EOL
 

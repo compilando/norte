@@ -133,17 +133,30 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // `snapshot_viewer_texto_y_hex`. La barra de estado de abajo es de
     // ancho completo y ya cede el sitio entero a `app.message` cuando hay
     // uno; este aviso sigue el mismo patrón.
-    // El cálculo de por qué no hace falta avisar (ronda de arreglo 1) vive
-    // en `viewer_open::no_hace_falta_avisar_de_imagen`, no inline aquí: su
-    // rustdoc es donde queda escrita la trampa de "simplificarlo" a
-    // `preview_plugin().is_some()`, y esta rama y la del «via …» de arriba
-    // ya son mutuamente excluyentes por esa misma cuenta.
+    //
+    // Task 5b (hallazgo de revisión de T6): el mismo agujero existía en
+    // `Modo::Kitty` — sin plugin `thumbnail` aprobado, `viewer_for_width`
+    // nunca coloca `App::viewer_imagen` y el visor cae a hexview tan
+    // silenciosamente como en `Modo::Bloques` sin previewer. Qué condición
+    // hace innecesario el aviso depende del modo — el `previewer` de
+    // `Modo::Bloques` y el `thumbnail` de `Modo::Kitty` son dos plugins
+    // distintos, con documentación separada en
+    // `viewer_open::no_hace_falta_avisar_de_imagen` /
+    // `no_hace_falta_avisar_de_miniatura` (con la trampa de "simplificarlo"
+    // a `preview_plugin().is_some()` escrita en la primera); ese `match`
+    // decide cuál aplica.
     let modo =
         crate::viewer_open::modo_efectivo(app.chrome.images(), crate::kitty_graphics::soportado());
-    let aviso_imagen = crate::viewer_open::aviso_de_imagen(
-        modo,
-        crate::viewer_open::no_hace_falta_avisar_de_imagen(viewer),
-    );
+    let no_hace_falta_avisar = match modo {
+        crate::viewer_open::Modo::Kitty => crate::viewer_open::no_hace_falta_avisar_de_miniatura(
+            viewer,
+            app.viewer_imagen.as_ref(),
+        ),
+        crate::viewer_open::Modo::Bloques | crate::viewer_open::Modo::Nada => {
+            crate::viewer_open::no_hace_falta_avisar_de_imagen(viewer)
+        }
+    };
+    let aviso_imagen = crate::viewer_open::aviso_de_imagen(modo, no_hace_falta_avisar);
     // `rect_del_visor` — la MISMA función que usa el run loop para el APC,
     // no una resta a mano — es lo que garantiza que el hueco que se deja en
     // blanco abajo y el hueco donde caen los píxeles sean estructuralmente
