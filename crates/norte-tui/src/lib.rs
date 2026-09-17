@@ -20,6 +20,7 @@ pub mod hints;
 pub mod jobs;
 pub mod keymap;
 pub mod keys;
+pub mod kitty_graphics;
 pub mod listing;
 pub mod logview;
 pub mod lua;

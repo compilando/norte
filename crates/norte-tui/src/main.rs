@@ -451,6 +451,11 @@ async fn main() -> Result<()> {
     // segundos. Se pregunta aunque la clave esté apagada, para que encenderla
     // desde los ajustes funcione sin reiniciar.
     let _ = norte_tui::alt_menu::consultar_soporte();
+    // La misma pregunta para los GRÁFICOS, en el mismo sitio y por los mismos
+    // dos motivos: el lector de eventos todavía no existe y stdout sigue
+    // siendo la terminal. Nadie pinta nada todavía con la respuesta — eso es
+    // de otra tarea de esta fase.
+    let _ = norte_tui::kitty_graphics::consultar_soporte();
     // `[ui] alt_menu`: un terminal sin el protocolo no recibe nada, y un fallo
     // al escribir deja la TUI sin el gesto, no sin arrancar.
     if let Err(e) = norte_tui::alt_menu::set(
