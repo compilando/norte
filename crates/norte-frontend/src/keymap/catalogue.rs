@@ -82,6 +82,12 @@ pub const CATALOGUE: &[CommandDef] = &[
     // implementa lo dice con la misma frase que cualquier otro que no tenga.
     live("app.agents", false),
     live("app.palette", false),
+    // «Ir a cualquier sitio» (fase 6 del programa WOW): una pantalla sobre
+    // lo que ya había repartido en cinco —historia, populares, favoritos,
+    // conexiones y la paleta— más una ruta tecleada y lo que encuentre el
+    // índice. No sustituye a ninguna: cada una sigue teniendo su tecla, y
+    // ésta es la que sirve cuando no sabes en cuál de las cinco está.
+    live("app.goto", false),
     live("app.menu", false),
     // `--pick` (S2): being in this table only means the NAME is known to the
     // vocabulary (help, palette, rebind checks). No preset binds it — the

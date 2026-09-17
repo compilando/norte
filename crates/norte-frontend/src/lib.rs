@@ -47,6 +47,7 @@ pub mod error;
 pub mod footer;
 pub mod format;
 pub mod frame;
+pub mod goto;
 pub mod help;
 pub mod help_badge;
 pub mod help_chords;

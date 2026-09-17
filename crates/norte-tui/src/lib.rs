@@ -13,6 +13,7 @@ pub mod dispatch;
 pub mod event_loop;
 pub mod fill;
 pub mod gestures;
+pub mod goto;
 pub mod help;
 pub mod help_context;
 pub mod help_render;

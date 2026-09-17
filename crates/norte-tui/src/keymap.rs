@@ -203,6 +203,7 @@ commands! {
     "app.theme" => AppTheme,
     "app.extensions" => AppExtensions,
     "app.palette" => AppPalette,
+    "app.goto" => AppGoto,
     "app.menu" => AppMenu,
     "app.settings" => AppSettings,
     "app.pick-accept" => AppPickAccept,

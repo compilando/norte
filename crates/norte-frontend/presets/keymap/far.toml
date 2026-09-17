@@ -100,6 +100,13 @@
 # diálogo. `Ins` (bloquear una entrada) no se copia: una entrada que sobrevive
 # a todo es un favorito, y norte ya los tiene. El punto de salto, los populares
 # y la historia de un lado no están en la fuente: menú Ir y paleta.
+#
+# `app.goto` («ir a cualquier sitio», fase 6) sigue ese mismo criterio y se
+# queda sin atar: es una pantalla propia de norte —historia, populares,
+# favoritos, conexiones, comandos y una ruta tecleada, todo en una lista— y
+# Far no tiene una sola tecla que haga eso. `ctrl+g` está libre en los siete
+# presets y lo llevan orthodox, cua y vim. Aquí se llega por el menú Ir
+# (F9), donde está el primero, y por la paleta.
 
 dialog_from = "orthodox"
 

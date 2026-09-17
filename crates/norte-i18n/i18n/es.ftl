@@ -718,6 +718,22 @@ host-no-session = no hay ninguna sesión señalada
 modal-undo-session-title = ¿deshacer todo lo que hizo esta sesión?
 modal-undo-session-scope = revierte TODAS sus operaciones, en orden inverso; lo que no se pueda revertir se dirá en el informe
 help-cmd-app-palette = paleta de comandos
+help-cmd-app-goto = ir a cualquier sitio
+# Los títulos de las secciones de «ir a» (fase 6). El orden en que salen lo
+# fija `norte_frontend::goto::ORDEN`, no este fichero.
+goto-title = Ir a
+goto-section-path = Ruta
+goto-section-history = Historia
+goto-section-popular = Frecuentes
+goto-section-favorites = Favoritos
+goto-section-connections = Conexiones
+goto-section-commands = Comandos
+goto-section-index = Encontrado por el índice
+goto-empty = nada casa con eso
+goto-index-off = el índice semántico no está encendido
+goto-path-desc = ir a esta ruta
+msg-goto-bad-path = esa ruta no se puede leer como destino
+msg-goto-no-home = no hay HOME en el entorno, así que «~» no nombra nada
 help-cmd-app-settings = ajustes
 help-cmd-app-pick-accept = aceptar la selección y salir (modo picker)
 # --- Paleta de comandos (H1 T4) — editor de filtro libre como el diálogo
@@ -1073,6 +1089,7 @@ menu-item-mark-extension-add = Marcar por extensión
 menu-item-mark-extension-remove = Desmarcar por extensión
 menu-item-mark-files = Marcar los ficheros
 menu-item-mark-dirs = Marcar los directorios
+menu-item-app-goto = Ir a…
 menu-item-nav-parent = Subir
 menu-item-nav-back = Atrás
 menu-item-nav-jump-back = Volver al punto de salto

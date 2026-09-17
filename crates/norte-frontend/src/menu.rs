@@ -85,6 +85,11 @@ pub const MENUS: &[Menu] = &[
     Menu {
         title: "menu-go",
         items: &[
+            // La primera del menú porque es la que sirve cuando no sabes
+            // cuál de las otras quieres, y porque los cuatro presets
+            // importados no la atan a ninguna tecla: aquí es donde la
+            // encuentran.
+            "app.goto",
             "nav.parent",
             "nav.back",
             "nav.forward",

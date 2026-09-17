@@ -875,6 +875,103 @@ pub(crate) fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette,
     frame.render_stateful_widget(list, area, &mut state);
 }
 
+/// «Ir a cualquier sitio» (fase 6): una caja con secciones tituladas y una
+/// fila por destino.
+///
+/// Mismo idioma visual que la paleta —caja centrada, consulta en el pie,
+/// cursor de selección— con una diferencia que es la razón de existir de
+/// esta pantalla: aquí las filas vienen de SITIOS distintos, y una lista
+/// que mezcla una conexión con un comando sin decir cuál es cuál no se
+/// puede leer. De ahí las cabeceras, que no reciben el cursor (de eso se
+/// encarga el modelo: [`norte_frontend::goto::Goto::up`]/`down`).
+///
+/// La altura sale de lo que hay, acotada al frame; el ancho es fijo y más
+/// generoso que el de la paleta porque lo que se pinta son RUTAS, que se
+/// leen por el final y se recortan por el medio.
+pub(crate) fn draw_goto(
+    frame: &mut Frame<'_>,
+    goto: &norte_frontend::goto::Goto,
+    theme: &TuiTheme,
+) {
+    use norte_frontend::goto::GotoLine;
+
+    /// Lo que se le quita a cada fila por la izquierda: la insignia de
+    /// texto hostil, o los dos espacios que la sustituyen cuando no la hay.
+    const SANGRIA_GOTO: usize = 2;
+
+    let alto = u16::try_from(goto.lines().len().max(1))
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let ancho = frame.area().width.saturating_sub(8).clamp(40, 88);
+    let area = centered(frame.area(), ancho, alto.min(frame.area().height.max(3)));
+    clear_themed(frame, area, theme);
+    let inner = usize::from(area.width.saturating_sub(3));
+    let dim = theme.role(Role::BorderUnfocused);
+    let items: Vec<ListItem<'_>> = if goto.is_empty() {
+        vec![ListItem::new(Line::styled(
+            format!(" {}", t("goto-empty")),
+            dim,
+        ))]
+    } else {
+        goto.lines()
+            .iter()
+            .map(|linea| match linea {
+                GotoLine::Header(s) => {
+                    ListItem::new(Line::styled(t(s.title_key), theme.role(Role::Title)))
+                }
+                GotoLine::Row(i) => {
+                    let row = &goto.rows()[*i];
+                    // La insignia va DELANTE y en su propio span, como en
+                    // todas las superficies de decisión: lo que se pinta
+                    // distinto de lo que dicen los bytes se dice, no se
+                    // deja adivinar.
+                    let mut spans = Vec::new();
+                    if row.hostile {
+                        spans.push(Span::styled(
+                            format!("{HOSTILE_BADGE} "),
+                            theme.role(Role::HostileBadge),
+                        ));
+                    } else {
+                        spans.push(Span::raw("  "));
+                    }
+                    // `SANGRIA_GOTO`: la insignia ocupa lo mismo que los
+                    // dos espacios que la sustituyen, para que los textos
+                    // queden alineados lleven bandera o no.
+                    let detalle = cells(&row.desc).min(inner / 2);
+                    let texto_w = inner.saturating_sub(SANGRIA_GOTO + detalle + 2).max(1);
+                    spans.push(Span::raw(middle_ellipsis(&row.text, texto_w)));
+                    if !row.desc.is_empty() {
+                        spans.push(Span::styled(
+                            format!("  {}", middle_ellipsis(&row.desc, detalle)),
+                            dim,
+                        ));
+                    }
+                    ListItem::new(Line::from(spans))
+                }
+            })
+            .collect()
+    };
+    let (query, _) = display_name(goto.query().as_bytes());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("goto-title")))
+        .title_style(theme.role(Role::Title))
+        // `>` y no la `/` de la paleta: aquí lo escrito PUEDE ser una ruta,
+        // y una barra de prompt pegada a una ruta absoluta se lee como
+        // parte de ella (`//etc`).
+        .title_bottom(Line::raw(format!(" ❯{query}_ ")))
+        .border_style(theme.role(Role::ModalBorder));
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme.role(Role::Selection));
+    let mut state = ListState::default();
+    // El cursor del modelo indexa LÍNEAS, que es lo que se pinta: filas y
+    // cabeceras. Convertirlo a «índice de fila» aquí sería la misma cuenta
+    // dos veces y la ocasión de que difieran.
+    state.select((!goto.is_empty()).then_some(goto.cursor()));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
 /// El asistente de primer arranque (spec 2026-09-10): una caja con el
 /// título del paso, la pregunta, las filas con el cursor y la línea de
 /// teclas. Mismo idioma visual que la paleta.

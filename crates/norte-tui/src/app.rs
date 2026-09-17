@@ -863,6 +863,10 @@ pub struct App {
     pub hotlist: Vec<crate::config::HotlistItem>,
     /// Popup de navegación abierto (historial/hotlist): None = cerrado.
     pub nav_popup: Option<NavPopup>,
+    /// «Ir a cualquier sitio» abierto (fase 6 del programa WOW): `None` =
+    /// cerrado. El modelo es de `norte-frontend`; de dónde salen sus filas
+    /// y qué significa confirmarlas, de [`crate::goto`].
+    pub goto: Option<norte_frontend::goto::Goto>,
     /// Diálogo de búsqueda viva abierto (`Alt+F7`, liveSearch T6): None =
     /// cerrado. Captura imprimibles como el `name_input` del popup de nav.
     pub search_dialog: Option<SearchDialog>,
@@ -1266,6 +1270,7 @@ impl App {
             history: crate::panel::Histories::new(),
             hotlist: Vec::new(),
             nav_popup: None,
+            goto: None,
             search_dialog: None,
             compare: None,
             compare_size_hints: std::collections::HashMap::new(),

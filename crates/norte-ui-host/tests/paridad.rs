@@ -78,6 +78,14 @@ const APLAZADOS: &[(&str, u32)] = &[
     // teclea sobre la lista de ajustes (su overlay se come todo imprimible;
     // aquí las teclas imprimibles no llegan al host), y la sección de plugins,
     // que es informativa en los dos frontends.
+    //
+    // Y vuelve a tener uno: «ir a cualquier sitio» (fase 6, ADR 0120) aterrizó
+    // en el terminal y la ventana todavía no lo pinta. Lo que falta es la
+    // superficie —fuentes sobre el estado del host, la petición asíncrona al
+    // índice, DTO y renderer—, no el modelo: las secciones, su orden, el
+    // filtro, el tope y el cursor que salta cabeceras viven en
+    // `norte_frontend::goto`, que es de los dos.
+    ("app.goto", 357),
 ];
 
 /// Todo comando vivo o lo implementa la ventana, o está clasificado.

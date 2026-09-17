@@ -23,6 +23,10 @@
 mod ai;
 mod compare;
 mod diskmap;
+// Público, al contrario que los demás: sus dos verbos —pedir y olvidar— los
+// llama el manejador de teclas en cada letra, y leerlos como
+// `jobs::goto::pedir_al_indice` dice de qué pantalla son.
+pub mod goto;
 mod inflight;
 mod search;
 mod sync;
@@ -35,9 +39,10 @@ pub use compare::{
     on_compare_enter, on_compare_key,
 };
 pub use diskmap::{harvest as harvest_disk_map, lanzar as lanzar_disk_map};
+pub use goto::harvest_goto_index;
 pub use inflight::{
-    AiRenameRun, ChecksumRun, DiskMapRun, InFlight, PendingAiPlan, Publicado, RenameBatchRun,
-    SemanticRun,
+    AiRenameRun, ChecksumRun, DiskMapRun, GotoIndexRun, InFlight, PendingAiPlan, Publicado,
+    RenameBatchRun, SemanticRun,
 };
 pub use search::{
     SEARCH_MAX_HITS, SearchRun, drain_search, finalize_search_state, launch_search,

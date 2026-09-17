@@ -896,6 +896,19 @@ pub async fn dispatch(
             }
             app.palette = Some(Palette::with_recent(rows, &app.palette_recent));
         }
+        // «Ir a cualquier sitio» (fase 6). Las conexiones se leen AQUÍ, como
+        // las lee `pane.connect`, y por lo mismo: tocar disco es del run
+        // loop, no del modelo. Si no se pueden leer, se abre igual con una
+        // sección menos — la pantalla que junta seis listas no se cae porque
+        // una falte, y decirlo en la barra taparía lo que el lector vino a
+        // hacer.
+        Command::AppGoto => {
+            let dir = norte_core::connect::config_dir();
+            let conexiones = norte_core::connect::named_connections(&dir)
+                .await
+                .unwrap_or_default();
+            crate::goto::abrir(app, &conexiones);
+        }
         // `F11` (S3): overlay de ajustes — las filas nacen del `cfg` VIGENTE
         // (mismo criterio que `help_lines`/`app.palette_rows`: reconstruidas
         // al abrir, jamás una copia arrastrada). Sección Plugins (G3c): un

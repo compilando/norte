@@ -712,6 +712,22 @@ host-no-session = no session is selected
 modal-undo-session-title = undo everything this session did?
 modal-undo-session-scope = reverts ALL of its operations, newest first; whatever cannot be reverted is named in the report
 help-cmd-app-palette = command palette
+help-cmd-app-goto = go anywhere
+# Section titles for "go anywhere" (phase 6). The order they appear in is
+# fixed by `norte_frontend::goto::ORDEN`, not by this file.
+goto-title = Go to
+goto-section-path = Path
+goto-section-history = History
+goto-section-popular = Frequent
+goto-section-favorites = Favourites
+goto-section-connections = Connections
+goto-section-commands = Commands
+goto-section-index = Found by the index
+goto-empty = nothing matches that
+goto-index-off = the semantic index is not switched on
+goto-path-desc = go to this path
+msg-goto-bad-path = that path cannot be read as a destination
+msg-goto-no-home = there is no HOME in the environment, so "~" names nothing
 help-cmd-app-settings = settings
 help-cmd-app-pick-accept = accept the selection and exit (picker mode)
 # --- Command palette (H1 T4) — a free-text filter editor like the search
@@ -1125,6 +1141,7 @@ menu-item-mark-extension-add = Mark by extension
 menu-item-mark-extension-remove = Unmark by extension
 menu-item-mark-files = Mark the files
 menu-item-mark-dirs = Mark the directories
+menu-item-app-goto = Go to…
 menu-item-nav-parent = Up
 menu-item-nav-back = Back
 menu-item-nav-jump-back = Jump back
