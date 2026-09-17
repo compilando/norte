@@ -171,6 +171,14 @@ puente 71 y `render/diskmap.ts` entraron aquí. Tres cosas para T5:
 3. Que la ventana MIDA: `fs.dir_usage` desde el host, el informe aterrizado con
    el mismo descarte que el terminal (si el panel ya apunta a otro directorio,
    lo que llega es de otro sitio), y la poda de `mapas` con su llamador.
+   **Hecho** (`160cf7a5`): el par entró en `HostBackend` —trait, impl real y
+   doble—, la sonda corre con el resto tras cada mensaje del actor y descarta
+   por testigo Y por directorio, y el plazo cubre el LANZAMIENTO y no la medida
+   (que dura minutos: un plazo encima la mataría en los árboles para los que
+   existe). El clic resuelve contra el mismo reparto que se pintó, exige que el
+   hijo sea un directorio y navega el listado seguido con `Trail::Record`.
+   Los dos tests de aterrizaje van aparte: una medida por directorio, no una
+   por mensaje.
 
 ## T6 — ADR, ayuda y cierre
 

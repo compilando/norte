@@ -17,9 +17,11 @@ independently through `PROTOCOL_VERSION`.
   panel where every child is a rectangle sized by what it takes up, the arrows
   walk them, Enter goes into the selected one and a click does both at once. It
   answers "where did my space go?", which a listing sorted by size cannot —
-  there a directory weighs what its own node weighs, not what is inside it. The
-  window knows the panel and shows it in its bar; measuring from the window
-  comes next.
+  there a directory weighs what its own node weighs, not what is inside it.
+  **The window has it too**: the same panel, measured by the host and painted
+  from the same repartition, so the rectangle you see and the one a click opens
+  are the same one. It measures what the listing is showing, once per directory
+  rather than once per keystroke, and a click walks into the child under it.
   It declares what it does not know instead of rounding it off: a child whose
   subtree could not be fully read is marked rather than reported short, a
   listing the provider itself admits it truncated is never announced as
