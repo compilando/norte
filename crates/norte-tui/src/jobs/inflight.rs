@@ -80,6 +80,33 @@ pub struct SemanticRun {
     pub handle: tokio::task::JoinHandle<Result<Vec<norte_proto::methods::SemanticHit>, Error>>,
 }
 
+/// La medida de un mapa de disco EN VUELO (fase 4).
+///
+/// Mismo molde que [`ChecksumRun`] —la espera del informe va spawneada y el
+/// ESTADO viaja con él, porque un informe de una Task cancelada está a medias—
+/// con dos datos que las sumas no necesitan.
+pub struct DiskMapRun {
+    /// La espera del informe, spawneada.
+    pub handle: tokio::task::JoinHandle<(
+        norte_proto::TaskState,
+        Result<norte_proto::methods::FsDirUsageReportResult, Error>,
+    )>,
+    /// La Task, para CANCELARLA si otra medida la releva. Abortar solo la
+    /// espera dejaría al core recorriendo un `$HOME` entero sin nadie que lo
+    /// recoja — y medir es justo lo que más tarda de todo esto.
+    pub task: norte_core::backend::TaskObserver,
+    /// El hueco cuyo mapa se está midiendo.
+    pub slot: norte_frontend::layout::SlotId,
+    /// El directorio que se mandó medir.
+    ///
+    /// Viaja con la medida para poder DESCARTAR lo que llegue tarde: medir un
+    /// árbol grande tarda, y en ese rato el panel puede estar apuntando ya a
+    /// otro sitio. Un informe aterrizado sin comprobar esto pintaría los
+    /// tamaños de un directorio bajo el título de otro, que es la clase de
+    /// mentira que este panel existe para no contar.
+    pub dir: norte_proto::VPath,
+}
+
 /// Un lote de sumas EN VUELO (#311).
 ///
 /// La Task ya está lanzada y en el tablero; lo que se espera aquí es el
@@ -154,6 +181,11 @@ pub struct InFlight {
     /// es uno, y lanzar otro CANCELA la Task del anterior además de abortar
     /// su espera.
     pub checksum: Option<ChecksumRun>,
+    /// Medida de un mapa de disco en vuelo (fase 4): a lo sumo una — el panel
+    /// es uno, y lanzar otra CANCELA la Task de la anterior. Sin eso, navegar
+    /// deprisa por un árbol grande dejaba al core midiendo tres directorios
+    /// que ya nadie iba a mirar.
+    pub disk_map: Option<DiskMapRun>,
     /// Sumas listas llegadas con OTRO modal abierto: se RETIENEN aquí y se
     /// abren en cuanto no haya modal (disciplina [`Self::pending_ai_plan`]).
     /// Antes se tiraban, y la barra prometía «cierra el diálogo para verlas»

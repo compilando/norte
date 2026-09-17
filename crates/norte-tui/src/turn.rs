@@ -140,6 +140,32 @@ pub async fn drain_pending(
     if let Some(hash) = app.pending_sync_apply.take() {
         launch_sync_apply(app, backend, &mut work.sync, &hash).await;
     }
+    // Fase 4: el mapa de disco pide medir. Se drena aquí y no en el despacho
+    // porque medir es I/O y el dueño del backend es este bucle — mismo reparto
+    // que las sumas y la comparación.
+    if std::mem::take(&mut app.disk_map_stale) {
+        crate::jobs::lanzar_disk_map(app, backend, work).await;
+    }
+    // Y entrar en un hijo del mapa es un `cd` NORMAL, con su ritual de vuelta:
+    // el mapa señala, y navegar es del mismo camino por el que se navega
+    // siempre. Un segundo camino es lo que ADR 0077 existe para impedir.
+    if let Some(name) = app.pending_disk_map_enter.take() {
+        let destino = app
+            .disk_map_slot()
+            .and_then(|s| app.panes.disk_map(s))
+            .and_then(|m| m.dir().map(|d| d.join(name)));
+        if let Some(dir) = destino {
+            let outcome = cd(app, backend, events, dir).await;
+            apply_cd(
+                &app.panes,
+                &mut work.fill,
+                &mut work.decorate,
+                &mut work.probed,
+                &mut work.search,
+                outcome,
+            );
+        }
+    }
     // #140: el panel que acaba de desconectar se va por el mismo `cd` que
     // cualquier otra navegación, con su ritual de vuelta.
     if let Some(destino) = app.pending_disconnect_dest.take() {

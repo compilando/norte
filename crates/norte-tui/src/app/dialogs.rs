@@ -159,6 +159,11 @@ pub const ALLOW_PLACES: &[&str] = &[
     // tmux con la suite entera en verde, que es exactamente para lo que
     // sirve el harness.
     "layout.places",
+    // El mapa de disco (fase 4): esta lista la filtran TAMBIÉN las teclas del
+    // árbol (`side_nav`), así que sin esto `alt+z` moría estando dentro del
+    // sidebar o del árbol — los dos paneles desde los que más apetece
+    // preguntar en qué se ha ido el sitio.
+    "layout.disk-map",
     // `Tab` sale a los listados sin cerrar el panel. Abrir una columna
     // lateral dejaba muerta la tecla con la que se cambia de panel toda la
     // vida: el panel se come lo que no esté aquí.
@@ -230,6 +235,7 @@ pub const ALLOW_PROCESSES: &[&str] = &[
     "layout.preview",
     "layout.metadata",
     "pane.tree",
+    "layout.disk-map",
     // Y el cromo de la aplicación, por lo mismo que en el sidebar.
     "app.menu",
     // Y salir, que es la tecla que peor puede morirse dentro de un panel: el
@@ -267,11 +273,46 @@ pub const ALLOW_LOG: &[&str] = &[
     "layout.processes",
     "layout.metadata",
     "pane.tree",
+    "layout.disk-map",
     "app.menu",
     // Y salir, que es la tecla que peor puede morirse dentro de un panel: el
     // lector cerraba la terminal creyendo que había salido y el proceso
     // seguía vivo con el lock de la sesión. La atiende el cromo
     // (`App::panel_chrome_command`), honrando `[ui] confirm_quit`.
+    "app.quit",
+];
+
+/// ALLOWLIST del mapa de disco (fase 4).
+///
+/// Propia, como la del registro y por el mismo motivo: sin `layout.disk-map`
+/// en su propia lista, `alt+z` muere en el embudo y el panel no se puede
+/// cerrar con la tecla que lo abrió — que es como se descubrió que hacían
+/// falta estas listas.
+///
+/// No lleva `dialog.up`/`down` ni `dialog.confirm`: las flechas, las páginas,
+/// `Fin`, `Inicio`, `Enter`, `r` y `Esc` los reclama el propio panel antes del
+/// keymap ([`crate::diskmap::key`]), porque son suyos mientras tenga el
+/// teclado. Y `dialog.confirm` aquí ENTRARÍA en un directorio: dejarlo pasar
+/// al embudo sería un `Enter` con dos significados según quién lo mire.
+pub const ALLOW_DISK_MAP: &[&str] = &[
+    "layout.disk-map",
+    "layout.grow",
+    "layout.shrink",
+    "dialog.pane",
+    "pane.switch",
+    "layout.focus-next",
+    "layout.focus-prev",
+    // Y las de los otros paneles: estar en el mapa no puede dejar sin efecto
+    // la tecla que abre la columna de al lado.
+    "layout.places",
+    "layout.preview",
+    "layout.processes",
+    "layout.metadata",
+    "layout.log",
+    "pane.tree",
+    "app.menu",
+    // Y salir, por lo mismo que en el registro: la tecla que peor puede
+    // morirse dentro de un panel.
     "app.quit",
 ];
 
@@ -300,6 +341,7 @@ pub const ALLOW_PANEL: &[&str] = &[
     "layout.processes",
     "layout.metadata",
     "layout.log",
+    "layout.disk-map",
     "pane.tree",
     "app.menu",
     // Salir, por el mismo motivo que en el registro: la tecla que peor puede

@@ -500,6 +500,14 @@ pub async fn run(
                 // precondición deja el evento ENCOLADO (canal de capacidad
                 // 1) y dispara al cerrarse el overlay.
                 if let Some(()) = ev {
+                    // El mapa de disco es una foto de hace un rato, y esto dice
+                    // que algo cambió — pero NO dice qué, así que lo único
+                    // honesto es volver a medir. Se enciende la bandera y la
+                    // drena `drain_pending` con el backend en la mano; medir
+                    // aquí dejaría el bucle esperando un árbol entero.
+                    if app.disk_map_slot().is_some() {
+                        app.disk_map_stale = true;
+                    }
                     let refreshed =
                         refresh_panes(app, backend, &mut Console::new(&mut events, terminal)).await;
                     after_panes_refresh(
@@ -922,6 +930,17 @@ pub async fn run(
                 }
             } => {
                 harvest_checksum(app, &mut work, res);
+            }
+            res = async {
+                // El informe de un mapa de disco (fase 4): mismo molde que el
+                // de sumas. La espera del estado terminal vive DENTRO del
+                // spawn, así que aquí no hay más que cosechar.
+                match &mut work.disk_map {
+                    Some(r) => (&mut r.handle).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                crate::jobs::harvest_disk_map(app, &mut work, res);
             }
             outcome = async {
                 match &mut work.lua {

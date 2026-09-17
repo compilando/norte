@@ -42,6 +42,7 @@ mod agents;
 mod ai;
 mod approvals;
 mod dialogs;
+mod diskmap;
 mod effects;
 mod extensions;
 mod fileops;
@@ -2921,6 +2922,12 @@ struct Estado {
     /// `SlotId` se reutiliza, y sin podar el panel de otro plugin heredaría lo
     /// que guardó el primero.
     paneles: std::collections::BTreeMap<u32, panelplugin::EstadoPanel>,
+    /// El mapa de disco de cada hueco que lo enseñe (fase 4).
+    ///
+    /// El estado es el COMPARTIDO (`norte_frontend::diskmap`), el mismo que
+    /// usa el terminal: qué directorio describe, lo medido y cuál es el hijo
+    /// elegido. Una decisión escrita dos veces diverge en silencio (ADR 0077).
+    mapas: std::collections::BTreeMap<u32, norte_frontend::diskmap::DiskMap>,
     /// Lo ÚLTIMO que se mandó de cada hoja de atributos, por hueco.
     ///
     /// La hoja no pide nada y se calcula entera del listado, así que no tiene
@@ -3423,6 +3430,7 @@ impl Estado {
             sitios: None,
             previews: std::collections::BTreeMap::new(),
             paneles: std::collections::BTreeMap::new(),
+            mapas: std::collections::BTreeMap::new(),
             hojas: std::collections::BTreeMap::new(),
             gen_sitios: 0,
             ramas: None,

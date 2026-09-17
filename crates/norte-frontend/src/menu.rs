@@ -164,6 +164,10 @@ pub const MENUS: &[Menu] = &[
             // #323: el registro va junto a procesos, que es su vecino de
             // sentido — los dos contestan «¿qué está haciendo esto?».
             "layout.log",
+            // Fase 4: el mapa de disco va con sus vecinos de sentido — los
+            // tres contestan «¿qué está pasando aquí?», y este además «¿en qué
+            // se ha ido el sitio?».
+            "layout.disk-map",
             "layout.pick",
             "app.theme",
         ],

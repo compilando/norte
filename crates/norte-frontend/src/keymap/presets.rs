@@ -445,6 +445,10 @@ mod k2b_gate_tests {
             // repositorio es que un cambio de teclas no está hecho hasta que
             // están los siete — esto es lo que lo hace cumplir a máquina.
             "layout.log",
+            // El mapa de disco (fase 4): otro panel que toma el teclado, y por
+            // tanto otro que no se puede dejar sin tecla en ninguno. `alt+z`
+            // en los siete — la única letra que quedaba libre en todos.
+            "layout.disk-map",
         ];
         let mut faltan: Vec<String> = Vec::new();
         for nombre in NAMES {

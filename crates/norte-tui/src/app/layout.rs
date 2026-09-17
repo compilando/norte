@@ -3,7 +3,8 @@
 //! redimensionar y mover el foco de hueco en hueco.
 
 use super::{
-    ALLOW_LOG, ALLOW_PANEL, ALLOW_PROCESSES, App, KeyOwner, PlacesClick, TreeClick, TreeSpot,
+    ALLOW_DISK_MAP, ALLOW_LOG, ALLOW_PANEL, ALLOW_PROCESSES, App, KeyOwner, PlacesClick, TreeClick,
+    TreeSpot,
 };
 use norte_i18n::t;
 use norte_proto::VPath;
@@ -101,6 +102,7 @@ impl App {
             KeyOwner::Preview => self.slot_of_kind_visible(crate::preview::KIND).is_some(),
             KeyOwner::Processes => self.slot_of_kind_visible(crate::processes::KIND).is_some(),
             KeyOwner::Tree => self.slot_of_kind_visible(crate::tree::KIND).is_some(),
+            KeyOwner::DiskMap => self.slot_of_kind_visible(crate::diskmap::KIND).is_some(),
             KeyOwner::Log => self.slot_of_kind_visible(crate::logview::KIND).is_some(),
             // Un panel de plugin sigue teniendo el teclado mientras se VEA.
             // Si el plugin se desactiva, o su hueco se va detrás de una
@@ -650,6 +652,75 @@ impl App {
         t.selected()
     }
 
+    /// El hueco del mapa de disco, si está abierto.
+    #[must_use]
+    pub fn disk_map_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::diskmap::KIND)
+    }
+
+    /// Abre el mapa de disco, lo enfoca, o lo cierra.
+    ///
+    /// Tres estados como el panel de procesos y NO como el visor acoplado: un
+    /// mapa se abre para ANDAR por él —elegir un rectángulo y entrar—, así que
+    /// llevarse el teclado al abrir es lo que se espera.
+    ///
+    /// **Qué directorio describe no se decide aquí.** Abrir es colocar el
+    /// hueco; apuntarlo al listado activo y pedir la medida es trabajo del
+    /// bucle, que es quien tiene el backend. Separarlo evita que abrir el panel
+    /// dispare una medida desde un sitio que no puede esperarla.
+    pub fn toggle_disk_map(&mut self) {
+        match self.disk_map_slot() {
+            Some(id) if self.key_owner == KeyOwner::DiskMap && self.se_ve(id) => {
+                self.close_disk_map();
+            }
+            Some(id) => {
+                self.revelar(id);
+                self.key_owner = KeyOwner::DiskMap;
+            }
+            None => self.open_disk_map(),
+        }
+    }
+
+    /// Coloca el mapa de disco si no estaba, y lo revela si estaba escondido.
+    pub fn open_disk_map(&mut self) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        if let Some(id) = self.disk_map_slot() {
+            self.revelar(id);
+            self.key_owner = KeyOwner::DiskMap;
+            return;
+        }
+        let id = self.mint_slot();
+        self.panes
+            .insert_disk_map(id, norte_frontend::diskmap::DiskMap::new());
+        self.layout = self.layout.dock(
+            self.focused_slot(),
+            Edge::Bottom,
+            // Doce filas: un treemap necesita alto para repartir en tiras —con
+            // cuatro es una barra— y el mínimo del kind son seis. Doce deja
+            // ver la forma sin comerse el listado.
+            Size::Fixed(12),
+            &Node::slot(id, KindId::new(crate::diskmap::KIND)),
+        );
+        self.panes.refresh_visible(&self.layout);
+        self.key_owner = KeyOwner::DiskMap;
+    }
+
+    /// Cierra el mapa de disco si está abierto, y devuelve el teclado a los
+    /// listados si lo tenía él.
+    pub fn close_disk_map(&mut self) {
+        let Some(id) = self.disk_map_slot() else {
+            return;
+        };
+        if let Some(nuevo) = self.layout.close_slot(id) {
+            self.layout = nuevo;
+            self.panes.refresh_visible(&self.layout);
+            self.podar_por_arbol();
+        }
+        if self.key_owner == KeyOwner::DiskMap {
+            self.key_owner = KeyOwner::Panes;
+        }
+    }
+
     /// El hueco del panel de procesos, si está abierto.
     #[must_use]
     pub fn processes_slot(&self) -> Option<norte_frontend::layout::SlotId> {
@@ -981,6 +1052,38 @@ impl App {
             "layout.grow" => self.layout_resize(1),
             "layout.shrink" => self.layout_resize(-1),
             "layout.log" => self.toggle_log(),
+            "layout.disk-map" => self.toggle_disk_map(),
+            "layout.processes" => self.toggle_processes(),
+            "layout.places" => self.toggle_places(),
+            "layout.preview" => self.toggle_preview(),
+            "layout.metadata" => self.toggle_metadata(),
+            "pane.tree" => self.toggle_tree(),
+            _ => {}
+        }
+    }
+
+    /// Despacha un comando del keymap con el teclado en un panel de plugin
+    /// (fase 4), filtrado por [`ALLOW_DISK_MAP`].
+    ///
+    /// Embudo propio y no el de sus vecinos: aquí `dialog.confirm` NO está en
+    /// la lista porque `Enter` es del panel —entra en el hijo elegido— y lo
+    /// reclama [`crate::diskmap::key`] antes del keymap. Dejarlo pasar sería un
+    /// `Enter` con dos significados según quién lo mirase primero.
+    pub fn disk_map_command(&mut self, cmd: &str) {
+        if !ALLOW_DISK_MAP.contains(&cmd) {
+            return; // fuera del allowlist de este panel: inerte
+        }
+        if self.panel_chrome_command(cmd) {
+            return;
+        }
+        match cmd {
+            "dialog.pane" | "pane.switch" => self.return_keys_to_panes(),
+            "layout.focus-next" => self.layout_focus(1),
+            "layout.focus-prev" => self.layout_focus(-1),
+            "layout.grow" => self.layout_resize(1),
+            "layout.shrink" => self.layout_resize(-1),
+            "layout.disk-map" => self.toggle_disk_map(),
+            "layout.log" => self.toggle_log(),
             "layout.processes" => self.toggle_processes(),
             "layout.places" => self.toggle_places(),
             "layout.preview" => self.toggle_preview(),
@@ -1011,6 +1114,7 @@ impl App {
             "layout.grow" => self.layout_resize(1),
             "layout.shrink" => self.layout_resize(-1),
             "layout.log" => self.toggle_log(),
+            "layout.disk-map" => self.toggle_disk_map(),
             "layout.processes" => self.toggle_processes(),
             "layout.places" => self.toggle_places(),
             "layout.preview" => self.toggle_preview(),
@@ -1122,6 +1226,7 @@ impl App {
             KeyOwner::Tree => self.tree_slot(),
             KeyOwner::Processes => self.processes_slot(),
             KeyOwner::Log => self.log_slot(),
+            KeyOwner::DiskMap => self.disk_map_slot(),
             // Un panel de plugin se agranda como cualquier otro lateral: la
             // tecla es la misma y el hueco lo dice el reparto.
             KeyOwner::Panel => self.panel_slot(),

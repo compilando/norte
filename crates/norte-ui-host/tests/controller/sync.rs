@@ -3597,7 +3597,19 @@ async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
     let kinds: Vec<&str> = barra.buttons.iter().map(|b| b.kind.as_str()).collect();
     assert_eq!(
         kinds,
-        ["places", "viewer", "processes", "metadata", "tree", "log"],
+        [
+            "places",
+            "viewer",
+            "processes",
+            "metadata",
+            "tree",
+            "log",
+            // Fase 4: el mapa de disco. La ventana todavía no lo PINTA (T5),
+            // pero el kind es del registro COMPARTIDO, así que su botón sale
+            // aquí desde que se declara — que es justo lo que este test
+            // comprueba: los mismos botones y el mismo orden que la TUI.
+            "disk-map",
+        ],
         "los mismos botones y el mismo orden que `panelbar::buttons`"
     );
     let sitios = kinds.iter().position(|k| *k == "places").expect("places");

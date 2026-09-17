@@ -172,6 +172,7 @@ pub async fn dispatch(
         Command::LayoutPreview => app.toggle_preview(),
         Command::LayoutProcesses => app.toggle_processes(),
         Command::LayoutLog => app.toggle_log(),
+        Command::LayoutDiskMap => app.toggle_disk_map(),
         // #136: el árbol se abre, se enfoca y se cierra como el sidebar. Su
         // contenido lo pide el run loop, una rama por vuelta.
         Command::PaneTree => app.toggle_tree(),

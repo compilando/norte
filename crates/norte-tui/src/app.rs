@@ -233,6 +233,12 @@ pub enum KeyOwner {
     Tree,
     /// El panel de registro (#323).
     Log,
+    /// El mapa de disco (fase 4).
+    ///
+    /// Sin carga, como todos: `KeyOwner` se compara por igualdad en ochenta y
+    /// seis sitios, y el mapa se declara `multi: false`, así que hay como mucho
+    /// uno y el reparto ya sabe cuál.
+    DiskMap,
     /// Un panel aportado por un PLUGIN (fase 3, ADR 0115/0116).
     ///
     /// SIN decir cuál, a propósito. `KeyOwner` se compara por igualdad en
@@ -629,6 +635,24 @@ pub struct App {
     /// caminos para abrir el mismo panel divergen en cuanto uno de los dos
     /// crece un detalle.
     pub pending_panel_command: Option<String>,
+    /// El hijo del mapa de disco en el que hay que entrar, si alguien lo pidió.
+    ///
+    /// Lo pone la tecla o el clic y lo consume el BUCLE, que es quien tiene el
+    /// backend: entrar en un directorio es un `cd` normal, con su relleno y su
+    /// refresco. Un segundo camino de navegación es justo lo que ADR 0077
+    /// existe para impedir.
+    ///
+    /// Un [`norte_proto::Segment`] y no una ruta: el mapa nombra HIJOS del
+    /// directorio que enseña, y quien lo consume los resuelve contra él. Una
+    /// ruta aquí sería un segundo modo de nombrar un fichero, saltándose el
+    /// que ya pasa por el gate.
+    pub pending_disk_map_enter: Option<norte_proto::Segment>,
+    /// El mapa de disco tiene que volver a medirse.
+    ///
+    /// Lo enciende `r` dentro del panel, abrirlo, y el aviso de la vigilancia
+    /// —que no dice QUÉ cambió, así que lo único honesto es volver a medir—.
+    /// Lo drena el bucle.
+    pub disk_map_stale: bool,
     /// La barra de paneles está fijada (`[ui] panel_bar`, #324).
     ///
     /// Los paneles laterales se abrían por atajo, por el menú o por la paleta,
@@ -1181,6 +1205,8 @@ impl App {
             volumes: Vec::new(),
             volumes_stale: true,
             pending_panel_command: None,
+            pending_disk_map_enter: None,
+            disk_map_stale: false,
             // Apagada hasta que el arranque diga: un `App` de test no lee
             // configuración, y una fila que aparece sola cambiaría los
             // índices de ochenta tests que no van de esto.

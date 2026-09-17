@@ -229,6 +229,12 @@ fn filas_de(s: &norte_ui_host::dto::SlotView) -> usize {
         // cuentan como cualquier otra: el tope de líneas es del protocolo
         // (`PANEL_MAX_LINES`), pero quien las paga es este mensaje.
         SlotView::Panel(p) => p.lines.len(),
+        // El mapa de disco lleva el treemap ya repartido por el host, y sus
+        // líneas cuentan como las de un panel de plugin: el tope es el del
+        // marco (`PANEL_MAX_LINES`), pero quien las paga es este mensaje. Un
+        // cero aquí desarmaría el guardia justo para el hueco que más fácil
+        // puede crecer — un mapa es tantas líneas como alto tenga.
+        SlotView::DiskMap(m) => m.lines.len(),
         // El panel de procesos no lleva sus filas en el hueco: las lleva
         // `ViewSnapshot::tasks`, que es una sola lista para toda la pantalla.
         SlotView::Processes { .. } | SlotView::Unsupported { .. } => 0,

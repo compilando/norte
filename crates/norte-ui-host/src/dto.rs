@@ -1703,6 +1703,14 @@ pub enum SlotView {
     Preview(Box<PreviewSlotView>),
     /// El panel que pinta un PLUGIN (fase 3): el marco que describió su guest.
     Panel(Box<PanelSlotView>),
+    /// El mapa de disco (fase 4): de qué está hecho el directorio, repartido
+    /// en rectángulos.
+    ///
+    /// El reparto lo hace el HOST con `norte_frontend::treemap::squarify`, no
+    /// el renderer: un treemap calculado dos veces son dos treemaps distintos
+    /// en cuanto alguien toque un redondeo (ADR 0077). Lo que cruza son las
+    /// líneas ya estiladas y sus zonas, igual que un panel de plugin.
+    DiskMap(Box<DiskMapSlotView>),
     /// Un hueco de un tipo que este host todavía no proyecta. Se enseña
     /// vacío y con su nombre: preservar lo que no se entiende es la regla de
     /// la sesión (ADR 0059), y desaparecer sería peor que estar en gris.
@@ -1758,6 +1766,38 @@ pub struct PanelSlotView {
     pub lines: Vec<Vec<SpanView>>,
     /// Las zonas pulsables, en celdas DENTRO del marco.
     pub hits: Vec<HitView>,
+}
+
+/// El mapa de disco (fase 4): el treemap ya repartido, listo para pintar.
+///
+/// Mismo reparto que un panel de plugin —líneas estiladas y zonas en celdas
+/// DENTRO del marco— y por la misma razón: el renderer pinta lo que le den y
+/// dice DÓNDE se pulsó; quién es cada rectángulo lo resuelve el host contra su
+/// propio marco.
+///
+/// Aquí eso pesa más que allí, porque lo que se resuelve es el NOMBRE de un
+/// fichero: mandarlo por el cable obligaría a elegir entre la forma que se
+/// pinta —enmascarada, que no identifica nada— y la reversible, y sería un
+/// nombre que puede mandar cualquiera que hable con el renderer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiskMapSlotView {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// Qué directorio se está describiendo, para el título. Enmascarado y
+    /// acotado: sale de un nombre de fichero.
+    pub title: String,
+    /// El nombre pintado difiere del que hay en el disco (#266).
+    pub title_hostile: bool,
+    /// Las líneas del treemap, cada una con sus tramos. Vacío mientras no se
+    /// haya medido nada: el hueco se pinta con su borde y nada dentro.
+    pub lines: Vec<Vec<SpanView>>,
+    /// Un rectángulo por zona, en celdas DENTRO del marco.
+    pub hits: Vec<HitView>,
+    /// La medida sigue en marcha.
+    ///
+    /// Viaja porque un mapa a medias sin decirlo se lee como un directorio
+    /// pequeño, que es la respuesta equivocada y encima creíble.
+    pub measuring: bool,
 }
 
 /// Una zona pulsable de un panel de plugin: dónde está, y nada más.

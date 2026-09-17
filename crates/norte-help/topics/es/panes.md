@@ -40,6 +40,7 @@ commands = [
     "layout.processes",
     "layout.metadata",
     "layout.log",
+    "layout.disk-map",
     "layout.pick",
 
     "profile.pick",
@@ -348,6 +349,22 @@ filtra por texto, y busca también en el nombre del módulo, que es media búsqu
 real. Las flechas y las páginas se despegan del final para que puedas leer
 mientras siguen llegando líneas, y `Fin` vuelve a pegarse. `Esc` devuelve el
 teclado sin cerrar el panel.
+
+{{cmd:layout.disk-map}} abre el mapa de disco: de qué está hecho el directorio
+que estás mirando, con un rectángulo por hijo y del tamaño que ocupa. Es la
+respuesta a «¿en qué se me ha ido el sitio?», que un listado ordenado por tamaño
+no contesta — ahí un directorio pesa lo que pesa su nodo, no lo que hay dentro.
+
+Las flechas se mueven de rectángulo en rectángulo y {{cmd:nav.enter}} entra en el
+elegido, que es como se baja hasta el que ocupa. Un clic hace lo mismo sobre el
+rectángulo que pulses. `Esc` devuelve el teclado sin cerrar el panel.
+
+Medir un árbol grande tarda, así que el mapa se va pintando mientras se mide y
+dice cuándo ha terminado. Lo que no se pudo leer entero sale marcado con `≈` en
+vez de contarse como cero: es una cota inferior y se declara, porque un
+rectángulo pequeño que en realidad es enorme es peor que uno que admite no
+saberlo. Y si el directorio tiene más hijos de los que caben, los que viajan son
+los **más grandes** — los que un mapa existe para enseñar.
 
 Pedir más detalle sube el nivel de verdad, no solo el filtro: los mensajes de
 depuración no existen hasta que los pides, así que aparecen de ahí en adelante y

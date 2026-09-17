@@ -102,6 +102,8 @@ checksum-mismatch = MISMATCH
 checksum-missing = missing
 checksum-unreadable = unreadable
 msg-checksum-started = computing sums…
+msg-disk-map-started = measuring the directory…
+msg-disk-map-partial = the map stopped short: what it measured is a lower bound
 msg-checksum-all-ok = { $n } checked, all ok
 msg-checksum-bad = { $n } do not match or are missing
 msg-checksum-copied = sums copied to the clipboard
@@ -899,6 +901,8 @@ processes-has-keyboard = this panel has the keyboard · Esc returns it
 # The log panel (#323). The title carries the level because a panel that looks
 # empty has to tell "nothing happened" apart from "you are filtering it out".
 log-title = Log
+disk-map-title = Disk map
+disk-map-measuring = measuring
 slot-retry = retry
 # Waiting for a listing (#323). Three pieces and not one sentence: the renderer
 # composes them with the PATH in its own node, because a path glued inside the
@@ -1026,6 +1030,7 @@ panelbar-viewer = Viewer
 panelbar-processes = Jobs
 panelbar-metadata = Details
 panelbar-log = Log
+panelbar-disk-map = Map
 
 # The first-run wizard (spec 2026-09-10): three questions when there is no
 # user norte.toml yet. Esc at any step means "do not ask again".
@@ -1051,6 +1056,7 @@ menu-item-layout-places = Places sidebar
 menu-item-layout-preview = Docked viewer
 menu-item-layout-processes = Processes panel
 menu-item-layout-log = Log
+menu-item-layout-disk-map = Disk map
 menu-item-layout-metadata = Details panel
 menu-item-layout-pick = Layout...
 menu-item-profile-pick = Profile...
@@ -1152,6 +1158,7 @@ help-cmd-layout-places = show or hide the places sidebar
 help-cmd-layout-preview = show or hide the docked viewer
 help-cmd-layout-processes = show or hide the processes panel
 help-cmd-layout-log = show or hide this session's log
+help-cmd-layout-disk-map = show or hide the disk map
 help-cmd-layout-metadata = show or hide the details panel
 help-cmd-layout-pick = choose a layout
 help-cmd-profile-pick = choose a profile

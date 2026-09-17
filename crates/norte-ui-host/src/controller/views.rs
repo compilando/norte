@@ -91,6 +91,9 @@ impl Estado {
                 Some(super::logpanel::KIND) => {
                     slots.push(SlotView::Log(Box::new(self.panel_de_registro(id))));
                 }
+                Some(super::diskmap::KIND) => {
+                    slots.push(SlotView::DiskMap(Box::new(self.vista_de_mapa(id))));
+                }
                 Some("processes") => slots.push(SlotView::Processes {
                     slot_id: id,
                     // Índice sobre las filas PINTADAS, que es lo que el

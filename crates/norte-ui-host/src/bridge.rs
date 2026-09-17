@@ -351,7 +351,24 @@ use serde::{Deserialize, Serialize};
 ///   `lines` vacío es el panel que todavía no tiene marco —la primera
 ///   petición en vuelo, o un plugin que falló—: se pinta su borde con su
 ///   título, nunca un hueco mudo.
-pub const BRIDGE_VERSION: u32 = 70;
+/// - **71**: el mapa de disco (fase 4, proto 0.75.0). Llega
+///   `SlotView::DiskMap` con `DiskMapSlotView`: las `lines` del treemap ya
+///   repartido y sus `hits`, con la misma forma que un panel de plugin y por
+///   la misma razón — el reparto lo hace el host con
+///   `norte_frontend::treemap::squarify`, porque un treemap calculado dos
+///   veces son dos treemaps distintos en cuanto alguien toque un redondeo.
+///
+///   Un `HitView` sigue sin llevar su destino: el renderer manda la CELDA
+///   (`panel_click`) y el host resuelve contra SU marco en qué hijo cayó. Aquí
+///   eso importa más que en un panel de plugin, porque lo que se resuelve es
+///   el NOMBRE de un fichero: si cruzara por el cable, sería un nombre que
+///   puede mandar cualquiera que hable con el renderer, y además tendría que
+///   viajar enmascarado —que es lo que se pinta— y volver reversible, que son
+///   dos formas distintas de la misma cadena.
+///
+///   `measuring` dice si la medida sigue en marcha: un mapa a medias sin
+///   decirlo se lee como un directorio pequeño.
+pub const BRIDGE_VERSION: u32 = 71;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

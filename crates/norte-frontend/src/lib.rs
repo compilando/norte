@@ -41,6 +41,7 @@ pub mod confine;
 pub mod connections_picker;
 mod decoration;
 pub mod diffpair;
+pub mod diskmap;
 pub mod display;
 pub mod error;
 pub mod footer;
