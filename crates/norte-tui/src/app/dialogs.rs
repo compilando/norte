@@ -119,6 +119,11 @@ pub const ALLOW_EXTENSIONS: &[&str] = &[
     "dialog.remove",
     "dialog.confirm",
     "dialog.cancel",
+    // `tab` mueve el foco entre la lista y los BOTONES de la ficha, que
+    // hasta ahora solo el ratón podía pulsar como botones (ADR 0104 los
+    // trajo con la ficha). Cada uno conserva su tecla; esto es el camino
+    // de quien recorre la pantalla en vez de recordar cinco letras.
+    "dialog.pane",
 ];
 
 /// ALLOWLIST del panel de `[config]` de un plugin (G3c, `on_extensions_key`

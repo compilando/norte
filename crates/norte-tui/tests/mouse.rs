@@ -1516,6 +1516,7 @@ fn app_con_gestor(w: u16, h: u16) -> (App, Vec<String>) {
         ],
         errors: Vec::new(),
         cursor: 0,
+        foco: norte_tui::app::ExtFoco::Lista,
         config: None,
     });
     let lineas = pintar_en(&mut app, w, h);

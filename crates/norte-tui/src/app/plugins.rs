@@ -48,6 +48,46 @@ pub struct ExtensionManager {
     /// (fetches `plugin.get_config`), `dialog.cancel` inside it closes
     /// back to the plugin list (never the whole overlay).
     pub config: Option<PluginConfigPanel>,
+    /// Dónde van las teclas dentro del gestor: la lista, o uno de los
+    /// botones de la ficha ([`ExtFoco`]). `dialog.pane` —`tab`— lo mueve.
+    pub foco: ExtFoco,
+}
+
+/// Dónde tiene el foco el gestor de extensiones: la lista de plugins, o el
+/// botón `n` de la ficha, contando desde 0 en el orden en que se pintan.
+///
+/// Existe porque el gestor nació con una sola parada de teclado —la lista—
+/// y la ficha, que la nivelación con la ventana (ADR 0104) le puso al lado,
+/// llegó con botones que solo el ratón podía pulsar como tales. Cada botón
+/// tiene su tecla propia y la conserva; esto es el camino de quien recorre
+/// la pantalla con `tab` en vez de recordar cinco letras.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExtFoco {
+    /// Las teclas mueven el cursor de la lista (lo de siempre).
+    #[default]
+    Lista,
+    /// Las teclas van al botón `n` de la ficha; `dialog.confirm` lo dispara.
+    Boton(usize),
+}
+
+/// La siguiente parada del anillo de `tab`: la lista, luego cada botón, y
+/// otra vez la lista.
+///
+/// `botones` es cuántos botones pintó el ÚLTIMO frame, no cuántos tendría
+/// la ficha si cupiese: con la caja estrecha no hay ficha, y entonces el
+/// anillo tiene una sola parada y `tab` no hace nada. Mover un foco a algo
+/// que no está en la pantalla es un teclado moviendo lo que nadie ve, que
+/// es justo el fallo que este anillo viene a arreglar.
+#[must_use]
+pub fn siguiente_foco(foco: ExtFoco, botones: usize) -> ExtFoco {
+    if botones == 0 {
+        return ExtFoco::Lista;
+    }
+    match foco {
+        ExtFoco::Lista => ExtFoco::Boton(0),
+        ExtFoco::Boton(i) if i + 1 < botones => ExtFoco::Boton(i + 1),
+        ExtFoco::Boton(_) => ExtFoco::Lista,
+    }
 }
 
 /// The extension manager's config drill-down (G3c): which plugin, its
@@ -67,14 +107,21 @@ pub struct PluginConfigPanel {
 
 impl ExtensionManager {
     /// Sube el cursor (tope arriba).
+    ///
+    /// Y devuelve el foco a la lista: los botones son los del plugin
+    /// ELEGIDO, así que uno enfocado mientras el cursor se va a otro plugin
+    /// sería un botón que ya no es de lo que se está mirando.
     pub fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
+        self.foco = ExtFoco::Lista;
     }
 
-    /// Baja el cursor (tope al último plugin).
+    /// Baja el cursor (tope al último plugin). Devuelve el foco a la lista,
+    /// por lo mismo que [`Self::up`].
     pub fn down(&mut self) {
         let max = self.plugins.len().saturating_sub(1);
         self.cursor = (self.cursor + 1).min(max);
+        self.foco = ExtFoco::Lista;
     }
 
     /// El plugin bajo el cursor, si lo hay.
@@ -236,5 +283,51 @@ mod clamp_plugin_descriptions_tests {
         let d = plugins[0].description.as_deref().unwrap();
         assert!(!d.contains('\u{202E}'));
         assert!(d.contains('\u{FFFD}'));
+    }
+}
+
+/// El anillo de `tab` del gestor: la lista, cada botón, la lista.
+#[cfg(test)]
+mod siguiente_foco_tests {
+    use super::{ExtFoco, siguiente_foco};
+
+    /// Con cuatro botones, `tab` los recorre en orden y vuelve a la lista:
+    /// cinco pulsaciones cierran el anillo, ni una parada de más.
+    #[test]
+    fn el_anillo_recorre_los_botones_y_vuelve() {
+        let mut f = ExtFoco::Lista;
+        let recorrido: Vec<ExtFoco> = (0..5)
+            .map(|_| {
+                f = siguiente_foco(f, 4);
+                f
+            })
+            .collect();
+        assert_eq!(
+            recorrido,
+            vec![
+                ExtFoco::Boton(0),
+                ExtFoco::Boton(1),
+                ExtFoco::Boton(2),
+                ExtFoco::Boton(3),
+                ExtFoco::Lista,
+            ]
+        );
+    }
+
+    /// Sin ficha pintada no hay botones, y entonces `tab` no mueve nada: el
+    /// caso de la caja estrecha, donde enfocar un botón sería enfocar algo
+    /// que no está en la pantalla.
+    #[test]
+    fn sin_botones_pintados_el_foco_se_queda_en_la_lista() {
+        assert_eq!(siguiente_foco(ExtFoco::Lista, 0), ExtFoco::Lista);
+        assert_eq!(siguiente_foco(ExtFoco::Boton(2), 0), ExtFoco::Lista);
+    }
+
+    /// Un foco que se quedó apuntando más allá de los botones que ahora se
+    /// pintan —la ficha encogió, o el plugin elegido no tiene ayuda y tiene
+    /// un botón menos— vuelve a la lista en vez de quedarse fuera de rango.
+    #[test]
+    fn un_foco_rebasado_vuelve_a_la_lista() {
+        assert_eq!(siguiente_foco(ExtFoco::Boton(9), 4), ExtFoco::Lista);
     }
 }

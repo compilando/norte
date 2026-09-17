@@ -854,6 +854,7 @@ pub async fn dispatch(
                     plugins,
                     errors: list.errors,
                     cursor: 0,
+                    foco: crate::app::ExtFoco::Lista,
                     config: None,
                 });
             }

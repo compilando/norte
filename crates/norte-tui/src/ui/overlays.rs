@@ -73,12 +73,21 @@ pub(crate) fn draw_extensions(
         let botones = extension_buttons(p);
         let mut spans = Vec::new();
         let mut x = 0usize;
-        for (etiqueta, _) in &botones {
+        for (n, (etiqueta, _)) in botones.iter().enumerate() {
             let w = UnicodeWidthStr::width(etiqueta.as_str());
             if x + w > usize::from(ficha_area.width) {
                 break;
             }
-            spans.push(Span::styled(etiqueta.clone(), theme.role(Role::Selection)));
+            // El que tiene el foco de `tab` se pinta como el cursor de una
+            // lista; los demás, como los botones que son. Sin esta
+            // diferencia `tab` movería algo que no se ve, que es como
+            // estaba antes de que el anillo existiera.
+            let rol = if mgr.foco == crate::app::ExtFoco::Boton(n) {
+                Role::Selection
+            } else {
+                Role::Button
+            };
+            spans.push(Span::styled(etiqueta.clone(), theme.role(rol)));
             spans.push(Span::raw(" "));
             x += w + 1;
         }
@@ -308,6 +317,14 @@ fn extensions_list_lines<'a>(
         filas.push(None);
         return (lines, filas);
     }
+    // Con el foco en un botón de la ficha, el cursor de la lista se apaga:
+    // dos cursores igual de vivos no dicen cuál recibe las teclas, que es
+    // para lo que existe `SelectionUnfocused`.
+    let rol_cursor = if mgr.foco == crate::app::ExtFoco::Lista {
+        Role::Selection
+    } else {
+        Role::SelectionUnfocused
+    };
     let mut last_cat: Option<&str> = None;
     for (i, p) in mgr.plugins.iter().enumerate() {
         if last_cat != Some(p.category.as_str()) {
@@ -317,14 +334,23 @@ fn extensions_list_lines<'a>(
             filas.push(None);
         }
         if con_descripcion {
-            lines.push(plugin_line(p, i == mgr.cursor, theme));
+            lines.push(plugin_line(
+                p,
+                (i == mgr.cursor).then_some(rol_cursor),
+                theme,
+            ));
             filas.push(Some(i));
             if let Some(desc_line) = plugin_description_line(p, theme, inner) {
                 lines.push(desc_line);
                 filas.push(None);
             }
         } else {
-            lines.push(plugin_row_compact(p, i == mgr.cursor, theme, inner));
+            lines.push(plugin_row_compact(
+                p,
+                (i == mgr.cursor).then_some(rol_cursor),
+                theme,
+                inner,
+            ));
             filas.push(Some(i));
         }
     }
@@ -351,13 +377,13 @@ fn extensions_list_lines<'a>(
 /// Recortada al ancho de la columna, que es la mitad de la caja.
 fn plugin_row_compact<'a>(
     p: &norte_proto::methods::PluginInfo,
-    selected: bool,
+    selected: Option<Role>,
     theme: &TuiTheme,
     inner: usize,
 ) -> Line<'a> {
     let (name, _) = display_name(p.name.as_bytes());
     let (version, _) = display_name(p.version.as_bytes());
-    let cursor = if selected { ">" } else { " " };
+    let cursor = if selected.is_some() { ">" } else { " " };
     // Sin aprobar se DICE en la fila, no solo en la ficha: es lo que hay que
     // mirar, y la ficha solo habla de la elegida.
     let aviso = if p.approved {
@@ -379,8 +405,8 @@ fn plugin_row_compact<'a>(
         spans.push(Span::styled("✓", theme.role(Role::Info)));
     }
     let mut line = Line::from(spans);
-    if selected {
-        line = line.style(theme.role(Role::Selection));
+    if let Some(rol) = selected {
+        line = line.style(theme.role(rol));
     }
     line
 }
@@ -560,7 +586,7 @@ pub(crate) fn draw_plugin_config_panel(
 /// si NO está aprobado. La línea seleccionada se resalta como el theme picker.
 pub(crate) fn plugin_line<'a>(
     p: &'a norte_proto::methods::PluginInfo,
-    selected: bool,
+    selected: Option<Role>,
     theme: &TuiTheme,
 ) -> Line<'a> {
     let (name, _) = display_name(p.name.as_bytes());
@@ -570,7 +596,7 @@ pub(crate) fn plugin_line<'a>(
     } else {
         p.capabilities.join(" ")
     };
-    let cursor = if selected { ">" } else { " " };
+    let cursor = if selected.is_some() { ">" } else { " " };
     let mut spans = vec![Span::raw(format!("{cursor} {name} v{version} [{badges}] "))];
     if p.enabled {
         spans.push(Span::styled("✓", theme.role(Role::Info)));
@@ -583,8 +609,8 @@ pub(crate) fn plugin_line<'a>(
         ));
     }
     let mut line = Line::from(spans);
-    if selected {
-        line = line.style(theme.role(Role::Selection));
+    if let Some(rol) = selected {
+        line = line.style(theme.role(rol));
     }
     line
 }

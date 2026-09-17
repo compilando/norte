@@ -124,6 +124,15 @@ pub async fn on_extensions_key(
         Resolution::Reset => return,
     };
     let panel_open = app.extensions.as_ref().is_some_and(|m| m.config.is_some());
+    // Con el foco en un botón de la ficha (`tab`), Enter dispara ESE botón.
+    // Se hace SUSTITUYENDO el comando aquí, antes del allowlist, y no
+    // llamando al despacho por segunda vez: uno de los botones es
+    // `dialog.confirm` —el de los ajustes—, así que reentrar sería un
+    // bucle. Sustituido una vez, `dialog.confirm` vuelve a significar lo
+    // que significa en la lista, que es exactamente lo que ese botón hace.
+    let cmd = boton_enfocado(app)
+        .filter(|_| !panel_open && cmd == "dialog.confirm")
+        .unwrap_or(cmd);
     // H3e: `app.help` es un comando de `[global]`, no un verbo `dialog.*`, así
     // que no está en ningún allowlist de este overlay y sin esta rama F1 sería
     // inerte aquí. Se resuelve por el keymap como todo lo demás (un rebind de
@@ -153,6 +162,22 @@ pub async fn on_extensions_key(
     } else {
         on_extensions_list_cmd(app, backend, &cmd).await;
     }
+}
+
+/// El comando del botón que el foco señala, si el foco está en uno y ese
+/// botón lo pintó el último frame.
+///
+/// `None` cuando el foco está en la lista —lo de siempre— y también cuando
+/// apunta más allá de los botones pintados: la ficha pudo encoger entre el
+/// frame y la tecla, y disparar «el cuarto botón» de una ficha que ahora
+/// tiene tres sería disparar otro verbo del que se leyó.
+fn boton_enfocado(app: &App) -> Option<String> {
+    let crate::app::ExtFoco::Boton(i) = app.extensions.as_ref()?.foco else {
+        return None;
+    };
+    crate::mouse::painted_extension_buttons(app)
+        .get(i)
+        .map(|c| (*c).to_owned())
 }
 
 /// Un clic en el gestor: un botón de la ficha, o la fila ya elegida.
@@ -259,6 +284,17 @@ async fn on_plugin_config_panel_cmd(app: &mut App, backend: &Backend, cmd: &str)
 /// del plugin resaltado SI declara alguna clave. Enter NUNCA aprueba (pin
 /// P1): solo entra en un submenú.
 async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
+    // `tab`: la lista, cada botón de la ficha, la lista. Las paradas son
+    // las que el último frame PINTÓ (`painted_extension_buttons`), así que
+    // con la caja estrecha —sin ficha— el anillo tiene una sola y la tecla
+    // no hace nada, en vez de mover un foco invisible.
+    if cmd == "dialog.pane" {
+        let botones = crate::mouse::painted_extension_buttons(app).len();
+        if let Some(mgr) = &mut app.extensions {
+            mgr.foco = crate::app::siguiente_foco(mgr.foco, botones);
+        }
+        return;
+    }
     let Some(mgr) = &mut app.extensions else {
         return;
     };
@@ -399,6 +435,7 @@ mod extensions_help_tests {
             errors: Vec::new(),
             cursor: 0,
             config: None,
+            foco: crate::app::ExtFoco::Lista,
         });
         app
     }
@@ -513,6 +550,15 @@ async fn relistar_extensiones(app: &mut App, backend: &Backend) {
     // de antes: el bucle lo olvida y lo vuelve a pedir.
     app.redecorate = true;
     let cursor = app.extensions.as_ref().map_or(0, |m| m.cursor);
+    // El foco viaja a mano, como el cursor y por lo mismo: este relistado
+    // es el de DESPUÉS de pulsar un botón, y perder el foco aquí sería
+    // devolver el teclado a la lista justo cuando el lector acaba de usar
+    // la ficha. Lo que el botón dice puede cambiar (encender ↔ apagar);
+    // cuántos hay, no.
+    let foco = app
+        .extensions
+        .as_ref()
+        .map_or_else(Default::default, |m| m.foco);
     match backend.plugins_list().await {
         Ok(list) => {
             let mut plugins = list.plugins;
@@ -527,6 +573,7 @@ async fn relistar_extensiones(app: &mut App, backend: &Backend) {
                 errors: list.errors,
                 cursor: cursor.min(tope),
                 config,
+                foco,
             });
         }
         Err(e) => app.message = Some(error_message(&e)),
@@ -548,6 +595,7 @@ mod aprobacion_tests {
             errors: Vec::new(),
             cursor: 0,
             config: None,
+            foco: crate::app::ExtFoco::Lista,
         });
         app
     }
@@ -607,5 +655,151 @@ mod aprobacion_tests {
 
         assert!(app.modal.is_none(), "no abre ninguna pregunta");
         assert!(app.message.is_some(), "y lo DICE en vez de callarse");
+    }
+}
+
+/// El anillo de `tab` del gestor, ya con la pantalla delante: qué paradas
+/// tiene y qué dispara Enter en cada una.
+#[cfg(test)]
+mod foco_tests {
+    use super::App;
+    use crate::app::{ExtFoco, ExtensionManager, Modal, Pane};
+    use ratatui::layout::Rect;
+
+    /// Un app con el gestor abierto y las zonas del último frame ya
+    /// devueltas al modelo, que es de donde el anillo saca sus paradas.
+    /// `ancho` decide si hay ficha: por debajo de `EXTENSIONS_WIDE_MIN` la
+    /// caja pinta una sola columna y no hay ningún botón.
+    fn app_pintado(ancho: u16) -> App {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
+        let d = norte_vfs::VPath::parse("file:///x").expect("wire de test");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
+        app.extensions = Some(ExtensionManager {
+            plugins: vec![norte_proto::methods::PluginInfo {
+                id: "org.acme.demo".to_owned(),
+                name: "Demo".to_owned(),
+                publisher: "ACME".to_owned(),
+                version: "1.0.0".to_owned(),
+                category: "previewer".to_owned(),
+                capabilities: vec!["fs-read".to_owned()],
+                approved: false,
+                enabled: false,
+                description: None,
+                commands: Vec::new(),
+                columns: Vec::new(),
+                panels: Vec::new(),
+                has_help: false,
+                manifest_digest: None,
+            }],
+            errors: Vec::new(),
+            cursor: 0,
+            config: None,
+            foco: ExtFoco::Lista,
+        });
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: ancho,
+            height: 24,
+        };
+        let zonas = crate::ui::extension_zones(&app, area);
+        crate::mouse::after_frame(
+            &mut app,
+            None,
+            crate::mouse::FrameZones {
+                extensions: zonas,
+                ..crate::mouse::FrameZones::default()
+            },
+        );
+        app
+    }
+
+    fn backend() -> norte_core::backend::Backend {
+        // Vacío a propósito: ninguno de estos tests llega al daemon.
+        norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()))
+    }
+
+    fn foco(app: &App) -> ExtFoco {
+        app.extensions.as_ref().expect("gestor abierto").foco
+    }
+
+    /// `tab` lleva el foco de la lista al primer botón de la ficha. Antes
+    /// del anillo esta tecla era inerte aquí —el comando existía en el
+    /// catálogo y la pantalla no lo atendía—, y los botones solo respondían
+    /// al ratón.
+    #[tokio::test]
+    async fn tab_lleva_el_foco_al_primer_boton() {
+        let mut app = app_pintado(100);
+        assert_eq!(foco(&app), ExtFoco::Lista);
+
+        super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
+
+        assert_eq!(foco(&app), ExtFoco::Boton(0));
+    }
+
+    /// Sin ficha pintada —caja estrecha— `tab` no mueve nada: las paradas
+    /// salen de lo que el frame pintó, no de lo que la ficha tendría si
+    /// cupiera.
+    #[tokio::test]
+    async fn sin_ficha_tab_no_mueve_el_foco() {
+        let mut app = app_pintado(40);
+        assert!(
+            crate::mouse::painted_extension_buttons(&app).is_empty(),
+            "una caja de 40 celdas no pinta ficha"
+        );
+
+        super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
+
+        assert_eq!(foco(&app), ExtFoco::Lista);
+    }
+
+    /// Con el foco en el SEGUNDO botón, Enter dispara ese botón —aprobar,
+    /// que pregunta— y no los ajustes, que es lo que Enter significa en la
+    /// lista.
+    #[tokio::test]
+    async fn enter_sobre_un_boton_dispara_ese_boton() {
+        let mut app = app_pintado(100);
+        for _ in 0..2 {
+            super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
+        }
+        assert_eq!(foco(&app), ExtFoco::Boton(1));
+        let cmd = super::boton_enfocado(&app).expect("el foco señala un botón pintado");
+        assert_eq!(cmd, "dialog.approve", "el segundo botón de la ficha");
+
+        super::on_extensions_list_cmd(&mut app, &backend(), &cmd).await;
+
+        assert!(
+            matches!(app.modal, Some(Modal::ConfirmPluginApproval { .. })),
+            "aprobar pregunta: {:?}",
+            app.modal
+        );
+    }
+
+    /// Un foco que apunta más allá de los botones pintados NO dispara nada:
+    /// Enter vuelve a significar lo que significa en la lista. Disparar «el
+    /// botón n» de una ficha que ya no tiene n sería ejecutar un verbo que
+    /// el lector no leyó, y entre esos verbos está desinstalar.
+    #[tokio::test]
+    async fn un_foco_rebasado_no_dispara_otro_verbo() {
+        let mut app = app_pintado(100);
+        if let Some(mgr) = &mut app.extensions {
+            mgr.foco = ExtFoco::Boton(99);
+        }
+
+        assert_eq!(super::boton_enfocado(&app), None);
+    }
+
+    /// Mover el cursor devuelve el foco a la lista: los botones son los del
+    /// plugin elegido, y uno enfocado mientras el cursor se va a otro sería
+    /// un botón de lo que ya no se está mirando.
+    #[tokio::test]
+    async fn bajar_por_la_lista_devuelve_el_foco() {
+        let mut app = app_pintado(100);
+        super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
+        assert_eq!(foco(&app), ExtFoco::Boton(0));
+
+        super::on_extensions_list_cmd(&mut app, &backend(), "dialog.down").await;
+
+        assert_eq!(foco(&app), ExtFoco::Lista);
     }
 }

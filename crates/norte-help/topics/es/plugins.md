@@ -59,6 +59,15 @@ ajustes, desinstalar, ayuda. Cada botón hace exactamente lo que hace su
 tecla; las teclas están en el pie. Pulsar una fila la elige, y pulsar la fila
 ya elegida abre sus ajustes, como `Intro`.
 
+Sin ratón: `Tab` mueve el foco entre la lista y los botones, uno a uno, y al
+llegar al último vuelve a la lista. El botón que lo tiene se enciende, y el
+cursor de la lista se apaga para que no haya dudas sobre a dónde van las
+teclas; `Intro` dispara el botón enfocado. Mover el cursor por la lista
+devuelve el foco a ella, porque los botones son los de la extensión elegida.
+`Tab` no está en el pie —ya va lleno— y no hace nada si la ventana es
+demasiado estrecha para pintar la ficha, que es cuando no hay ningún botón a
+dónde ir.
+
 Las extensiones entran desde la línea de comandos: `norte plugin install
 <dir>` trae una sin aprobar, y `norte plugin list` enseña los mismos dos hechos
 que esta pantalla. Salen por cualquiera de los dos lados. La tecla de quitar

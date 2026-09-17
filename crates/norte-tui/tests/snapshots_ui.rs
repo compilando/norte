@@ -728,6 +728,7 @@ fn snapshot_extensions_80x24() {
         }],
         errors: Vec::new(),
         cursor: 0,
+        foco: norte_tui::app::ExtFoco::Lista,
         config: None,
     });
     let text = render_80x24(&app);
@@ -775,6 +776,7 @@ fn snapshot_extensions_description_hostil_80x24() {
         }],
         errors: Vec::new(),
         cursor: 0,
+        foco: norte_tui::app::ExtFoco::Lista,
         config: None,
     });
     let text = render_80x24(&app);
@@ -839,6 +841,7 @@ fn snapshot_extensions_ficha_con_ajustes_80x24() {
         }],
         errors: Vec::new(),
         cursor: 0,
+        foco: norte_tui::app::ExtFoco::Lista,
         config: Some(norte_tui::app::PluginConfigPanel {
             plugin_id: "org.norte.file-icons".into(),
             plugin_name: "File icons".into(),
@@ -883,6 +886,7 @@ fn snapshot_plugin_config_panel_80x24() {
         plugins: Vec::new(),
         errors: Vec::new(),
         cursor: 0,
+        foco: norte_tui::app::ExtFoco::Lista,
         config: Some(norte_tui::app::PluginConfigPanel {
             plugin_id: "org.norte.demo".into(),
             plugin_name: "Demo".into(),

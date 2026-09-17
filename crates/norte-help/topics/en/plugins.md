@@ -60,6 +60,15 @@ uninstall, help. Each button does exactly what its key does; the keys are in
 the footer. Clicking a row selects it, and clicking the selected row opens
 its settings, as `Enter` does.
 
+Without a mouse: `Tab` moves the focus between the list and the buttons, one
+at a time, and returns to the list after the last one. The button that holds
+it lights up and the list's cursor dims, so there is no doubt about where the
+keys go; `Enter` fires the focused button. Moving the cursor through the list
+hands the focus back to it, because the buttons belong to the selected
+extension. `Tab` is not in the footer — that is already full — and does
+nothing when the window is too narrow to paint the card, which is when there
+is no button to go to.
+
 Extensions come in from the command line: `norte plugin install <dir>` brings
 one in unapproved, and `norte plugin list` shows the same two facts as this
 screen. They leave from either side. The remove key (and, in the window, the
