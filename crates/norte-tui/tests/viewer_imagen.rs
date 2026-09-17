@@ -11,7 +11,7 @@ use norte_proto::methods::PluginThumbnail;
 use norte_tui::app::{App, Modal, Pane};
 use norte_tui::kitty_graphics::{escape_borrar, escape_colocar};
 use norte_tui::viewer_open::{
-    ImagenColocada, Modo, aviso_de_imagen, imagen_desde_miniatura, modo_efectivo,
+    ImagenColocada, Miniatura, Modo, aviso_de_imagen, imagen_desde_miniatura, modo_efectivo,
 };
 use ratatui::layout::Rect;
 
@@ -191,8 +191,9 @@ fn thumb(mimetype: &str) -> PluginThumbnail {
 fn una_miniatura_jpeg_se_descarta() {
     let imagen = imagen_desde_miniatura(&vp("mem:///x.jpg"), thumb("image/jpeg"));
     assert!(
-        imagen.is_none(),
-        "kitty no sabe f= para JPEG: debe descartarse, no colocarse mal"
+        matches!(imagen, Miniatura::FormatoAjeno),
+        "kitty no sabe f= para JPEG: debe descartarse, no colocarse mal — y \
+         descartarse DICIENDO que fue el formato, no como un «no hay»: {imagen:?}"
     );
 }
 
@@ -201,7 +202,10 @@ fn una_miniatura_jpeg_se_descarta() {
 #[test]
 fn una_miniatura_webp_se_descarta() {
     let imagen = imagen_desde_miniatura(&vp("mem:///x.webp"), thumb("image/webp"));
-    assert!(imagen.is_none(), "kitty no sabe f= para WebP");
+    assert!(
+        matches!(imagen, Miniatura::FormatoAjeno),
+        "kitty no sabe f= para WebP: {imagen:?}"
+    );
 }
 
 /// El PNG, el único formato que el protocolo de kitty entiende, SÍ se
@@ -210,7 +214,9 @@ fn una_miniatura_webp_se_descarta() {
 #[test]
 fn una_miniatura_png_se_coloca() {
     let path = vp("mem:///x.png");
-    let imagen = imagen_desde_miniatura(&path, thumb("image/png")).expect("un PNG sí se coloca");
+    let imagen = imagen_desde_miniatura(&path, thumb("image/png"))
+        .colocable()
+        .expect("un PNG sí se coloca");
     assert_eq!(imagen.mimetype, "image/png");
     assert_eq!(imagen.path, path);
 }
@@ -496,18 +502,18 @@ fn sin_visor_no_hay_nada_que_soltar() {
 #[test]
 fn en_bloques_sin_previewer_el_visor_lo_dice() {
     // Un hexview silencioso es indistinguible de «norte no sabe hacerlo».
-    let aviso = aviso_de_imagen(Modo::Bloques, false);
+    let aviso = aviso_de_imagen(Modo::Bloques, false, false);
     assert!(aviso.is_some(), "hay que decir que falta aprobar el plugin");
 }
 
 #[test]
 fn con_previewer_no_se_avisa_de_nada() {
-    assert!(aviso_de_imagen(Modo::Bloques, true).is_none());
+    assert!(aviso_de_imagen(Modo::Bloques, true, false).is_none());
 }
 
 #[test]
 fn en_off_no_se_avisa_porque_lo_pidio_el_lector() {
-    assert!(aviso_de_imagen(Modo::Nada, false).is_none());
+    assert!(aviso_de_imagen(Modo::Nada, false, false).is_none());
 }
 
 /// Task 5b (hallazgo de revisión de la 6): el mismo agujero de Task 5, pero
@@ -520,7 +526,7 @@ fn en_off_no_se_avisa_porque_lo_pidio_el_lector() {
 /// rama.
 #[test]
 fn en_kitty_sin_miniatura_el_visor_lo_dice() {
-    let aviso = aviso_de_imagen(Modo::Kitty, false);
+    let aviso = aviso_de_imagen(Modo::Kitty, false, false);
     assert!(
         aviso.is_some(),
         "hay que decir que falta aprobar el plugin de miniaturas"
@@ -529,7 +535,37 @@ fn en_kitty_sin_miniatura_el_visor_lo_dice() {
 
 #[test]
 fn con_miniatura_colocada_no_se_avisa_de_nada_en_kitty() {
-    assert!(aviso_de_imagen(Modo::Kitty, true).is_none());
+    assert!(aviso_de_imagen(Modo::Kitty, true, false).is_none());
+}
+
+/// Los DOS motivos por los que en Kitty no hay píxeles no se arreglan
+/// igual, y hasta ahora decían lo mismo: con una extensión de miniaturas
+/// aprobada y encendida que contesta en JPEG, el visor mandaba al lector a
+/// F12 a aprobar lo que ya estaba aprobado. Un aviso que pide lo imposible
+/// es peor que uno que calla.
+#[test]
+fn un_formato_que_kitty_no_coloca_no_manda_a_aprobar_nada() {
+    let falta = aviso_de_imagen(Modo::Kitty, false, false).expect("sin plugin, avisa");
+    let formato = aviso_de_imagen(Modo::Kitty, false, true).expect("con formato ajeno, avisa");
+    assert_ne!(
+        falta, formato,
+        "«no hay extensión» y «la hay y contestó en otro formato» son dos cosas"
+    );
+    assert!(
+        !formato.contains("F12"),
+        "no hay nada que aprobar en F12: la extensión ya está aprobada — {formato}"
+    );
+}
+
+/// Y el formato ajeno sólo manda en Kitty: en bloques los píxeles no pasan
+/// por el protocolo del terminal, así que una miniatura rechazada no dice
+/// nada de esa rama.
+#[test]
+fn el_formato_ajeno_no_cambia_el_aviso_de_bloques() {
+    assert_eq!(
+        aviso_de_imagen(Modo::Bloques, false, true),
+        aviso_de_imagen(Modo::Bloques, false, false)
+    );
 }
 
 /// Las dos ramas piden aprobar EXTENSIONES distintas (`previewer` contra
@@ -538,8 +574,8 @@ fn con_miniatura_colocada_no_se_avisa_de_nada_en_kitty() {
 /// no avisar (el encargo lo llama explícitamente).
 #[test]
 fn el_aviso_de_bloques_y_el_de_kitty_son_textos_distintos() {
-    let bloques = aviso_de_imagen(Modo::Bloques, false).expect("bloques avisa");
-    let kitty = aviso_de_imagen(Modo::Kitty, false).expect("kitty avisa");
+    let bloques = aviso_de_imagen(Modo::Bloques, false, false).expect("bloques avisa");
+    let kitty = aviso_de_imagen(Modo::Kitty, false, false).expect("kitty avisa");
     assert_ne!(
         bloques, kitty,
         "cada modo pide aprobar una extensión distinta"

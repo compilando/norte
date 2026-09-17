@@ -108,6 +108,19 @@ que no está aprobado se rechaza. Sin una extensión aprobada Y activada te
 quedas en hexview, y la barra de estado del visor lo dice ahora, con un aviso
 que nombra F12. De los dos pasos, y de qué más concede aprobar, va [[plugins]].
 
+Dos detalles que sólo se notan cuando pasan. El primero: por el camino `kitty`
+sólo se colocan miniaturas en **PNG**. El protocolo del terminal no tiene forma
+de anunciar un JPEG ni un WebP, y un `thumbnail` puede devolver cualquiera de
+los tres —el de este repositorio cae a JPEG cuando el PNG no cabe en su tope de
+tamaño—. Una miniatura que llega en otro formato se descarta en vez de mandarse
+mal, y el visor lo dice con un aviso distinto del de «falta aprobar»: ahí no hay
+nada que aprobar, la extensión está aprobada y contestó.
+
+El segundo: `[ui] images` se relee en caliente, pero **no cambia un visor que ya
+está abierto**. El modo se fija al abrirlo, porque cambiarlo a mitad dejaría
+píxeles colocados que ya nadie sabe borrar. Ciérralo y vuelve a abrirlo para ver
+el valor nuevo.
+
 > 💡 Dentro de tmux los píxeles no atraviesan la sesión sin `allow-passthrough` activado. La sonda del arranque lo detecta y cae a medios bloques por su cuenta, así que ahí no ves ningún aviso: no falta nada, es lo correcto.
 
 # Darle el fichero a otro programa

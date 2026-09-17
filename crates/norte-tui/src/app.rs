@@ -601,6 +601,15 @@ pub struct App {
     /// lo comparten los dos frontends; la ventana pinta imágenes por su
     /// propio camino y no necesita este campo.
     pub viewer_imagen: Option<crate::viewer_open::ImagenColocada>,
+    /// El fichero cuya miniatura llegó en un formato que kitty no sabe
+    /// colocar, si pasó (`Miniatura::FormatoAjeno`).
+    ///
+    /// Va el PATH y no un `bool` por la misma razón que
+    /// [`Self::viewer_imagen`] lleva el suyo: el lector puede estar viendo
+    /// otro fichero mientras esto sigue en pie, y un aviso sobre el fichero
+    /// de antes describe algo que ya no está en pantalla. El aviso sólo
+    /// sale cuando esto nombra el fichero que el visor enseña.
+    pub viewer_miniatura_ajena: Option<VPath>,
     /// El [`crate::viewer_open::Modo`] con el que se abrió [`Self::viewer`]
     /// — resuelto UNA VEZ, al abrir (`viewer_open::open_viewer`), no
     /// recalculado en cada frame.
@@ -1219,6 +1228,7 @@ impl App {
             board: crate::tasks::TaskBoard::default(),
             viewer: None,
             viewer_imagen: None,
+            viewer_miniatura_ajena: None,
             viewer_modo: crate::viewer_open::Modo::Nada,
             help: None,
             pending_collisions: std::collections::VecDeque::new(),

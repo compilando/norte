@@ -309,6 +309,13 @@ viewer-image-needs-previewer = no image previewer approved yet — press F12
 # the reader at the wrong one is worse than not warning at all. Same 80
 # column budget with `pos` next to it.
 viewer-image-needs-thumbnail = no image thumbnail plugin approved yet — press F12
+# The OTHER reason there are no pixels under Kitty, and F12 does not fix it:
+# the thumbnail extension is approved, enabled and answered — in JPEG or
+# WebP, and kitty's protocol only places PNG (`f=100`). With the notice
+# above the reader went to F12, found everything in order and was left
+# without a clue. The mimetype is NOT interpolated: it is THIRD-PARTY text
+# and the status bar is no place to mask it. Same 80 column budget.
+viewer-image-thumbnail-format = the thumbnail extension did not answer in PNG
 eol-mixed = mixed EOL
 eol-none = no EOL
 
