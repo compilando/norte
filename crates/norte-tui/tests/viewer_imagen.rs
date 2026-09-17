@@ -134,6 +134,16 @@ fn colocar_lleva_el_id_el_tamano_y_base64() {
         esc.contains("c=40") && esc.contains("r=20"),
         "el hueco: {esc}"
     );
+    // Ronda de arreglo 2 (MENOR nuevo): sin `C=1` colocar mueve el cursor y
+    // puede scrollear la pantalla (CRÍTICO 1); sin `q=2` el terminal
+    // contesta y su respuesta entra al lector de eventos como pulsaciones
+    // sueltas (CRÍTICO 3). Ninguno de los dos tenía un aserto que lo
+    // impidiera desaparecer en silencio.
+    assert!(esc.contains("C=1"), "no mueve el cursor al colocar: {esc}");
+    assert!(
+        esc.contains("q=2"),
+        "calla la respuesta del terminal: {esc}"
+    );
     assert!(esc.ends_with("\x1b\\"), "cierra el APC: {esc}");
     // Los bytes van en base64 y NO en crudo: un APC se termina con
     // `\x1b\\`, y un PNG contiene esa pareja de bytes con toda normalidad.

@@ -430,7 +430,17 @@ pub async fn run(
                     .viewer
                     .as_ref()
                     .is_some_and(|v| app.viewer_imagen.as_ref().is_some_and(|i| i.path == v.path));
-            let rect = coloca.then(|| ui::rect_del_visor(app, painted_area));
+            // Revisión, ronda 2 (rotura del CRÍTICO 2): un `rect` de ancho o
+            // alto cero (terminal muy bajo, el cuerpo se queda sin sitio
+            // tras las barras) no se filtra — y en kitty `c=0,r=0` significa
+            // «tamaño NATURAL de la imagen», así que sin este guardia una
+            // miniatura se colocaría a tamaño de píxeles sobre la pantalla
+            // entera. `is_empty()` no importaba antes de aplicar
+            // `block_inner`: el marco CON bordes llegaba a cero dos filas y
+            // dos columnas más tarde que su interior.
+            let rect = coloca
+                .then(|| ui::rect_del_visor(app, painted_area))
+                .filter(|r| !r.is_empty());
             match (&mut app.viewer_imagen, rect) {
                 (Some(imagen), Some(rect)) => {
                     // IMPORTANTE 4: sin este atajo, un visor QUIETO

@@ -557,9 +557,17 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
 /// puedan salir sin construir un registro de overlays que esta fase no pide;
 /// si tocas la cadena de `if let Some(x) = &app.x` de arriba, toca esta lista
 /// también.
+///
+/// Revisión, ronda 2: `app.menu` faltaba. El desplegable se pinta dentro del
+/// CUERPO (`chrome::draw_menu`, `y = area.y + 1`, sobre el interior del
+/// visor cuando está abierto), y `f9`/`alt+m` están en `[global]` — se
+/// fusiona en TODAS las pantallas, así que abrir el menú con el visor
+/// delante es alcanzable. `app.menu_bar` (la barra FIJA) no hace falta:
+/// vive fuera de `body_area`, nunca compite por el hueco del visor.
 #[must_use]
 pub fn algo_encima_del_visor(app: &App) -> bool {
-    app.help.is_some()
+    app.menu.is_some()
+        || app.help.is_some()
         || app.theme_picker.is_some()
         || app.columns_picker.is_some()
         || app.profile_picker.is_some()
