@@ -74,12 +74,21 @@ pub fn modo_efectivo(cfg: norte_config::Images, soporta: bool) -> Modo {
 /// avisar. En [`Modo::Nada`] el lector pidió hexview él mismo
 /// (`images = "off"`): ahí no hay nada que aprobar y no se avisa.
 #[must_use]
-pub fn aviso_de_imagen(modo: Modo, no_hace_falta_avisar: bool) -> Option<String> {
+pub fn aviso_de_imagen(
+    modo: Modo,
+    no_hace_falta_avisar: bool,
+    formato_ajeno: bool,
+) -> Option<String> {
     if no_hace_falta_avisar {
         return None;
     }
     match modo {
         Modo::Bloques => Some(t("viewer-image-needs-previewer")),
+        // Los dos motivos por los que en Kitty no hay píxeles piden cosas
+        // DISTINTAS del lector, y sólo uno se arregla desde F12. Mandar a
+        // aprobar lo que ya está aprobado es peor que no decir nada: el
+        // lector va, lo encuentra todo en orden, y se queda sin pista.
+        Modo::Kitty if formato_ajeno => Some(t("viewer-image-thumbnail-format")),
         Modo::Kitty => Some(t("viewer-image-needs-thumbnail")),
         Modo::Nada => None,
     }
@@ -161,6 +170,38 @@ pub struct ImagenColocada {
     pub puesta_en: Option<ratatui::layout::Rect>,
 }
 
+/// Lo que salió de pedir la miniatura de un fichero, con el MOTIVO cuando
+/// no hay ninguna que colocar.
+///
+/// Un `Option<ImagenColocada>` decía «no hay» y nada más, y los dos «no
+/// hay» piden cosas distintas del lector: sin plugin `thumbnail` aprobado
+/// hay que ir a F12 y aprobarlo; con uno aprobado que contestó en JPEG no
+/// hay nada que aprobar, y ese mismo aviso manda a una pantalla donde todo
+/// se ve correcto. Un visor que pide lo imposible es peor que uno callado.
+#[derive(Debug, Clone, Default)]
+pub enum Miniatura {
+    /// No hubo ninguna: ningún plugin `thumbnail` aprobado y encendido, la
+    /// llamada falló, o el modo no pedía miniatura.
+    #[default]
+    Ninguna,
+    /// Un plugin contestó, pero en un formato que kitty no sabe colocar
+    /// —sólo PNG— así que se descartó ([`imagen_desde_miniatura`]).
+    FormatoAjeno,
+    /// Lista para colocar.
+    Colocable(ImagenColocada),
+}
+
+impl Miniatura {
+    /// La imagen, si la hay; descarta el motivo.
+    #[must_use]
+    pub fn colocable(self) -> Option<ImagenColocada> {
+        match self {
+            Self::Colocable(imagen) => Some(imagen),
+            Self::Ninguna | Self::FormatoAjeno => None,
+        }
+    }
+}
+
 /// El siguiente id de imagen que no se ha usado nunca en este proceso.
 ///
 /// Propio de este módulo — no del contador de `SlotId` de [`App`], que es
@@ -173,7 +214,7 @@ fn mint_image_id() -> u32 {
 }
 
 /// Convierte lo que devolvió `plugin.thumbnail` en una [`ImagenColocada`], o
-/// `None` si kitty no sabe colocar ese formato.
+/// dice POR QUÉ no hay ninguna que colocar ([`Miniatura`]).
 ///
 /// Revisión de rama, hallazgo 1: `escape_colocar` manda `f=100` FIJO —el
 /// protocolo de kitty no tiene una clave `f=` para JPEG ni para WebP, sólo
@@ -186,18 +227,23 @@ fn mint_image_id() -> u32 {
 /// [`crate::kitty_graphics::marcar_colocada`] ya anotó el id así que nadie
 /// reintenta, y [`no_hace_falta_avisar_de_miniatura`] ve una
 /// [`ImagenColocada`] para este fichero y calla el aviso — un visor vacío
-/// sin ningún rastro de por qué. Descartar aquí reengancha el camino que ya
-/// funciona: sin [`App::viewer_imagen`](crate::app::App::viewer_imagen), el
-/// aviso `viewer-image-needs-thumbnail` vuelve a salir.
+/// sin ningún rastro de por qué.
+///
+/// Descartarlo devuelve el aviso, pero el aviso de «falta aprobar una
+/// extensión» es FALSO en este caso concreto: la extensión está aprobada y
+/// encendida, contestó, y lo que no sirve es su formato. Mandar al lector a
+/// F12 a aprobar lo que ya está aprobado es un callejón sin salida. Por eso
+/// esto devuelve [`Miniatura::FormatoAjeno`] y no un `None` sin motivo: el
+/// aviso que sale entonces es otro y dice lo que pasa.
 #[must_use]
 pub fn imagen_desde_miniatura(
     path: &VPath,
     thumb: norte_proto::methods::PluginThumbnail,
-) -> Option<ImagenColocada> {
+) -> Miniatura {
     if thumb.mimetype != "image/png" {
-        return None;
+        return Miniatura::FormatoAjeno;
     }
-    Some(ImagenColocada {
+    Miniatura::Colocable(ImagenColocada {
         path: path.clone(),
         bytes: thumb.bytes,
         mimetype: thumb.mimetype,
@@ -221,6 +267,10 @@ impl App {
     pub fn close_viewer(&mut self) {
         self.viewer = None;
         self.viewer_imagen = None;
+        // Y el motivo por el que no había imagen: sin visor no hay a quién
+        // avisar, y dejarlo puesto haría que el PRÓXIMO visor del mismo
+        // fichero heredase un aviso que nadie ha vuelto a comprobar.
+        self.viewer_miniatura_ajena = None;
         // `viewer_modo` sin visor no significa nada — se deja en `Nada`
         // como `App::new`, para que un `viewer_modo` viejo (Hallazgo 3) no
         // sobreviva a este visor y confunda al que abra el siguiente antes
@@ -310,7 +360,7 @@ pub async fn viewer_for(
     backend: &Backend,
     path: &VPath,
     modo: Modo,
-) -> Result<(Viewer, Option<ImagenColocada>), Error> {
+) -> Result<(Viewer, Miniatura), Error> {
     // El ancho del terminal es el del visor a pantalla completa, y es lo que
     // un previewer de imagen usa para encoger (proto 0.66.0). Sin terminal
     // —tests, un pipe— no hay pista y el guest elige su ancho.
@@ -347,7 +397,7 @@ pub async fn viewer_for_width(
     path: &VPath,
     columns: Option<u32>,
     modo: Modo,
-) -> Result<(Viewer, Option<ImagenColocada>), Error> {
+) -> Result<(Viewer, Miniatura), Error> {
     let (bytes, truncated) = read_head(backend, path).await?;
     // Por BYTES, antes de que la cadena de preview de plugin —que puede
     // sustituir la vista cruda entera— tenga oportunidad de esconder el
@@ -368,7 +418,7 @@ pub async fn viewer_for_width(
             Err(_) => Viewer::new(path.clone(), bytes, truncated),
         },
     };
-    let imagen = if es_imagen && modo == Modo::Kitty {
+    let miniatura = if es_imagen && modo == Modo::Kitty {
         // El lado mayor en PÍXELES que cabe en el hueco. Una celda de
         // terminal es aproximadamente 8x16 px y no hay forma portable de
         // preguntarlo, así que se estima: pasarse sólo cuesta que el
@@ -379,11 +429,13 @@ pub async fn viewer_for_width(
             .await
             .ok()
             .flatten()
-            .and_then(|thumb| imagen_desde_miniatura(path, thumb))
+            .map_or(Miniatura::Ninguna, |thumb| {
+                imagen_desde_miniatura(path, thumb)
+            })
     } else {
-        None
+        Miniatura::Ninguna
     };
-    Ok((viewer, imagen))
+    Ok((viewer, miniatura))
 }
 
 /// Abre el viewer a pantalla completa leyendo la CABECERA vía el core (regla
@@ -409,9 +461,14 @@ pub async fn open_viewer(
         crate::console::wait_painting(events, app, started, viewer_for(backend, &path, modo)).await;
     app.busy = None;
     match esperado {
-        Waited::Done(Ok((viewer, imagen))) => {
+        Waited::Done(Ok((viewer, miniatura))) => {
+            // El formato ajeno se anota ANTES de consumir la miniatura, y
+            // contra ESTE path: es lo que distingue «no hay extensión de
+            // miniaturas» de «la hay, contestó, y su formato no sirve».
+            app.viewer_miniatura_ajena =
+                matches!(miniatura, Miniatura::FormatoAjeno).then(|| path.clone());
             app.viewer = Some(viewer);
-            app.viewer_imagen = imagen;
+            app.viewer_imagen = miniatura.colocable();
             // Hallazgo 3: el modo con que se PIDIÓ la miniatura, fijado
             // aquí y no recalculado después — ver el rustdoc de
             // `App::viewer_modo`.

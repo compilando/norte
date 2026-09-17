@@ -107,6 +107,19 @@ approved AND enabled you stay on hexview, and the viewer's status line says so
 now, in a warning that names F12. See [[plugins]] for the two steps, and for
 what else approving grants.
 
+Two details you only notice when they happen. First: the `kitty` path places
+**PNG** thumbnails only. The terminal's protocol has no way to announce a JPEG
+or a WebP, and a `thumbnail` plugin may return any of the three — the one in
+this repository falls back to JPEG when the PNG does not fit its size cap. A
+thumbnail that arrives in another format is discarded rather than sent wrong,
+and the viewer says so with a notice different from the "approve one" warning:
+there is nothing to approve there, the extension is approved and it answered.
+
+Second: `[ui] images` is re-read live, but it **does not change a viewer that
+is already open**. The mode is pinned when it opens, because switching it
+midway would leave placed pixels nobody knows how to erase. Close it and open
+it again to see the new value.
+
 > 💡 Inside tmux, pixels do not cross the session without `allow-passthrough` turned on. The startup probe detects that and falls back to half blocks on its own, so you see no warning there either: nothing is missing, that is the correct outcome.
 
 # Handing the file to another program

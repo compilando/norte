@@ -173,7 +173,15 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
             crate::viewer_open::no_hace_falta_avisar_de_imagen(viewer)
         }
     };
-    let aviso_imagen = crate::viewer_open::aviso_de_imagen(modo, no_hace_falta_avisar);
+    // Contra el path del visor: una miniatura rechazada del fichero de
+    // ANTES no dice nada de éste (misma trampa que documenta
+    // `no_hace_falta_avisar_de_miniatura` para la imagen ya colocada).
+    let formato_ajeno = app
+        .viewer_miniatura_ajena
+        .as_ref()
+        .is_some_and(|p| *p == viewer.path);
+    let aviso_imagen =
+        crate::viewer_open::aviso_de_imagen(modo, no_hace_falta_avisar, formato_ajeno);
     // `rect_del_visor` — la MISMA función que usa el run loop para el APC,
     // no una resta a mano — es lo que garantiza que el hueco que se deja en
     // blanco abajo y el hueco donde caen los píxeles sean estructuralmente

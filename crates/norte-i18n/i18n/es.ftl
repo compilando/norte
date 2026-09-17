@@ -311,6 +311,13 @@ viewer-image-needs-previewer = falta aprobar una extensión de vista previa de i
 # lector a aprobar la equivocada es peor que no avisar. Mismo presupuesto de
 # 80 columnas con `pos` al lado.
 viewer-image-needs-thumbnail = falta aprobar una extensión de miniaturas de imagen — F12
+# El OTRO motivo por el que en Kitty no hay píxeles, y no se arregla desde
+# F12: la extensión de miniaturas está aprobada, encendida y contestó, pero
+# en JPEG o WebP, y el protocolo de kitty sólo coloca PNG (`f=100`). Con el
+# aviso de arriba el lector iba a F12, lo encontraba todo en orden y se
+# quedaba sin pista. No se interpola el mimetype: es texto de un TERCERO y
+# la barra no es sitio para enmascararlo. Mismo presupuesto de 80 columnas.
+viewer-image-thumbnail-format = la extensión de miniaturas no contestó en PNG
 eol-mixed = EOL mixto
 eol-none = sin EOL
 

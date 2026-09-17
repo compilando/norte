@@ -35,7 +35,10 @@ independently through `PROTOCOL_VERSION`.
   picks what happens next: `auto` (the default) uses real pixels when the
   probe said yes and falls back to coloured half-blocks otherwise; `kitty` and
   `blocks` force one of the two without asking the terminal again; `off`
-  leaves the viewer on hexview. The pixels are fed by the same `thumbnail`
+  leaves the viewer on hexview. The key is re-read live but does NOT change a
+  viewer that is already open: the mode is pinned when it opens, because
+  switching midway would leave placed pixels nobody knows how to erase. The
+  pixels are fed by the same `thumbnail`
   plugin kind the window already uses (`image-thumb`, protocol 0.73.0, ADR
   0107) and are written to the terminal after each frame, outside ratatui,
   because a graphics escape does not fit in a cell — erased the moment the
@@ -44,7 +47,13 @@ independently through `PROTOCOL_VERSION`.
   `previewer` plugin (`image-ansi`); what is new is that the viewer now SAYS
   when the extension it needs — `image-thumb` for pixels, `image-ansi` for
   half-blocks, they are not interchangeable — is not approved and enabled,
-  instead of silently showing raw bytes. Inside tmux without
+  instead of silently showing raw bytes. Only **PNG** thumbnails are placed:
+  kitty's protocol cannot announce a JPEG or a WebP, and a `thumbnail` plugin
+  may return any of the three (this repository's falls back to JPEG when the
+  PNG does not fit its size cap). One that arrives in another format is
+  discarded rather than sent wrong, and the viewer says THAT, with a notice
+  distinct from "approve one" — pointing a reader at F12 to approve what is
+  already approved is a dead end. Inside tmux without
   `allow-passthrough` the probe correctly reports no pixel support and the
   viewer falls back to half-blocks on its own — and still warns exactly as it
   would outside tmux if no `image-ansi` is approved yet: falling back to
