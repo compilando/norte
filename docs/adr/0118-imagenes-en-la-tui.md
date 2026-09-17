@@ -45,19 +45,19 @@ outside the frame instead of inside it:
      silently (memory `funcion-compartida-no-basta`), and an early version of
      this code proved it: it returned the frame WITH its border, two cells off
      on each axis from the interior `draw_viewer` actually leaves empty.
-   - **Erasing has four call sites plus the panic hook.** Nothing in ratatui's
-     diff-based repaint knows an image is on screen, so nothing erases it for
-     free. It is erased in the run loop when the frame that would place a
-     different id or `None` runs (covers closing the viewer and moving it to
-     another file, by the ordinary comparison against process state),
-     in `suspend::suspend_terminal` before yielding the terminal, in
-     `tty::restore` before leaving the alternate screen, and in the panic
-     hook — a crash while an image is placed must not leave it stuck on top
-     of the backtrace the hook exists to make readable. All four go through
-     the single `kitty_graphics::borrar_colocada`, keyed off one piece of
-     process state (`COLOCADA`, an atomic id) rather than four places trusting
-     `App` to still be reachable — two of the four (suspend, exit) have no
-     guaranteed next frame that would run the normal comparison.
+   - **Erasing has four call sites, and the panic hook is one of them.**
+     Nothing in ratatui's diff-based repaint knows an image is on screen, so
+     nothing erases it for free. The four are: the run loop, when the frame
+     that would place a different id or `None` runs (covers closing the
+     viewer and moving it to another file, by the ordinary comparison against
+     process state); `suspend::suspend_terminal`, before yielding the
+     terminal; `tty::restore`, before leaving the alternate screen; and the
+     panic hook — a crash while an image is placed must not leave it stuck on
+     top of the backtrace the hook exists to make readable. All four go
+     through the single `kitty_graphics::borrar_colocada`, keyed off one piece
+     of process state (`COLOCADA`, an atomic id) rather than four places
+     trusting `App` to still be reachable — two of the four (suspend, exit)
+     have no guaranteed next frame that would run the normal comparison.
    - **The hole declared to the terminal is the block's INTERIOR, not its
      frame.** `c`/`r` in the placement escape are cells, and the terminal
      fits the raster to them; giving it the bordered rect would paint two
@@ -135,9 +135,25 @@ themselves and nothing is missing.
   hexview, never to an error. This is the same degradation ladder ADR 0037
   already committed the viewer to; phase 5 adds a rung, it does not change the
   contract.
-- Positive: `[ui] images` is documented as terminal-only, the same pattern
-  already established for `[ui] mouse` and `[ui] alt_menu` (ADR 0097): the
-  window paints images through its own webview and does not read this key.
+- Positive: `[ui] images` staying terminal-only follows the pattern already
+  established for `[ui] mouse` and `[ui] alt_menu` (ADR 0097): a key whose
+  meaning is inherently about a terminal protocol does not need a window
+  equivalent to be a coherent design, and the window's own image path (its
+  webview decoder, plus the `thumbnail` plugin for what it cannot decode) is
+  not missing anything this key would give it.
+- Limit — **`[ui] images` governs the TUI only; it is not a knob for the
+  window.** The key does not appear in `norte-gui-tauri` or
+  `norte-ui-host` — nothing there reads it, nothing there offers it as a
+  setting. `Images` (the `auto`/`kitty`/`blocks`/`off` enum) and
+  `modo_efectivo` live in `norte-config`/`norte-tui` and are never consulted
+  by the window's own render path. Someone who wants to change how the
+  WINDOW shows images — force it off, prefer a plugin's rendering over its
+  own decoder — has no lever here and would need one built on the window's
+  side; this ADR settles nothing for that frontend. It is the one place in
+  this phase where "both frontends" (CLAUDE.md, "extensible, TUI+window")
+  was deliberately not attempted, and is recorded as a gap rather than
+  folded into the terminal-only decision as if it closed the question for
+  both.
 - Negative / residual risk — **a read race on `/dev/tty` that is possible but
   unobserved.** The probe's read runs on a separate thread because a
   deadline-bounded read on `/dev/tty` needs `poll(2)`, which is `unsafe` and

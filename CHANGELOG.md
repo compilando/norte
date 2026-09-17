@@ -27,10 +27,12 @@ independently through `PROTOCOL_VERSION`.
   half-blocks, they are not interchangeable — is not approved and enabled,
   instead of silently showing raw bytes. Inside tmux without
   `allow-passthrough` the probe correctly reports no pixel support and the
-  viewer falls back to half-blocks with no warning, because nothing is
-  missing there. Sixel is out of scope: it needs a colour quantizer this
-  project has no real use for. The window is unaffected — it paints images
-  through its own webview and does not read `[ui] images`.
+  viewer falls back to half-blocks on its own — and still warns exactly as it
+  would outside tmux if no `image-ansi` is approved yet: falling back to
+  half-blocks does not by itself mean the file is shown. Sixel is out of
+  scope: it needs a colour quantizer this project has no real use for. The
+  window is unaffected — it paints images through its own webview and does
+  not read `[ui] images`.
 - **The core can measure what a directory is made of** (protocol 0.75.0,
   ADR 0117). `fs.dir_usage` walks one directory as a cancellable task and
   `fs.dir_usage_report` collects what it measured: one entry per child with the
