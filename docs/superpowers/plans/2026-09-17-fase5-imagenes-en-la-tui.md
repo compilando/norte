@@ -99,7 +99,7 @@ el piloto confirma que los bloques se ven bien ahí. Se documenta en la ayuda.
 
 ---
 
-### Tarea 1 — La sonda de kitty (PUERTA)
+### Task 1 — La sonda de kitty (PUERTA)
 
 **Ficheros:**
 - Crear: `crates/norte-tui/src/kitty_graphics.rs`
@@ -290,7 +290,7 @@ Mensaje: `feat(tui): preguntar al terminal si sabe pintar gráficos`
 
 ---
 
-### Tarea 2 — `[ui] images`
+### Task 2 — `[ui] images`
 
 **Ficheros:**
 - Modificar: `crates/norte-config/src/schema.rs` (junto a `processes_panel`, :438)
@@ -451,7 +451,7 @@ Mensaje: `feat(config): [ui] images elige cómo se ve una imagen en la TUI`
 
 ---
 
-### Tarea 3 — El visor pide la miniatura
+### Task 3 — El visor pide la miniatura
 
 **Ficheros:**
 - Modificar: `crates/norte-tui/src/viewer_open.rs:82` (`viewer_for_width`)
@@ -588,7 +588,7 @@ Mensaje: `feat(tui): el visor pide la miniatura cuando va a pintar píxeles`
 
 ---
 
-### Tarea 4 — Colocar y borrar
+### Task 4 — Colocar y borrar
 
 **Ficheros:**
 - Modificar: `crates/norte-tui/src/ui/geometry.rs` (`rect_del_visor`)
@@ -619,6 +619,23 @@ fn colocar_lleva_el_id_el_tamano_y_base64() {
     // Los bytes van en base64 y NO en crudo: un APC se termina con
     // `\x1b\\`, y un PNG contiene esa pareja de bytes con toda normalidad.
     assert!(esc.contains("UE5HRkFMU08"), "base64 del contenido: {esc}");
+}
+
+#[test]
+fn un_contenido_grande_se_trocea() {
+    // Una miniatura de verdad no cabe en un solo APC, así que hay que
+    // trocearla: todos los trozos menos el último llevan `m=1` y el último
+    // `m=0`. Sin este test, los de arriba pasan con un `escape_colocar` que
+    // no sabe trocear — 8 bytes nunca llegan al tope.
+    let grande = vec![0u8; 12 * 1024];
+    let esc = escape_colocar(7, &grande, Rect::new(1, 2, 40, 20));
+    let trozos: Vec<&str> = esc.split("\x1b_G").skip(1).collect();
+    assert!(trozos.len() > 1, "una imagen grande va en varios trozos: {}", trozos.len());
+    let (ultimo, previos) = trozos.split_last().expect("hay al menos uno");
+    for t in previos {
+        assert!(t.contains("m=1"), "un trozo que no es el último sigue: {t}");
+    }
+    assert!(ultimo.contains("m=0"), "el último cierra: {ultimo}");
 }
 
 #[test]
@@ -737,7 +754,7 @@ cero que era del `echo` ya mandó a `main` un gate rojo en este proyecto.
 
 ---
 
-### Tarea 5 — Que se note que falta aprobar el plugin
+### Task 5 — Que se note que falta aprobar el plugin
 
 **Ficheros:**
 - Modificar: `crates/norte-tui/src/viewer_open.rs`
@@ -793,7 +810,7 @@ Mensaje: `feat(tui): decir que falta aprobar el previewer en vez de callar`
 
 ---
 
-### Tarea 6 — La ayuda
+### Task 6 — La ayuda
 
 **Ficheros:**
 - Modificar: `crates/norte-help/topics/en/viewer.md`
@@ -824,7 +841,7 @@ Mensaje: `docs(help): cómo se ve una imagen en la TUI`
 
 ---
 
-### Tarea 7 — ADR, changelog, memoria y cierre
+### Task 7 — ADR, changelog, memoria y cierre
 
 **Ficheros:**
 - Crear: `docs/adr/0118-imagenes-en-la-tui.md`
