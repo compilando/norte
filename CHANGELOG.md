@@ -9,6 +9,28 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The terminal viewer shows an image as an image**, not as a hex dump
+  (ADR 0118). At startup the TUI asks the terminal, once, whether it speaks
+  kitty's graphics protocol (an APC query followed by a DA1, so a terminal
+  that stays silent on the first still answers the second). `[ui] images`
+  picks what happens next: `auto` (the default) uses real pixels when the
+  probe said yes and falls back to coloured half-blocks otherwise; `kitty` and
+  `blocks` force one of the two without asking the terminal again; `off`
+  leaves the viewer on hexview. The pixels are fed by the same `thumbnail`
+  plugin kind the window already uses (`image-thumb`, protocol 0.73.0, ADR
+  0107) and are written to the terminal after each frame, outside ratatui,
+  because a graphics escape does not fit in a cell — erased the moment the
+  viewer closes, moves to another file, the terminal is suspended, or norte
+  exits. The half-blocks were already there, painted by an approved
+  `previewer` plugin (`image-ansi`); what is new is that the viewer now SAYS
+  when the extension it needs — `image-thumb` for pixels, `image-ansi` for
+  half-blocks, they are not interchangeable — is not approved and enabled,
+  instead of silently showing raw bytes. Inside tmux without
+  `allow-passthrough` the probe correctly reports no pixel support and the
+  viewer falls back to half-blocks with no warning, because nothing is
+  missing there. Sixel is out of scope: it needs a colour quantizer this
+  project has no real use for. The window is unaffected — it paints images
+  through its own webview and does not read `[ui] images`.
 - **The core can measure what a directory is made of** (protocol 0.75.0,
   ADR 0117). `fs.dir_usage` walks one directory as a cancellable task and
   `fs.dir_usage_report` collects what it measured: one entry per child with the
