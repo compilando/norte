@@ -520,19 +520,22 @@ pub(crate) fn visor_split(app: &App, area: Rect) -> (Rect, Rect) {
     (rows[0], rows[1])
 }
 
-/// El hueco donde el visor a pantalla completa pinta su CONTENIDO: el marco
-/// completo, bordes incluidos — lo mismo que recibe el `Block` de
-/// `draw_viewer`.
+/// El hueco donde el visor a pantalla completa pinta su CONTENIDO de verdad:
+/// el INTERIOR del marco, SIN bordes — donde `draw_viewer` deja las líneas
+/// en blanco cuando hay una imagen colocada.
 ///
 /// `pub` porque el run loop (T4, fase 5 WOW) la necesita tras
-/// `terminal.draw` para saber dónde colocar los píxeles de una imagen: el
-/// interior sin bordes es `block_inner` (privado, sin enlazar) de este mismo
-/// rect, que es exactamente lo que `draw_viewer` usa para su `inner_h`. Sale
-/// de `visor_split` (privado también), la MISMA cuenta que pinta el marco —
-/// no una copia.
+/// `terminal.draw` para saber dónde colocar los píxeles. Revisión, CRÍTICO
+/// 2: la primera versión devolvía el marco CON bordes (`visor_split(...).0`
+/// a secas) — dos celdas de más por eje, justo encima del borde y de las
+/// barras de scroll que `barras_del_visor` pinta ahí — así que ahora aplica
+/// `block_inner` (privado, sin enlazar) ella misma: la coincidencia con el
+/// hueco que `draw_viewer` deja vacío es ESTRUCTURAL, no algo que recordar
+/// en cada llamante. Sale de `visor_split` (privado también), la MISMA
+/// cuenta que pinta el marco — no una copia.
 #[must_use]
 pub fn rect_del_visor(app: &App, area: Rect) -> Rect {
-    visor_split(app, area).0
+    block_inner(visor_split(app, area).0)
 }
 
 /// Como [`sync_layout`], desde el área EXTERNA del panel (la que recibe

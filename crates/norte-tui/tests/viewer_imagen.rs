@@ -161,13 +161,82 @@ fn un_contenido_grande_se_trocea() {
     assert!(ultimo.contains("m=0"), "el último cierra: {ultimo}");
 }
 
-/// `d=i` borra POR ID. Sin el id se borrarían las imágenes de todo el
-/// terminal, incluidas las de otro programa en otra pestaña.
+/// `d=I` (mayúscula) borra la colocación Y libera los bytes que el terminal
+/// guarda para el id — no sólo `d=i` (minúscula), que deja el PNG vivo en la
+/// memoria del terminal para siempre porque `mint_image_id` nunca recicla un
+/// id (ronda de arreglo 1, IMPORTANTE 6: este aserto estaba mal en el
+/// encargo original, no el código que lo seguía). `i=<id>` sigue acotando el
+/// borrado a ESTA imagen: sin él se borrarían las de todo el terminal,
+/// incluidas las de otro programa en otra pestaña.
 #[test]
-fn borrar_nombra_solo_ese_id() {
+fn borrar_nombra_solo_ese_id_y_libera_los_datos() {
     let esc = escape_borrar(7);
     assert!(
-        esc.contains("a=d") && esc.contains("d=i") && esc.contains("i=7"),
+        esc.contains("a=d") && esc.contains("d=I") && esc.contains("i=7"),
         "{esc}"
+    );
+}
+
+/// MENOR 8 (ronda de arreglo 1): el rect que el run loop manda al terminal
+/// (`ui::rect_del_visor`) tiene que ser el MISMO que `draw_viewer` deja en
+/// blanco cuando hay una imagen colocada — no dos cuentas del mismo hueco
+/// que puedan divergir en silencio (memoria `funcion-compartida-no-basta`).
+///
+/// Sin este test, `rect_del_visor` podía devolver el marco CON bordes (el
+/// bug del CRÍTICO 2) y nada lo habría cazado: los tests de arriba sólo
+/// miran la FORMA del escape, nunca dónde cae de verdad. Este renderiza de
+/// verdad y comprueba las CELDAS.
+#[test]
+fn el_rect_del_visor_es_el_hueco_que_draw_viewer_deja_en_blanco() {
+    let dir = vp("mem:///");
+    let mut app = app_en(&dir);
+    let path = vp("mem:///x.png");
+    app.viewer = Some(norte_tui::viewer::Viewer::new(
+        path.clone(),
+        b"\x89PNG\r\n\x1a\n".to_vec(),
+        false,
+    ));
+    app.viewer_imagen = Some(ImagenColocada {
+        path,
+        bytes: vec![0u8; 4],
+        width: 8,
+        height: 4,
+        id: 7,
+        puesta_en: None,
+    });
+    let area = Rect::new(0, 0, 40, 12);
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+            .expect("terminal de test");
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, &app))
+        .expect("draw");
+    let hueco = norte_tui::ui::rect_del_visor(&app, area);
+    assert!(
+        hueco.width > 0 && hueco.height > 0,
+        "el hueco no puede ser vacío en un terminal de {area:?}: {hueco:?}"
+    );
+    let buf = terminal.backend().buffer();
+    for y in hueco.top()..hueco.bottom() {
+        for x in hueco.left()..hueco.right() {
+            assert_eq!(
+                buf[(x, y)].symbol(),
+                " ",
+                "la celda ({x},{y}) del hueco debería estar en blanco con la \
+                 imagen colocada"
+            );
+        }
+    }
+    // Y el marco, justo por ENCIMA del hueco, NO está en blanco: si lo
+    // estuviera, el test de arriba pasaría con cualquier rect más grande que
+    // el real — exactamente el bug del CRÍTICO 2, que se pasaba de los
+    // bordes y tapaba el marco con `z=0`.
+    let borde_y = hueco.top() - 1;
+    let fila: String = (0..area.width)
+        .map(|x| buf[(x, borde_y)].symbol().chars().next().unwrap_or(' '))
+        .collect();
+    assert!(
+        fila.contains(['┌', '─', '┐']),
+        "encima del hueco sigue el marco del visor, no más blanco: {fila:?}"
     );
 }

@@ -540,6 +540,43 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     draw_key_bar(frame, app);
 }
 
+/// ¿Hay algo pintado ENCIMA del visor en este frame?
+///
+/// Revisión, IMPORTANTE 5: los píxeles de kitty se pintan por FUERA de
+/// ratatui y con `z=0` (por delante del texto), así que sobreviven a
+/// cualquier repintado de celdas que `draw` haga DESPUÉS del visor — abrir
+/// F1 o la paleta sobre un visor con imagen la dejaba tapada por la
+/// miniatura, justo la clase de bug que el comentario de [`draw`] (arriba)
+/// dice haber arreglado para el propio visor. El run loop (T4) la consulta
+/// antes de colocar píxeles: con algo encima, no coloca (y borra si algo
+/// estaba puesto).
+///
+/// Repite, A PROPÓSITO, la lista de overlays que [`draw`] pinta DESPUÉS del
+/// visor — ES la misma pregunta, «qué hay por encima», mirada desde el run
+/// loop en vez de desde el pintor. No hay una fuente única de la que las dos
+/// puedan salir sin construir un registro de overlays que esta fase no pide;
+/// si tocas la cadena de `if let Some(x) = &app.x` de arriba, toca esta lista
+/// también.
+#[must_use]
+pub fn algo_encima_del_visor(app: &App) -> bool {
+    app.help.is_some()
+        || app.theme_picker.is_some()
+        || app.columns_picker.is_some()
+        || app.profile_picker.is_some()
+        || app.layout_picker.is_some()
+        || app.connections_picker.is_some()
+        || app.extensions.is_some()
+        || app.nav_popup.is_some()
+        || app.search_dialog.is_some()
+        || app.palette.is_some()
+        || app.splash.is_some()
+        || app.wizard.is_some()
+        || app.settings.is_some()
+        || app.shortcuts.is_some()
+        || app.which_key.is_some()
+        || app.modal.is_some()
+}
+
 /// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto
 /// (nombre/contenido) con un `_` en el activo, los dos toggles regex/case y la
 /// raíz del walk (el `cwd` del pane, no editable) — todo saneado, jamás

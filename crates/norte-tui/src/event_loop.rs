@@ -387,51 +387,95 @@ pub async fn run(
             .area;
         // T4 (fase 5 WOW): los píxeles van DESPUÉS del frame y por fuera de
         // ratatui — un APC no cabe en una celda, y ratatui pinta celdas
-        // (`draw_viewer` ya dejó el hueco vacío cuando hay imagen). Se borra
-        // lo de antes y se coloca lo de ahora en el mismo sitio, de una vez,
-        // para que no haya un frame con la imagen vieja sobre el marco
-        // nuevo. El rect sale de `ui::rect_del_visor(app, painted_area)` —
-        // la MISMA función que usa `draw_viewer`, no una copia (dos cuentas
-        // del mismo hueco divergen en silencio).
+        // (`draw_viewer` ya dejó el hueco vacío cuando hay imagen). El rect
+        // sale de `ui::rect_del_visor(app, painted_area)` — la MISMA función
+        // que usa `draw_viewer`, no una copia (dos cuentas del mismo hueco
+        // divergen en silencio) — y ya es el INTERIOR sin bordes (revisión,
+        // CRÍTICO 2).
         //
         // Cubre por sí solo dos de los cuatro momentos de borrado (cerrar el
         // visor, moverlo a otro fichero): los dos cambian `app.viewer_imagen`
         // ANTES de este punto en la misma vuelta del bucle, así que la
         // comparación de abajo contra lo que de verdad hay en la terminal
-        // (`kitty_graphics::borrar_colocada`, estado de PROCESO) ya lo
-        // resuelve sin código aparte. Los otros dos —ceder la terminal y
-        // salir— no tienen garantizado un frame siguiente que haga esta
-        // cuenta, y por eso llaman a `borrar_colocada` directamente
+        // (`kitty_graphics::borrar_colocada`/`ya_colocada`, estado de
+        // PROCESO) ya lo resuelve sin código aparte. Los otros dos —ceder la
+        // terminal y salir— no tienen garantizado un frame siguiente que haga
+        // esta cuenta, y por eso llaman a `borrar_colocada` directamente
         // (`suspend::suspend_terminal`, `tty::restore`).
         //
         // Un fallo pintando NUNCA tumba la TUI (regla del pintado): se traga
-        // con un `tracing::debug!` dentro de las propias funciones.
+        // con un `tracing::debug!`.
         {
             use std::io::Write as _;
-            // El rect se calcula ANTES de tomar prestado `app.viewer_imagen`
-            // en modo mutable: `rect_del_visor` necesita el `App` entero
-            // (repartos, barras…), y un préstamo mutable de un campo suyo ya
-            // vivo se lo impediría.
-            let rect = app
-                .viewer_imagen
-                .is_some()
-                .then(|| ui::rect_del_visor(app, painted_area));
+            // `coloca` mira TRES cosas, ninguna de las cuales miraba la
+            // primera versión (revisión, CRÍTICO 2/IMPORTANTE 5):
+            // - hay una imagen pedida;
+            // - es la del fichero que el visor enseña AHORA (mismo criterio
+            //   que `draw_viewer`'s `hay_imagen` — si no, se podría colocar
+            //   la miniatura de un fichero que ya no es el que se ve, en la
+            //   ventana entre cambiar `app.viewer` y que `viewer_open`
+            //   actualice `app.viewer_imagen`);
+            // - no hay NADA pintado encima del visor este frame
+            //   (`ui::algo_encima_del_visor`): los píxeles de kitty van por
+            //   delante del texto y sobreviven a cualquier repintado de
+            //   celdas, así que sin este guardia un F1 o una paleta abiertos
+            //   sobre el visor quedaban tapados por la miniatura.
+            //
+            // Se calcula ANTES de tomar prestado `app.viewer_imagen` en modo
+            // mutable: las tres miran el `App` entero, y un préstamo mutable
+            // de un campo suyo ya vivo se lo impediría.
+            let coloca = app.viewer_imagen.is_some()
+                && !ui::algo_encima_del_visor(app)
+                && app
+                    .viewer
+                    .as_ref()
+                    .is_some_and(|v| app.viewer_imagen.as_ref().is_some_and(|i| i.path == v.path));
+            let rect = coloca.then(|| ui::rect_del_visor(app, painted_area));
             match (&mut app.viewer_imagen, rect) {
                 (Some(imagen), Some(rect)) => {
-                    let out = terminal.backend_mut();
-                    crate::kitty_graphics::borrar_colocada(out);
-                    let esc = crate::kitty_graphics::escape_colocar(imagen.id, &imagen.bytes, rect);
-                    match out.write_all(esc.as_bytes()).and_then(|()| out.flush()) {
-                        Ok(()) => {
-                            crate::kitty_graphics::marcar_colocada(imagen.id);
-                            imagen.puesta_en = Some(rect);
-                        }
-                        Err(e) => {
-                            tracing::debug!(
-                                error = %e,
-                                id = imagen.id,
-                                "no se pudo colocar la imagen del visor"
-                            );
+                    // IMPORTANTE 4: sin este atajo, un visor QUIETO
+                    // retransmitía el PNG entero (hasta 1920 px de lado, en
+                    // base64) en cada frame — y el bucle gira aunque nadie
+                    // teclee, `session_tick` lo despierta una vez por
+                    // segundo. `puesta_en` es justo para esto: si el id ya
+                    // es el colocado Y el rect no cambió, no hay nada que
+                    // rehacer.
+                    let ya_puesta = crate::kitty_graphics::ya_colocada(imagen.id)
+                        && imagen.puesta_en == Some(rect);
+                    if !ya_puesta {
+                        let out = terminal.backend_mut();
+                        crate::kitty_graphics::borrar_colocada(out);
+                        let esc =
+                            crate::kitty_graphics::escape_colocar(imagen.id, &imagen.bytes, rect);
+                        // CRÍTICO 1: `a=T` coloca en la posición del CURSOR,
+                        // y tras `terminal.draw` el cursor queda donde acabó
+                        // la última tirada de celdas repintadas — arbitrario,
+                        // y cambia de frame a frame. El cursor se mueve al
+                        // rect ANTES del APC; `C=1` (en `escape_colocar`)
+                        // evita que colocar, a su vez, lo desplace (y
+                        // potencialmente scrollee la pantalla si cae en la
+                        // última fila).
+                        let escrito =
+                            crossterm::execute!(out, crossterm::cursor::MoveTo(rect.x, rect.y))
+                                .and_then(|()| out.write_all(esc.as_bytes()))
+                                .and_then(|()| out.flush());
+                        match escrito {
+                            Ok(()) => {
+                                crate::kitty_graphics::marcar_colocada(imagen.id);
+                                imagen.puesta_en = Some(rect);
+                            }
+                            Err(e) => {
+                                // MENOR 7: un fallo a medio escribir el APC
+                                // deja el terminal esperando su cierre — todo
+                                // lo que se pinte después se leería como su
+                                // payload. El terminador se escribe SIEMPRE.
+                                let _ = out.write_all(b"\x1b\\");
+                                tracing::debug!(
+                                    error = %e,
+                                    id = imagen.id,
+                                    "no se pudo colocar la imagen del visor"
+                                );
+                            }
                         }
                     }
                 }

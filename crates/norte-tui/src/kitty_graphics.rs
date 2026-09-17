@@ -122,8 +122,23 @@ const CHUNK_RAW_BYTES: usize = 3 * 1024;
 
 /// El escape que coloca la imagen en el hueco del visor.
 ///
-/// `a=T` transmite Y muestra de una vez, en la posición del CURSOR —el
-/// llamante lo coloca en `rect` antes de escribir esto (T4, el run loop).
+/// `a=T` transmite Y muestra de una vez, en la posición del CURSOR — el
+/// LLAMANTE tiene que mover el cursor a la esquina de `rect` (p.ej.
+/// `crossterm::cursor::MoveTo`) justo ANTES de escribir esto (T4, el run
+/// loop): esta función sólo construye la cadena, no toca el cursor. `C=1`
+/// pide además que COLOCAR no mueva el cursor: sin él, kitty lo deja tras la
+/// imagen al terminar, y si eso cae en la última fila la pantalla SCROLLEA
+/// — con la pantalla alternativa y ratatui pintando por diff, eso desplaza
+/// el frame entero (revisión, CRÍTICO 1).
+///
+/// `q=2` calla la respuesta del terminal (éxito Y error): sin ella, kitty
+/// contesta `\x1b_Gi=<id>;OK\x1b\\` a cada trozo con `i`, y como nadie la
+/// consume llega al lector de eventos de crossterm, que no parsea APC —
+/// `\x1b_` se lee como `Alt+_` y el resto como pulsaciones sueltas que
+/// entran al keymap (revisión, CRÍTICO 3). La propia sonda del arranque
+/// evita esto LEYENDO su respuesta a mano; aquí es más simple pedir
+/// silencio.
+///
 /// `f=100` es PNG, que es lo que devuelve el kind `thumbnail`. Los bytes van
 /// en base64 porque un APC termina en `\x1b\\` y un PNG contiene esa pareja
 /// con toda normalidad: mandarlo crudo cortaría la imagen por la mitad y
@@ -131,14 +146,17 @@ const CHUNK_RAW_BYTES: usize = 3 * 1024;
 ///
 /// `c`/`r` son CELDAS, no píxeles: se le dice al terminal el HUECO y él
 /// encaja, que es lo que mantiene la imagen dentro del marco cuando el
-/// terminal tiene celdas de otro tamaño del que supusimos.
+/// terminal tiene celdas de otro tamaño del que supusimos. El llamante le
+/// pasa el INTERIOR del marco (sin bordes) — `rect` no se recorta aquí.
 ///
 /// Si `bytes` pasa de `CHUNK_RAW_BYTES` (privado, sin enlazar) se trocea en
 /// varios APC seguidos:
-/// el primero lleva TODA la cabecera (`i`, `f`, `c`, `r`) más `m=1`; los
-/// siguientes sólo llevan `m` (`1` mientras queden más, `0` en el último) —
-/// es lo normal, porque una miniatura de verdad (hasta 1920 px de lado) no
-/// cabe nunca en un único trozo.
+/// el primero lleva TODA la cabecera (`i`, `f`, `c`, `r`, `C`, `q`) más
+/// `m=1`; los siguientes llevan `m` (`1` mientras queden más, `0` en el
+/// último) y también `q=2` — cada trozo es su propio comando y kitty puede
+/// contestar a cualquiera que traiga `i`, así que el silencio se pide en
+/// todos, no sólo en el primero. Es lo normal, porque una miniatura de
+/// verdad (hasta 1920 px de lado) no cabe nunca en un único trozo.
 ///
 /// ```
 /// use norte_tui::kitty_graphics::escape_colocar;
@@ -170,11 +188,11 @@ pub fn escape_colocar(id: u32, bytes: &[u8], rect: Rect) -> String {
             // `unwrap`/`expect` fuera de test, y aquí no hace falta ni eso).
             let _ = write!(
                 out,
-                "a=T,i={id},f=100,c={},r={},m={mas}",
+                "a=T,i={id},f=100,c={},r={},C=1,q=2,m={mas}",
                 rect.width, rect.height
             );
         } else {
-            let _ = write!(out, "m={mas}");
+            let _ = write!(out, "m={mas},q=2");
         }
         out.push(';');
         out.push_str(&engine.encode(trozo));
@@ -183,10 +201,18 @@ pub fn escape_colocar(id: u32, bytes: &[u8], rect: Rect) -> String {
     out
 }
 
-/// El escape que borra SÓLO esta imagen.
+/// El escape que borra SÓLO esta imagen — datos Y colocación.
 ///
-/// `d=i` borra POR ID. Sin el id se borrarían las imágenes de todo el
-/// terminal, incluidas las de otro programa en otra pestaña.
+/// `d=I` (mayúscula) borra la colocación Y libera los BYTES que el terminal
+/// tiene guardados para este id; `d=i` (minúscula, lo que pedía el encargo
+/// original) sólo borra la colocación y deja los datos vivos en la memoria
+/// del terminal — con `mint_image_id` sin reciclar nunca un id, cada
+/// fichero que se mira dejaría una copia de su PNG ahí para el resto de la
+/// sesión (revisión, IMPORTANTE 6; el test del encargo se corrigió con
+/// ella). `i=<id>` sigue acotando el borrado a ESTA imagen: sin él se
+/// borrarían las de todo el terminal, incluidas las de otro programa en
+/// otra pestaña. `q=2` calla la respuesta, mismo motivo que
+/// [`escape_colocar`].
 ///
 /// ```
 /// use norte_tui::kitty_graphics::escape_borrar;
@@ -194,7 +220,7 @@ pub fn escape_colocar(id: u32, bytes: &[u8], rect: Rect) -> String {
 /// ```
 #[must_use]
 pub fn escape_borrar(id: u32) -> String {
-    format!("\x1b_Ga=d,d=i,i={id}\x1b\\")
+    format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\")
 }
 
 /// El id de la imagen que está colocada AHORA MISMO en la terminal de
@@ -211,6 +237,18 @@ static COLOCADA: AtomicU32 = AtomicU32::new(0);
 /// creyendo puesta una imagen que la terminal nunca vio.
 pub fn marcar_colocada(id: u32) {
     COLOCADA.store(id, Ordering::Relaxed);
+}
+
+/// ¿Es `id` la imagen que está colocada AHORA MISMO?
+///
+/// Revisión, IMPORTANTE 4: el run loop la usa para no retransmitir el PNG
+/// entero en cada frame cuando nada cambió — sin esto, un visor QUIETO
+/// remandaba su miniatura (hasta 1920 px de lado, en base64) en cada tick de
+/// `session_tick` (una vez por segundo), con el parpadeo de borrar+colocar
+/// de propina.
+#[must_use]
+pub fn ya_colocada(id: u32) -> bool {
+    COLOCADA.load(Ordering::Relaxed) == id
 }
 
 /// Borra la imagen colocada AHORA MISMO, si hay alguna, y olvida cuál era.
@@ -236,7 +274,13 @@ pub fn borrar_colocada(out: &mut impl Write) {
         .and_then(|()| out.flush())
     {
         Ok(()) => {}
-        Err(e) => tracing::debug!(error = %e, id, "no se pudo borrar la imagen colocada"),
+        Err(e) => {
+            // MENOR 7: `write_all` puede fallar a medio APC — sin cerrarlo,
+            // todo lo que se pinte después se leería como su payload. El
+            // terminador se escribe SIEMPRE tras un fallo, best-effort.
+            let _ = out.write_all(b"\x1b\\");
+            tracing::debug!(error = %e, id, "no se pudo borrar la imagen colocada");
+        }
     }
 }
 

@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use super::text::{head, middle, two_fields, with_badge};
-use super::{HOSTILE_BADGE, placed_of_kind, resolved_for, visor_split};
+use super::{HOSTILE_BADGE, placed_of_kind, rect_del_visor, resolved_for, visor_split};
 use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
@@ -119,7 +119,11 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
         }
         block = block.title(Line::from(spans).right_aligned());
     }
-    let inner_h = content_area.height.saturating_sub(2) as usize;
+    // `rect_del_visor` — la MISMA función que usa el run loop para el APC,
+    // no una resta a mano — es lo que garantiza que el hueco que se deja en
+    // blanco abajo y el hueco donde caen los píxeles sean estructuralmente
+    // el mismo (revisión, CRÍTICO 2).
+    let inner_h = rect_del_visor(app, frame.area()).height as usize;
     // T4 (fase 5 WOW): con la imagen COLOCADA (el run loop pinta sus
     // píxeles tras este frame, por fuera de ratatui), las líneas van
     // VACÍAS. El terminal va a pintar ENCIMA de este hueco, y un texto ahí
