@@ -316,7 +316,26 @@ impl DialogHints {
                     .collect::<Vec<_>>(),
                 eff,
             ),
-            extensions: dialog_hints(&without_navigation(ALLOW_EXTENSIONS), eff),
+            // El gestor ata `dialog.pane` —`tab` mueve el foco entre la
+            // lista y los botones de la ficha— pero NO lo imprime, y es el
+            // único de estos pies con una exclusión propia. Su footer ya
+            // iba lleno a 80 columnas: con los cinco verbos de siempre
+            // quedaban tres celdas libres, y el sexto no crecía la caja
+            // sino que partía el quinto por la mitad (`[Tab] otr┘`) —
+            // exactamente el MAJOR-1 que hizo nacer `without_navigation`,
+            // cuyo criterio se aplica igual aquí: la tecla sigue haciendo
+            // lo suyo, solo que no se deletrea. `dialog.pane` no entra en
+            // la lista COMPARTIDA porque otras seis allowlists lo atan con
+            // el sentido de «el otro panel», y ahí sí cabe y sí hace falta.
+            // Quien lo cuenta en su lugar: el tema de ayuda del gestor, y
+            // el propio botón, que se enciende al recibir el foco.
+            extensions: dialog_hints(
+                &without_navigation(ALLOW_EXTENSIONS)
+                    .into_iter()
+                    .filter(|c| *c != "dialog.pane")
+                    .collect::<Vec<_>>(),
+                eff,
+            ),
             plugin_config: dialog_hints(&without_navigation(ALLOW_PLUGIN_CONFIG), eff),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
             nav_volumes: dialog_hints(&without_navigation(ALLOW_NAV_VOLUMES), eff),

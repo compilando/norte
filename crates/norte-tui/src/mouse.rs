@@ -444,6 +444,27 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     app.mouse.slots = slots;
 }
 
+/// Los comandos de los botones del gestor de extensiones que el ÚLTIMO
+/// frame pintó, en el orden en que se pintaron.
+///
+/// El anillo de `tab` recorre ESTA lista, la misma que resuelve un clic, y
+/// no la que `extension_buttons` construiría: la ficha no se pinta con la
+/// caja estrecha, y un botón que no cupo por el ancho tampoco está. Sacar
+/// las paradas del teclado de lo PINTADO es la misma regla que hizo
+/// pulsable el gestor, y la que impide que `tab` mueva un foco a un sitio
+/// donde no hay nada.
+#[must_use]
+pub fn painted_extension_buttons(app: &App) -> Vec<&'static str> {
+    app.mouse
+        .extension_zones
+        .iter()
+        .filter_map(|z| match z.hit {
+            crate::ui::ExtensionHit::Button(cmd) => Some(cmd),
+            crate::ui::ExtensionHit::Row(_) => None,
+        })
+        .collect()
+}
+
 /// Si `ev` es el botón izquierdo cayendo sobre el indicador de sesión suelta
 /// del último frame.
 fn pulsa_indicador_de_sesion(app: &App, ev: MouseEvent) -> bool {
@@ -713,6 +734,10 @@ fn extensions_mouse(app: &mut App, ev: MouseEvent) -> After {
                 Some(crate::ui::ExtensionHit::Row(i)) => {
                     if i < mgr.plugins.len() {
                         mgr.cursor = i;
+                        // Elegir una fila devuelve el foco a la lista, como
+                        // hacen las flechas: los botones son los del plugin
+                        // elegido.
+                        mgr.foco = crate::app::ExtFoco::Lista;
                         let otro = mgr.config.as_ref().is_some_and(|c| {
                             mgr.plugins.get(i).is_none_or(|p| p.id != c.plugin_id)
                         });

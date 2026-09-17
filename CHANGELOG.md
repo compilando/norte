@@ -9,6 +9,25 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`Tab` walks the extension manager in the terminal** (ADR 0119). The
+  manager's card (ADR 0104) came with a row of buttons — enable, approve,
+  settings, uninstall, help — that only the mouse could press as buttons:
+  `tab` resolved to `dialog.pane`, the command was live in the catalogue, and
+  the screen ignored it in silence. It now moves the focus from the list to
+  each button and back to the list; `Enter` fires the focused one, the button
+  lights up, and the list's cursor dims while the focus is away, because two
+  equally bright cursors do not say which one gets the keys. The ring's stops
+  are the buttons THE FRAME PAINTED, so a terminal too narrow for the card
+  has nowhere to go and `tab` does nothing, and a focus left pointing past
+  the painted buttons fires nothing at all rather than a verb the reader
+  never read — one of those verbs is uninstall. Moving the list cursor hands
+  the focus back to the list, since the buttons belong to the selected
+  extension. `tab` is deliberately NOT printed in the footer: at 80 columns
+  that footer already held five verbs in 67 of its 71 cells, and a sixth cut
+  the fifth mid-word. The `plugins` help topic says so instead, in both
+  locales. The window needed no change — its buttons are real `<button>`
+  elements and the browser's own focus ring already walked them.
+
 - **The terminal viewer shows an image as an image**, not as a hex dump
   (ADR 0118). At startup the TUI asks the terminal, once, whether it speaks
   kitty's graphics protocol (an APC query followed by a DA1, so a terminal
