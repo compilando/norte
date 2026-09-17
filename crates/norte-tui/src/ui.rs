@@ -34,8 +34,8 @@ pub use chrome::{
 };
 pub use compare::draw_compare;
 pub use geometry::{
-    before_frame, pane_geometry, pane_list_rows, panel_slots, resize_borders, resolved_for,
-    tab_strip_for,
+    before_frame, pane_geometry, pane_list_rows, panel_slots, rect_del_visor, resize_borders,
+    resolved_for, tab_strip_for,
 };
 pub use help::{draw_help, help_body_size, help_group_is_painted, help_layout, help_sidebar_width};
 pub use overlays::{
@@ -59,6 +59,7 @@ pub(crate) use chrome::panel_buttons;
 use chrome::{draw_key_bar, draw_menu, draw_panel_bar};
 pub(crate) use geometry::{
     body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_rect,
+    visor_split,
 };
 use modals::draw_modal;
 pub use modals::{ModalZone, modal_zones};

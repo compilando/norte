@@ -95,6 +95,12 @@ zeroize.workspace = true
 # alternativa era `unsafe` en un frontend, que la regla 5 prohíbe. Si algún día
 # el pty se comparte con la ventana, este es el sitio donde reconsiderarlo.
 portable-pty = { version = "0.9.0", default-features = false }
+# El protocolo de gráficos de kitty (T4, fase 5 WOW) manda la miniatura en
+# base64 dentro del APC (`kitty_graphics::escape_colocar`). No es una
+# dependencia nueva del árbol: `norte-proto` y `norte-frontend` (`osc52`) ya la
+# usan para lo mismo —bytes arbitrarios, base64 en el canal—, solo se enlaza
+# aquí también.
+base64.workspace = true
 
 [dev-dependencies]
 # Un `Provider` de test que devuelve `SecretNeeded`: es la respuesta que un

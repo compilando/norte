@@ -6,13 +6,13 @@
 
 use norte_theme::Role;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use super::text::{head, middle, two_fields, with_badge};
-use super::{HOSTILE_BADGE, placed_of_kind, resolved_for};
+use super::{HOSTILE_BADGE, placed_of_kind, resolved_for, visor_split};
 use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
@@ -83,11 +83,11 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // completa y no pasa por el reparto de huecos, así que con la barra de
     // menú fijada se metía debajo de ella y la barra le tapaba la primera
     // fila. La misma resta que hace el reparto, en el único otro sitio que
-    // pinta a pantalla completa.
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(super::geometry::body_area(app, frame.area()));
+    // pinta a pantalla completa. `visor_split` — no una copia del
+    // `Layout::split` — es la MISMA cuenta que usa el run loop (T4) para
+    // saber dónde van los píxeles: dos cuentas del mismo hueco divergen en
+    // silencio.
+    let (content_area, status_area) = visor_split(app, frame.area());
     let (title, hostile) =
         norte_frontend::path_display_with(&viewer.path, app.focused().name_encoding());
     let title = if hostile {
@@ -119,7 +119,18 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
         }
         block = block.title(Line::from(spans).right_aligned());
     }
-    let inner_h = rows[0].height.saturating_sub(2) as usize;
+    let inner_h = content_area.height.saturating_sub(2) as usize;
+    // T4 (fase 5 WOW): con la imagen COLOCADA (el run loop pinta sus
+    // píxeles tras este frame, por fuera de ratatui), las líneas van
+    // VACÍAS. El terminal va a pintar ENCIMA de este hueco, y un texto ahí
+    // se vería DEBAJO de los píxeles o parpadearía al alternar con ellos en
+    // cada frame. El marco, el título y las barras de scroll de abajo
+    // siguen pintándose igual — nada de esto cambia por tener una imagen
+    // puesta.
+    let hay_imagen = app
+        .viewer_imagen
+        .as_ref()
+        .is_some_and(|imagen| imagen.path == viewer.path);
     // #29/G3a (ADR 0037): un preview de plugin trae color, por ANSI-SGR
     // saneado (`fg` únicamente) o por WIT estructurado (`role` VALIDADO +
     // `fg` de respaldo). `role` GANA sobre `fg` cuando ambos están
@@ -127,23 +138,27 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // de un plugin, ADR 0037 decisión 3) — se resuelve por el tema
     // (`app.theme.role`), no como RGB crudo. Sin ninguno de los dos, el
     // color por defecto del tema (sin `.style()`).
-    let lines: Vec<Line<'_>> = match viewer.plugin_styled_rows(inner_h) {
-        Some(styled) => styled
-            .into_iter()
-            .map(|line| {
-                Line::from(
-                    line.iter()
-                        .map(|span| {
-                            Span::raw(span.text.clone()).style(estilo_de_span(span, &app.theme))
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect(),
-        None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
+    let lines: Vec<Line<'_>> = if hay_imagen {
+        Vec::new()
+    } else {
+        match viewer.plugin_styled_rows(inner_h) {
+            Some(styled) => styled
+                .into_iter()
+                .map(|line| {
+                    Line::from(
+                        line.iter()
+                            .map(|span| {
+                                Span::raw(span.text.clone()).style(estilo_de_span(span, &app.theme))
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect(),
+            None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
+        }
     };
-    frame.render_widget(Paragraph::new(lines).block(block), rows[0]);
-    barras_del_visor(frame, rows[0], viewer, &app.theme, true);
+    frame.render_widget(Paragraph::new(lines).block(block), content_area);
+    barras_del_visor(frame, content_area, viewer, &app.theme, true);
     let pos = format!(
         "{}/{}",
         (viewer.scroll + 1).min(viewer.total_rows().max(1)),
@@ -155,7 +170,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
-        rows[1],
+        status_area,
     );
 }
 

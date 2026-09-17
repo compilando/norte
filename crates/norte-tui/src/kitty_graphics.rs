@@ -1,8 +1,16 @@
 //! ¿Sabe este terminal pintar gráficos por el protocolo de kitty? La misma
 //! pregunta que [`crate::alt_menu`] le hace al protocolo de TECLADO, para el
 //! protocolo de IMÁGENES: se pregunta una vez, al arrancar, y se guarda.
-//! Nadie pinta nada aquí — eso es de otra tarea; esta sólo abre o cierra la
-//! puerta.
+//!
+//! T4 (fase 5 WOW) añade lo que sí pinta: [`escape_colocar`]/[`escape_borrar`]
+//! son los escapes puros —nada de I/O aquí, eso corre en el run loop, dueño de
+//! la terminal—, y [`marcar_colocada`]/[`borrar_colocada`] llevan la cuenta de
+//! qué id hay puesto AHORA MISMO en la terminal de verdad. Esa cuenta es
+//! estado de PROCESO, como `alt_menu::PEDIDO` (privado, sin enlazar desde
+//! aquí — el mismo motivo que documenta [`consultar_soporte`] más abajo):
+//! ceder la terminal, un `Esc` que cierra el visor y la salida necesitan
+//! poder borrar SIN que nadie les pase el `App` — el `App` decide QUÉ se
+//! quiere ver, esto lleva la cuenta de qué hay de verdad en pantalla.
 //!
 //! El protocolo se describe en
 //! <https://sw.kovidgoyal.net/kitty/graphics-protocol/>: una secuencia APC
@@ -13,7 +21,11 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
+
+use base64::Engine as _;
+use ratatui::layout::Rect;
 
 /// El id con el que se pregunta. Arbitrario y sólo nuestro: una respuesta
 /// con otro id contesta a otra pregunta y no dice nada de la nuestra.
@@ -97,6 +109,135 @@ pub fn consultar_soporte() -> bool {
 #[must_use]
 pub fn soportado() -> bool {
     SOPORTE.get().copied().unwrap_or(false)
+}
+
+/// Cuántos bytes CRUDOS (antes de base64) lleva cada trozo de un APC.
+///
+/// El protocolo trocea por longitud del payload YA en base64 (4096
+/// caracteres es el límite de kitty), así que se trocea en crudo en un
+/// múltiplo de 3: 3 bytes crudos son exactamente 4 caracteres de base64, sin
+/// relleno a mitad de trozo. `3 * 1024` bytes crudos = 4096 caracteres,
+/// justo el límite.
+const CHUNK_RAW_BYTES: usize = 3 * 1024;
+
+/// El escape que coloca la imagen en el hueco del visor.
+///
+/// `a=T` transmite Y muestra de una vez, en la posición del CURSOR —el
+/// llamante lo coloca en `rect` antes de escribir esto (T4, el run loop).
+/// `f=100` es PNG, que es lo que devuelve el kind `thumbnail`. Los bytes van
+/// en base64 porque un APC termina en `\x1b\\` y un PNG contiene esa pareja
+/// con toda normalidad: mandarlo crudo cortaría la imagen por la mitad y
+/// dejaría el resto escrito en la pantalla como texto.
+///
+/// `c`/`r` son CELDAS, no píxeles: se le dice al terminal el HUECO y él
+/// encaja, que es lo que mantiene la imagen dentro del marco cuando el
+/// terminal tiene celdas de otro tamaño del que supusimos.
+///
+/// Si `bytes` pasa de `CHUNK_RAW_BYTES` (privado, sin enlazar) se trocea en
+/// varios APC seguidos:
+/// el primero lleva TODA la cabecera (`i`, `f`, `c`, `r`) más `m=1`; los
+/// siguientes sólo llevan `m` (`1` mientras queden más, `0` en el último) —
+/// es lo normal, porque una miniatura de verdad (hasta 1920 px de lado) no
+/// cabe nunca en un único trozo.
+///
+/// ```
+/// use norte_tui::kitty_graphics::escape_colocar;
+/// use ratatui::layout::Rect;
+///
+/// let esc = escape_colocar(7, b"PNGFALSO", Rect::new(1, 2, 40, 20));
+/// assert!(esc.starts_with("\x1b_G") && esc.ends_with("\x1b\\"));
+/// ```
+#[must_use]
+pub fn escape_colocar(id: u32, bytes: &[u8], rect: Rect) -> String {
+    let engine = base64::engine::general_purpose::STANDARD;
+    // `chunks` de un slice vacío no produce ningún trozo, y una miniatura de
+    // cero bytes sigue necesitando UN APC (vacío) para que el terminal la
+    // reconozca — de ahí el `[&[][..]]` de respaldo.
+    let trozos: Vec<&[u8]> = if bytes.is_empty() {
+        vec![&[]]
+    } else {
+        bytes.chunks(CHUNK_RAW_BYTES).collect()
+    };
+    let total = trozos.len();
+    let mut out = String::new();
+    for (i, trozo) in trozos.into_iter().enumerate() {
+        use std::fmt::Write as _;
+        let ultimo = i + 1 == total;
+        let mas = u8::from(!ultimo);
+        out.push_str("\x1b_G");
+        if i == 0 {
+            // `write!` en un `String` no falla nunca (regla 6: no hay
+            // `unwrap`/`expect` fuera de test, y aquí no hace falta ni eso).
+            let _ = write!(
+                out,
+                "a=T,i={id},f=100,c={},r={},m={mas}",
+                rect.width, rect.height
+            );
+        } else {
+            let _ = write!(out, "m={mas}");
+        }
+        out.push(';');
+        out.push_str(&engine.encode(trozo));
+        out.push_str("\x1b\\");
+    }
+    out
+}
+
+/// El escape que borra SÓLO esta imagen.
+///
+/// `d=i` borra POR ID. Sin el id se borrarían las imágenes de todo el
+/// terminal, incluidas las de otro programa en otra pestaña.
+///
+/// ```
+/// use norte_tui::kitty_graphics::escape_borrar;
+/// assert!(escape_borrar(7).contains("i=7"));
+/// ```
+#[must_use]
+pub fn escape_borrar(id: u32) -> String {
+    format!("\x1b_Ga=d,d=i,i={id}\x1b\\")
+}
+
+/// El id de la imagen que está colocada AHORA MISMO en la terminal de
+/// verdad, o `0` si no hay ninguna — estado de PROCESO, como
+/// [`crate::alt_menu`]'s `PEDIDO`/`CEDIDO`: `0` no es un id válido porque
+/// [`crate::viewer_open::ImagenColocada::id`] arranca en 1, así que sirve de
+/// centinela sin envolver en `Option` un átomo.
+static COLOCADA: AtomicU32 = AtomicU32::new(0);
+
+/// Anota que `id` se acaba de colocar en la terminal de verdad.
+///
+/// Lo llama el run loop justo después de escribir [`escape_colocar`] con
+/// éxito — nunca antes, o un fallo de escritura dejaría esta cuenta
+/// creyendo puesta una imagen que la terminal nunca vio.
+pub fn marcar_colocada(id: u32) {
+    COLOCADA.store(id, Ordering::Relaxed);
+}
+
+/// Borra la imagen colocada AHORA MISMO, si hay alguna, y olvida cuál era.
+///
+/// Idempotente —llamar dos veces seguidas la segunda no escribe nada—, y
+/// nunca falla hacia el llamante: un escape que no se pudo escribir se traga
+/// con un `tracing::debug!` (regla del pintado: una imagen que no se borra
+/// es una molestia, no un motivo para tumbar la TUI ni la suspensión).
+///
+/// Es el punto de borrado COMPARTIDO por los cuatro momentos (T4): cerrar el
+/// visor o moverlo a otro fichero lo alcanzan por la diferencia que hace el
+/// run loop cada frame (compara el id deseado contra este); ceder la
+/// terminal ([`crate::suspend::suspend_terminal`]) y salir
+/// ([`crate::tty::restore`]) lo llaman aquí directamente porque ninguno de
+/// los dos tiene garantizado un frame siguiente que haga esa diferencia.
+pub fn borrar_colocada(out: &mut impl Write) {
+    let id = COLOCADA.swap(0, Ordering::Relaxed);
+    if id == 0 {
+        return;
+    }
+    match out
+        .write_all(escape_borrar(id).as_bytes())
+        .and_then(|()| out.flush())
+    {
+        Ok(()) => {}
+        Err(e) => tracing::debug!(error = %e, id, "no se pudo borrar la imagen colocada"),
+    }
 }
 
 /// Escribe la consulta en `/dev/tty` y lee la respuesta con un plazo corto,

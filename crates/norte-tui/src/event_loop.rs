@@ -381,9 +381,63 @@ pub async fn run(
         // Exención puntual de la regla 2: el draw escribe la terminal de
         // control síncronamente (patrón async oficial de ratatui; acotado,
         // runtime multi-thread).
-        let painted = terminal
+        let painted_area = terminal
             .draw(|f| ui::draw(f, app))
-            .map_err(RunError::Terminal)?;
+            .map_err(RunError::Terminal)?
+            .area;
+        // T4 (fase 5 WOW): los píxeles van DESPUÉS del frame y por fuera de
+        // ratatui — un APC no cabe en una celda, y ratatui pinta celdas
+        // (`draw_viewer` ya dejó el hueco vacío cuando hay imagen). Se borra
+        // lo de antes y se coloca lo de ahora en el mismo sitio, de una vez,
+        // para que no haya un frame con la imagen vieja sobre el marco
+        // nuevo. El rect sale de `ui::rect_del_visor(app, painted_area)` —
+        // la MISMA función que usa `draw_viewer`, no una copia (dos cuentas
+        // del mismo hueco divergen en silencio).
+        //
+        // Cubre por sí solo dos de los cuatro momentos de borrado (cerrar el
+        // visor, moverlo a otro fichero): los dos cambian `app.viewer_imagen`
+        // ANTES de este punto en la misma vuelta del bucle, así que la
+        // comparación de abajo contra lo que de verdad hay en la terminal
+        // (`kitty_graphics::borrar_colocada`, estado de PROCESO) ya lo
+        // resuelve sin código aparte. Los otros dos —ceder la terminal y
+        // salir— no tienen garantizado un frame siguiente que haga esta
+        // cuenta, y por eso llaman a `borrar_colocada` directamente
+        // (`suspend::suspend_terminal`, `tty::restore`).
+        //
+        // Un fallo pintando NUNCA tumba la TUI (regla del pintado): se traga
+        // con un `tracing::debug!` dentro de las propias funciones.
+        {
+            use std::io::Write as _;
+            // El rect se calcula ANTES de tomar prestado `app.viewer_imagen`
+            // en modo mutable: `rect_del_visor` necesita el `App` entero
+            // (repartos, barras…), y un préstamo mutable de un campo suyo ya
+            // vivo se lo impediría.
+            let rect = app
+                .viewer_imagen
+                .is_some()
+                .then(|| ui::rect_del_visor(app, painted_area));
+            match (&mut app.viewer_imagen, rect) {
+                (Some(imagen), Some(rect)) => {
+                    let out = terminal.backend_mut();
+                    crate::kitty_graphics::borrar_colocada(out);
+                    let esc = crate::kitty_graphics::escape_colocar(imagen.id, &imagen.bytes, rect);
+                    match out.write_all(esc.as_bytes()).and_then(|()| out.flush()) {
+                        Ok(()) => {
+                            crate::kitty_graphics::marcar_colocada(imagen.id);
+                            imagen.puesta_en = Some(rect);
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                error = %e,
+                                id = imagen.id,
+                                "no se pudo colocar la imagen del visor"
+                            );
+                        }
+                    }
+                }
+                _ => crate::kitty_graphics::borrar_colocada(terminal.backend_mut()),
+            }
+        }
         if app.quit {
             // La última foto, y esperarla. El tick de un segundo se pierde lo
             // que pasó dentro de ese segundo, y salir es cuando más duele:
@@ -405,7 +459,7 @@ pub async fn run(
             session_push.close(last).await;
             return Ok(());
         }
-        turn::after_frame(app, backend, &mut work, painted.area).await;
+        turn::after_frame(app, backend, &mut work, painted_area).await;
         // La pantalla de arranque `brief` caduca con el reloj del PINTADO, el
         // mismo que caduca los avisos: medirla con otro sería un plazo que los
         // tests no pueden fijar. Va después del frame porque lo que promete es

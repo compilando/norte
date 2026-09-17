@@ -8,7 +8,9 @@
 use norte_config::Images;
 use norte_proto::VPath;
 use norte_tui::app::{App, Pane};
+use norte_tui::kitty_graphics::{escape_borrar, escape_colocar};
 use norte_tui::viewer_open::{ImagenColocada, Modo, modo_efectivo};
+use ratatui::layout::Rect;
 
 fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire de test")
@@ -112,5 +114,60 @@ fn un_previewer_de_plugin_no_esconde_que_los_bytes_son_imagen() {
     assert!(
         norte_frontend::viewer::image_format(png).is_some(),
         "pero los bytes del mismo fichero siguen diciendo que ES una imagen"
+    );
+}
+
+/// Task 4: el APC que coloca la imagen lleva el id, el tamaño en CELDAS
+/// (`c`/`r`, no píxeles) y los bytes en base64 — nunca crudos, porque un APC
+/// se cierra con `\x1b\\` y un PNG contiene esa pareja de bytes con toda
+/// normalidad.
+#[test]
+fn colocar_lleva_el_id_el_tamano_y_base64() {
+    let esc = escape_colocar(7, b"PNGFALSO", Rect::new(1, 2, 40, 20));
+    assert!(esc.starts_with("\x1b_G"), "empieza por APC: {esc}");
+    assert!(esc.contains("i=7"), "lleva el id: {esc}");
+    assert!(
+        esc.contains("f=100"),
+        "PNG, que es lo que da el kind thumbnail"
+    );
+    assert!(
+        esc.contains("c=40") && esc.contains("r=20"),
+        "el hueco: {esc}"
+    );
+    assert!(esc.ends_with("\x1b\\"), "cierra el APC: {esc}");
+    // Los bytes van en base64 y NO en crudo: un APC se termina con
+    // `\x1b\\`, y un PNG contiene esa pareja de bytes con toda normalidad.
+    assert!(esc.contains("UE5HRkFMU08"), "base64 del contenido: {esc}");
+}
+
+/// Una miniatura de verdad no cabe en un solo APC, así que hay que
+/// trocearla: todos los trozos menos el último llevan `m=1` y el último
+/// `m=0`. Sin este test, los de arriba pasan con un `escape_colocar` que no
+/// sabe trocear — 8 bytes nunca llegan al tope.
+#[test]
+fn un_contenido_grande_se_trocea() {
+    let grande = vec![0u8; 12 * 1024];
+    let esc = escape_colocar(7, &grande, Rect::new(1, 2, 40, 20));
+    let trozos: Vec<&str> = esc.split("\x1b_G").skip(1).collect();
+    assert!(
+        trozos.len() > 1,
+        "una imagen grande va en varios trozos: {}",
+        trozos.len()
+    );
+    let (ultimo, previos) = trozos.split_last().expect("hay al menos uno");
+    for t in previos {
+        assert!(t.contains("m=1"), "un trozo que no es el último sigue: {t}");
+    }
+    assert!(ultimo.contains("m=0"), "el último cierra: {ultimo}");
+}
+
+/// `d=i` borra POR ID. Sin el id se borrarían las imágenes de todo el
+/// terminal, incluidas las de otro programa en otra pestaña.
+#[test]
+fn borrar_nombra_solo_ese_id() {
+    let esc = escape_borrar(7);
+    assert!(
+        esc.contains("a=d") && esc.contains("d=i") && esc.contains("i=7"),
+        "{esc}"
     );
 }

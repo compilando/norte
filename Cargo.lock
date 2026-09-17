@@ -5466,6 +5466,7 @@ version = "0.3.0-alpha.4"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "criterion",
  "crossterm",
