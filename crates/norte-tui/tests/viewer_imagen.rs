@@ -550,7 +550,7 @@ fn en_kitty_con_miniatura_colocada_no_sale_el_aviso() {
     let path = vp("mem:///x.png");
     app.viewer = Some(norte_tui::viewer::Viewer::new(
         path.clone(),
-        b"\x89PNG\r\n\x1a\n".to_vec(),
+        png_bytes_binarios(),
         false,
     ));
     app.viewer_imagen = Some(ImagenColocada {
