@@ -629,6 +629,24 @@ type RespuestaListado = (
 /// hueco, y las parejas `(lo que se pidió, lo que contestó el provider)`.
 type Sondas = (VPath, u32, Vec<(VPath, Entry)>);
 
+/// Lo que vuelve de medir un mapa de disco (fase 4).
+///
+/// El hueco que lo pidió, el TESTIGO de esa petición —uno que no sea el vivo es
+/// de un directorio que ya se dejó atrás— y el resultado, con el ESTADO de la
+/// Task pegado al informe: uno de una Task cancelada está a medias, y pintarlo
+/// como completo convierte un directorio enorme en uno pequeño.
+type MedidaDeMapa = (
+    u32,
+    RequestToken,
+    Result<
+        (
+            norte_proto::TaskState,
+            norte_proto::methods::FsDirUsageReportResult,
+        ),
+        Error,
+    >,
+);
+
 enum Mensaje {
     Accion(Box<UiAction>, oneshot::Sender<ActionAck>),
     /// Los BYTES de la imagen que el visor tiene abierta, si los hay.
@@ -731,6 +749,12 @@ enum Mensaje {
             Result<Option<norte_proto::methods::PanelFrame>, Error>,
         )>,
     ),
+    /// Lo que midió un mapa de disco (fase 4), con el testigo de la petición
+    /// que lo pidió: uno que no sea el vivo es de un directorio que ya se dejó
+    /// atrás. El ESTADO viaja con el informe porque uno de una Task cancelada
+    /// está a medias, y pintarlo como completo convierte un directorio enorme
+    /// en uno pequeño.
+    MapaContenido(Box<MedidaDeMapa>),
     /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
     /// un listado perezoso).
     ///
@@ -1348,6 +1372,12 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
+            Mensaje::MapaContenido(datos) => {
+                let (slot, token, res) = *datos;
+                if let Some(u) = estado.aterrizar_mapa(slot, token, res) {
+                    let _ = updates.send(u);
+                }
+            }
             Mensaje::Fondo(f) => {
                 for u in estado.aplicar_de_fondo(*f, &backend, &buzon) {
                     let _ = updates.send(u);
@@ -1508,6 +1538,14 @@ async fn actor(
         // su guest recibe el directorio y la fila bajo el cursor, así que
         // cualquier mensaje puede cambiar lo que debería estar enseñando.
         for u in estado.sondear_paneles(&backend, &buzon) {
+            let _ = updates.send(u);
+        }
+        // Y el mapa de disco (fase 4), en el mismo sitio y por lo mismo: sigue
+        // al DIRECTORIO del listado al que está atado, así que un `cd` —venga
+        // de donde venga— cambia lo que debería estar enseñando. No sigue al
+        // cursor: mover una fila no cambia de qué está hecho el directorio, y
+        // sondear por cursor sería medir un `$HOME` en cada flecha.
+        for u in estado.sondear_mapas(&backend, &buzon) {
             let _ = updates.send(u);
         }
         // Y la hoja de atributos, por lo MISMO y en el mismo sitio: también
@@ -2927,7 +2965,7 @@ struct Estado {
     /// El estado es el COMPARTIDO (`norte_frontend::diskmap`), el mismo que
     /// usa el terminal: qué directorio describe, lo medido y cuál es el hijo
     /// elegido. Una decisión escrita dos veces diverge en silencio (ADR 0077).
-    mapas: std::collections::BTreeMap<u32, norte_frontend::diskmap::DiskMap>,
+    mapas: std::collections::BTreeMap<u32, diskmap::EstadoMapa>,
     /// Lo ÚLTIMO que se mandó de cada hoja de atributos, por hueco.
     ///
     /// La hoja no pide nada y se calcula entera del listado, así que no tiene
@@ -4041,7 +4079,17 @@ impl Estado {
             UiAction::LogSetFilter { filter } => self.filtro_de_registro(filter),
             UiAction::LogScroll { delta } => self.desplazar_registro(*delta),
             UiAction::PanelClick { slot_id, row, col } => {
-                self.clic_en_panel(*slot_id, *row, *col, backend, buzon)
+                // La MISMA acción para los dos, y se bifurca por el kind del
+                // hueco: el renderer manda una celda y no sabe —ni tiene por
+                // qué— si detrás hay un guest o un treemap. Lo que cambia es
+                // quién resuelve y contra qué marco.
+                if kind_de(&self.arbol, SlotId(*slot_id))
+                    .is_some_and(|k| k.as_str() == diskmap::KIND)
+                {
+                    self.clic_en_mapa(*slot_id, *row, *col, backend, buzon)
+                } else {
+                    self.clic_en_panel(*slot_id, *row, *col, backend, buzon)
+                }
             }
             UiAction::PreviewScroll { slot_id, delta } => self.desplazar_preview(*slot_id, *delta),
             UiAction::ViewerScroll { lines, cols } => self.desplazar_visor(*lines, *cols),
