@@ -535,6 +535,14 @@
             "null"
           ]
         },
+        "images": {
+          "default": null,
+          "description": "`[ui] images`: how the TUI shows an image file in the viewer. Absent =\n`auto`.\n\n`auto` uses the terminal's graphics protocol when it has one and falls\nback to an approved `previewer` plugin otherwise; `kitty` and `blocks`\nforce one of the two; `off` leaves the viewer on hexview. The GUI\nignores this key: a window paints images by itself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "key_bar": {
           "default": null,
           "description": "Whether the row of function keys (F1–F10 with what each one does on\nthe current screen) stays pinned at the bottom. Absent = `true`.\n\nDerived from the effective keymap, never drawn by hand: rebinding F5\nchanges the label, and a screen that binds nothing to F7 shows an\nempty cell there. Clicking a cell runs the command.",

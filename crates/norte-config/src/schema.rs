@@ -436,6 +436,15 @@ pub struct UiSection {
     /// [`crate::load::load`] rejects other values.
     #[serde(default)]
     pub processes_panel: Option<String>,
+    /// `[ui] images`: how the TUI shows an image file in the viewer. Absent =
+    /// `auto`.
+    ///
+    /// `auto` uses the terminal's graphics protocol when it has one and falls
+    /// back to an approved `previewer` plugin otherwise; `kitty` and `blocks`
+    /// force one of the two; `off` leaves the viewer on hexview. The GUI
+    /// ignores this key: a window paints images by itself.
+    #[serde(default)]
+    pub images: Option<String>,
     /// The `/` in front of a directory row: `"auto"` (default — only when the
     /// icon column is closed, since an icon already says what the row is),
     /// `"slash"` (always) or `"none"`.
