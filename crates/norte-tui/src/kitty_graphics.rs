@@ -13,7 +13,7 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// El id con el que se pregunta. Arbitrario y sólo nuestro: una respuesta
 /// con otro id contesta a otra pregunta y no dice nada de la nuestra.
@@ -40,9 +40,25 @@ fn respuesta_dice_si(bytes: &[u8]) -> bool {
         .split("\x1b_G")
         .skip(1)
         .any(|resto| match resto.split_once("\x1b\\") {
-            Some((cuerpo, _)) => cuerpo.contains(ID_SONDA) && cuerpo.ends_with(";OK"),
+            Some((cuerpo, _)) => es_nuestro_ok(cuerpo),
             None => false,
         })
+}
+
+/// `cuerpo` es lo de entre `\x1b_G` y `\x1b\\`: claves separadas por comas
+/// (`i=31`, `I=2`…) y DESPUÉS un `;` el mensaje (`OK`, `ENOTSUPPORTED`…).
+///
+/// Revisión, hallazgo 1: la primera versión comprobaba `contains(ID_SONDA)`,
+/// una subcadena — y `"i=311;OK".contains("i=31")` es cierto, así que la
+/// respuesta a OTRA consulta (id 311, no 31) contaba como un sí para la
+/// nuestra. Aquí se separa el campo de claves del mensaje por el primer
+/// `;`, y se compara CADA clave por IGUALDAD exacta contra [`ID_SONDA`]:
+/// ningún id que sólo comparta prefijo cuela.
+fn es_nuestro_ok(cuerpo: &str) -> bool {
+    let Some((claves, mensaje)) = cuerpo.split_once(';') else {
+        return false;
+    };
+    mensaje == "OK" && claves.split(',').any(|clave| clave == ID_SONDA)
 }
 
 /// Lo que contestó el terminal, preguntado UNA vez.
@@ -91,9 +107,35 @@ pub fn soportado() -> bool {
 /// `/dev/tty` no tiene un `read_timeout` como un socket (regla 5: el `poll`
 /// de verdad es `unsafe`, y ese `unsafe` es sólo de `norte-vfs-local`), así
 /// que la lectura corre en un hilo aparte y el que pregunta espera con
-/// [`std::sync::mpsc::Receiver::recv_timeout`]. Si el plazo vence, el hilo
-/// se queda leyendo hasta que el terminal cierre o conteste — huérfano pero
-/// inofensivo: el proceso no espera por él, y muere con el proceso.
+/// [`std::sync::mpsc::Receiver::recv_timeout`].
+///
+/// **Revisión, hallazgo 2 — por qué el hilo sigue leyendo tras el plazo, en
+/// vez de tirar la toalla con él.** El primer diseño comprobaba, byte a
+/// byte, si el que pregunta seguía escuchando, y se rendía en cuanto dejaba
+/// de estarlo. Eso significa que una respuesta TARDÍA (SSH con latencia
+/// real) se leía UN byte —el que hacía fallar el envío— y el resto
+/// (`[?62;c`) se dejaba sin consumir en la terminal, esperando a que el
+/// lector de eventos de crossterm arrancara y se lo comiera como
+/// pulsaciones del usuario. Aquí el hilo, una vez lanzado, YA NO comprueba
+/// si alguien escucha: sigue leyendo hasta ver la `c` (o un error/EOF) pase
+/// lo que pase, y sólo entonces intenta mandar el resultado — que si el
+/// plazo ya venció, nadie recoge, y no importa: el trabajo del hilo nunca
+/// fue avisar a quien se rindió, es DRENAR la respuesta entera de la
+/// terminal antes de que otro lector la confunda con teclado.
+///
+/// Esto no cierra la ventana del todo. Sigue existiendo una carrera real:
+/// si la respuesta tarda tanto que el lector de eventos ya arrancó (más
+/// allá de este arranque, dentro de `run`) ANTES de que este hilo termine
+/// de leerla, los dos compiten por los mismos bytes del mismo fd y cuál se
+/// queda con cada uno no está definido. Cerrarla del todo pediría o bien
+/// esperar indefinidamente aquí (perder la garantía de plazo corto que es
+/// el motivo de esta sonda) o vaciar el búfer de entrada de la terminal
+/// (`tcflush`, que es `unsafe`/`libc` — la regla 5 lo prohíbe fuera de
+/// `norte-vfs-local`). Se acepta el riesgo residual, acotado a terminales
+/// con latencia mucho mayor que [`PLAZO`] (200 ms) Y que además tardan tanto
+/// en contestar que alcanzan a solaparse con el arranque del lector de
+/// eventos — no observado en las pruebas locales (tmux, kitty) de esta
+/// tarea.
 fn preguntar() -> io::Result<bool> {
     let mut tty = std::fs::OpenOptions::new()
         .read(true)
@@ -113,23 +155,19 @@ fn preguntar() -> io::Result<bool> {
                 Ok(_) => {
                     let c = byte[0];
                     buf.push(c);
-                    let cierra = c == b'c';
-                    if tx.send(buf.clone()).is_err() || cierra {
+                    if c == b'c' {
                         break;
                     }
                 }
             }
         }
+        // Best-effort: si el que preguntó ya no escucha (el plazo venció),
+        // el envío falla y se ignora — para entonces el drenado de arriba
+        // ya hizo lo que importaba.
+        let _ = tx.send(buf);
     });
 
-    let limite = Instant::now() + PLAZO;
-    let mut leido = Vec::new();
-    while let Some(restante) = limite.checked_duration_since(Instant::now()) {
-        match rx.recv_timeout(restante) {
-            Ok(buf) => leido = buf,
-            Err(_) => break,
-        }
-    }
+    let leido = rx.recv_timeout(PLAZO).unwrap_or_default();
     let soporte = respuesta_dice_si(&leido);
     // Sin esto, un «no» y un terminal que no contestó nada son
     // indistinguibles desde fuera. Es la evidencia del paso 6 (la puerta):
@@ -166,6 +204,14 @@ mod tests {
         // Si la respuesta es de otra consulta (un id que no es el nuestro),
         // no dice nada de nuestra pregunta.
         assert!(!respuesta_dice_si(b"\x1b_Gi=99;OK\x1b\\\x1b[?62;c"));
+    }
+
+    #[test]
+    fn un_id_que_comparte_prefijo_no_cuenta() {
+        // Revisión, hallazgo 1: "i=311" CONTIENE "i=31" como subcadena y
+        // también termina en ";OK" — un id ajeno que por casualidad
+        // comparte prefijo no puede colarse como si fuera el nuestro.
+        assert!(!respuesta_dice_si(b"\x1b_Gi=311;OK\x1b\\"));
     }
 
     #[test]
