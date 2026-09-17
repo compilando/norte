@@ -119,6 +119,26 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
         }
         block = block.title(Line::from(spans).right_aligned());
     }
+    // T5 (fase 5 WOW): sin preview de plugin, un PNG en `Modo::Bloques` cae a
+    // hexview igual que un fichero que nadie sabe interpretar — nada en
+    // pantalla distinguía los dos casos hasta que el piloto lo encontró.
+    // `modo` se recalcula igual que en `open_viewer`: barato (config + un
+    // `OnceLock` ya resuelto) y evita cargar con un campo nuevo en `App`
+    // sólo para este aviso.
+    //
+    // NO va en el título de la cabecera pese a que el «via …» de arriba
+    // vive ahí: el título derecho se right-aligna SIN recortar cuando no
+    // cabe, así que el texto largo del aviso (con el hint de F12) se comía
+    // el título izquierdo entero — regresión real, cazada por
+    // `snapshot_viewer_texto_y_hex`. La barra de estado de abajo es de
+    // ancho completo y ya cede el sitio entero a `app.message` cuando hay
+    // uno; este aviso sigue el mismo patrón.
+    // `viewer.is_image()` YA vale `false` en cuanto `preview_plugin()` es
+    // `Some` (ver su rustdoc), así que no hace falta comprobarlo aparte: la
+    // rama «via …» de arriba y este aviso son mutuamente excluyentes solos.
+    let modo =
+        crate::viewer_open::modo_efectivo(app.chrome.images(), crate::kitty_graphics::soportado());
+    let aviso_imagen = crate::viewer_open::aviso_de_imagen(modo, !viewer.is_image());
     // `rect_del_visor` — la MISMA función que usa el run loop para el APC,
     // no una resta a mano — es lo que garantiza que el hueco que se deja en
     // blanco abajo y el hueco donde caen los píxeles sean estructuralmente
@@ -168,14 +188,17 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
         (viewer.scroll + 1).min(viewer.total_rows().max(1)),
         viewer.total_rows().max(1)
     );
-    let text = match &app.message {
-        Some(msg) => format!(" {msg}"),
-        None => format!(" {}  {pos}", crate::viewer::status(viewer)),
+    let text: Line<'_> = match &app.message {
+        Some(msg) => Line::styled(format!(" {msg}"), app.theme.role(Role::StatusBar)),
+        None => match aviso_imagen {
+            Some(aviso) => Line::styled(format!(" {aviso}"), app.theme.role(Role::Info)),
+            None => Line::styled(
+                format!(" {}  {pos}", crate::viewer::status(viewer)),
+                app.theme.role(Role::StatusBar),
+            ),
+        },
     };
-    frame.render_widget(
-        Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
-        status_area,
-    );
+    frame.render_widget(Paragraph::new(text), status_area);
 }
 
 /// El visor ACOPLADO (L3): el fichero bajo el cursor, en su hueco.

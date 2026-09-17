@@ -5,7 +5,7 @@
 //! alcanzarlo sin que el bucle de eventos hiciera de intermediario.
 
 use norte_core::backend::Backend;
-use norte_i18n::ta;
+use norte_i18n::{t, ta};
 use norte_proto::{Error, VPath};
 
 use crate::app::{App, error_category};
@@ -43,6 +43,29 @@ pub fn modo_efectivo(cfg: norte_config::Images, soporta: bool) -> Modo {
         // el código.
         norte_config::Images::Blocks | norte_config::Images::Auto => Modo::Bloques,
     }
+}
+
+/// El aviso de la barra del visor cuando `Bloques` no tiene quién pinte.
+///
+/// El piloto de verdad encontró este agujero: sin previewer aprobado, un PNG
+/// en `Modo::Bloques` cae a hexview exactamente igual que un fichero que
+/// nadie sabe interpretar, y nada en pantalla distingue los dos casos. Un
+/// hexview silencioso es indistinguible de «norte no sabe hacerlo».
+///
+/// `hay_previewer` es `true` cuando algo YA se está encargando de pintar —
+/// el llamante pasa `!Viewer::is_image()`, que sólo es `false` cuando NINGÚN
+/// previewer de plugin sustituyó la vista Y los bytes son una imagen
+/// reconocida: exactamente el hueco que este aviso rellena. Para un fichero
+/// que no es imagen, o uno que sí lo es pero un previewer ya pintó,
+/// `is_image()` es `false` y `hay_previewer` llega `true` — nada que avisar.
+///
+/// En [`Modo::Kitty`] el terminal ya pinta píxeles por su cuenta y en
+/// [`Modo::Nada`] el lector pidió hexview él mismo (`images = "off"`): en
+/// los dos no hay nada que aprobar, así que el aviso sólo sale en
+/// [`Modo::Bloques`].
+#[must_use]
+pub fn aviso_de_imagen(modo: Modo, hay_previewer: bool) -> Option<String> {
+    (modo == Modo::Bloques && !hay_previewer).then(|| t("viewer-image-needs-previewer"))
 }
 
 /// Una miniatura ya pedida y lista para colocar (T4 la coloca/borra).

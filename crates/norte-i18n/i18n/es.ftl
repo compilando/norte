@@ -301,6 +301,7 @@ viewer-image-too-large = imagen demasiado grande para previsualizarla
 viewer-image-unreadable = no se entiende la cabecera de la imagen
 viewer-image-loading = cargando la imagen…
 viewer-plugin-preview-lossy = [decodificación con pérdida]
+viewer-image-needs-previewer = no hay ninguna extensión de vista previa de imagen aprobada — F12 para aprobar una
 eol-mixed = EOL mixto
 eol-none = sin EOL
 

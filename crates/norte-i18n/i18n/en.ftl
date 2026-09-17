@@ -299,6 +299,7 @@ viewer-image-too-large = image too large to preview
 viewer-image-unreadable = image header not understood
 viewer-image-loading = loading image…
 viewer-plugin-preview-lossy = [lossy decode]
+viewer-image-needs-previewer = an image previewer extension is not approved yet — F12 to approve one
 eol-mixed = mixed EOL
 eol-none = no EOL
 

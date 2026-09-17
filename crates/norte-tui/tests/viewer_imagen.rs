@@ -9,7 +9,7 @@ use norte_config::Images;
 use norte_proto::VPath;
 use norte_tui::app::{App, Pane};
 use norte_tui::kitty_graphics::{escape_borrar, escape_colocar};
-use norte_tui::viewer_open::{ImagenColocada, Modo, modo_efectivo};
+use norte_tui::viewer_open::{ImagenColocada, Modo, aviso_de_imagen, modo_efectivo};
 use ratatui::layout::Rect;
 
 fn vp(wire: &str) -> VPath {
@@ -249,4 +249,24 @@ fn el_rect_del_visor_es_el_hueco_que_draw_viewer_deja_en_blanco() {
         fila.contains(['┌', '─', '┐']),
         "encima del hueco sigue el marco del visor, no más blanco: {fila:?}"
     );
+}
+
+/// Task 5: el agujero de usabilidad que encontró el piloto — sin previewer
+/// aprobado, un PNG en `Modo::Bloques` cae a hexview igual que un fichero
+/// que nadie sabe interpretar, y nada en pantalla distinguía los dos casos.
+#[test]
+fn en_bloques_sin_previewer_el_visor_lo_dice() {
+    // Un hexview silencioso es indistinguible de «norte no sabe hacerlo».
+    let aviso = aviso_de_imagen(Modo::Bloques, false);
+    assert!(aviso.is_some(), "hay que decir que falta aprobar el plugin");
+}
+
+#[test]
+fn con_previewer_no_se_avisa_de_nada() {
+    assert!(aviso_de_imagen(Modo::Bloques, true).is_none());
+}
+
+#[test]
+fn en_off_no_se_avisa_porque_lo_pidio_el_lector() {
+    assert!(aviso_de_imagen(Modo::Nada, false).is_none());
 }
