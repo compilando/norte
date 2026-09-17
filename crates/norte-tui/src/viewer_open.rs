@@ -80,6 +80,22 @@ fn mint_image_id() -> u32 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+impl App {
+    /// Cierra el visor a pantalla completa Y su miniatura A LA VEZ.
+    ///
+    /// La invariante es que no puede haber [`App::viewer_imagen`] sin el
+    /// [`App::viewer`] al que corresponde — si no, T4 coloca o borra por un
+    /// id que ya no tiene visor detrás. Un `app.viewer = None` suelto en el
+    /// sitio que cierra el visor es exactamente el hallazgo de revisión que
+    /// esto arregla: se quedaba la miniatura vieja colgando. Un único punto
+    /// de cierre hace la invariante imposible de romper por accidente en un
+    /// sitio nuevo, en vez de tener que acordarse de los dos campos cada vez.
+    pub fn close_viewer(&mut self) {
+        self.viewer = None;
+        self.viewer_imagen = None;
+    }
+}
+
 /// Aplica `f` al visor que tiene el teclado.
 ///
 /// El acoplado (preview enfocado) o el de pantalla completa, en ese orden: es
@@ -146,10 +162,17 @@ pub async fn viewer_for(
 /// hueco es más estrecho que la pantalla).
 ///
 /// `modo` decide si además se pide la miniatura ([`ImagenColocada`]): sólo
-/// cuando el resultado es una imagen Y el modo es [`Modo::Kitty`]. Con
-/// [`Modo::Bloques`] o [`Modo::Nada`] no se pide nada aquí — `Bloques` lo
-/// pinta el previewer de plugin por su camino normal (`plugin_preview_styled`
-/// arriba), no éste.
+/// cuando los BYTES dicen que es una imagen ([`norte_frontend::viewer::image_format`])
+/// Y el modo es [`Modo::Kitty`]. Con [`Modo::Bloques`] o [`Modo::Nada`] no se
+/// pide nada aquí — `Bloques` lo pinta el previewer de plugin por su camino
+/// normal (`plugin_preview_styled` abajo), no éste.
+///
+/// A propósito NO se usa `viewer.is_image()`: ese getter es `false` en
+/// cuanto un previewer de plugin (estilizado o plano) sustituye la vista
+/// cruda, así que decidir por él dejaría la miniatura sin pedirse nunca en
+/// cuanto hubiera un previewer de imagen aprobado — que es precisamente el
+/// caso que esta clave existe para resolver: el protocolo del terminal GANA
+/// al previewer, no al revés (hallazgo de revisión: T3 fase 5).
 ///
 /// # Errors
 ///
@@ -164,6 +187,10 @@ pub async fn viewer_for_width(
     modo: Modo,
 ) -> Result<(Viewer, Option<ImagenColocada>), Error> {
     let (bytes, truncated) = read_head(backend, path).await?;
+    // Por BYTES, antes de que la cadena de preview de plugin —que puede
+    // sustituir la vista cruda entera— tenga oportunidad de esconder el
+    // formato. Ver el rustdoc de arriba.
+    let es_imagen = norte_frontend::viewer::image_format(&bytes).is_some();
     let viewer = match backend.plugin_preview_styled(path, columns).await {
         Ok(Some(p)) => {
             Viewer::with_plugin_preview_styled(path.clone(), p.plugin_name, &p.lines, p.lossy)
@@ -179,7 +206,7 @@ pub async fn viewer_for_width(
             Err(_) => Viewer::new(path.clone(), bytes, truncated),
         },
     };
-    let imagen = if viewer.is_image() && modo == Modo::Kitty {
+    let imagen = if es_imagen && modo == Modo::Kitty {
         // El lado mayor en PÍXELES que cabe en el hueco. Una celda de
         // terminal es aproximadamente 8x16 px y no hay forma portable de
         // preguntarlo, así que se estima: pasarse sólo cuesta que el
