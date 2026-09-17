@@ -139,10 +139,20 @@ const CHUNK_RAW_BYTES: usize = 3 * 1024;
 /// evita esto LEYENDO su respuesta a mano; aquí es más simple pedir
 /// silencio.
 ///
-/// `f=100` es PNG, que es lo que devuelve el kind `thumbnail`. Los bytes van
-/// en base64 porque un APC termina en `\x1b\\` y un PNG contiene esa pareja
-/// con toda normalidad: mandarlo crudo cortaría la imagen por la mitad y
-/// dejaría el resto escrito en la pantalla como texto.
+/// `f=100` es PNG, FIJO — y es una promesa que el LLAMANTE tiene que
+/// cumplir, no algo que esta función compruebe: el kind `thumbnail`
+/// (`plugin.thumbnail`, ADR 0107) puede devolver PNG, JPEG o WebP
+/// (`PluginThumbnail::mimetype`), y `thumb::reencode` en
+/// `norte-plugin-host` cae de verdad a JPEG cuando el PNG no cabe en su
+/// tope. El protocolo de kitty no tiene una clave `f=` para JPEG ni WebP
+/// —sólo PNG (100) o raster crudo (24/32)—, así que mandar cualquiera de
+/// esos dos con `f=100` no falla con un error legible: kitty lo rechaza en
+/// silencio. `viewer_open::imagen_desde_miniatura` es quien filtra ANTES de
+/// que `bytes` llegue aquí (revisión de rama, hallazgo 1): todo lo que pasa
+/// por esta función ya es PNG. Los bytes van en base64 porque un APC
+/// termina en `\x1b\\` y un PNG contiene esa pareja con toda normalidad:
+/// mandarlo crudo cortaría la imagen por la mitad y dejaría el resto
+/// escrito en la pantalla como texto.
 ///
 /// `c`/`r` son CELDAS, no píxeles: se le dice al terminal el HUECO y él
 /// encaja, que es lo que mantiene la imagen dentro del marco cuando el

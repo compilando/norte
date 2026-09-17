@@ -122,9 +122,27 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // T5 (fase 5 WOW): sin preview de plugin, un PNG en `Modo::Bloques` cae a
     // hexview igual que un fichero que nadie sabe interpretar — nada en
     // pantalla distinguía los dos casos hasta que el piloto lo encontró.
-    // `modo` se recalcula igual que en `open_viewer`: barato (config + un
-    // `OnceLock` ya resuelto) y evita cargar con un campo nuevo en `App`
-    // sólo para este aviso.
+    //
+    // Revisión de rama, hallazgo 3: `modo` NO se recalcula aquí — se lee de
+    // `App::viewer_modo`, el mismo valor que `viewer_open::open_viewer`
+    // resolvió al ABRIR el visor. Recalcularlo en cada frame contra
+    // `app.chrome.images()` (lo que hacía la primera versión) es lo que
+    // producía el bug: `[ui] images` se recarga EN CALIENTE
+    // (`config_reload::reload_config` reasigna `app.chrome` entero,
+    // `applies_live` en `norte-frontend::settings`), así que un cambio de
+    // `blocks` a `kitty` con el visor ya abierto hacía que este `match`
+    // pasara a `Modo::Kitty` para un fichero al que JAMÁS se le pidió una
+    // miniatura — el aviso «falta aprobar la extensión de miniaturas» sobre
+    // un fichero que nunca la pidió, mintiendo sobre lo que hace falta
+    // (reabrir, no aprobar nada). `App::viewer_modo` sólo cambia cuando el
+    // visor se abre de nuevo, o cuando `reload_config` suelta una miniatura
+    // `Kitty` que dejó de serlo (ver ahí el porqué de esa dirección única).
+    //
+    // El bucle de colocación (T4, `event_loop.rs`) no necesita mirar `modo`
+    // por su cuenta: `ui::imagen_a_colocar` sólo ve algo que colocar
+    // mientras `App::viewer_imagen` siga vivo, y `reload_config` ya lo
+    // suelta en el momento en que el modo deja de ser `Kitty` — un solo
+    // punto de corte en vez de una comprobación repetida en cada frame.
     //
     // NO va en el título de la cabecera pese a que el «via …» de arriba
     // vive ahí: el título derecho se right-aligna SIN recortar cuando no
@@ -145,8 +163,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // `no_hace_falta_avisar_de_miniatura` (con la trampa de "simplificarlo"
     // a `preview_plugin().is_some()` escrita en la primera); ese `match`
     // decide cuál aplica.
-    let modo =
-        crate::viewer_open::modo_efectivo(app.chrome.images(), crate::kitty_graphics::soportado());
+    let modo = app.viewer_modo;
     let no_hace_falta_avisar = match modo {
         crate::viewer_open::Modo::Kitty => crate::viewer_open::no_hace_falta_avisar_de_miniatura(
             viewer,
@@ -169,10 +186,15 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // cada frame. El marco, el título y las barras de scroll de abajo
     // siguen pintándose igual — nada de esto cambia por tener una imagen
     // puesta.
-    let hay_imagen = app
-        .viewer_imagen
-        .as_ref()
-        .is_some_and(|imagen| imagen.path == viewer.path);
+    // Revisión de rama, hallazgo 2: `imagen_a_colocar` (no una comprobación
+    // aparte del `path`) es la MISMA función que usa el run loop para
+    // decidir si coloca píxeles — antes esta línea sólo miraba el `path`, y
+    // el run loop añadía además `!algo_encima_del_visor` y que el rect no
+    // estuviera vacío; con un overlay que no tapa la pantalla entera (el
+    // menú, which-key…) este pintor blanqueaba el hueco igual que siempre
+    // mientras el run loop se negaba a colocar píxeles encima: ni imagen ni
+    // hexview.
+    let hay_imagen = super::imagen_a_colocar(app, frame.area()).is_some();
     // #29/G3a (ADR 0037): un preview de plugin trae color, por ANSI-SGR
     // saneado (`fg` únicamente) o por WIT estructurado (`role` VALIDADO +
     // `fg` de respaldo). `role` GANA sobre `fg` cuando ambos están

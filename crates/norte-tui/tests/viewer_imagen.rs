@@ -7,9 +7,12 @@
 
 use norte_config::Images;
 use norte_proto::VPath;
-use norte_tui::app::{App, Pane};
+use norte_proto::methods::PluginThumbnail;
+use norte_tui::app::{App, Modal, Pane};
 use norte_tui::kitty_graphics::{escape_borrar, escape_colocar};
-use norte_tui::viewer_open::{ImagenColocada, Modo, aviso_de_imagen, modo_efectivo};
+use norte_tui::viewer_open::{
+    ImagenColocada, Modo, aviso_de_imagen, imagen_desde_miniatura, modo_efectivo,
+};
 use ratatui::layout::Rect;
 
 fn vp(wire: &str) -> VPath {
@@ -81,6 +84,7 @@ fn cerrar_el_visor_limpia_tambien_su_miniatura() {
     app.viewer_imagen = Some(ImagenColocada {
         path: vp("mem:///x.png"),
         bytes: vec![0u8; 4],
+        mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 7,
@@ -142,7 +146,7 @@ fn colocar_lleva_el_id_el_tamano_y_base64() {
     assert!(esc.contains("i=7"), "lleva el id: {esc}");
     assert!(
         esc.contains("f=100"),
-        "PNG, que es lo que da el kind thumbnail"
+        "PNG: lo único que `imagen_desde_miniatura` deja pasar"
     );
     assert!(
         esc.contains("c=40") && esc.contains("r=20"),
@@ -162,6 +166,53 @@ fn colocar_lleva_el_id_el_tamano_y_base64() {
     // Los bytes van en base64 y NO en crudo: un APC se termina con
     // `\x1b\\`, y un PNG contiene esa pareja de bytes con toda normalidad.
     assert!(esc.contains("UE5HRkFMU08"), "base64 del contenido: {esc}");
+}
+
+fn thumb(mimetype: &str) -> PluginThumbnail {
+    PluginThumbnail {
+        plugin_id: "image-thumb".to_owned(),
+        plugin_name: "image-thumb".to_owned(),
+        mimetype: mimetype.to_owned(),
+        bytes: png_bytes_binarios(),
+        width: 8,
+        height: 4,
+    }
+}
+
+/// HALLAZGO 1 de la revisión de rama: `escape_colocar` manda `f=100` FIJO
+/// —kitty no tiene clave `f=` para JPEG ni WebP, sólo PNG (100) o raster
+/// crudo (24/32)— pero `PluginThumbnail.mimetype` admite las tres, y
+/// `thumb::reencode` (`norte-plugin-host`) cae de verdad a JPEG cuando el
+/// PNG no cabe en 4 MiB, fácil con el `max_edge` de hasta 1920 px que pide
+/// este visor. Un JPEG colocado con una cabecera que dice PNG lo rechaza
+/// kitty EN SILENCIO (`q=2`), y sin este filtro nadie se entera: ni traza,
+/// ni reintento, ni aviso.
+#[test]
+fn una_miniatura_jpeg_se_descarta() {
+    let imagen = imagen_desde_miniatura(&vp("mem:///x.jpg"), thumb("image/jpeg"));
+    assert!(
+        imagen.is_none(),
+        "kitty no sabe f= para JPEG: debe descartarse, no colocarse mal"
+    );
+}
+
+/// Misma cadena para WebP — el tercer formato que `plugin.thumbnail` puede
+/// devolver y que kitty tampoco sabe colocar.
+#[test]
+fn una_miniatura_webp_se_descarta() {
+    let imagen = imagen_desde_miniatura(&vp("mem:///x.webp"), thumb("image/webp"));
+    assert!(imagen.is_none(), "kitty no sabe f= para WebP");
+}
+
+/// El PNG, el único formato que el protocolo de kitty entiende, SÍ se
+/// coloca — y lleva su mimetype consigo, para que la invariante sea
+/// comprobable en el resto del camino (no sólo documentada).
+#[test]
+fn una_miniatura_png_se_coloca() {
+    let path = vp("mem:///x.png");
+    let imagen = imagen_desde_miniatura(&path, thumb("image/png")).expect("un PNG sí se coloca");
+    assert_eq!(imagen.mimetype, "image/png");
+    assert_eq!(imagen.path, path);
 }
 
 /// Una miniatura de verdad no cabe en un solo APC, así que hay que
@@ -223,6 +274,7 @@ fn el_rect_del_visor_es_el_hueco_que_draw_viewer_deja_en_blanco() {
     app.viewer_imagen = Some(ImagenColocada {
         path,
         bytes: vec![0u8; 4],
+        mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 7,
@@ -263,6 +315,179 @@ fn el_rect_del_visor_es_el_hueco_que_draw_viewer_deja_en_blanco() {
         fila.contains(['┌', '─', '┐']),
         "encima del hueco sigue el marco del visor, no más blanco: {fila:?}"
     );
+}
+
+fn app_con_imagen_colocada(area_no_vacia: bool) -> (App, Rect) {
+    let dir = vp("mem:///");
+    let mut app = app_en(&dir);
+    let path = vp("mem:///x.png");
+    app.viewer = Some(norte_tui::viewer::Viewer::new(
+        path.clone(),
+        png_bytes_binarios(),
+        false,
+    ));
+    app.viewer_imagen = Some(ImagenColocada {
+        path,
+        bytes: vec![0u8; 4],
+        mimetype: "image/png".to_owned(),
+        width: 8,
+        height: 4,
+        id: 7,
+        puesta_en: None,
+    });
+    let area = if area_no_vacia {
+        Rect::new(0, 0, 40, 12)
+    } else {
+        Rect::new(0, 0, 0, 0)
+    };
+    (app, area)
+}
+
+/// HALLAZGO 2 de la revisión de rama: el pintor (`draw_viewer`'s
+/// `hay_imagen`) y el run loop (`coloca`, T4) miraban condiciones
+/// DISTINTAS para decidir si la miniatura se ve — el pintor sólo el `path`,
+/// el run loop además "nada pintado encima" y "el rect no vacío". Con un
+/// overlay que NO tapa la pantalla entera (un modal pequeño, el menú,
+/// which-key) el pintor blanqueaba el hueco igual que siempre mientras el
+/// run loop se negaba a colocar píxeles: ni imagen ni hexview. Las dos
+/// preguntas son ahora la MISMA función (`ui::imagen_a_colocar`).
+#[test]
+fn con_algo_encima_no_se_coloca_aunque_el_path_case() {
+    let (mut app, area) = app_con_imagen_colocada(true);
+    assert!(
+        norte_tui::ui::imagen_a_colocar(&app, area).is_some(),
+        "sin nada encima, la miniatura se coloca"
+    );
+    app.modal = Some(Modal::ConfirmQuit);
+    assert!(
+        norte_tui::ui::imagen_a_colocar(&app, area).is_none(),
+        "un modal abierto sobre el visor no debe dejar colocar píxeles"
+    );
+}
+
+/// El hueco vacío (terminal demasiado bajo para dejar sitio al marco y su
+/// interior) es el otro caso en el que no se coloca nada — el test del rect
+/// vacío que la revisión de rama pidió por separado de la comprobación de
+/// overlay de arriba: antes de esta pasada, `imagen_a_colocar` no existía y
+/// nada probaba esta rama de forma aislada del resto de `coloca`.
+#[test]
+fn con_el_rect_vacio_no_se_coloca() {
+    let (app, area) = app_con_imagen_colocada(false);
+    assert!(
+        norte_tui::ui::imagen_a_colocar(&app, area).is_none(),
+        "sin hueco donde caer, no hay nada que colocar: {area:?}"
+    );
+}
+
+/// HALLAZGO 3 de la revisión de rama: el modo con que se PIDE la miniatura
+/// (`viewer_open::open_viewer`, resuelto una vez al abrir) y el modo con que
+/// se AVISA y COLOCA (recalculado en cada frame contra la config vigente)
+/// podían divergir en caliente — `[ui] images` recarga en vivo
+/// (`applies_live`). Estos dos tests fijan el método que
+/// `config_reload::reload_config` llama tras reasignar `App::chrome`
+/// (`reload_config` en sí pide un `Backend`, tres `Resolver` y una
+/// `Layers`, demasiado para un test unitario de esto).
+#[test]
+fn kitty_a_off_suelta_la_miniatura_colocada_ya_puesta() {
+    let (mut app, _) = app_con_imagen_colocada(true);
+    app.viewer_modo = Modo::Kitty;
+    let soltada = app.soltar_miniatura_si_deja_de_ser_kitty(Modo::Nada);
+    assert!(soltada, "un Kitty que pasa a off debe soltar la miniatura");
+    assert!(
+        app.viewer_imagen.is_none(),
+        "sin esto los píxeles se quedan pegados en pantalla para siempre, \
+         violando lo que la ayuda promete de `off`"
+    );
+    assert_eq!(
+        app.viewer_modo,
+        Modo::Nada,
+        "el modo pineado se actualiza a la vez que se suelta la miniatura"
+    );
+}
+
+/// La dirección contraria (`Bloques`/`Nada` → `Kitty`) NO suelta ni
+/// actualiza nada, a propósito: hacerlo resucitaría el otro agujero de la
+/// misma revisión — el aviso «falta aprobar la extensión de miniaturas»
+/// saldría sobre un fichero al que el modo nuevo JAMÁS le pidió una.
+#[test]
+fn blocks_a_kitty_no_toca_el_modo_pineado() {
+    let dir = vp("mem:///");
+    let mut app = app_en(&dir);
+    app.viewer = Some(norte_tui::viewer::Viewer::new(
+        vp("mem:///x.png"),
+        png_bytes_binarios(),
+        false,
+    ));
+    app.viewer_modo = Modo::Bloques;
+    let soltada = app.soltar_miniatura_si_deja_de_ser_kitty(Modo::Kitty);
+    assert!(!soltada, "sólo actúa cuando el modo pineado YA era Kitty");
+    assert_eq!(
+        app.viewer_modo,
+        Modo::Bloques,
+        "se deja pineado hasta que el lector reabra el fichero"
+    );
+}
+
+/// Extremo a extremo del mismo hallazgo: `panels::draw_viewer` tiene que
+/// leer `App::viewer_modo` (pineado) y NO recalcular contra `app.chrome`
+/// EN VIVO. Se simula justo el escenario que la revisión describió — el
+/// lector abrió el PNG bajo `Bloques` (nunca se le pidió miniatura) y LUEGO
+/// la config cambió a `kitty` en caliente, sin que el lector reabra nada —
+/// y se comprueba que el aviso sigue siendo el de `Bloques` («vista
+/// previa»), no el de `Kitty` («miniaturas») sobre un fichero al que esa
+/// extensión nunca se le pidió.
+#[test]
+fn el_pintor_usa_el_modo_pineado_no_el_chrome_en_vivo() {
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
+    let dir = vp("mem:///");
+    let mut app = app_en(&dir);
+    app.viewer = Some(norte_tui::viewer::Viewer::new(
+        vp("mem:///x.png"),
+        png_bytes_binarios(),
+        false,
+    ));
+    // Lo que `open_viewer` fijó cuando el lector abrió el fichero.
+    app.viewer_modo = Modo::Bloques;
+    // Lo que un hot-reload cambió DESPUÉS, sin tocar `viewer_modo` (el
+    // propio arreglo del hallazgo 3: sólo la dirección Kitty→algo-más
+    // actualiza el modo pineado).
+    app.chrome.images = Some(Images::Kitty);
+    // Sin `viewer_imagen`: nunca se pidió una miniatura bajo `Bloques`.
+
+    let area = Rect::new(0, 0, 80, 16);
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+            .expect("terminal de test");
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, &app))
+        .expect("draw");
+    let buf = terminal.backend().buffer();
+    let status_y = area.height - 1;
+    let fila: String = (0..area.width)
+        .map(|x| buf[(x, status_y)].symbol().chars().next().unwrap_or(' '))
+        .collect();
+    assert!(
+        fila.contains("vista previa"),
+        "el aviso debe seguir siendo el de Bloques, el modo con que se \
+         abrió: {fila:?}"
+    );
+    assert!(
+        !fila.contains("miniaturas"),
+        "el aviso de Kitty mentiría: nunca se le pidió una miniatura a \
+         este fichero: {fila:?}"
+    );
+}
+
+/// Sin visor abierto no hay nada que soltar — un cambio de config con el
+/// navegador (no el visor) al frente no debe tocar `viewer_imagen`, que ya
+/// es `None`.
+#[test]
+fn sin_visor_no_hay_nada_que_soltar() {
+    let dir = vp("mem:///");
+    let mut app = app_en(&dir);
+    assert_eq!(app.viewer_modo, Modo::Nada);
+    let soltada = app.soltar_miniatura_si_deja_de_ser_kitty(Modo::Nada);
+    assert!(!soltada, "sin viewer abierto no hay miniatura que soltar");
 }
 
 /// Task 5: el agujero de usabilidad que encontró el piloto — sin previewer
@@ -343,6 +568,7 @@ fn no_hace_falta_avisar_de_miniatura_cuando_ya_hay_una_colocada() {
     let imagen = ImagenColocada {
         path,
         bytes: vec![0u8; 4],
+        mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 1,
@@ -364,6 +590,7 @@ fn no_hace_falta_avisar_de_miniatura_compara_el_path() {
     let de_otro_fichero = ImagenColocada {
         path: vp("mem:///otro.png"),
         bytes: vec![0u8; 4],
+        mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 1,
@@ -405,6 +632,12 @@ fn no_hace_falta_avisar_de_miniatura_cuando_un_previewer_ya_sustituyo_la_vista()
 fn fila_de_estado_con_png_sin_previewer() -> String {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
+    // Hallazgo 3: `panels::draw_viewer` lee `App::viewer_modo` (fijado al
+    // abrir), no un recálculo en vivo — `Auto` sin sonda de terminal (no
+    // hay tty en un test) es `Modo::Bloques`
+    // (`auto_usa_kitty_solo_si_el_terminal_sabe`), que es justo lo que
+    // `open_viewer` habría fijado aquí.
+    app.viewer_modo = Modo::Bloques;
     let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
     bytes.resize(40, 0);
     let mut v = norte_tui::viewer::Viewer::new(vp("mem:///x.png"), bytes, false);
@@ -482,6 +715,11 @@ fn fila_de_estado_con_png_en_kitty_sin_miniatura() -> String {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     app.chrome.images = Some(Images::Kitty);
+    // Hallazgo 3: `panels::draw_viewer` lee `App::viewer_modo` (fijado al
+    // abrir), no `app.chrome.images()` en vivo — este test bypassa
+    // `open_viewer`, así que tiene que fijarlo él mismo, tal como lo haría
+    // `open_viewer` para un visor abierto bajo este `chrome`.
+    app.viewer_modo = Modo::Kitty;
     let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
     bytes.resize(40, 0);
     let mut v = norte_tui::viewer::Viewer::new(vp("mem:///x.png"), bytes, false);
@@ -547,6 +785,9 @@ fn en_kitty_con_miniatura_colocada_no_sale_el_aviso() {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     app.chrome.images = Some(Images::Kitty);
+    // Ídem: fijar el modo pineado a mano, ver el comentario en
+    // `fila_de_estado_con_png_en_kitty_sin_miniatura`.
+    app.viewer_modo = Modo::Kitty;
     let path = vp("mem:///x.png");
     app.viewer = Some(norte_tui::viewer::Viewer::new(
         path.clone(),
@@ -556,6 +797,7 @@ fn en_kitty_con_miniatura_colocada_no_sale_el_aviso() {
     app.viewer_imagen = Some(ImagenColocada {
         path,
         bytes: vec![0u8; 4],
+        mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 1,

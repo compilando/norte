@@ -26,11 +26,20 @@ is a place this could have gone wrong quietly.
 **1. The pixel source is the existing `thumbnail` plugin kind
 (`backend.plugin_thumbnail`, protocol 0.73.0, ADR 0107), not a new previewer.**
 The window already asks that kind for a picture when its own decoder cannot
-show one. A `thumbnail` guest turns bytes into a small PNG/JPEG/WebP raster —
-exactly what the terminal needs to hand to kitty's protocol. Building a second
-plugin kind so the TUI could ask the "same" question in its own vocabulary is
-the divergence ADR 0077 exists to forbid: one command, two meanings, decided
-twice and drifting the moment one side changes. One kind, two callers.
+show one. A `thumbnail` guest turns bytes into a small raster and can hand
+back PNG, JPEG, or WebP (`PluginThumbnail::mimetype`) — kitty's graphics
+protocol eats exactly one of those: `f=100` is PNG, and there is no `f=` for
+JPEG or WebP, only PNG or a raw pixel dump. The TUI discards a thumbnail
+that came back as anything but PNG (`viewer_open::imagen_desde_miniatura`)
+and falls back to its usual path (hexview, plus the
+`viewer-image-needs-thumbnail` notice) rather than feeding kitty a format it
+cannot read — a fix from the branch-wide review (finding 1), after a JPEG
+thumbnail with a `f=100` header sent to a real kitty terminal turned out to
+be rejected silently. Building a second plugin kind so the TUI could ask the
+"same" question in its own vocabulary is the divergence ADR 0077 exists to
+forbid: one command, two meanings, decided twice and drifting the moment one
+side changes. One kind, two callers, one of which is pickier about the
+answer.
 
 **2. The pixels are written to the tty AFTER `terminal.draw`, outside
 ratatui, never as cell content.** A kitty graphics APC (`\x1b_G…\x1b\\`) is not

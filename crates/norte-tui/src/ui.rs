@@ -585,6 +585,31 @@ pub fn algo_encima_del_visor(app: &App) -> bool {
         || app.modal.is_some()
 }
 
+/// El hueco (interior, SIN bordes) donde debe colocarse la miniatura de
+/// [`App::viewer_imagen`] este frame, o `None` si no debe verse — ni sus
+/// píxeles ni el hueco en blanco que les deja sitio.
+///
+/// Revisión de rama, hallazgo 2: `panels::draw_viewer` (el pintor, que
+/// blanquea el hueco) y el run loop (T4, que coloca los píxeles de verdad,
+/// `event_loop.rs`) hacían esta cuenta cada uno por su lado — el pintor
+/// sólo miraba el `path`, el run loop añadía [`algo_encima_del_visor`] y que
+/// el rect no estuviera vacío. Con un overlay que NO tapa la pantalla
+/// entera (el menú, which-key, un modal pequeño, el popup de navegación) el
+/// pintor blanqueaba el hueco IGUAL que siempre mientras el run loop se
+/// negaba a colocar píxeles: ni imagen ni hexview, un visor vacío. Con las
+/// dos preguntas resueltas por la MISMA función, divergir así deja de ser
+/// posible (memoria `funcion-compartida-no-basta`).
+#[must_use]
+pub fn imagen_a_colocar(app: &App, area: Rect) -> Option<Rect> {
+    let viewer = app.viewer.as_ref()?;
+    let imagen = app.viewer_imagen.as_ref()?;
+    if imagen.path != viewer.path || algo_encima_del_visor(app) {
+        return None;
+    }
+    let rect = rect_del_visor(app, area);
+    (!rect.is_empty()).then_some(rect)
+}
+
 /// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto
 /// (nombre/contenido) con un `_` en el activo, los dos toggles regex/case y la
 /// raíz del walk (el `cwd` del pane, no editable) — todo saneado, jamás

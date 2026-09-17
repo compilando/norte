@@ -407,40 +407,31 @@ pub async fn run(
         // con un `tracing::debug!`.
         {
             use std::io::Write as _;
-            // `coloca` mira TRES cosas, ninguna de las cuales miraba la
-            // primera versión (revisión, CRÍTICO 2/IMPORTANTE 5):
-            // - hay una imagen pedida;
-            // - es la del fichero que el visor enseña AHORA (mismo criterio
-            //   que `draw_viewer`'s `hay_imagen` — si no, se podría colocar
-            //   la miniatura de un fichero que ya no es el que se ve, en la
-            //   ventana entre cambiar `app.viewer` y que `viewer_open`
-            //   actualice `app.viewer_imagen`);
-            // - no hay NADA pintado encima del visor este frame
-            //   (`ui::algo_encima_del_visor`): los píxeles de kitty van por
-            //   delante del texto y sobreviven a cualquier repintado de
-            //   celdas, así que sin este guardia un F1 o una paleta abiertos
-            //   sobre el visor quedaban tapados por la miniatura.
+            // `ui::imagen_a_colocar` mira TODO lo que hace falta para
+            // decidir si se colocan píxeles este frame — la MISMA función
+            // que usa `panels::draw_viewer` para decidir si blanquea el
+            // hueco (revisión de rama, hallazgo 2: antes eran dos cuentas
+            // separadas que podían divergir, ver su rustdoc):
+            // - hay una imagen pedida, para el fichero que el visor enseña
+            //   AHORA (no la de un fichero anterior, colgada en la ventana
+            //   entre cambiar `app.viewer` y que `viewer_open` actualice
+            //   `app.viewer_imagen`);
+            // - no hay NADA pintado encima del visor este frame: los
+            //   píxeles de kitty van por delante del texto y sobreviven a
+            //   cualquier repintado de celdas, así que sin este guardia un
+            //   F1 o una paleta abiertos sobre el visor quedaban tapados
+            //   por la miniatura;
+            // - el rect no es vacío (revisión, ronda 2, rotura del CRÍTICO
+            //   2): un `rect` de ancho o alto cero (terminal muy bajo, el
+            //   cuerpo se queda sin sitio tras las barras) no se filtra —
+            //   y en kitty `c=0,r=0` significa «tamaño NATURAL de la
+            //   imagen», así que sin este guardia una miniatura se
+            //   colocaría a tamaño de píxeles sobre la pantalla entera.
             //
             // Se calcula ANTES de tomar prestado `app.viewer_imagen` en modo
-            // mutable: las tres miran el `App` entero, y un préstamo mutable
-            // de un campo suyo ya vivo se lo impediría.
-            let coloca = app.viewer_imagen.is_some()
-                && !ui::algo_encima_del_visor(app)
-                && app
-                    .viewer
-                    .as_ref()
-                    .is_some_and(|v| app.viewer_imagen.as_ref().is_some_and(|i| i.path == v.path));
-            // Revisión, ronda 2 (rotura del CRÍTICO 2): un `rect` de ancho o
-            // alto cero (terminal muy bajo, el cuerpo se queda sin sitio
-            // tras las barras) no se filtra — y en kitty `c=0,r=0` significa
-            // «tamaño NATURAL de la imagen», así que sin este guardia una
-            // miniatura se colocaría a tamaño de píxeles sobre la pantalla
-            // entera. `is_empty()` no importaba antes de aplicar
-            // `block_inner`: el marco CON bordes llegaba a cero dos filas y
-            // dos columnas más tarde que su interior.
-            let rect = coloca
-                .then(|| ui::rect_del_visor(app, painted_area))
-                .filter(|r| !r.is_empty());
+            // mutable: mira el `App` entero, y un préstamo mutable de un
+            // campo suyo ya vivo se lo impediría.
+            let rect = ui::imagen_a_colocar(app, painted_area);
             match (&mut app.viewer_imagen, rect) {
                 (Some(imagen), Some(rect)) => {
                     // IMPORTANTE 4: sin este atajo, un visor QUIETO

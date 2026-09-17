@@ -142,8 +142,14 @@ pub struct ImagenColocada {
     /// El fichero del que es esta miniatura — para saber si sigue siendo
     /// la que el visor enseña cuando el lector ya se movió a otro.
     pub path: VPath,
-    /// Los bytes codificados (PNG/JPEG/WebP) que devolvió el plugin.
+    /// Los bytes codificados que devolvió el plugin — SIEMPRE
+    /// `"image/png"` (ver [`imagen_desde_miniatura`]): es el único formato
+    /// que kitty sabe colocar con `f=100`, así que nada que llegue hasta
+    /// aquí es otra cosa.
     pub bytes: Vec<u8>,
+    /// El mimetype que dijo el plugin — se guarda para que la invariante de
+    /// arriba (siempre PNG) sea COMPROBABLE, no sólo documentada.
+    pub mimetype: String,
     /// Ancho en píxeles, el que dice la cabecera del raster.
     pub width: u32,
     /// Alto en píxeles, el que dice la cabecera del raster.
@@ -166,6 +172,42 @@ fn mint_image_id() -> u32 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Convierte lo que devolvió `plugin.thumbnail` en una [`ImagenColocada`], o
+/// `None` si kitty no sabe colocar ese formato.
+///
+/// Revisión de rama, hallazgo 1: `escape_colocar` manda `f=100` FIJO —el
+/// protocolo de kitty no tiene una clave `f=` para JPEG ni para WebP, sólo
+/// PNG (100) o raster crudo (24/32)— pero
+/// [`norte_proto::methods::PluginThumbnail::mimetype`] admite las tres
+/// (`thumb::reencode` en `norte-plugin-host` escribe PNG y cae a JPEG
+/// calidad 85 cuando el PNG no cabe en 4 MiB, algo fácil con el `max_edge`
+/// de hasta 1920 px que pide este visor). Sin este filtro, un JPEG viaja con
+/// una cabecera que dice PNG: kitty lo rechaza, `q=2` calla el error,
+/// [`crate::kitty_graphics::marcar_colocada`] ya anotó el id así que nadie
+/// reintenta, y [`no_hace_falta_avisar_de_miniatura`] ve una
+/// [`ImagenColocada`] para este fichero y calla el aviso — un visor vacío
+/// sin ningún rastro de por qué. Descartar aquí reengancha el camino que ya
+/// funciona: sin [`App::viewer_imagen`](crate::app::App::viewer_imagen), el
+/// aviso `viewer-image-needs-thumbnail` vuelve a salir.
+#[must_use]
+pub fn imagen_desde_miniatura(
+    path: &VPath,
+    thumb: norte_proto::methods::PluginThumbnail,
+) -> Option<ImagenColocada> {
+    if thumb.mimetype != "image/png" {
+        return None;
+    }
+    Some(ImagenColocada {
+        path: path.clone(),
+        bytes: thumb.bytes,
+        mimetype: thumb.mimetype,
+        width: thumb.width,
+        height: thumb.height,
+        id: mint_image_id(),
+        puesta_en: None,
+    })
+}
+
 impl App {
     /// Cierra el visor a pantalla completa Y su miniatura A LA VEZ.
     ///
@@ -179,6 +221,40 @@ impl App {
     pub fn close_viewer(&mut self) {
         self.viewer = None;
         self.viewer_imagen = None;
+        // `viewer_modo` sin visor no significa nada — se deja en `Nada`
+        // como `App::new`, para que un `viewer_modo` viejo (Hallazgo 3) no
+        // sobreviva a este visor y confunda al que abra el siguiente antes
+        // de que `open_viewer` lo fije de nuevo.
+        self.viewer_modo = Modo::Nada;
+    }
+
+    /// Suelta la miniatura colocada cuando el modo EFECTIVO (recién resuelto
+    /// contra la config recargada) dejó de ser [`Modo::Kitty`] — llamado
+    /// SÓLO desde [`crate::config_reload::reload_config`], después de
+    /// reasignar `App::chrome`.
+    ///
+    /// Revisión de rama, hallazgo 3: sin esto, un `Kitty` que pasa a `off` o
+    /// `blocks` en caliente deja los píxeles ya colocados en pantalla PARA
+    /// SIEMPRE — nada vuelve a mirarlos una vez que
+    /// [`App::viewer_modo`] quedó pineado al abrir, y la ayuda promete que
+    /// `off` «deja el visor en hexview sin más», una promesa que sólo se
+    /// cumple si algo suelta la miniatura vieja.
+    ///
+    /// A propósito NO hace nada en la dirección contraria
+    /// (`blocks`/`off` → `kitty`, o cualquier cambio mientras ya está en
+    /// `Bloques`/`Nada`): actualizar el modo pineado ahí resucitaría el otro
+    /// agujero de la misma revisión — el aviso «falta aprobar la extensión
+    /// de miniaturas» saldría para un fichero al que el modo nuevo JAMÁS le
+    /// pidió una. Devuelve si soltó algo, sólo para que quien llama pueda
+    /// registrarlo si quiere; hoy nadie lo usa.
+    pub fn soltar_miniatura_si_deja_de_ser_kitty(&mut self, modo_efectivo: Modo) -> bool {
+        if self.viewer.is_none() || self.viewer_modo != Modo::Kitty || modo_efectivo == Modo::Kitty
+        {
+            return false;
+        }
+        self.viewer_imagen = None;
+        self.viewer_modo = modo_efectivo;
+        true
     }
 }
 
@@ -303,14 +379,7 @@ pub async fn viewer_for_width(
             .await
             .ok()
             .flatten()
-            .map(|thumb| ImagenColocada {
-                path: path.clone(),
-                bytes: thumb.bytes,
-                width: thumb.width,
-                height: thumb.height,
-                id: mint_image_id(),
-                puesta_en: None,
-            })
+            .and_then(|thumb| imagen_desde_miniatura(path, thumb))
     } else {
         None
     };
@@ -343,6 +412,10 @@ pub async fn open_viewer(
         Waited::Done(Ok((viewer, imagen))) => {
             app.viewer = Some(viewer);
             app.viewer_imagen = imagen;
+            // Hallazgo 3: el modo con que se PIDIÓ la miniatura, fijado
+            // aquí y no recalculado después — ver el rustdoc de
+            // `App::viewer_modo`.
+            app.viewer_modo = modo;
         }
         Waited::Done(Err(e)) => {
             app.message = Some(ta("msg-view-error", &[("error", &error_category(&e))]));

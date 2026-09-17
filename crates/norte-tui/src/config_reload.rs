@@ -83,6 +83,17 @@ pub async fn reload_config(
                 app.panel_bar = cfg.common.ui_panel_bar.unwrap_or(true);
                 // El cromo entero, por lo mismo: cada frame lo lee.
                 app.chrome = cfg.common.ui_chrome;
+                // Hallazgo 3 (revisión de rama, fase 5): `[ui] images` vive
+                // en el cromo que acaba de reasignarse arriba —
+                // `App::viewer_modo` se fijó al ABRIR el visor, y sin este
+                // corte un `Kitty` que deja de serlo en caliente dejaba los
+                // píxeles ya colocados en pantalla para siempre. Ver el
+                // rustdoc de `App::soltar_miniatura_si_deja_de_ser_kitty`
+                // para por qué la dirección contraria NO se sigue aquí.
+                app.soltar_miniatura_si_deja_de_ser_kitty(crate::viewer_open::modo_efectivo(
+                    app.chrome.images(),
+                    crate::kitty_graphics::soportado(),
+                ));
                 // El tope de la historia, también en caliente: al bajarlo se
                 // tira lo más lejano, nunca lo que el lector acaba de andar.
                 app.history.set_capacity(app.chrome.history_size());

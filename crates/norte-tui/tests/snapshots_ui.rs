@@ -1447,6 +1447,12 @@ fn snapshot_viewer_texto_y_hex() {
     );
     v.scroll_down(0);
     app.viewer = Some(v);
+    // Hallazgo 3 (revisión de rama, fase 5): `panels::draw_viewer` lee
+    // `App::viewer_modo` (fijado al ABRIR), no un recálculo en vivo — este
+    // test construye `App` a mano, así que fija el modo que `open_viewer`
+    // habría dejado bajo el `chrome` por defecto: `Auto` sin sonda de
+    // terminal (no hay tty en un test) es `Modo::Bloques`.
+    app.viewer_modo = norte_tui::viewer_open::Modo::Bloques;
     let hex = render(&app);
     insta::assert_snapshot!(format!("{text}\n===\n{hex}"));
 }
