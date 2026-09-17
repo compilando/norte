@@ -13,8 +13,13 @@ independently through `PROTOCOL_VERSION`.
   ADR 0117). `fs.dir_usage` walks one directory as a cancellable task and
   `fs.dir_usage_report` collects what it measured: one entry per child with the
   size of its whole subtree, which is what a listing cannot tell you and what a
-  disk map is drawn from. It is the groundwork for that map — **nothing paints
-  it yet**; the terminal and the window get it in a later step.
+  disk map is drawn from. **The terminal paints it**: `alt+z` opens a disk map
+  panel where every child is a rectangle sized by what it takes up, the arrows
+  walk them, Enter goes into the selected one and a click does both at once. It
+  answers "where did my space go?", which a listing sorted by size cannot —
+  there a directory weighs what its own node weighs, not what is inside it. The
+  window knows the panel and shows it in its bar; measuring from the window
+  comes next.
   It declares what it does not know instead of rounding it off: a child whose
   subtree could not be fully read is marked rather than reported short, a
   listing the provider itself admits it truncated is never announced as

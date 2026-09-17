@@ -136,12 +136,41 @@ tienen que volver a descubrir:
 3. Pintado con el `StyledFrame` que ya sabe pintar la fase 3, y el clic
    resolviendo `hit_at` → `nav.enter` del hijo.
 
+### Lo que T4 dejó dicho (`ea2189fc`)
+
+Hecho, y con el mínimo de T5 dentro: declarar un kind COMPARTIDO obliga a la
+ventana a reconocerlo aunque todavía no lo mida, así que `SlotView::DiskMap`, el
+puente 71 y `render/diskmap.ts` entraron aquí. Tres cosas para T5:
+
+- **Nadie llena `mapas` todavía.** La ventana declara el hueco, lo abre y lo
+  pinta —vacío, con su título y diciendo si mide—, pero pedir `fs.dir_usage`
+  desde el host y aterrizar el informe es lo que queda. La PODA de `mapas`
+  (un `SlotId` se reutiliza y el mapa nuevo heredaría lo medido del anterior)
+  está escrita en prosa en `controller/diskmap.rs` y entra con quien lo llene:
+  una poda sin nada que podar es código muerto que nadie sabe si se llamaba.
+- **El clic ya viaja.** Va como CELDA por `panel_click`, igual que el de un
+  panel de plugin, así que navegar es resolverlo en el host contra el marco que
+  él mismo repartió — y sin pasar por `zona_puede`, porque el marco es de casa.
+  El `arg` no cruza el cable a propósito: es un NOMBRE de fichero, y tendría
+  que elegir entre la forma que se pinta (enmascarada, que no identifica nada) y
+  la reversible.
+- **Un kind compartido dispara CINCO gates** que la crate del terminal no ve, y
+  cada uno espera a que el anterior esté verde: el corpus de ayuda
+  (`DOCUMENTED`, con su longitud en el tipo), la paridad de la ventana
+  (`IMPLEMENTADOS`/`NO_APLICA`/`APLAZADOS` — este último exige issue REAL), la
+  lista de sondas (`NO_SIGUEN`, con motivo), `filas_de` en `payload.rs` y la
+  tabla `vista_de` de `sondas.rs`, más el orden de botones de la barra en los
+  dos frontends. Con la lista delante es una pasada; sin ella fueron seis.
+
 ## T5 — La ventana
 
-1. `SlotView::DiskMap` (puente 71) y `render/diskmap.ts`.
+1. `SlotView::DiskMap` (puente 71) y `render/diskmap.ts`. **Hecho en T4.**
 2. La misma regla que el panel de plugin: el renderer manda la CELDA, el host
    resuelve. Aquí el host además NO filtra por `zona_puede`, porque el marco es
-   suyo.
+   suyo. **El cable está; falta que el host resuelva y navegue.**
+3. Que la ventana MIDA: `fs.dir_usage` desde el host, el informe aterrizado con
+   el mismo descarte que el terminal (si el panel ya apunta a otro directorio,
+   lo que llega es de otro sitio), y la poda de `mapas` con su llamador.
 
 ## T6 — ADR, ayuda y cierre
 
