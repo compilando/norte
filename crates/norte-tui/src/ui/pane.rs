@@ -68,6 +68,118 @@ pub fn painted_len_and_selection(pane: &Pane) -> (usize, Option<usize>) {
     }
 }
 
+/// Los índices que el pintor formatea de verdad: LA VENTANA, no el listado.
+///
+/// `offset` es la ventana del MODELO (`PaneState::reconcile_viewport`,
+/// pegajosa) y `alto` las filas que el frame deja para el listado. El rango
+/// se recorta al `total`, así que el final del listado pinta lo que queda y
+/// un `offset` que se quedó más allá (el listado encogió bajo una ventana
+/// vieja) da rango VACÍO en vez de reventar.
+///
+/// Existe porque formatear una fila por ENTRADA para enseñar treinta y tres
+/// costaba ~50 ms de CPU por frame en un directorio de 3794 entradas, con el
+/// bucle repintando once veces por segundo: casi un núcleo entero quemado
+/// estando quieto, y el coste crecía con el tamaño del directorio.
+///
+/// UNA cuenta y no una segunda al lado de [`Pane::viewport_offset`]: el hit
+/// test del ratón resuelve contra esa misma ventana, y dos cuentas del mismo
+/// hueco divergen en silencio — ahí es donde un click acaba marcando el
+/// fichero de al lado (memoria `funcion-compartida-no-basta`).
+pub(crate) fn filas_pintadas(offset: usize, total: usize, alto: usize) -> std::ops::Range<usize> {
+    let desde = offset.min(total);
+    let hasta = desde.saturating_add(alto).min(total);
+    desde..hasta
+}
+
+/// El estado con el que ratatui pinta la lista, para una `ventana` ya
+/// recortada.
+///
+/// Dos cosas, y las dos se siguen de que `items` sea SOLO la ventana:
+///
+/// - la selección va en coordenadas de lo PINTADO, así que se rebasa
+///   restándole el inicio de la ventana; un cursor fuera de ella no resalta
+///   ninguna fila, que es lo que ya pasaba cuando el recorte lo hacía
+///   ratatui;
+/// - el `offset` es CERO a propósito. Poner ahí el del modelo saltaría filas
+///   dos veces y pintaría el hueco vacío.
+///
+/// La ventana del MODELO (`PaneState::reconcile_viewport`, pegajosa) sigue
+/// viviendo en `Pane::viewport_offset`, y es la que `pane_geometry` declara
+/// al ratón: las dos salen del mismo sitio, que es lo que impide que un
+/// click resuelva la fila de al lado.
+fn estado_de_lista(selected: Option<usize>, ventana: &std::ops::Range<usize>) -> ListState {
+    let mut state = ListState::default();
+    state.select(
+        selected
+            .and_then(|s| s.checked_sub(ventana.start))
+            .filter(|k| *k < ventana.len()),
+    );
+    *state.offset_mut() = 0;
+    state
+}
+
+/// La ventana que este frame pinta de `pane`, resuelta ANTES de formatear
+/// ninguna fila.
+///
+/// El alto sale de la misma cuenta que [`draw_tab_strip`] hace al repartir el
+/// interior del bloque —barra de pestañas si la hay, cabecera de columnas, y
+/// el listado debajo—; aquí solo se adelanta, el pintado sigue en su sitio.
+/// Adelantarlo es lo que permite formatear la VENTANA en vez del listado
+/// entero, que es de donde salía el coste.
+fn ventana_del_pane(
+    pane: &Pane,
+    area: Rect,
+    con_pestanas: bool,
+    painted_len: usize,
+) -> std::ops::Range<usize> {
+    let inner = super::geometry::block_inner(area);
+    let bar = u16::from(con_pestanas);
+    let alto = usize::from(inner.height.saturating_sub(bar).saturating_sub(1));
+    filas_pintadas(pane.viewport_offset(), painted_len, alto)
+}
+
+#[cfg(test)]
+mod filas_pintadas_tests {
+    use super::filas_pintadas;
+
+    /// El caso que costó encontrar: un directorio grande NO puede formatear
+    /// una fila por entrada para enseñar la ventana.
+    ///
+    /// Medido antes del arreglo: `/usr/share/man/man1` (3794 entradas) daba
+    /// ~550 ms de CPU por segundo en el pintado, 11 frames por segundo, o sea
+    /// ~50 ms por frame para enseñar 33 filas. El coste era lineal en el
+    /// tamaño del listado, que es exactamente lo que este rango impide.
+    #[test]
+    fn un_listado_enorme_pinta_solo_la_ventana() {
+        let r = filas_pintadas(0, 3794, 33);
+        assert_eq!(r.len(), 33, "33 filas de ventana, no 3794");
+        let r = filas_pintadas(3000, 100_000, 40);
+        assert_eq!(r.len(), 40, "el tamaño del listado no cambia el coste");
+        assert_eq!(r.start, 3000, "empieza donde dice la ventana del modelo");
+    }
+
+    /// El final del listado se recorta al total: pedir más filas de las que
+    /// quedan no inventa entradas ni desborda.
+    #[test]
+    fn el_ultimo_tramo_se_recorta_al_total() {
+        let r = filas_pintadas(95, 100, 33);
+        assert_eq!(r, 95..100, "solo quedan cinco");
+    }
+
+    /// Un offset más allá del final da rango VACÍO, no un pánico ni un rango
+    /// invertido. Pasa de verdad: el listado encoge (un refresco, un filtro)
+    /// mientras la ventana del modelo sigue donde estaba.
+    #[test]
+    fn un_offset_fuera_de_rango_no_revienta() {
+        assert!(filas_pintadas(500, 100, 33).is_empty());
+        assert!(filas_pintadas(0, 0, 33).is_empty(), "listado vacío");
+        assert!(
+            filas_pintadas(0, 100, 0).is_empty(),
+            "sin alto no hay filas"
+        );
+    }
+}
+
 /// La línea de cabecera (#108 L5): etiquetas Fluent (o la `header` custom
 /// del spec, #108 7b — YA saneada y capada al resolver, aquí solo el
 /// recorte por ancho), la del orden activo con `▲`/`▼`. Ancho fiel al de
@@ -276,9 +388,17 @@ fn pane_title(
 // Once argumentos: es el cableado del render de un pane, no una API. Agruparlos
 // en un struct solo movería la lista a otro sitio y añadiría un tipo que nadie
 // usa dos veces.
+//
+// Y una línea por encima del tope de `too_many_lines`, DESPUÉS de sacar de aquí
+// todo lo que tenía nombre propio: el reparto de la ventana
+// (`ventana_del_pane`) y el estado de la lista (`estado_de_lista`), 34 líneas
+// entre las dos. Lo que queda es secuencia de pintado sin juntas naturales —
+// bloque, cabecera, listado—, y trocearla más para ganar una línea sería
+// partirla por donde no se parte.
 #[expect(
     clippy::too_many_arguments,
-    reason = "cada arg es una fuente de pintado; un struct no se usaría dos veces"
+    clippy::too_many_lines,
+    reason = "cableado del render de un pane; lo extraíble ya salió a ventana_del_pane y estado_de_lista"
 )]
 pub(crate) fn draw_pane(
     frame: &mut Frame<'_>,
@@ -361,9 +481,12 @@ pub(crate) fn draw_pane(
     // tiene icono, todas llevan el hueco.
     let icons = pane.any_icon();
     let dir_slash = pinta_barra(dir_indicator, icons);
+    let ventana = ventana_del_pane(pane, area, tabs.is_some(), painted_len);
     let items: Vec<ListItem<'_>> = match pane.quick_visible() {
         Some(vis) => vis
             .iter()
+            .skip(ventana.start)
+            .take(ventana.len())
             .filter_map(|&i| pane.entries().get(i).map(|e| (i, e)))
             .map(|(i, e)| {
                 entry_item(
@@ -385,6 +508,8 @@ pub(crate) fn draw_pane(
             .entries()
             .iter()
             .enumerate()
+            .skip(ventana.start)
+            .take(ventana.len())
             .map(|(i, e)| {
                 entry_item(
                     e,
@@ -428,18 +553,7 @@ pub(crate) fn draw_pane(
         Role::SelectionUnfocused
     };
     let list = List::new(items).highlight_style(theme.role(cursor_role));
-    let mut state = ListState::default();
-    state.select(selected);
-    // Scroll EXPLÍCITO y no deducido por ratatui: la ventana es del MODELO
-    // (`PaneState::reconcile_viewport`, pegajosa) y el hit test del ratón lee
-    // esa misma, así que las dos salen del mismo sitio — deducirla dos veces
-    // es como un click acaba en la fila de al lado.
-    //
-    // El clamp contra `painted_len` sigue haciendo falta: el `filter_map` de
-    // arriba puede descartar un índice imposible del filtro, y una ventana
-    // más allá del final pintaría el listado vacío.
-    let _ = painted_len;
-    *state.offset_mut() = pane.viewport_offset().min(painted_len.saturating_sub(1));
+    let mut state = estado_de_lista(selected, &ventana);
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 
