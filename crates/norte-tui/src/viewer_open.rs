@@ -52,20 +52,47 @@ pub fn modo_efectivo(cfg: norte_config::Images, soporta: bool) -> Modo {
 /// nadie sabe interpretar, y nada en pantalla distingue los dos casos. Un
 /// hexview silencioso es indistinguible de «norte no sabe hacerlo».
 ///
-/// `hay_previewer` es `true` cuando algo YA se está encargando de pintar —
-/// el llamante pasa `!Viewer::is_image()`, que sólo es `false` cuando NINGÚN
-/// previewer de plugin sustituyó la vista Y los bytes son una imagen
-/// reconocida: exactamente el hueco que este aviso rellena. Para un fichero
-/// que no es imagen, o uno que sí lo es pero un previewer ya pintó,
-/// `is_image()` es `false` y `hay_previewer` llega `true` — nada que avisar.
+/// `no_hace_falta_avisar` es `true` cuando este hueco NO necesita el aviso,
+/// por CUALQUIERA de dos motivos DISTINTOS que aquí colapsan al mismo
+/// booleano: el fichero no es una imagen (nada que ver con un previewer), o
+/// sí lo es y un previewer de plugin ya la sustituyó. El llamante pasa
+/// [`no_hace_falta_avisar_de_imagen`] — que calcula exactamente eso, con el
+/// porqué de que no sea un simple «¿hay previewer?» documentado ahí — en vez
+/// de repetir la expresión inline en el sitio de llamada (ronda de arreglo
+/// 1: un `hay_previewer` calculado ahí, con ese nombre, invitaba a
+/// «simplificarlo» a `viewer.preview_plugin().is_some()`, que pierde el
+/// primer motivo y avisaría para cualquier fichero no-imagen).
 ///
 /// En [`Modo::Kitty`] el terminal ya pinta píxeles por su cuenta y en
 /// [`Modo::Nada`] el lector pidió hexview él mismo (`images = "off"`): en
 /// los dos no hay nada que aprobar, así que el aviso sólo sale en
 /// [`Modo::Bloques`].
 #[must_use]
-pub fn aviso_de_imagen(modo: Modo, hay_previewer: bool) -> Option<String> {
-    (modo == Modo::Bloques && !hay_previewer).then(|| t("viewer-image-needs-previewer"))
+pub fn aviso_de_imagen(modo: Modo, no_hace_falta_avisar: bool) -> Option<String> {
+    (modo == Modo::Bloques && !no_hace_falta_avisar).then(|| t("viewer-image-needs-previewer"))
+}
+
+/// Si `viewer` NO necesita el aviso de [`aviso_de_imagen`] — el segundo
+/// parámetro que ese sitio de llamada le pasa.
+///
+/// Es `!viewer.is_image()`, y [`Viewer::is_image`] ya hace el AND de las dos
+/// condiciones que hacen falta: `plugin_preview.is_none() && image.is_some()`
+/// — sólo `true` cuando NINGÚN previewer sustituyó la vista Y los bytes son
+/// una imagen reconocida. Negarlo da «no es imagen, o SÍ lo es pero un
+/// previewer ya pintó»: las dos razones para no avisar, juntas.
+///
+/// T3 (esta misma fase) ya avisó de que la TUI no debe usar `is_image()`
+/// para decidir «es imagen» (deja de pintar píxeles en cuanto un previewer
+/// sustituye la vista); aquí es al revés — se usa a propósito, PARA saber si
+/// algo ya sustituyó la vista — pero la trampa hermana existe: no lo
+/// "corrijas" a `viewer.preview_plugin().is_some()` pensando que es más
+/// honesto. Eso pierde la mitad no-imagen y avisaría de un previewer de
+/// IMAGEN que falta para cualquier fichero que no sea una imagen en
+/// `Modo::Bloques` — justo la regresión que centralizar este cálculo aquí,
+/// con este nombre, existe para prevenir.
+#[must_use]
+pub fn no_hace_falta_avisar_de_imagen(viewer: &Viewer) -> bool {
+    !viewer.is_image()
 }
 
 /// Una miniatura ya pedida y lista para colocar (T4 la coloca/borra).

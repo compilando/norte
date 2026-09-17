@@ -270,3 +270,44 @@ fn con_previewer_no_se_avisa_de_nada() {
 fn en_off_no_se_avisa_porque_lo_pidio_el_lector() {
     assert!(aviso_de_imagen(Modo::Nada, false).is_none());
 }
+
+/// Ronda de arreglo 1, IMPORTANTE 2: sin previewer aprobado es el estado por
+/// DEFECTO de cualquier instalación (nada que aprobar todavía), así que la
+/// rama del aviso es el caso COMÚN, no el raro. Antes de este arreglo,
+/// `format!(" {aviso}")` sustituía la barra de estado entera y se comía
+/// `n/total` — un PNG grande en hexview perdía el conteo de posición justo
+/// mientras se hacía scroll por él.
+#[test]
+fn el_aviso_no_se_come_la_posicion_de_scroll() {
+    let dir = vp("mem:///");
+    let mut app = app_en(&dir);
+    // Firma mágica real de PNG (`is_image()` la reconoce) + relleno hasta 40
+    // bytes: a 16 bytes por fila de hexview (`HEX_COLS`) da 3 filas, así que
+    // `scroll_down` deja una posición que NO es el trivial «1/1».
+    let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
+    bytes.resize(40, 0);
+    let mut v = norte_tui::viewer::Viewer::new(vp("mem:///x.png"), bytes, false);
+    v.scroll_down(1);
+    app.viewer = Some(v);
+
+    let area = Rect::new(0, 0, 80, 16);
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+            .expect("terminal de test");
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, &app))
+        .expect("draw");
+    let buf = terminal.backend().buffer();
+    let status_y = area.height - 1;
+    let fila: String = (0..area.width)
+        .map(|x| buf[(x, status_y)].symbol().chars().next().unwrap_or(' '))
+        .collect();
+    assert!(
+        fila.contains("2/3"),
+        "el aviso no debe comerse la posición: {fila:?}"
+    );
+    assert!(
+        fila.contains("F12"),
+        "y el aviso sigue presente a la vez: {fila:?}"
+    );
+}

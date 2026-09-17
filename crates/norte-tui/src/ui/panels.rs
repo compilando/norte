@@ -133,12 +133,17 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // `snapshot_viewer_texto_y_hex`. La barra de estado de abajo es de
     // ancho completo y ya cede el sitio entero a `app.message` cuando hay
     // uno; este aviso sigue el mismo patrón.
-    // `viewer.is_image()` YA vale `false` en cuanto `preview_plugin()` es
-    // `Some` (ver su rustdoc), así que no hace falta comprobarlo aparte: la
-    // rama «via …» de arriba y este aviso son mutuamente excluyentes solos.
+    // El cálculo de por qué no hace falta avisar (ronda de arreglo 1) vive
+    // en `viewer_open::no_hace_falta_avisar_de_imagen`, no inline aquí: su
+    // rustdoc es donde queda escrita la trampa de "simplificarlo" a
+    // `preview_plugin().is_some()`, y esta rama y la del «via …» de arriba
+    // ya son mutuamente excluyentes por esa misma cuenta.
     let modo =
         crate::viewer_open::modo_efectivo(app.chrome.images(), crate::kitty_graphics::soportado());
-    let aviso_imagen = crate::viewer_open::aviso_de_imagen(modo, !viewer.is_image());
+    let aviso_imagen = crate::viewer_open::aviso_de_imagen(
+        modo,
+        crate::viewer_open::no_hace_falta_avisar_de_imagen(viewer),
+    );
     // `rect_del_visor` — la MISMA función que usa el run loop para el APC,
     // no una resta a mano — es lo que garantiza que el hueco que se deja en
     // blanco abajo y el hueco donde caen los píxeles sean estructuralmente
@@ -191,7 +196,12 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     let text: Line<'_> = match &app.message {
         Some(msg) => Line::styled(format!(" {msg}"), app.theme.role(Role::StatusBar)),
         None => match aviso_imagen {
-            Some(aviso) => Line::styled(format!(" {aviso}"), app.theme.role(Role::Info)),
+            // Ronda de arreglo 1, IMPORTANTE 2: sin previewer aprobado es el
+            // estado por DEFECTO de cualquier instalación, así que esta
+            // rama es el caso común, no el raro — perder `pos` aquí es
+            // perderlo justo donde más se nota (un PNG grande en hexview,
+            // haciendo scroll sin más guía que el pulgar de la barra).
+            Some(aviso) => Line::styled(format!(" {aviso}  {pos}"), app.theme.role(Role::Info)),
             None => Line::styled(
                 format!(" {}  {pos}", crate::viewer::status(viewer)),
                 app.theme.role(Role::StatusBar),
