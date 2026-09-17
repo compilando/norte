@@ -271,19 +271,17 @@ fn en_off_no_se_avisa_porque_lo_pidio_el_lector() {
     assert!(aviso_de_imagen(Modo::Nada, false).is_none());
 }
 
-/// Ronda de arreglo 1, IMPORTANTE 2: sin previewer aprobado es el estado por
-/// DEFECTO de cualquier instalación (nada que aprobar todavía), así que la
-/// rama del aviso es el caso COMÚN, no el raro. Antes de este arreglo,
-/// `format!(" {aviso}")` sustituía la barra de estado entera y se comía
-/// `n/total` — un PNG grande en hexview perdía el conteo de posición justo
-/// mientras se hacía scroll por él.
-#[test]
-fn el_aviso_no_se_come_la_posicion_de_scroll() {
+/// Renderiza la app con un PNG en hexview (sin previewer) y devuelve la
+/// última fila del terminal (la barra de estado del visor a pantalla
+/// completa, `status_area`), a 80 columnas — el ancho de referencia de la
+/// tarea (`snapshot_viewer_texto_y_hex` usa el mismo).
+///
+/// Firma mágica real de PNG (`is_image()` la reconoce) + relleno hasta 40
+/// bytes: a 16 bytes por fila de hexview (`HEX_COLS`) da 3 filas, así que
+/// `scroll_down(1)` deja una posición que NO es el trivial «1/1».
+fn fila_de_estado_con_png_sin_previewer() -> String {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
-    // Firma mágica real de PNG (`is_image()` la reconoce) + relleno hasta 40
-    // bytes: a 16 bytes por fila de hexview (`HEX_COLS`) da 3 filas, así que
-    // `scroll_down` deja una posición que NO es el trivial «1/1».
     let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
     bytes.resize(40, 0);
     let mut v = norte_tui::viewer::Viewer::new(vp("mem:///x.png"), bytes, false);
@@ -299,15 +297,54 @@ fn el_aviso_no_se_come_la_posicion_de_scroll() {
         .expect("draw");
     let buf = terminal.backend().buffer();
     let status_y = area.height - 1;
-    let fila: String = (0..area.width)
+    (0..area.width)
         .map(|x| buf[(x, status_y)].symbol().chars().next().unwrap_or(' '))
-        .collect();
+        .collect()
+}
+
+/// Ronda de arreglo 1, IMPORTANTE 2: sin previewer aprobado es el estado por
+/// DEFECTO de cualquier instalación (nada que aprobar todavía), así que la
+/// rama del aviso es el caso COMÚN, no el raro. Antes de ese arreglo,
+/// `format!(" {aviso}")` sustituía la barra de estado entera y se comía
+/// `n/total` — un PNG grande en hexview perdía el conteo de posición justo
+/// mientras se hacía scroll por él.
+///
+/// Ronda de arreglo 2: el `format!(" {aviso}  {pos}")` de la ronda 1 era
+/// correcto en el código pero NO en pantalla — el texto ES original (82
+/// caracteres) ya desbordaba las 80 columnas él solo, así que `pos` seguía
+/// invisible. `es.ftl`/`en.ftl` se acortaron para que quepan los dos con
+/// `pos` al lado; este test fija el locale a ES (`norte_i18n::force`, sólo
+/// gana la PRIMERA llamada del proceso — nextest da un proceso por test,
+/// así que no choca con `el_aviso_no_se_come_la_posicion_de_scroll_en_ingles`
+/// de abajo, que fija EN en OTRO proceso) para probar el caso que estaba
+/// roto de verdad, no el que el entorno de esta máquina (`LANG=en_US.UTF-8`)
+/// hacía pasar por casualidad.
+#[test]
+fn el_aviso_no_se_come_la_posicion_de_scroll() {
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
+    let fila = fila_de_estado_con_png_sin_previewer();
     assert!(
         fila.contains("2/3"),
-        "el aviso no debe comerse la posición: {fila:?}"
+        "el aviso no debe comerse la posición, en ES: {fila:?}"
     );
     assert!(
         fila.contains("F12"),
-        "y el aviso sigue presente a la vez: {fila:?}"
+        "y el aviso sigue presente a la vez, en ES: {fila:?}"
+    );
+}
+
+/// Mismo caso que [`el_aviso_no_se_come_la_posicion_de_scroll`], en EN —
+/// proceso aparte bajo nextest, mismo motivo para fijar el locale.
+#[test]
+fn el_aviso_no_se_come_la_posicion_de_scroll_en_ingles() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let fila = fila_de_estado_con_png_sin_previewer();
+    assert!(
+        fila.contains("2/3"),
+        "el aviso no debe comerse la posición, en EN: {fila:?}"
+    );
+    assert!(
+        fila.contains("F12"),
+        "y el aviso sigue presente a la vez, en EN: {fila:?}"
     );
 }

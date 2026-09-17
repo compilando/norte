@@ -299,7 +299,10 @@ viewer-image-too-large = image too large to preview
 viewer-image-unreadable = image header not understood
 viewer-image-loading = loading image…
 viewer-plugin-preview-lossy = [lossy decode]
-viewer-image-needs-previewer = an image previewer extension is not approved yet — F12 to approve one
+# Ronda de arreglo 2 (Task 5, fase 5 WOW): el texto largo original no cabía
+# junto a la posición de scroll (`pos`) en 80 columnas — ni siquiera solo,
+# en ES. Acortado a lo que quepa en los dos idiomas con `pos` al lado.
+viewer-image-needs-previewer = no image previewer approved yet — press F12
 eol-mixed = mixed EOL
 eol-none = no EOL
 

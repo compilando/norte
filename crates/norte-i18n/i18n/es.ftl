@@ -301,7 +301,10 @@ viewer-image-too-large = imagen demasiado grande para previsualizarla
 viewer-image-unreadable = no se entiende la cabecera de la imagen
 viewer-image-loading = cargando la imagen…
 viewer-plugin-preview-lossy = [decodificación con pérdida]
-viewer-image-needs-previewer = no hay ninguna extensión de vista previa de imagen aprobada — F12 para aprobar una
+# Ronda de arreglo 2 (Task 5, fase 5 WOW): el texto largo original no cabía
+# junto a la posición de scroll (`pos`) en 80 columnas — ni siquiera solo.
+# Acortado a lo que quepa en los dos idiomas con `pos` al lado.
+viewer-image-needs-previewer = falta aprobar una extensión de vista previa de imagen — F12
 eol-mixed = EOL mixto
 eol-none = sin EOL
 
