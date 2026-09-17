@@ -70,6 +70,16 @@
 # no le atribuye acorde. Inventarle uno a una transcripción es peor que una
 # hoja de referencia que imprime `—`, que al menos dice la verdad. Los tres
 # presets nativos sí lo llevan, en `alt+C`.
+#
+# `app.goto` («ir a cualquier sitio», fase 6) NO se ata aquí. Es una
+# pantalla propia de norte: junta historia, populares, favoritos,
+# conexiones, comandos y una ruta tecleada en una sola lista, y Krusader no
+# tiene nada equivalente a lo que copiarle un atajo. `ctrl+g` está libre en
+# los siete presets y es el que llevan orthodox, cua y vim; inventárselo
+# aquí sería exactamente lo que este fichero existe para no hacer. Está el
+# primero del menú Ir (F9), que es preset-independiente, así que no es una
+# capacidad que falte: es un atajo que no se atribuye a una fuente que no lo
+# dice.
 
 dialog_from = "orthodox"
 

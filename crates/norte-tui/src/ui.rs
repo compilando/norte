@@ -64,8 +64,8 @@ pub(crate) use geometry::{
 use modals::draw_modal;
 pub use modals::{ModalZone, modal_zones};
 use overlays::{
-    EXTENSIONS_WIDE_MIN, draw_extensions, draw_palette, draw_plugin_config_panel, draw_settings,
-    draw_splash, draw_wizard,
+    EXTENSIONS_WIDE_MIN, draw_extensions, draw_goto, draw_palette, draw_plugin_config_panel,
+    draw_settings, draw_splash, draw_wizard,
 };
 use pane::draw_pane;
 use panels::{
@@ -459,6 +459,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(palette) = &app.palette {
         draw_palette(frame, palette, &app.theme);
     }
+    // «Ir a cualquier sitio» (fase 6) va con la paleta, que es su hermana:
+    // encima del listado, debajo del asistente y de un modal.
+    if let Some(goto) = &app.goto {
+        draw_goto(frame, goto, &app.theme);
+    }
     // El asistente de primer arranque (spec 2026-09-10): encima de la
     // paleta y de los ajustes, debajo de un modal, como el resto de overlays
     // que no son una pregunta de seguridad.
@@ -577,6 +582,7 @@ pub fn algo_encima_del_visor(app: &App) -> bool {
         || app.nav_popup.is_some()
         || app.search_dialog.is_some()
         || app.palette.is_some()
+        || app.goto.is_some()
         || app.splash.is_some()
         || app.wizard.is_some()
         || app.settings.is_some()

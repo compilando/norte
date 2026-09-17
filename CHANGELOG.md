@@ -9,6 +9,30 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`app.goto` — go anywhere from one screen** (ADR 0120), phase 6 of the WOW
+  programme. `ctrl+g` in `orthodox`, `cua` and `vim`, and first in the Go menu
+  for every preset, opens one list with sections: the path you are typing,
+  this panel's history, the places you return to, your bookmarks, your
+  connections, the commands, and whatever the semantic index finds. Typing
+  filters by subsequence, the arrows skip the section titles, and Enter
+  either navigates or runs the command through exactly the same dispatch its
+  key would. It replaces none of the six screens it draws from — each keeps
+  its key and the things only it can do — it is the one for when you cannot
+  remember which of them held your answer. A source is a trait
+  (`norte_frontend::goto::GotoSource`) and the model owns the order, the
+  filter, the headers, the per-section cap and the cursor, so a seventh
+  source is one `impl` and one line. The index is asked from three characters
+  on, lands in its own section without moving the cursor, is dropped when the
+  answer is to a query that is no longer typed, and passes the same
+  validation belt as `ai.search`. A typed path counts as one when it starts
+  with `/`, `~` or a scheme — never relative, because where you are going
+  cannot depend on where you were — and `~` is the process home, not the
+  panel's. Only the focused panel's history carries that panel's name
+  reinterpretation; every other section is built without one, because a
+  panel's reinterpretation applied to another's paths invents mojibake. The
+  four imported presets leave `ctrl+g` unbound and say why in their headers:
+  none of the managers they transcribe has an equivalent key.
+
 - **`Tab` walks the extension manager in the terminal** (ADR 0119). The
   manager's card (ADR 0104) came with a row of buttons — enable, approve,
   settings, uninstall, help — that only the mouse could press as buttons:

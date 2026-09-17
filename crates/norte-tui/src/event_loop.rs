@@ -1020,6 +1020,17 @@ pub async fn run(
                 harvest_semantic(app, &mut work, res);
             }
             res = async {
+                // La misma pregunta, para la SECCIÓN del «ir a» (fase 6):
+                // casilla propia porque lo que se hace con la respuesta es
+                // otra cosa, y porque las dos pueden estar vivas a la vez.
+                match &mut work.goto_index {
+                    Some(r) => (&mut r.handle).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                crate::jobs::harvest_goto_index(app, &mut work, res);
+            }
+            res = async {
                 // El informe de un lote de sumas (#311): mismo molde. La espera
                 // del estado terminal vive DENTRO del spawn, así que aquí no
                 // hay más que cosechar.

@@ -352,6 +352,107 @@ pub async fn on_key(
             key.code,
         )
         .await;
+    } else if app.goto.is_some() && !modal_wins(app) {
+        // «Ir a cualquier sitio» (fase 6): teclas FIJAS, por lo mismo que
+        // las de la paleta —no hay verbo `dialog.*` para «teclea una letra»
+        // ni para «vete a lo que señalo»— y `ctrl+c` conserva su salida
+        // global como en todos los overlays.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            app.quit = true;
+            return;
+        }
+        let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
+        match key.code {
+            KeyCode::Char(c) if plain => {
+                if let Some(g) = &mut app.goto {
+                    g.push_char(c);
+                }
+                crate::jobs::goto::pedir_al_indice(app, backend, work);
+            }
+            KeyCode::Backspace if plain => {
+                if let Some(g) = &mut app.goto {
+                    g.backspace();
+                }
+                crate::jobs::goto::pedir_al_indice(app, backend, work);
+            }
+            KeyCode::Esc if plain => {
+                app.goto = None;
+                crate::jobs::goto::olvidar(work);
+            }
+            KeyCode::Up if plain => {
+                if let Some(g) = &mut app.goto {
+                    g.up();
+                }
+            }
+            KeyCode::Down if plain => {
+                if let Some(g) = &mut app.goto {
+                    g.down();
+                }
+            }
+            KeyCode::Enter if plain => {
+                let key = app
+                    .goto
+                    .as_ref()
+                    .and_then(|g| g.selected().map(|r| r.key.clone()));
+                // La pantalla se cierra ANTES de actuar, y la petición al
+                // índice se abandona: lo que venga detrás —un cd, un
+                // comando, un modal— manda en la pantalla, y una respuesta
+                // tardía no tiene ya dónde caer.
+                app.goto = None;
+                crate::jobs::goto::olvidar(work);
+                let Some(key) = key else { return };
+                match crate::goto::accion(app, &key) {
+                    crate::goto::Accion::Ir(dir) => {
+                        let outcome = crate::navigate::cd(app, backend, events, dir).await;
+                        settle_cd(
+                            app,
+                            backend,
+                            &mut work.fill,
+                            &mut work.decorate,
+                            &mut work.probed,
+                            &mut work.search,
+                            outcome,
+                        );
+                    }
+                    // Un comando elegido aquí corre EXACTAMENTE como si se
+                    // hubiera pulsado su tecla: el MISMO `run_command` que
+                    // invoca el resolver, como ya hace la paleta. Dos
+                    // caminos para el mismo verbo divergen en cuanto uno
+                    // crece un detalle.
+                    //
+                    // Sus filas son las de la paleta, que nacen de
+                    // `COMMANDS`, así que el parse no puede fallar; el
+                    // guard es defensivo, igual que allí.
+                    crate::goto::Accion::Comando(cmd) => {
+                        let Some(cmd) = Command::parse(&cmd) else {
+                            debug_assert!(false, "goto fuera de COMMANDS");
+                            return;
+                        };
+                        run_command(
+                            app,
+                            backend,
+                            events,
+                            help_lines,
+                            lang,
+                            quick_mode,
+                            confirm_quit,
+                            cfg,
+                            &mut work.fill,
+                            &mut work.decorate,
+                            &mut work.probed,
+                            &mut work.search,
+                            cmd,
+                        )
+                        .await;
+                        launch_pending(app, events, capture).await;
+                    }
+                    crate::goto::Accion::Nada(clave) => {
+                        app.message = Some(norte_i18n::t(clave));
+                    }
+                }
+            }
+            _ => {}
+        }
     } else if app.palette.is_some() && !modal_wins(app) {
         // Command palette (H1 T4): editor de filtro libre,
         // como el diálogo de búsqueda de arriba — sus

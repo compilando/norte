@@ -60,6 +60,13 @@
 # directorios en NC/Volkov no está atestiguado por ninguna; atar una tecla por
 # rumor es peor que el `—` de la hoja de referencia. Todo sigue en el menú Ir y
 # en la paleta.
+#
+# Y con `app.goto` («ir a cualquier sitio», fase 6) pasa lo mismo, por la
+# misma razón y con más motivo: es una pantalla propia de norte que junta
+# historia, populares, favoritos, conexiones, comandos y una ruta tecleada,
+# y el Norton Commander de 1986 no tenía dónde poner algo así. `ctrl+g` está
+# libre en los siete y lo llevan orthodox, cua y vim; aquí se llega por el
+# menú Ir (F9), donde está el primero.
 
 dialog_from = "orthodox"
 

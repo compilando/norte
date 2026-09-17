@@ -80,6 +80,23 @@ pub struct SemanticRun {
     pub handle: tokio::task::JoinHandle<Result<Vec<norte_proto::methods::SemanticHit>, Error>>,
 }
 
+/// La misma pregunta al índice, pero para la SECCIÓN del «ir a» (fase 6), no
+/// para el modal de [`SemanticRun`].
+///
+/// Dos runs y no uno porque lo que se hace con la respuesta es distinto —una
+/// abre un modal, la otra rellena una sección de una pantalla abierta— y
+/// porque pueden solaparse: nada impide tener el «ir a» abierto justo
+/// después de lanzar una búsqueda semántica, y meterlas en la misma casilla
+/// haría que una abortase a la otra sin que nadie lo hubiera pedido.
+pub struct GotoIndexRun {
+    /// La llamada al índice+modelo, spawneada.
+    pub handle: tokio::task::JoinHandle<Result<Vec<norte_proto::methods::SemanticHit>, Error>>,
+    /// Lo que estaba escrito cuando se lanzó. La respuesta sólo se usa si
+    /// sigue siendo lo que está escrito: si no, es la respuesta a otra
+    /// pregunta.
+    pub query: String,
+}
+
 /// La medida de un mapa de disco EN VUELO (fase 4).
 ///
 /// Mismo molde que [`ChecksumRun`] —la espera del informe va spawneada y el
@@ -177,6 +194,9 @@ pub struct InFlight {
     /// Búsqueda semántica en vuelo (M4-IA-2): mismo molde que
     /// [`Self::ai_rename`].
     pub semantic: Option<SemanticRun>,
+    /// La pregunta al índice de la pantalla «ir a» (fase 6): a lo sumo una,
+    /// y escribir otra letra ABORTA la anterior.
+    pub goto_index: Option<GotoIndexRun>,
     /// Lote de sumas en vuelo (#311): a lo sumo uno — el modal de resultados
     /// es uno, y lanzar otro CANCELA la Task del anterior además de abortar
     /// su espera.

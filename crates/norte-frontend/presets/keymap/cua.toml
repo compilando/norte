@@ -20,6 +20,9 @@ keymap = [
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
     { on = ["ctrl+p"], run = "app.palette" },
+    # `ctrl+g` es «ir a» en casi todo editor CUA (goto line); aquí el sitio
+    # al que se va es un directorio, una conexión o un comando.
+    { on = ["ctrl+g"], run = "app.goto" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },

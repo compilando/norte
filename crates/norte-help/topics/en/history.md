@@ -19,6 +19,7 @@ commands = [
     "nav.set-jump-point",
     "nav.jump-back",
     "pane.hotlist",
+    "app.goto",
 ]
 +++
 
@@ -80,3 +81,28 @@ live in your configuration.
 
 In the window, the mouse's side buttons are back and forward. A terminal does
 not receive those buttons.
+
+# Go anywhere
+
+{{cmd:app.goto}} opens one screen holding everything that can be a
+destination, in sections: the path you are typing, this panel's history, the
+places you come back to most, your bookmarks, your connections, the
+commands, and — if you have a semantic index — whatever the index finds.
+Type and what does not match drops away; the arrows move row by row,
+skipping the titles, and Enter takes you there.
+
+It replaces none of the lists above: each keeps its own key and its own
+screen, where you see them whole and can delete entries. This is the one for
+when you cannot remember which of the five held the thing you want.
+
+Three things worth knowing. Something counts as a path if it starts with
+`/`, with `~`, or carries a scheme (`sftp://…`); `~` is your home directory,
+not the panel's. A relative path deliberately does not count: where you are
+going cannot depend on where you were. And the semantic index is asked from
+three letters on, answers when it can — it is not instant — and its section
+appears at the bottom without moving what you were looking at; if you do not
+have it switched on, it simply never appears.
+
+In the `orthodox`, `cua` and `vim` presets it is `ctrl+g`. The four imported
+ones do not bind it, because none of the managers they transcribe has an
+equivalent key: there, you reach it from the Go menu, where it sits first.

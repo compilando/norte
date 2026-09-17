@@ -56,6 +56,13 @@
 # ata: norte no quita ninguno, así que sería la misma lista con otra tecla. El
 # punto de salto, los populares y la historia de un lado no tienen tecla en la
 # fuente: están en el menú Ir y en la paleta.
+#
+# `app.goto` («ir a cualquier sitio», fase 6) se queda con ellas. Total
+# Commander tiene piezas sueltas de lo que esa pantalla junta —`ctrl+d` para
+# los favoritos, la historia en su propio desplegable— pero ninguna tecla
+# que las junte, y atar `ctrl+g` a algo que la fuente no dice es lo que este
+# fichero no hace. `ctrl+g` está libre en los siete presets y lo llevan
+# orthodox, cua y vim; aquí, el menú Ir (F9), donde está el primero.
 
 dialog_from = "orthodox"
 
