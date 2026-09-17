@@ -153,6 +153,19 @@ pub const CATALOGUE: &[CommandDef] = &[
     // al lector el paso de más en el peor momento. `alt+l` estaba libre en los
     // siete presets.
     live("layout.log", false),
+    // El mapa de disco (fase 4). Lleva acorde en los siete por lo mismo que el
+    // registro: es un panel que se queda el TECLADO —se anda por los
+    // rectángulos y se entra en uno—, y a un panel así hay que poder entrar y
+    // salir sin ratón. Eso lo exige a máquina el test
+    // `los_paneles_con_teclado_se_abren_y_se_recorren_en_los_siete_presets`.
+    //
+    // `alt+z`, y el mnemónico es malo a propósito: era la ÚNICA letra libre en
+    // los siete. De la `a` a la `y` no queda ninguna sin atar en algún preset
+    // —`alt+d` es `pane.disconnect` en orthodox y krusader, `alt+m` el menú,
+    // `alt+j` procesos, `alt+l` el registro—, así que o era esta o era un
+    // acorde que ya significa otra cosa en el gestor que alguien viene
+    // imitando. Una tecla rara se aprende; una que hace dos cosas, no.
+    live("layout.disk-map", false),
     // El selector de disposición. Sin acorde por el mismo #228, y además
     // porque el nombre de una disposición NO es el de un preset de teclas
     // aunque coincida: el diálogo lo dice en su pie.

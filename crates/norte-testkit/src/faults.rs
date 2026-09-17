@@ -46,7 +46,12 @@ struct FaultState {
     /// Cuántos renames quedan antes de cancelar [`FaultState::cancel_token`]
     /// (#274): es lo que deja estar DENTRO de una secuencia de dos.
     cancel_after_renames: Option<u64>,
-    /// El token que se cancela cuando la cuenta de arriba llega a cero.
+    /// Cuántos `list` quedan antes de cancelar [`FaultState::cancel_token`]:
+    /// es lo que deja estar DENTRO de un recorrido y no antes ni después.
+    cancel_after_lists: Option<u64>,
+    /// El token que se cancela cuando una de las cuentas de arriba llega a
+    /// cero. Es UNO para las dos: un test arma la que necesita, y armar las dos
+    /// a la vez no describe ningún momento concreto.
     cancel_token: Option<tokio_util::sync::CancellationToken>,
     /// `Some(n)`: quedan `n` operaciones antes de la desconexión.
     disconnect_after: Option<u64>,
@@ -141,6 +146,37 @@ impl Faults {
             }
         } else {
             s.cancel_after_renames = Some(quedan - 1);
+        }
+    }
+
+    /// Cancela `token` justo DESPUÉS del `n`-ésimo `list` que se atienda.
+    ///
+    /// El gemelo de [`Self::cancel_after_renames`] para los que RECORREN. Un
+    /// recorrido cancelado antes de empezar no demuestra nada —el cuerpo sale
+    /// en su primera comprobación y deja el informe en blanco, que es
+    /// indistinguible de no haber corrido—, así que para probar que un walk se
+    /// para LIMPIO hay que cancelarlo estando dentro. Con un `sleep` se acierta
+    /// por casualidad; con esto, siempre y sin reloj.
+    pub fn cancel_after_lists(&self, n: u64, token: tokio_util::sync::CancellationToken) {
+        let mut s = self.lock();
+        s.cancel_after_lists = Some(n);
+        s.cancel_token = Some(token);
+    }
+
+    /// Lo consulta el provider al atender un `list`: descuenta, y al llegar a
+    /// cero cancela el token.
+    pub fn tick_list(&self) {
+        let mut s = self.lock();
+        let Some(quedan) = s.cancel_after_lists else {
+            return;
+        };
+        if quedan <= 1 {
+            s.cancel_after_lists = None;
+            if let Some(t) = s.cancel_token.take() {
+                t.cancel();
+            }
+        } else {
+            s.cancel_after_lists = Some(quedan - 1);
         }
     }
 

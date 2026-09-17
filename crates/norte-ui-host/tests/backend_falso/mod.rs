@@ -434,6 +434,12 @@ pub struct Falso {
     pub permisos: std::sync::Mutex<Vec<(Vec<VPath>, u32)>>,
     /// Las rutas de cada lote de sumas que se pidió (#311).
     pub sumas_pedidas: std::sync::Mutex<Vec<Vec<VPath>>>,
+    /// El directorio de cada medida de mapa de disco que se pidió (fase 4).
+    ///
+    /// Existe para poder afirmar que se midió UNA vez: la sonda corre tras cada
+    /// mensaje del actor, así que la mitad de su valor está en que no vuelva a
+    /// pedir lo mismo. Sin esta lista, «midió» y «mide en bucle» se ven igual.
+    pub mapas_pedidos: std::sync::Mutex<Vec<VPath>>,
     /// Los ids de task cuyo INFORME de sumas se pidió, en orden.
     ///
     /// Existe para poder esperar a que el informe haya vuelto: un test que
@@ -1631,6 +1637,57 @@ impl HostBackend for Falso {
                 progress: rx,
                 cancel: Arc::new(|| {}),
                 foreign: false,
+            })
+        })
+    }
+
+    fn dir_usage(
+        &self,
+        params: norte_proto::methods::FsDirUsageParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.mapas_pedidos
+            .lock()
+            .expect("mapas")
+            .push(params.path.clone());
+        self.latido();
+        // Ya terminada: el host pide el informe en cuanto la Task es terminal,
+        // así que un doble que la deje corriendo no llegaría nunca a aterrizar
+        // nada y el test mediría un silencio.
+        let progreso = norte_proto::TaskProgress {
+            task_id: norte_proto::TaskId::new(11),
+            kind: norte_proto::TaskKind::DirUsage,
+            state: norte_proto::TaskState::Completed,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: Some(params.path),
+            unreadable: None,
+            unvisited: None,
+        };
+        let (_tx, rx) = tokio::sync::watch::channel(progreso);
+        Box::pin(async move {
+            Ok(HostTask {
+                id: norte_proto::TaskId::new(11),
+                progress: rx,
+                cancel: Arc::new(|| {}),
+                foreign: false,
+            })
+        })
+    }
+
+    fn dir_usage_report(
+        &self,
+        task: norte_proto::TaskId,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::FsDirUsageReportResult, Error>> {
+        let _ = task;
+        self.latido();
+        // Un mapa vacío pero LISTADO: el hueco se pinta sin rectángulos y sin
+        // decir que mide, que es lo que un directorio vacío produce de verdad.
+        Box::pin(async move {
+            Ok(norte_proto::methods::FsDirUsageReportResult {
+                listed: true,
+                ..norte_proto::methods::FsDirUsageReportResult::default()
             })
         })
     }

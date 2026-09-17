@@ -1187,6 +1187,38 @@ fn pulsar_panel(app: &mut App, ev: MouseEvent) -> Option<After> {
         return None;
     }
     enfocar_lo_pulsado(app, ev.column, ev.row);
+    // El mapa de disco primero: su rectángulo nombra un HIJO, no un comando,
+    // así que no puede pasar por el camino de las zonas de plugin. Pulsar uno
+    // lo elige Y entra, que es el gesto entero — en un mapa señalar y abrir es
+    // el mismo acto, como un doble clic en un listado.
+    if let Some(arg) = hijo_del_mapa_en(app, ev.column, ev.row) {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        if let Ok(seg) = norte_proto::Segment::parse_wire(&arg) {
+            let slot = app.disk_map_slot();
+            let es_dir = slot
+                .and_then(|s| app.panes.disk_map(s))
+                .and_then(|m| {
+                    m.informe()
+                        .children
+                        .iter()
+                        .find(|c| c.name == seg)
+                        .map(|c| c.kind == norte_proto::EntryKind::Dir)
+                })
+                .unwrap_or(false);
+            if let Some(s) = slot
+                && let Some(m) = app.panes.disk_map_mut(s)
+            {
+                m.elegir(&seg);
+            }
+            // Entrar SOLO en un directorio: el mapa enseña las dos cosas, y
+            // «entrar» en un fichero no es navegar.
+            if es_dir {
+                app.pending_disk_map_enter = Some(seg);
+            }
+        }
+        return Some(After::PanelBar);
+    }
     let cmd = zona_de_panel_en(app, ev.column, ev.row)?;
     // Y se suelta el gesto en vuelo, como la barra: sin esto, un clic en una
     // fila y otro en la zona dentro de la ventana del doble clic se leían como
@@ -1233,6 +1265,43 @@ fn zona_de_panel_en(app: &App, col: u16, row: u16) -> Option<String> {
         // deja el clic con el mismo alcance que la tecla de un panel enfocado
         // (`ALLOW_PANEL`), que es lo que esta casa promete.
         .filter(|c| norte_frontend::frame::zona_puede(c))
+}
+
+/// El NOMBRE del hijo cuyo rectángulo hay en `(col, row)` del mapa de disco.
+///
+/// Gemelo de [`zona_de_panel_en`] y con dos diferencias que importan, las dos
+/// porque el marco es NUESTRO y no de un tercero:
+///
+/// 1. **Devuelve el `arg`, no el comando.** En un panel de plugin el argumento
+///    se tira —el catálogo del terminal no toma parámetros— y la zona solo
+///    ejecuta su comando. Aquí el argumento ES la respuesta: en qué hijo se
+///    entra. Se devuelve en su forma WIRE, que es la reversible; lo que se
+///    pinta va enmascarado y no nombra ningún fichero.
+/// 2. **No pasa por `zona_puede`.** Ese filtro existe porque en un panel de
+///    plugin la etiqueta y el comando los elige un tercero y nada los ata. Los
+///    rectángulos de aquí los pone `squarify`, así que filtrarlos sería
+///    protegerse de uno mismo — y dejaría el mapa sin su único gesto.
+fn hijo_del_mapa_en(app: &App, col: u16, row: u16) -> Option<String> {
+    let slot = app.disk_map_slot()?;
+    let rect = app.mouse.slots.iter().find(|s| s.slot == slot)?;
+    if !rect.contains(col, row) {
+        return None;
+    }
+    // DENTRO del borde por los cuatro lados, con la misma cuenta —y el mismo
+    // motivo— que el panel de plugin.
+    let dentro_x = col
+        .checked_sub(rect.x.saturating_add(1))
+        .filter(|x| *x < rect.width.saturating_sub(2))?;
+    let dentro_y = row
+        .checked_sub(rect.y.saturating_add(1))
+        .filter(|y| *y < rect.height.saturating_sub(2))?;
+    let mapa = app.panes.disk_map(slot)?;
+    let marco = norte_frontend::treemap::squarify(
+        &mapa.informe().children,
+        rect.width.saturating_sub(2),
+        rect.height.saturating_sub(2),
+    );
+    marco.hit_at(dentro_y, dentro_x).and_then(|h| h.arg.clone())
 }
 
 /// Le da el teclado al panel que hay bajo `(col, row)`.

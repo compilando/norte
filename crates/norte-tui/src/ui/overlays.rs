@@ -869,6 +869,15 @@ pub(crate) fn draw_splash(
 ) {
     use norte_frontend::splash::numbered;
 
+    // PORTADA: `brief` viene SIN secciones a propósito, y sin lista que
+    // enmarcar una caja centrada es un marco alrededor de nada. El modo no
+    // viaja en la vista —no hace falta—, porque «no hay secciones» es la
+    // misma señal que este pintor ya usa para elegir el pie.
+    if splash.sections.is_empty() {
+        draw_splash_cover(frame, splash, theme);
+        return;
+    }
+
     let lang = norte_i18n::active();
     let numeradas = numbered(&splash.sections);
     let arte = splash.art.len();
@@ -936,6 +945,55 @@ pub(crate) fn draw_splash(
         }
     }
     frame.render_widget(Paragraph::new(lineas), inner);
+}
+
+/// La portada: el logo ocupando la pantalla, con la versión y el core debajo.
+///
+/// Sin marco y sin título de diálogo, al revés que su hermana con lista: una
+/// portada que se quita con la primera tecla no es algo que el lector tenga
+/// que cerrar, así que no se le pinta el cromo de una cosa que se cierra.
+fn draw_splash_cover(
+    frame: &mut Frame<'_>,
+    splash: &norte_frontend::splash::SplashView,
+    theme: &TuiTheme,
+) {
+    let lang = norte_i18n::active();
+    let area = frame.area();
+    clear_themed(frame, area, theme);
+
+    let mut lineas: Vec<Line<'_>> = splash
+        .art
+        .iter()
+        .map(|l| Line::styled((*l).to_owned(), theme.role(Role::Title)))
+        .collect();
+    lineas.push(Line::raw(String::new()));
+    lineas.push(Line::raw(
+        format!("{} {}", splash.version, splash.revision)
+            .trim()
+            .to_owned(),
+    ));
+    lineas.push(Line::styled(
+        norte_i18n::t_in(lang, splash.daemon.key()),
+        theme.role(Role::Info),
+    ));
+    lineas.push(Line::raw(String::new()));
+    lineas.push(Line::styled(t("splash-hint"), theme.role(Role::Info)));
+
+    // Centrada tambien a lo alto: el aire de arriba es la mitad de lo que
+    // sobra. Con una terminal más baja que el logo se pinta desde arriba y se
+    // recorta por abajo, que es mejor que empezar por la mitad del logo.
+    let alto = u16::try_from(lineas.len()).unwrap_or(u16::MAX);
+    let sobra = area.height.saturating_sub(alto);
+    let dentro = ratatui::layout::Rect {
+        x: area.x,
+        y: area.y.saturating_add(sobra / 2),
+        width: area.width,
+        height: alto.min(area.height),
+    };
+    frame.render_widget(
+        Paragraph::new(lineas).alignment(ratatui::layout::Alignment::Center),
+        dentro,
+    );
 }
 
 pub(crate) fn draw_wizard(

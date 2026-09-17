@@ -68,8 +68,8 @@ use overlays::{
 };
 use pane::draw_pane;
 use panels::{
-    draw_log, draw_metadata, draw_places, draw_plugin_panel, draw_preview, draw_processes,
-    draw_tasks, draw_tree, draw_viewer,
+    draw_disk_map, draw_log, draw_metadata, draw_places, draw_plugin_panel, draw_preview,
+    draw_processes, draw_tasks, draw_tree, draw_viewer,
 };
 use pickers::{
     draw_columns_picker, draw_connections_picker, draw_layout_picker, draw_profile_picker,
@@ -229,10 +229,25 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             );
         }
     }
-    // El sidebar va DESPUÉS de los listados y antes del cromo de abajo: su
-    // hueco sale del mismo reparto, así que si no se colocó —cerrado, o
-    // colapsado por falta de sitio— aquí no hay nada que hacer.
-    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, "places")
+    draw_laterales(frame, &res, app, tasks_area, status_area);
+}
+
+/// Los paneles LATERALES, que salen del mismo reparto que los listados.
+///
+/// Extraídos de [`draw_body`] cuando el mapa de disco la pasó de cien líneas.
+/// Son un grupo homogéneo —cada uno pregunta al reparto si su kind se colocó y
+/// se pinta si sí—, así que salen juntos y el orden se conserva: van DESPUÉS de
+/// los listados y antes del cromo de abajo.
+fn draw_laterales(
+    frame: &mut Frame<'_>,
+    res: &norte_frontend::layout::Resolved,
+    app: &App,
+    tasks_area: Rect,
+    status_area: Rect,
+) {
+    // Si el hueco no se colocó —cerrado, o colapsado por falta de sitio— aquí
+    // no hay nada que hacer.
+    if let Some((id, rect)) = placed_of_kind(res, &app.layout, "places")
         && let Some(state) = app.panes.places(id)
     {
         draw_places(
@@ -243,7 +258,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             &app.theme,
         );
     }
-    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::preview::KIND)
+    if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::preview::KIND)
         && let Some(p) = app.panes.preview(id)
     {
         draw_preview(
@@ -254,7 +269,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             app,
         );
     }
-    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::processes::KIND)
+    if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::processes::KIND)
         && let Some(&p) = app.panes.processes(id)
     {
         draw_processes(
@@ -267,7 +282,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
     }
     // El registro no lleva estado POR HUECO —hay uno, y su nivel y su filtro
     // son de la sesión— así que basta el rectángulo donde cayó.
-    if let Some((_, rect)) = placed_of_kind(&res, &app.layout, crate::logview::KIND) {
+    if let Some((_, rect)) = placed_of_kind(res, &app.layout, crate::logview::KIND) {
         draw_log(
             frame,
             rect,
@@ -275,7 +290,18 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             app.key_owner() == crate::app::KeyOwner::Log,
         );
     }
-    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::tree::KIND)
+    if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::diskmap::KIND)
+        && let Some(m) = app.panes.disk_map(id)
+    {
+        draw_disk_map(
+            frame,
+            rect,
+            m,
+            app,
+            app.key_owner() == crate::app::KeyOwner::DiskMap,
+        );
+    }
+    if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::tree::KIND)
         && let Some(t) = app.panes.tree(id)
     {
         draw_tree(
@@ -286,7 +312,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             app.key_owner() == crate::app::KeyOwner::Tree,
         );
     }
-    if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::metadata::KIND)
+    if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::metadata::KIND)
         && let Some(e) = app.panes.metadata(id)
     {
         // Sin borde de foco NUNCA: la hoja no toma el teclado, y un borde
@@ -295,13 +321,13 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
         //
         // El título dice A QUÉ LISTADO sigue: con dos abiertos, «Detalles» a
         // secas no dice de qué son los detalles.
-        let sigue = crate::metadata::follows(app, &res);
+        let sigue = crate::metadata::follows(app, res);
         draw_metadata(frame, rect, e.as_ref(), sigue.as_ref(), app, false);
     }
     // El panel de un PLUGIN (fase 3) se resuelve por PREFIJO: su kind no se
     // conoce al compilar, así que no pasa por `placed_of_kind`.
     if let Some(id) = app.panel_slot()
-        && let Some(rect) = geometry::slot_rect(&res, id)
+        && let Some(rect) = geometry::slot_rect(res, id)
     {
         let con_teclado = app.key_owner() == crate::app::KeyOwner::Panel;
         draw_plugin_panel(frame, rect, app, id, con_teclado);

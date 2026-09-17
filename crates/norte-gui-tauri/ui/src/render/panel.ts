@@ -11,7 +11,7 @@ import type { SlotDom } from "./dom";
  *  El rol llega ya validado desde Rust contra lo que un plugin PUEDE pedir, y
  *  el texto ya viene enmascarado: aquí no se valida nada, se pinta. Por
  *  `textContent` y jamás por `innerHTML` — el texto es de un tercero. */
-function tramo(s: SpanView): HTMLElement {
+export function tramo(s: SpanView): HTMLElement {
   const el = document.createElement("span");
   el.textContent = s.text;
   if (s.role !== null && s.role !== undefined) {

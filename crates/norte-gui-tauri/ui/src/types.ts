@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 70;
+export const BRIDGE_VERSION = 71;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -338,6 +338,20 @@ export interface PanelSlotView {
   hits: HitView[];
 }
 
+export interface DiskMapSlotView {
+  kind: "disk_map";
+  slot_id: number;
+  /** El directorio que se describe, enmascarado y acotado. */
+  title: string;
+  title_hostile: boolean;
+  /** El treemap ya repartido por el host: el renderer no calcula nada. */
+  lines: SpanView[][];
+  /** Un rectángulo por zona. Sin destino: el host resuelve la celda. */
+  hits: HitView[];
+  /** La medida sigue en marcha; un mapa a medias tiene que decirlo. */
+  measuring: boolean;
+}
+
 export interface LogSlotView {
   kind: "log";
   slot_id: number;
@@ -445,6 +459,7 @@ export type SlotView =
   | ProcessesSlotView
   | LogSlotView
   | PanelSlotView
+  | DiskMapSlotView
   | UnsupportedSlotView;
 
 export interface PendingView {

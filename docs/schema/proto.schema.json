@@ -1244,6 +1244,43 @@
       "description": "La identidad OPACA del directorio que un listado devolvió, para que la\npetición que escribe en él pueda decir CUÁL era (#295, 0.54.0).\n\n# Qué problema resuelve\n\nEl core abre el directorio destino como raíz confinada (ADR 0072), así que\nuna sustitución POSTERIOR a esa apertura ya no desvía nada. Lo que no puede\ndistinguir es un enlace que **ya estaba puesto** cuando miró por primera\nvez: desde dentro del core, `dest/sub -> /etc` recién plantado y un\n`~/copias -> /mnt/disco/copias` legítimo son idénticos —los dos resuelven a\notro sitio—, y rechazar los dos rompe copiar a `/tmp` en macOS o a `/bin`\nen un Linux con usrmerge.\n\nLo único que los separa es la identidad que se observó **cuando el humano\naprobó**: el listado que estaba mirando. Eso es esto.\n\n# Es opaco a propósito\n\nDentro no hay un inodo ni un número de volumen, sino un valor derivado de\nellos con un secreto del daemon: dos rutas del mismo nodo dan el mismo\nancla, y un cliente no puede ni fabricar una ni deducir qué nodo hay\ndetrás. Un cliente lo trata como bytes: lo guarda, lo devuelve y jamás lo\ninterpreta ni lo construye.\n\nUn ancla **no sobrevive al reinicio del daemon**, que renueva el secreto.\nUn cliente que reconecta ha perdido su listado de todas formas y vuelve a\npedirlo, así que la ventana que importa —mirar, aprobar, escribir— cae\nentera dentro de una sesión.\n\n```\nuse norte_proto::entry::{DIR_ANCHOR_LEN, DirAnchor};\nlet a = DirAnchor::new(\"0123456789abcdef0123456789abcdef\".to_owned());\nassert!(a.is_well_formed());\nassert_eq!(a.as_str().len(), DIR_ANCHOR_LEN);\n// Va por el wire como una cadena y nada más.\nassert_eq!(\n    serde_json::to_string(&a).unwrap(),\n    \"\\\"0123456789abcdef0123456789abcdef\\\"\"\n);\n\n// Lo que no está bien formado NO es un error de decodificación: llega,\n// y quien compare no encontrará jamás un nodo que le case, que es la\n// respuesta segura (un ancla que no se reconoce no autoriza nada).\nlet raro: DirAnchor = serde_json::from_str(\"\\\"../etc\\\"\").unwrap();\nassert!(!raro.is_well_formed());\n```",
       "type": "string"
     },
+    "DirUsageChild": {
+      "description": "Un hijo medido: qué es y cuánto ocupa (0.75.0, fase 4).\n\n```\nuse norte_proto::methods::DirUsageChild;\nlet c: DirUsageChild = serde_json::from_str(\n    r#\"{\"name\":\"caf%FF.txt\",\"kind\":\"file\",\"bytes\":17,\"entries\":1}\"#,\n)\n.expect(\"hijo\");\n// El nombre vuelve a ser los BYTES que había en el disco.\nassert_eq!(c.name.as_bytes(), b\"caf\\xFF.txt\");\n// Y un hijo que no dice nada es un hijo COMPLETO: la cota inferior se\n// declara, no se supone.\nassert!(!c.partial);\n```",
+      "properties": {
+        "bytes": {
+          "description": "Cuánto ocupa, contando lo que se pudo leer bajo él.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entries": {
+          "description": "Cuántas entradas tiene dentro, él incluido.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/EntryKind",
+          "description": "Qué clase de nodo es, para que el mapa lo pinte como lo que es."
+        },
+        "name": {
+          "$ref": "#/$defs/Segment",
+          "description": "Su nombre BASE, en bytes (regla 1): un nombre no es UTF-8, y quien lo\npinte lo enmascara como cualquier otro.\n\nUn [`Segment`] y no un `String` ni una ruta: es exactamente un tramo de\nnombre, ya tiene su codificación de wire, y una ruta aquí sería un\nsegundo camino para nombrar un fichero — el que se resuelve contra el\ndirectorio que se pidió, sin pasar por donde pasan los demás."
+        },
+        "partial": {
+          "default": false,
+          "description": "Lo de arriba es una COTA INFERIOR: hubo algo bajo este hijo que no se\ndejó leer.\n\nPor HIJO y no por informe, que es la diferencia entre poder pintarlo y\nno: un mapa marca el rectángulo que no está completo; una bandera\nglobal solo puede apagar el mapa entero. Es el mismo criterio que\n[`ChecksumEntry::miss`], que también va por entrada.\n\n`default` para que añadir campos aquí siga siendo aditivo.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "bytes",
+        "entries"
+      ],
+      "type": "object"
+    },
     "Entry": {
       "description": "Metadatos de un nodo del VFS.\n\nCampos opcionales `None` = \"el provider no lo sabe\", nunca un 0 fingido.\n\n```\nuse norte_proto::attrs::AttrValue;\nuse norte_proto::{Entry, EntryKind, VPath};\nlet e = Entry {\n    path: VPath::parse(\"file:///a.txt\").unwrap(),\n    kind: EntryKind::File,\n    size: Some(42),\n    mtime_ms: None,\n    attrs: [(\"posix.mode\".to_owned(), AttrValue::Uint(0o100_644))].into(),\n};\nlet json = serde_json::to_string(&e).unwrap();\nassert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);\n\n// Sin attrs, el wire es EXACTAMENTE el de 0.29.\nlet plain = Entry { attrs: Default::default(), ..e };\nassert!(!serde_json::to_string(&plain).unwrap().contains(\"attrs\"));\n\n// Una clave de atributo mal formada NO llega al mapa: se descarta al\n// decodificar, sin error (ver [`Entry::attrs`]).\nlet wire = r#\"{\"path\":\"file:///a.txt\",\"kind\":\"file\",\"attrs\":{\"MODE\":{\"uint\":1}}}\"#;\nlet filtrada: Entry = serde_json::from_str(wire).unwrap();\nassert!(filtrada.attrs.is_empty());\n```\n\nOJO: `PartialEq`/`Eq`/`Hash` derivados son REPRESENTACIONALES, no de\nIDENTIDAD: dos `Entry` del MISMO nodo difieren si una se pidió con\natributos y la otra no, o si se pidieron ids distintos. Para \"¿es el mismo\nnodo?\" se compara [`Entry::path`]; estas derivaciones existen para\nfixtures, tests y deduplicado de listados idénticos, no para decidir\nidentidad.",
       "properties": {
@@ -2049,6 +2086,88 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "FsDirUsageParams": {
+      "description": "Params de [`FS_DIR_USAGE`] (0.75.0, fase 4).\n\nUNA raíz y no varias, al revés que [`FsDirSizeParams`]: aquello suma una\nselección en un número, y esto describe de qué está hecho UN directorio.\nMezclar dos raíces daría una lista de hijos de sitios distintos con nombres\nque pueden repetirse, que no es un mapa de nada.\n\n```\nuse norte_proto::methods::FsDirUsageParams;\n// `depth` omitido es UNO, que es lo que pinta un mapa.\nlet p: FsDirUsageParams =\n    serde_json::from_str(r#\"{\"path\":\"file:///casa\"}\"#).expect(\"params\");\nassert_eq!(p.depth, 1);\n```",
+      "properties": {
+        "depth": {
+          "default": 1,
+          "description": "Cuántos niveles se abren. `1` —lo que pinta un mapa de disco— mide cada\nhijo entero y no baja más.\n\nVa en el wire aunque hoy el servidor solo sirva `1` porque un mapa de\ndos niveles es la primera cosa que alguien va a pedir, y añadir el\ncampo después obligaría a distinguir «no lo mandó» de «pidió uno».\n\n**Contrato**: `0` —describir cero niveles no es una petición— y todo lo\nque pase de [`DIR_USAGE_MAX_DEPTH`] se rechazan con la taxonomía\n`invalid-path` (`-32000` con la categoría en `data`, como cualquier\nerror de aplicación de este protocolo), **no** con un `-32602` pelado:\nun código sin categoría llega al cliente como `internal`, o sea como un\nfallo del servidor y no como el error de quien llamó.\n\nUna `depth` VÁLIDA que este servidor todavía no sirva —hoy, cualquiera\nmayor que `1`— se contesta `unsupported`, y **se rechaza en vez de\nrecortarse**: un servidor que recorte en silencio deja al cliente\ncreyendo que tiene los niveles que pidió.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "El directorio que se describe."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsDirUsageReportParams": {
+      "description": "Params de [`FS_DIR_USAGE_REPORT`] (0.75.0, fase 4).\n\n```\nuse norte_proto::methods::FsDirUsageReportParams;\nlet p: FsDirUsageReportParams =\n    serde_json::from_str(r#\"{\"task_id\":9}\"#).expect(\"params\");\nassert_eq!(p.task_id.get(), 9);\n```",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "La Task cuyo informe se pide (la de [`FsTaskResult::task_id`] que\ndevolvió [`FS_DIR_USAGE`])."
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "FsDirUsageReportResult": {
+      "description": "Result de [`FS_DIR_USAGE_REPORT`] (0.75.0, fase 4): lo medido hasta ahora.\n\nEs un SNAPSHOT, como el de [`FS_CHECKSUM_REPORT`]: parcial mientras la Task\ncorre —que es lo que hace útil pedirlo— y definitivo cuando termina. El\norden es el del LISTADO del directorio, no el de terminación: un mapa que\nse reordena solo cambia de forma entre dos vistas de lo mismo.\n\n```\nuse norte_proto::methods::FsDirUsageReportResult;\n// Un fragmento: la Task se paró mientras listaba la raíz.\nlet r: FsDirUsageReportResult = serde_json::from_str(\n    r#\"{\"children\":[],\"total_bytes\":0,\"total_entries\":0,\n        \"pending\":0,\"listed\":false,\"omitted\":0}\"#,\n)\n.expect(\"informe\");\n// `pending: 0` NO quiere decir «terminado» aquí: sin `listed`, nadie sabe\n// cuántos hijos había.\nassert!(!r.listed);\nassert_eq!(r.pending, 0);\n```",
+      "properties": {
+        "children": {
+          "description": "Un hijo por entrada del directorio, ya medida.",
+          "items": {
+            "$ref": "#/$defs/DirUsageChild"
+          },
+          "type": "array"
+        },
+        "listed": {
+          "description": "El listado de la raíz TERMINÓ, así que ya se sabe cuántos hijos hay.\n\nEn `false` el informe es un fragmento —se canceló mientras listaba, o\nla raíz ni se dejó abrir— y ni [`Self::pending`] ni los totales dicen\nnada de lo que falta.",
+          "type": "boolean"
+        },
+        "omitted": {
+          "description": "Hijos que EXISTEN y no están en la lista, porque no cabían\n([`DIR_USAGE_MAX_CHILDREN`]).\n\nLos totales SÍ los cuentan, así que un mapa puede pintar el resto como\nun rectángulo más: lo que se pierde es su nombre, no su tamaño. Cero es\nel caso normal.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pending": {
+          "description": "Cuántos hijos quedan por medir. Cero con la Task `Completed`; en una\ncancelada o fallida se queda en lo que faltaba.\n\n**Solo significa algo con [`Self::listed`] en `true`.** Al revés que el\nde [`FsChecksumReportResult`], cuyo denominador son las rutas que mandó\nel cliente, aquí no se sabe cuántos hijos hay hasta que termina el\nlistado de la raíz: una Task cancelada mientras listaba informa `0`\nsobre un puñado de hijos, y sin `listed` eso se lee como un mapa\ncompleto.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_bytes": {
+          "description": "La suma de los hijos medidos.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_entries": {
+          "description": "Las entradas contadas bajo ellos.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "children",
+        "total_bytes",
+        "total_entries",
+        "pending",
+        "listed",
+        "omitted"
+      ],
       "type": "object"
     },
     "FsListParams": {
@@ -5755,6 +5874,11 @@
           "type": "string"
         },
         {
+          "const": "dir_usage",
+          "description": "Qué ocupa CADA HIJO de un directorio (`fs.dir_usage`, 0.75.0, fase 4\ndel programa 2026-09-15). Lectura pura, como `DirSize`: sin journal y\nsin undo.\n\nAparte de [`TaskKind::DirSize`] y no un parámetro suyo: aquel contesta\nUN número sobre una selección —«¿cabe esto en el destino?»— y su total\nviaja en el progreso; este contesta una LISTA, que no cabe ahí y se\nrecoge con `fs.dir_usage_report`. Dos preguntas distintas, dos clases\nque el lector distingue en `task.list`.\n\nEntra CON el método. Un cliente N-1 (0.74.x) la degrada a\n[`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que\n`Search`/`Index`/`Embed`/`RenameBatch`/`Compare`/`DirSize`/`Checksum`.",
+          "type": "string"
+        },
+        {
           "const": "set_mode",
           "description": "Cambio de permisos POSIX de un lote de rutas\n(`fs.set_mode`/[`FS_SET_MODE`](crate::methods::FS_SET_MODE), 0.60.0,\n#314). MUTA: journal con reversa y gate de política (regla 4).\n\nEl progreso cuenta ENTRADAS y no bytes: un `chmod` no mueve ninguno, y\nuna barra de bytes aquí se quedaría en cero para siempre. El total se\nsabe desde el principio, porque son las rutas que se mandaron.\n\nEntra CON el método, y un cliente N-1 (0.59.x) la degrada a\n[`TaskKind::Unknown`] por el `serde(other)` de abajo.",
           "type": "string"
@@ -6277,6 +6401,9 @@
     "dest_trash": {
       "$ref": "#/$defs/DestTrash"
     },
+    "dir_usage_child": {
+      "$ref": "#/$defs/DirUsageChild"
+    },
     "entry": {
       "$ref": "#/$defs/Entry"
     },
@@ -6321,6 +6448,15 @@
     },
     "fs_dir_size_params": {
       "$ref": "#/$defs/FsDirSizeParams"
+    },
+    "fs_dir_usage_params": {
+      "$ref": "#/$defs/FsDirUsageParams"
+    },
+    "fs_dir_usage_report_params": {
+      "$ref": "#/$defs/FsDirUsageReportParams"
+    },
+    "fs_dir_usage_report_result": {
+      "$ref": "#/$defs/FsDirUsageReportResult"
     },
     "fs_list_params": {
       "$ref": "#/$defs/FsListParams"
@@ -6800,6 +6936,10 @@
     "fs_checksum_params",
     "fs_checksum_report_params",
     "fs_checksum_report_result",
+    "fs_dir_usage_params",
+    "fs_dir_usage_report_params",
+    "fs_dir_usage_report_result",
+    "dir_usage_child",
     "checksum_entry",
     "checksum_algo",
     "checksum_miss",

@@ -506,12 +506,13 @@ fn cada_boton_de_la_barra_cae_en_su_sitio() {
         app.pending_panel_command.clone()
     };
     assert_eq!(pulsa(&mut app, 1).as_deref(), Some("layout.places"));
+    assert_eq!(pulsa(&mut app, 16).as_deref(), Some("layout.log"));
     assert_eq!(
-        pulsa(&mut app, 16).as_deref(),
-        Some("layout.log"),
-        "el último"
+        pulsa(&mut app, 19).as_deref(),
+        Some("layout.disk-map"),
+        "el último: el mapa de disco (fase 4) entró detrás del registro"
     );
-    assert_eq!(pulsa(&mut app, 18), None, "pasado el último no hay botón");
+    assert_eq!(pulsa(&mut app, 21), None, "pasado el último no hay botón");
 }
 
 /// REGRESIÓN de un BLOCKER: con un overlay delante, la barra ni se pinta ni se

@@ -103,6 +103,8 @@ checksum-mismatch = NO CUADRA
 checksum-missing = falta
 checksum-unreadable = ilegible
 msg-checksum-started = calculando sumas…
+msg-disk-map-started = midiendo el directorio…
+msg-disk-map-partial = el mapa se quedó a medias: lo medido es una cota inferior
 msg-checksum-all-ok = { $n } comprobados, todos correctos
 msg-checksum-bad = { $n } no cuadran o faltan
 msg-checksum-copied = sumas copiadas al portapapeles
@@ -975,6 +977,7 @@ panelbar-viewer = Visor
 panelbar-processes = Procesos
 panelbar-metadata = Detalles
 panelbar-log = Registro
+panelbar-disk-map = Mapa
 
 # El asistente de primer arranque (spec 2026-09-10): tres preguntas cuando
 # aún no hay norte.toml de usuario. Esc en cualquier paso = «no volver a
@@ -1001,6 +1004,7 @@ menu-item-layout-places = Panel de sitios
 menu-item-layout-preview = Visor acoplado
 menu-item-layout-processes = Panel de procesos
 menu-item-layout-log = Registro
+menu-item-layout-disk-map = Mapa de disco
 menu-item-layout-metadata = Panel de detalles
 menu-item-layout-pick = Disposición...
 menu-item-profile-pick = Perfil...
@@ -1102,6 +1106,7 @@ help-cmd-layout-places = enseñar u ocultar el panel de sitios
 help-cmd-layout-preview = enseñar u ocultar el visor acoplado
 help-cmd-layout-processes = muestra u oculta el panel de procesos
 help-cmd-layout-log = muestra u oculta el registro de esta sesión
+help-cmd-layout-disk-map = muestra u oculta el mapa de disco
 help-cmd-layout-metadata = muestra u oculta el panel de detalles
 help-cmd-layout-pick = elige una disposición
 help-cmd-profile-pick = elige un perfil
@@ -2051,6 +2056,8 @@ processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
 # que se ve vacío tiene que distinguir «no ha pasado nada» de «lo estás
 # filtrando fuera».
 log-title = Registro
+disk-map-title = Mapa de disco
+disk-map-measuring = midiendo
 slot-retry = reintentar
 # Esperando un listado (#323). Tres piezas y no una frase: el renderer las
 # compone con la RUTA en su propio nodo, porque una ruta pegada dentro de la

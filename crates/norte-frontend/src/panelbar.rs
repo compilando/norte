@@ -36,6 +36,7 @@ const TOGGLES: &[(&str, &str)] = &[
     ("processes", "layout.processes"),
     ("metadata", "layout.metadata"),
     ("log", "layout.log"),
+    ("disk-map", "layout.disk-map"),
 ];
 
 /// Cómo está un panel ahora mismo.
@@ -353,7 +354,18 @@ mod tests {
         // snapshots de render que no se explican solos.
         assert_eq!(
             kinds,
-            ["places", "viewer", "processes", "metadata", "tree", "log"],
+            [
+                "places",
+                "viewer",
+                "processes",
+                "metadata",
+                "tree",
+                "log",
+                // Fase 4: el mapa de disco entra AL FINAL, que es donde lo pone
+                // su orden de registro en `builtin()`. Los de siempre no se
+                // mueven de sitio: la posición es lo que el dedo aprende.
+                "disk-map",
+            ],
             "cambió el orden de los botones de serie"
         );
         for fuera in ["browser", "tasks", "status", "compare", "sync"] {

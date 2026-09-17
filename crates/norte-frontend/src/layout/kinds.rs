@@ -121,6 +121,19 @@ impl KindRegistry {
                 // mensaje corto y el marco; por debajo la hora y el nivel se
                 // comen la línea entera y no queda sitio para lo que dice.
                 decl("log", (30, 4), true, true, false, SIN_ROLES),
+                // El mapa de disco (fase 4): se enfoca, toma teclas —se anda
+                // por los rectángulos y se entra en uno— y hay UNO. No opta a
+                // ningún rol: un mapa se mira y se recorre, y nadie copia
+                // dentro de un treemap.
+                //
+                // 24x6 es el mínimo con el que sigue siendo un MAPA. A lo
+                // ancho, 24 columnas es lo que ocupa una etiqueta como
+                // `documentos 1,2G` con el marco alrededor; por debajo los
+                // rectángulos dejan de caber con su nombre y lo que queda es
+                // un mosaico de colores sin leyenda. A lo alto, seis filas son
+                // dos tiras con su etiqueta más el marco: con menos solo cabe
+                // una tira, y una sola tira no reparte nada — es una barra.
+                decl("disk-map", (24, 6), true, true, false, SIN_ROLES),
             ],
         }
     }

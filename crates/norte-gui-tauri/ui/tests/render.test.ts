@@ -199,6 +199,30 @@ describe("la pantalla de arranque", () => {
     expect(document.querySelector(".splash-label")?.textContent).toBe("casa");
   });
 
+  // La PORTADA: `brief` viene sin secciones, y entonces la pantalla de
+  // arranque deja de ser una caja centrada para ocupar el hueco entero. La
+  // señal es la misma que usa el terminal —no hay secciones—, así que las dos
+  // superficies deciden igual sin que el modo tenga que viajar por el puente.
+  it("sin secciones se pinta como portada", () => {
+    const { screen } = montar();
+    const v = conSplash(null);
+    if (v.splash) {
+      v.splash.sections = [];
+    }
+    screen.paint(v);
+    const caja = document.querySelector(".splash") as HTMLElement;
+    expect(caja.dataset["cover"]).toBe("true");
+  });
+
+  // Y con lista sigue siendo una caja: las filas numeradas se leen y se
+  // pulsan, y sueltas sobre el fondo pierden el marco que las delimita.
+  it("con secciones sigue siendo una caja", () => {
+    const { screen } = montar();
+    screen.paint(conSplash(null));
+    const caja = document.querySelector(".splash") as HTMLElement;
+    expect(caja.dataset["cover"]).toBeUndefined();
+  });
+
   it("un clic en cualquier sitio la quita", () => {
     const { screen, enviadas } = montar();
     screen.paint(conSplash(null));

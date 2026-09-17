@@ -3,7 +3,7 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render_80x24(&app)
 ---
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
-" Sitios  Visor  Procesos  Detalles  Árbol  Registro                             "
+" Sitios  Visor  Procesos  Detalles  Árbol  Registro  Mapa                       "
 "┌ sincronizar (espejo) — /casa → /otro ────────────────────────────────────────┐"
 "│nada de esto lo puede deshacer norte                                          │"
 "│el destino no tiene papelera: lo que esto sustituya o borre no se guarda en   │"

@@ -121,6 +121,7 @@ pub async fn on_tree_key(
         "layout.processes" => app.toggle_processes(),
         "layout.metadata" => app.toggle_metadata(),
         "layout.log" => app.toggle_log(),
+        "layout.disk-map" => app.toggle_disk_map(),
         "dialog.confirm" => {
             let dest = app.tree().and_then(crate::tree::Tree::selected);
             if let Some(dir) = dest {
@@ -166,6 +167,72 @@ pub fn on_processes_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifie
     if let Some(msg) = app.processes_command(&cmd) {
         app.message = Some(msg);
     }
+}
+
+/// Teclas del mapa de disco (fase 4).
+///
+/// Dos capas, como en el panel de registro y por el mismo motivo. Primero las
+/// teclas PROPIAS del mapa ([`crate::diskmap::key`]): flechas, páginas,
+/// extremos, `Enter`, `r` y `Esc` son suyas mientras tenga el teclado, y no
+/// pasan por el keymap porque fuera de aquí no significan nada — meterlas
+/// obligaría a los siete presets a declarar atajos inútiles. Lo que no
+/// reclame, al resolver de la pantalla `dialog`, filtrado por
+/// [`crate::app::ALLOW_DISK_MAP`].
+///
+/// **`Enter` no navega aquí.** Deja el hijo elegido en `pending_disk_map_enter`
+/// y lo consume el bucle, que es quien tiene el backend: entrar en un
+/// directorio es un `cd` como cualquier otro, con su relleno y su refresco, y
+/// hacerlo a medias desde una función síncrona sería el segundo camino de
+/// navegación que ADR 0077 existe para impedir.
+pub fn on_disk_map_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
+    use crate::diskmap::MapAction;
+
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return;
+    }
+    if let Some(accion) = crate::diskmap::key(code, mods) {
+        let Some(slot) = app.disk_map_slot() else {
+            return;
+        };
+        match accion {
+            MapAction::Mover(n) => {
+                if let Some(m) = app.panes.disk_map_mut(slot) {
+                    m.mover(n);
+                }
+            }
+            MapAction::Entrar => {
+                let elegido = app
+                    .panes
+                    .disk_map(slot)
+                    .and_then(|m| m.elegido().map(|c| c.name.clone()));
+                // Solo un DIRECTORIO se abre: entrar en un fichero no es
+                // navegar, y el mapa enseña las dos cosas.
+                let es_dir = app
+                    .panes
+                    .disk_map(slot)
+                    .and_then(|m| m.elegido().map(|c| c.kind == norte_proto::EntryKind::Dir));
+                if let (Some(name), Some(true)) = (elegido, es_dir) {
+                    app.pending_disk_map_enter = Some(name);
+                }
+            }
+            MapAction::Remedir => app.disk_map_stale = true,
+            MapAction::Leave => app.return_keys_to_panes(),
+        }
+        return;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return;
+        }
+        Resolution::Reset => return,
+    };
+    app.disk_map_command(&cmd);
 }
 
 /// Teclas de un panel APORTADO por un plugin (fase 3), resueltas por el mismo
@@ -267,6 +334,7 @@ pub async fn on_places_key(
         "layout.processes" => app.toggle_processes(),
         "layout.metadata" => app.toggle_metadata(),
         "layout.log" => app.toggle_log(),
+        "layout.disk-map" => app.toggle_disk_map(),
         "pane.tree" => app.toggle_tree(),
         // `⏎` sobre una CABECERA pliega o despliega su sección, como en el
         // árbol de al lado. Antes no hacía nada: `activate()` devuelve `None`

@@ -457,6 +457,7 @@ fn task_kind_wire_strings() {
         // 0.59.0 (#311). El schema también lo congela, pero ese rojo se
         // arregla regenerando; este obliga a tocar dos sitios a mano.
         (TaskKind::Checksum, "\"checksum\""),
+        (TaskKind::DirUsage, "\"dir_usage\""),
         // 0.60.0 (#314).
         (TaskKind::SetMode, "\"set_mode\""),
     ] {
@@ -1322,10 +1323,15 @@ fn version_ventana_actual() {
     // que ve cuando el plugin que lo pinta está desinstalado. Y lee `panels`
     // vacío en cada `PluginInfo`, o sea «este plugin no ofrece paneles», que
     // es exactamente lo que ese cliente podía saber antes de que existieran.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.74.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.73.0"), "N-1");
+    // 0.75.0 (fase 4): un cliente 0.74 no sabe pedir `fs.dir_usage` y no lo
+    // pide, así que se queda sin mapa de disco — la pantalla que tenía. Y si
+    // ve la Task de otro en `task.list`, su `TaskKind` cae en `Unknown` por el
+    // `serde(other)`: la pinta como una tarea que no sabe nombrar, con su
+    // progreso y su botón de cancelar, en vez de fallar el parse.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.75.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.74.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.72.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.73.9"),
         "N-2 fuera de la ventana"
     );
 }

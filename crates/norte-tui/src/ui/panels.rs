@@ -312,22 +312,79 @@ pub(crate) fn draw_plugin_panel(
         .paneles
         .get(id)
         .and_then(|p| p.frame.as_ref())
-        .map(|f| {
-            f.lines
-                .iter()
-                .map(|linea| {
-                    Line::from(
-                        linea
-                            .iter()
-                            .map(|span| {
-                                Span::raw(span.text.clone()).style(estilo_de_span(span, &app.theme))
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                })
-                .collect()
-        })
+        .map(|f| lineas_de_marco(f, &app.theme))
         .unwrap_or_default();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// Un [`StyledFrame`](norte_frontend::frame::StyledFrame) convertido en líneas
+/// de `ratatui`.
+///
+/// UNA conversión y dos llamantes —el panel de un plugin y el mapa de disco—,
+/// porque una segunda escrita a mano es exactamente cómo se coló un camino que
+/// se saltaba el enmascarado (ver `crate::ansi::span_de_wire`). Lo que entra ya
+/// viene saneado; lo que esto hace es solo estilo.
+fn lineas_de_marco<'a>(
+    marco: &norte_frontend::frame::StyledFrame,
+    theme: &TuiTheme,
+) -> Vec<Line<'a>> {
+    marco
+        .lines
+        .iter()
+        .map(|linea| {
+            Line::from(
+                linea
+                    .iter()
+                    .map(|span| Span::raw(span.text.clone()).style(estilo_de_span(span, theme)))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
+}
+
+/// El mapa de disco (fase 4): de qué está hecho el directorio, en rectángulos.
+///
+/// El marco lo reparte [`norte_frontend::treemap::squarify`] con el ancho y el
+/// alto de DENTRO del borde: el reparto no sabe dónde cayó el hueco, igual que
+/// no lo sabe el guest de un plugin, y la cuenta la hace quien pinta.
+///
+/// Mientras se mide se pinta lo que haya llegado —un mapa se va formando— y el
+/// título lo dice. Un mapa a medias sin decirlo se lee como un directorio
+/// pequeño, que es la respuesta equivocada.
+pub(crate) fn draw_disk_map(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    mapa: &norte_frontend::diskmap::DiskMap,
+    app: &App,
+    con_teclado: bool,
+) {
+    use norte_frontend::diskmap::Estado;
+
+    let border = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    // El título lleva el ESTADO, que es la mitad de la información: «midiendo»
+    // sobre un mapa a medias es lo que impide leerlo como un total.
+    let estado = match mapa.estado() {
+        // Quieto y Hecho no añaden nada, y es el MISMO resultado a propósito:
+        // uno es «nadie ha pedido nada» y el otro «ya está», y en los dos el
+        // título se basta solo. Lo que tiene que verse es cuando NO está
+        // terminado, porque un mapa a medias sin decirlo se lee como un total.
+        Estado::Quieto | Estado::Hecho => String::new(),
+        Estado::Midiendo(_) => format!(" — {}", t("disk-map-measuring")),
+        Estado::Fallo(motivo) => format!(" — {motivo}"),
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {}{estado} ", t("disk-map-title")))
+        .title_style(app.theme.role(Role::Title))
+        .border_style(app.theme.role(border));
+    let dentro = block.inner(area);
+    let marco =
+        norte_frontend::treemap::squarify(&mapa.informe().children, dentro.width, dentro.height);
+    let lines = lineas_de_marco(&marco, &app.theme);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 

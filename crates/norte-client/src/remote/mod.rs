@@ -1509,6 +1509,40 @@ impl RemoteBackend {
         .await
     }
 
+    /// `fs.dir_usage` (0.75.0, fase 4): lanza la Task que mide un directorio
+    /// hijo a hijo y devuelve su referencia. El mapa se recoge con
+    /// [`Self::dir_usage_report`], que es el único camino: una lista de hijos no
+    /// cabe en el desenlace de una Task.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon. [`Error::Unsupported`] dice DOS cosas y no
+    /// una: que el daemon no conoce el método (uno 0.74, que contesta
+    /// `METHOD_NOT_FOUND`) o que conoce el método y no sirve esa `depth`
+    /// todavía. Las distingue quien llamó, por la `depth` que pidió: con
+    /// `depth: 1` —lo que pinta un mapa— solo cabe la primera.
+    pub async fn dir_usage(&self, params: methods::FsDirUsageParams) -> Result<RemoteTask, Error> {
+        let result: FsTaskResult = self
+            .call_maybe_unknown(methods::FS_DIR_USAGE, &params)
+            .await?;
+        Ok(self.own_task(result.task_id, TaskKind::DirUsage))
+    }
+
+    /// `fs.dir_usage_report` (0.75.0, fase 4): el mapa medido hasta ahora.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon; [`Error::Unsupported`] contra uno 0.74, que
+    /// no conoce el método.
+    pub async fn dir_usage_report(
+        &self,
+        task_id: TaskId,
+    ) -> Result<methods::FsDirUsageReportResult, Error> {
+        self.call_maybe_unknown(
+            methods::FS_DIR_USAGE_REPORT,
+            &methods::FsDirUsageReportParams { task_id },
+        )
+        .await
+    }
+
     /// `archive.pack` (0.50.0, #132).
     ///
     /// # Errors

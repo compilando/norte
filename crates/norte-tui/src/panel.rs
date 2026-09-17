@@ -71,6 +71,12 @@ pub enum TuiPanel {
     /// lado porque sobre `..` la hoja se llama `..` y dice a dónde lleva, y
     /// eso no se puede deducir de la `Entry` sola: la suya es la del padre.
     Metadata(Box<Option<(norte_proto::Entry, bool)>>),
+    /// El mapa de disco (fase 4): qué directorio describe, lo medido y cuál
+    /// es el hijo elegido.
+    ///
+    /// En caja como el árbol: el informe lleva hasta 4096 hijos, y eso no
+    /// puede fijar el tamaño de este enum para todos los demás paneles.
+    DiskMap(Box<norte_frontend::diskmap::DiskMap>),
     /// Un kind que este binario no conoce: se pinta como una caja con su
     /// nombre y sus `params` se conservan intactos, para que abrir el layout
     /// de la GUI en el TUI no le borre nada.
@@ -93,6 +99,7 @@ impl TuiPanel {
             | Self::Processes(_)
             | Self::Tree(_)
             | Self::Metadata(_)
+            | Self::DiskMap(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -106,6 +113,7 @@ impl TuiPanel {
             | Self::Processes(_)
             | Self::Tree(_)
             | Self::Metadata(_)
+            | Self::DiskMap(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -120,6 +128,7 @@ impl TuiPanel {
             | Self::Processes(_)
             | Self::Tree(_)
             | Self::Metadata(_)
+            | Self::DiskMap(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -133,6 +142,7 @@ impl TuiPanel {
             | Self::Processes(_)
             | Self::Tree(_)
             | Self::Metadata(_)
+            | Self::DiskMap(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -407,6 +417,28 @@ impl PaneSlots {
     /// Mete el panel de procesos en un hueco.
     pub fn insert_processes(&mut self, id: SlotId, p: crate::processes::Processes) {
         self.store.insert(id, TuiPanel::Processes(p));
+    }
+
+    /// El mapa de disco de ese hueco, si lo hay.
+    #[must_use]
+    pub fn disk_map(&self, id: SlotId) -> Option<&norte_frontend::diskmap::DiskMap> {
+        match self.store.get(id) {
+            Some(TuiPanel::DiskMap(m)) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// El mapa de disco de ese hueco, para mutarlo.
+    pub fn disk_map_mut(&mut self, id: SlotId) -> Option<&mut norte_frontend::diskmap::DiskMap> {
+        match self.store.get_mut(id) {
+            Some(TuiPanel::DiskMap(m)) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// Mete el mapa de disco en un hueco.
+    pub fn insert_disk_map(&mut self, id: SlotId, m: norte_frontend::diskmap::DiskMap) {
+        self.store.insert(id, TuiPanel::DiskMap(Box::new(m)));
     }
 
     /// Lo que enseña la hoja de atributos de un hueco, si lo hay.

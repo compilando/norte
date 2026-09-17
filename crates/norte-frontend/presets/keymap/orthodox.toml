@@ -35,6 +35,11 @@ keymap = [
     { on = ["alt+j"], run = "layout.processes" },
     # El registro (#323). `alt+l` de «log», libre en los siete presets.
     { on = ["alt+l"], run = "layout.log" },
+    # El mapa de disco (fase 4). `alt+z` era la ÚNICA letra libre en los siete
+    # presets: de la `a` a la `y` no queda ninguna sin atar en alguno. El
+    # mnemónico es malo y se asume — una tecla rara se aprende, una que hace
+    # dos cosas distintas según el preset, no.
+    { on = ["alt+z"], run = "layout.disk-map" },
     # El resto de la familia `layout.*`, que estaba SIN TECLA en los siete
     # presets: cerrar un hueco, cambiarle el ancho, igualarlos y designar el
     # destino. Se llegaba solo por el menú o la paleta, y el menú los pintaba

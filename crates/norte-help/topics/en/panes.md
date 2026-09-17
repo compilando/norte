@@ -40,6 +40,7 @@ commands = [
     "layout.processes",
     "layout.metadata",
     "layout.log",
+    "layout.disk-map",
     "layout.pick",
 
     "profile.pick",
@@ -341,6 +342,23 @@ filters by text, and searches the module name too, which is half of what you
 actually look for. Arrows and pages detach from the tail so you can read while
 lines keep arriving, and `End` re-attaches. `Esc` hands the keyboard back without
 closing the panel.
+
+{{cmd:layout.disk-map}} opens the disk map: what the directory you are looking at
+is made of, one rectangle per child, sized by what it takes up. It answers "where
+did my space go?", which a listing sorted by size does not — there a directory
+weighs what its own node weighs, not what is inside it.
+
+Arrows move from rectangle to rectangle and {{cmd:nav.enter}} goes into the
+selected one, which is how you walk down to whatever is eating the disk. A click
+does the same on whichever rectangle you press. `Esc` hands the keyboard back
+without closing the panel.
+
+Measuring a big tree takes a while, so the map paints as it measures and says
+when it has finished. Anything that could not be read in full is marked with `≈`
+rather than counted as zero: it is a lower bound and it says so, because a small
+rectangle that is really enormous is worse than one admitting it does not know.
+And when a directory has more children than fit, the ones that travel are the
+**largest** — the ones a map exists to show.
 
 Asking for more detail really does raise the level, not just the filter: debug
 messages do not exist until you ask for them, so they appear from then on and not

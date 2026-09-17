@@ -62,12 +62,17 @@ La pantalla de arranque
 -----------------------
 
 Antes del primer listado, norte enseña qué build corre y contra qué core
-habla, y se quita con la primera tecla o sola en poco más de un segundo
-(`splash = "brief"`, el de serie). `"home"` la convierte en una pantalla de
-inicio que se queda hasta que la toques, con los directorios a los que más
-vas y tus favoritos, cada uno abierto por su número (1-9); un clic en la fila
-hace lo mismo. `"off"` no enseña nada. El asistente de primer arranque le
-gana: si aún no tienes `norte.toml`, se pregunta antes y la pantalla no sale.
+habla, y se quita con la primera tecla o sola a los cuatro segundos
+(`splash = "brief"`, el de serie). `splash_ms` cambia esos cuatro segundos:
+de 200 a 60000. Por debajo de unos cientos es un parpadeo que no da tiempo a
+leer; y si lo que quieres es que se quede hasta que la toques, eso es
+`"home"`, no un número muy grande.
+
+`"home"` la convierte en una pantalla de inicio que se queda hasta que la
+toques, con los directorios a los que más vas y tus favoritos, cada uno
+abierto por su número (1-9); un clic en la fila hace lo mismo. `"off"` no
+enseña nada. El asistente de primer arranque le gana: si aún no tienes
+`norte.toml`, se pregunta antes y la pantalla no sale.
 
 El panel de procesos
 --------------------

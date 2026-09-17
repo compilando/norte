@@ -118,6 +118,27 @@ pub trait HostBackend: Send + Sync + 'static {
         task: norte_proto::TaskId,
     ) -> BoxFuture<'static, Result<norte_proto::methods::FsChecksumReportResult, Error>>;
 
+    /// De qué está hecho un directorio, hijo a hijo, como Task (fase 4).
+    ///
+    /// Los hijos NO vuelven aquí: una lista no cabe en el desenlace de una
+    /// Task ni en su progreso. Se recogen con [`Self::dir_usage_report`].
+    fn dir_usage(
+        &self,
+        params: norte_proto::methods::FsDirUsageParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
+    /// El mapa que lleva medido esa Task (fase 4).
+    ///
+    /// Es un SNAPSHOT: parcial mientras corre —que es lo que hace útil pedirlo,
+    /// porque un mapa se va pintando— y definitivo cuando la Task es terminal.
+    /// Quien lo aterrice tiene que mirar el estado: uno de una Task cancelada
+    /// está a medias, y pintarlo como completo convierte un directorio enorme
+    /// en uno pequeño.
+    fn dir_usage_report(
+        &self,
+        task: norte_proto::TaskId,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::FsDirUsageReportResult, Error>>;
+
     /// Cambia los PERMISOS POSIX de un lote, como Task (#314).
     ///
     /// Muta: el core la registra en el journal con su reversa —el modo
@@ -827,6 +848,31 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<norte_proto::methods::FsChecksumReportResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.checksum_report(task).await })
+    }
+
+    fn dir_usage(
+        &self,
+        params: norte_proto::methods::FsDirUsageParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.dir_usage(params).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
+    }
+
+    fn dir_usage_report(
+        &self,
+        task: norte_proto::TaskId,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::FsDirUsageReportResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.dir_usage_report(task).await })
     }
 
     fn set_mode(

@@ -9,6 +9,27 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The core can measure what a directory is made of** (protocol 0.75.0,
+  ADR 0117). `fs.dir_usage` walks one directory as a cancellable task and
+  `fs.dir_usage_report` collects what it measured: one entry per child with the
+  size of its whole subtree, which is what a listing cannot tell you and what a
+  disk map is drawn from. **The terminal paints it**: `alt+z` opens a disk map
+  panel where every child is a rectangle sized by what it takes up, the arrows
+  walk them, Enter goes into the selected one and a click does both at once. It
+  answers "where did my space go?", which a listing sorted by size cannot —
+  there a directory weighs what its own node weighs, not what is inside it.
+  **The window has it too**: the same panel, measured by the host and painted
+  from the same repartition, so the rectangle you see and the one a click opens
+  are the same one. It measures what the listing is showing, once per directory
+  rather than once per keystroke, and a click walks into the child under it.
+  It declares what it does not know instead of rounding it off: a child whose
+  subtree could not be fully read is marked rather than reported short, a
+  listing the provider itself admits it truncated is never announced as
+  complete, and a map that was cancelled mid-listing says so instead of looking
+  like a small directory. Past 4096 children the largest travel and the rest
+  are counted, so the big rectangle is always the one you can see. Reading it
+  needs the same permission as listing the directory — it opens no file — and
+  an agent does not get to measure the directories it is not allowed to walk.
 - **A plugin can paint a whole panel** (protocol 0.74.0, WIT
   `norte:panel@0.1.0`, window bridge 70). A consented plugin contributes a
   panel kind, `plugin:<id>:<kind>`, that a layout can place like any other:

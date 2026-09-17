@@ -122,6 +122,10 @@ keymap = [
     # ata igual porque es de norte y `alt+l` está libre. Ver el bloque de
     # divergencias de la cabecera.
     { on = ["alt+l"], run = "layout.log" },
+    # El mapa de disco (fase 4). Krusader NO atestigua ningún acorde para esto
+    # —no tiene un panel así—, así que no se transcribe nada: se ata `alt+z`,
+    # que es la única letra libre en los siete presets. Ver orthodox.toml.
+    { on = ["alt+z"], run = "layout.disk-map" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`. Krusader tiene
     # lo suyo para el reparto (`Ctrl+Alt+R` orientación, `Ctrl+Alt+=` igualar),

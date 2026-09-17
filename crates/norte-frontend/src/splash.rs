@@ -125,7 +125,7 @@ pub fn sections(fuentes: &[&dyn SplashSource]) -> Vec<SplashSection> {
 /// No es de los temporizadores que prohíbe la ADR 0006 —aquello va de resolver
 /// TECLAS—: aquí ninguna tecla espera al reloj, porque cualquiera lo quita
 /// antes.
-pub const BRIEF_MS: i64 = 1_200;
+pub const BRIEF_MS: i64 = norte_config::load::UiChrome::DEFAULT_SPLASH_MS as i64;
 
 /// Cuántas filas del splash se pueden elegir por número.
 ///
@@ -172,13 +172,11 @@ pub fn numbered(secciones: &[SplashSection]) -> Vec<(u8, &SplashRow)> {
 /// superficies la centran, y una fila más ancha que las demás sale torcida en
 /// cuanto el centrado es por línea.
 pub const ART: &[&str] = &[
-    "╭───────────╮",
-    "│     N     │",
-    "│     ▲     │",
-    "│  W ─┼─ E  │",
-    "│     │     │",
-    "│     S     │",
-    "╰───────────╯",
+    "▛▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▜",
+    "▌                                 ▐",
+    "▌  ░▒▓█  N O R T E  █▓▒░          ▐",
+    "▌                                 ▐",
+    "▙▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▟",
 ];
 
 #[cfg(test)]

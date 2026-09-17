@@ -94,6 +94,10 @@ keymap = [
     # El registro (#323): no lo atestigua TC, se ata igual porque es de norte
     # y `alt+l` está libre. Ver el bloque de divergencias de la cabecera.
     { on = ["alt+l"], run = "layout.log" },
+    # El mapa de disco (fase 4). Total Commander no atestigua acorde para esto
+    # —su equivalente más cercano es un diálogo, no un panel—, así que no se
+    # transcribe: `alt+z`, la única letra libre en los siete. Ver orthodox.toml.
+    { on = ["alt+z"], run = "layout.disk-map" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },

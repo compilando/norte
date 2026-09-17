@@ -4804,6 +4804,64 @@ fn handle_fs_checksum_report(
     to_value(&report)
 }
 
+/// `fs.dir_usage` (0.75.0, fase 4): de qué está hecho un directorio, como Task.
+///
+/// Gate de LECTURA sobre la raíz, por lo mismo que en `fs.dir_size`: sin él, un
+/// agente fuera de scope enumeraría un árbol ajeno a través de los errores de
+/// esta llamada.
+///
+/// **Sin gate de CONTENIDO**, y esa es la diferencia con `fs.checksum`: aquello
+/// lee los BYTES de cada fichero y devuelve una huella de ellos; esto solo mide
+/// la FORMA del árbol —nombres y tamaños, lo mismo que ya devuelve un listado—
+/// y no abre un solo fichero. Pedir la puerta estrecha aquí sería cerrarle el
+/// mapa a quien ya puede listar el directorio entero.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_fs_dir_usage(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::FsDirUsageParams = parse_params(params)?;
+    read_gate(actor, &p.path, shared)?;
+    let handle = shared
+        .engine
+        .dir_usage_as(p, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
+    // `dir_usage_as`) y este register — la Task jamás corre FUERA de
+    // `shared.tasks`.
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+    to_value(&methods::FsTaskResult { task_id })
+}
+
+/// `fs.dir_usage_report` (0.75.0, fase 4): el mapa que midió esa Task.
+///
+/// Misma visibilidad que el informe de sumas, y por lo mismo: una sola
+/// respuesta —`NotFound`— para las tres situaciones (desalojado, nunca fue un
+/// mapa, es de otro actor), porque separar la tercera confirmaría que la task
+/// de otro existió.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+fn handle_fs_dir_usage_report(
+    actor: &Actor,
+    p: &methods::FsDirUsageReportParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let unknown = || RpcError::from(norte_proto::Error::NotFound);
+    let (owner, report) = shared
+        .engine
+        .dir_usage_report(p.task_id)
+        .ok_or_else(unknown)?;
+    if !may_observe(actor, &owner) {
+        tracing::warn!(
+            actor = ?actor,
+            "mapa de disco de otro actor: denegado (respuesta = id desconocido)"
+        );
+        return Err(unknown());
+    }
+    to_value(&report)
+}
+
 /// `archive.pack` (0.50.0, #132): fabrica un archivo como Task.
 ///
 /// El gate de MUTACIÓN lo hace el engine (misma op que una copia: se leen las
@@ -5546,6 +5604,13 @@ async fn dispatch_fs_task(
         methods::FS_CHECKSUM_REPORT => {
             let p: methods::FsChecksumReportParams = parse_params(req.params)?;
             handle_fs_checksum_report(&actor, &p, shared)
+        }
+        // fs.dir_usage (0.75.0, fase 4): sin conn_id — no enruta nada; el mapa
+        // se recoge con su informe, que no cabe en el progreso.
+        methods::FS_DIR_USAGE => handle_fs_dir_usage(req.params, &actor, shared).await,
+        methods::FS_DIR_USAGE_REPORT => {
+            let p: methods::FsDirUsageReportParams = parse_params(req.params)?;
+            handle_fs_dir_usage_report(&actor, &p, shared)
         }
         // 0.50.0 (#132): escribir archivos. Ninguno escribe DENTRO de un
         // contenedor — el provider de archivos sigue `READ_ONLY` (ADR 0018).

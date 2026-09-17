@@ -62,12 +62,17 @@ The start screen
 ----------------
 
 Before the first listing, norte shows which build is running and which core
-it talks to, and the first key — or a second or so on its own — takes it away
-(`splash = "brief"`, the default). `"home"` turns it into a start screen that
-stays until you touch it, listing the directories you go to most and your
-bookmarks, each opened by its number (1-9); clicking the row does the same.
-`"off"` shows nothing at all. The first-start wizard wins: with no
-`norte.toml` yet, it asks first and the screen stays away.
+it talks to, and the first key — or four seconds on its own — takes it away
+(`splash = "brief"`, the default). `splash_ms` changes those four seconds:
+anything from 200 to 60000. Below a few hundred it is a flash nobody can
+read; if you want it to stay until you touch it, that is `"home"` rather than
+a very large number.
+
+`"home"` turns it into a start screen that stays until you touch it, listing
+the directories you go to most and your bookmarks, each opened by its number
+(1-9); clicking the row does the same. `"off"` shows nothing at all. The
+first-start wizard wins: with no `norte.toml` yet, it asks first and the
+screen stays away.
 
 The jobs panel
 --------------

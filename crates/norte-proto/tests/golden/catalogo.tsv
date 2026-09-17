@@ -22,6 +22,8 @@ fs.copy	Request	Task	methods::FsCopyParams	methods::FsTaskResult
 fs.create	Request	Task	methods::FsCreateParams	methods::FsTaskResult	
 fs.delete	Request	Task	methods::FsDeleteParams	methods::FsTaskResult	
 fs.dir_size	Request	Task	methods::FsDirSizeParams	methods::FsTaskResult	
+fs.dir_usage	Request	Task	methods::FsDirUsageParams	methods::FsTaskResult	
+fs.dir_usage_report	Request	Direct	methods::FsDirUsageReportParams	methods::FsDirUsageReportResult	
 fs.list	Request	Direct	methods::FsListParams	methods::FsListResult	
 fs.mkdir	Request	Task	methods::FsMkdirParams	methods::FsTaskResult	
 fs.move	Request	Task	methods::FsMoveParams	methods::FsTaskResult	

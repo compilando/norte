@@ -3172,6 +3172,317 @@ pub(crate) async fn dir_size(
     Ok(())
 }
 
+/// De qué está hecho `root`, hijo a hijo (`fs.dir_usage`, 0.75.0, fase 4).
+///
+/// Hermano de [`dir_size`] y con la pregunta al revés: aquello contesta «¿cuánto
+/// ocupa esto?» en UN número, y esto contesta «¿de qué está hecho?» con un
+/// acumulador por hijo. Por eso el total no basta y hay informe: un mapa se
+/// pinta con la lista, no con la suma.
+///
+/// **El listado de la raíz es todo o nada.** Un error a mitad de stream PROPAGA
+/// —igual que en [`list_base_names`], y por lo mismo: un listado a medias
+/// produce un mapa a medias, y un mapa al que le falta el hijo de 400 GB no se
+/// distingue de uno donde ese hijo no existe. Lo que sí se tolera es que un
+/// hijo no se deje MEDIR: ese sale con `partial` y los demás se miden.
+///
+/// **`partial` va por HIJO** (no por informe) porque es lo que permite pintar:
+/// el rectángulo incompleto se marca y el resto del mapa sigue siendo verdad.
+///
+/// # Se mide MIENTRAS se lista, y por eso no materializa nada
+/// Un `/nix/store` —el caso que [`DIR_USAGE_MAX_CHILDREN`] existe para
+/// contemplar— tiene cientos de miles de hijos de primer nivel. Guardar el
+/// listado entero para medirlo después acota el WIRE y deja el montón del
+/// daemon sin acotar: cada hijo retenido es un `Segment` y un `VPath` con todos
+/// sus tramos. Midiendo al vuelo no sobrevive más que el top-N, así que la
+/// memoria es O(tope) y no O(hijos).
+///
+/// La consecuencia se ve en el informe: mientras el listado corre, `listed` es
+/// `false` —nadie sabe aún cuántos hijos hay— y `pending` es cero porque no hay
+/// ningún hijo listado a la espera de medirse. Cuando `listed` pasa a `true`,
+/// está todo medido. Es exactamente lo que `listed` existe para decir.
+///
+/// # Por encima del tope sobreviven los MÁS GRANDES
+/// Lo promete el protocolo, y es lo único que sirve: un mapa que pinta 4096
+/// hijos alfabéticamente primeros y manda el de 400 GB a `omitted` es la
+/// función no existiendo. Se poda al vuelo —cuando entra uno mayor que el menor
+/// retenido, el menor se va y `omitted` sube—, así que el informe parcial
+/// también cumple la promesa, y se emiten en orden de LISTADO, que es el otro
+/// extremo del contrato.
+///
+/// El desempate es por bytes de NOMBRE, no por texto plegado: tiene que dar lo
+/// mismo en ext4, en NTFS y en APFS, que ordenan sus listados de tres maneras
+/// distintas.
+pub(crate) async fn dir_usage(
+    provider: std::sync::Arc<dyn Provider>,
+    root: VPath,
+    informe: std::sync::Arc<std::sync::Mutex<norte_proto::methods::FsDirUsageReportResult>>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    use norte_proto::methods::{DIR_USAGE_MAX_CHILDREN, DirUsageChild};
+
+    // De qué está hecho un FICHERO no es una pregunta: está hecho de sí mismo.
+    // Se rechaza aquí y no se contesta con un mapa de un solo rectángulo, que
+    // es la respuesta que parece útil y no lo es.
+    match provider.stat(&root).await {
+        Ok(e) if e.kind == EntryKind::Dir => {}
+        Ok(_) => return Err(Error::InvalidPath),
+        Err(e) => return Err(e),
+    }
+
+    // Por dónde NO se baja. Sale del MISMO sitio que las exclusiones de
+    // `fs.search`, `fs.compare` y `archive.pack`: el gate de lectura mira la
+    // RAÍZ de la petición y nada más (#165), así que un mapa de `$HOME` pedido
+    // por un agente arrastraría el directorio de estado del daemon con él —
+    // y un tamaño y un número de entradas sobre `journal.db` y `secrets.age`,
+    // consultables en bucle, son un canal lateral sobre lo que el humano hace.
+    let excluidas = crate::policy::walk_exclusions(&ctx.actor);
+
+    let mut bytes: u64 = 0;
+    let mut entradas: u64 = 0;
+    let mut hechos: u64 = 0;
+    let mut ilegibles: u64 = 0;
+    let mut omitidos: u64 = 0;
+
+    let mut stream = provider.list(&root).await?;
+    while let Some(item) = stream.next().await {
+        // Inner loop de verdad (regla 3): un directorio de 10^6 entradas no
+        // puede retrasar la cancelación hasta el final del listado.
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let entry = item?;
+        // Una entrada sin nombre base es la propia raíz, que algunos providers
+        // de objetos devuelven en su propio listado; no es un hijo. No se
+        // cuenta en ningún sitio a propósito: no tiene nombre que pintar ni
+        // subárbol que medir.
+        let Some(name) = entry.path.file_name().cloned() else {
+            continue;
+        };
+        // Defensa en profundidad, como en `search::run_walk`: el alcance de la
+        // medida es invariante del CORE, no de que el provider se porte bien.
+        // Un servidor remoto que liste un path de fuera del directorio pedido
+        // le colgaría a un nombre de aquí los bytes de otro sitio.
+        if !crate::policy::is_under(&root, &entry.path) {
+            continue;
+        }
+        if excluidas
+            .iter()
+            .any(|x| crate::policy::is_under(x, &entry.path))
+        {
+            continue;
+        }
+        ctx.progress
+            .update(|p| p.current = Some(entry.path.clone()));
+        let (hijo_bytes, hijo_entradas, hijo_ilegibles) = if entry.kind == EntryKind::Dir {
+            medir_subarbol(provider.as_ref(), &entry.path, &excluidas, ctx, bytes).await?
+        } else {
+            // Un listado PEREZOSO no trae tamaños (#52), así que aquí hay que
+            // pedirlos — mismo motivo y mismo coste que en `dir_size`.
+            match entry.size {
+                Some(n) => (n, 1, 0),
+                None => match provider.stat(&entry.path).await {
+                    Ok(st) => (st.size.unwrap_or(0), 1, u64::from(st.size.is_none())),
+                    Err(Error::Cancelled) => return Err(Error::Cancelled),
+                    // Se deja listar y no statear: cuenta como entrada, su
+                    // tamaño es una cota inferior, y lo dice.
+                    Err(_) => (0, 1, 1),
+                },
+            }
+        };
+        bytes = bytes.saturating_add(hijo_bytes);
+        entradas = entradas.saturating_add(hijo_entradas);
+        hechos = hechos.saturating_add(1);
+        ilegibles = ilegibles.saturating_add(hijo_ilegibles);
+        let hijo = DirUsageChild {
+            name,
+            kind: entry.kind,
+            bytes: hijo_bytes,
+            entries: hijo_entradas,
+            partial: hijo_ilegibles > 0,
+        };
+        {
+            let mut r = informe
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Con la lista llena, este hijo deja a UNO sin nombre: o él, o el
+            // menor que desaloja. En los dos casos `omitted` sube uno.
+            if r.children.len() >= DIR_USAGE_MAX_CHILDREN {
+                omitidos = omitidos.saturating_add(1);
+            }
+            retener_mas_grandes(&mut r.children, hijo, DIR_USAGE_MAX_CHILDREN);
+            r.total_bytes = bytes;
+            r.total_entries = entradas;
+            r.omitted = omitidos;
+        }
+        ctx.progress.update(|p| {
+            p.bytes_done = bytes;
+            p.entries_done = hechos;
+            // #251: un `Completed` sobre un mapa donde varios hijos son cotas
+            // inferiores se lee como un total confiado si el progreso no lo
+            // dice. El informe lo dice por hijo; esto lo dice en el tablero.
+            p.unreadable = Some(ilegibles);
+        });
+    }
+
+    // El listado terminó: AHORA se sabe cuántos hijos había, y no queda ninguno
+    // a medias porque se han medido según llegaban.
+    {
+        let mut r = informe
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        r.listed = true;
+        r.pending = 0;
+    }
+    // Un provider que ADMITE haber dejado entradas fuera (el índice de un
+    // archivo con nombres que no pudo representar) no puede producir un mapa
+    // que diga «esto es todo». No va a `omitted` —que promete que los bytes de
+    // lo omitido SÍ están en los totales, y los de esto no— sino a `unvisited`,
+    // que es exactamente «el árbol es más grande que lo que recorrí».
+    let saltadas = provider.list_skipped(&root).await.ok().flatten();
+    ctx.progress.update(|p| {
+        p.bytes_total = Some(bytes);
+        p.entries_total = Some(hechos);
+        p.unvisited = saltadas;
+        p.current = None;
+    });
+    Ok(())
+}
+
+/// Mete `hijo` en `children` si es de los MÁS GRANDES, desalojando al menor.
+///
+/// Por debajo de `tope` entra todo. A partir de ahí se compite: el candidato
+/// desplaza al menor retenido, o se queda fuera él. Así el informe cumple la
+/// promesa del protocolo —«por encima del tope viajan los más grandes»— también
+/// MIENTRAS corre, que es cuando se puede pedir.
+///
+/// **El orden de listado se conserva sin ordenar nada**: los hijos llegan en
+/// ese orden y se añaden al final, y quitar uno del medio no altera el de los
+/// que quedan.
+///
+/// La clave de comparación es `(bytes, bytes del nombre)`. El desempate por
+/// NOMBRE CRUDO, y no por texto plegado ni normalizado, porque el resultado
+/// tiene que ser el mismo en ext4, en NTFS y en APFS: cada uno ordena su
+/// listado a su manera, y de eso no puede depender qué hijo conserva su nombre.
+fn retener_mas_grandes(
+    children: &mut Vec<norte_proto::methods::DirUsageChild>,
+    hijo: norte_proto::methods::DirUsageChild,
+    tope: usize,
+) {
+    if children.len() < tope {
+        children.push(hijo);
+        return;
+    }
+    let victima = children
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            a.bytes
+                .cmp(&b.bytes)
+                .then_with(|| a.name.as_bytes().cmp(b.name.as_bytes()))
+        })
+        .map(|(i, c)| (i, c.bytes, c.name.as_bytes().to_vec()));
+    if let Some((i, vb, vn)) = victima
+        && (hijo.bytes, hijo.name.as_bytes()) > (vb, vn.as_slice())
+    {
+        children.remove(i);
+        children.push(hijo);
+    }
+}
+
+/// Cuánto ocupa el subárbol de `dir`, contándolo a él: `(bytes, entradas,
+/// ilegibles)`.
+///
+/// `ilegibles` es CUÁNTAS cosas de aquí debajo no se dejaron leer, y es lo que
+/// convierte los otros dos números en una COTA INFERIOR declarada. Un `EACCES`
+/// en la hoja 40 000 no puede tirar el mapa entero — pero tampoco se puede
+/// callar, que es lo que haría un recuento que solo devuelve el número.
+///
+/// Es una CUENTA y no un `bool` porque el mismo contador viaja en
+/// `TaskProgress::unreadable`, que en `dir_size` cuenta cosas ilegibles: un
+/// campo que significara «cuántas» en una task y «alguna» en su hermana no lo
+/// podría leer nadie. El `partial` del hijo se deriva de aquí (`> 0`).
+///
+/// `base_bytes` es lo que llevan sumado los hijos ANTERIORES, para que el
+/// progreso se publique desde dentro del bucle de verdad: sin esto, un solo
+/// hijo de 400 GB deja la barra congelada durante minutos, y una barra parada
+/// en una task cancelable es indistinguible de una colgada.
+///
+/// **El único `Err` es [`Error::Cancelled`]**; cualquier otro fallo se dobla en
+/// la cuenta de ilegibles. De eso depende el `?` de quien llama: si algún día
+/// esto devolviera otro error, un hijo ilegible tumbaría el mapa entero.
+///
+/// La cancelación sí para: es una orden, no un tropiezo.
+async fn medir_subarbol(
+    provider: &dyn Provider,
+    dir: &VPath,
+    excluidas: &[VPath],
+    ctx: &TaskCtx,
+    base_bytes: u64,
+) -> Result<(u64, u64, u64), Error> {
+    let mut bytes: u64 = 0;
+    // Él mismo cuenta como entrada: `entries` es «lo que hay dentro, él
+    // incluido», que es lo que hace que los hijos sumen el total del padre.
+    let mut entradas: u64 = 1;
+    let mut ilegibles: u64 = 0;
+    let mut pending = vec![dir.clone()];
+    while let Some(actual) = pending.pop() {
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let mut stream = match provider.list(&actual).await {
+            Ok(s) => s,
+            Err(Error::Cancelled) => return Err(Error::Cancelled),
+            Err(_) => {
+                ilegibles = ilegibles.saturating_add(1);
+                continue;
+            }
+        };
+        while let Some(item) = stream.next().await {
+            if ctx.cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let entry = match item {
+                Ok(e) => e,
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(_) => {
+                    ilegibles = ilegibles.saturating_add(1);
+                    continue;
+                }
+            };
+            // Las mismas exclusiones que arriba, y aquí por el mismo motivo:
+            // el gate miró la raíz, y por debajo de ella puede haber un
+            // directorio por el que a este actor no se baja.
+            if excluidas
+                .iter()
+                .any(|x| crate::policy::is_under(x, &entry.path))
+            {
+                continue;
+            }
+            entradas = entradas.saturating_add(1);
+            if entry.kind == EntryKind::Dir {
+                pending.push(entry.path);
+            } else {
+                let size = match entry.size {
+                    Some(n) => Some(n),
+                    None => match provider.stat(&entry.path).await {
+                        Ok(st) => st.size,
+                        Err(Error::Cancelled) => return Err(Error::Cancelled),
+                        Err(_) => None,
+                    },
+                };
+                if size.is_none() {
+                    ilegibles = ilegibles.saturating_add(1);
+                }
+                bytes = bytes.saturating_add(size.unwrap_or(0));
+            }
+            // Desde el bucle INTERIOR: es donde pasa el tiempo.
+            let vistos = base_bytes.saturating_add(bytes);
+            ctx.progress.update(|p| p.bytes_done = vistos);
+        }
+    }
+    Ok((bytes, entradas, ilegibles))
+}
+
 /// Recorre el árbol bajo `root` (sin incluirlo). Garantía de orden: todo
 /// directorio aparece ANTES que cualquiera de sus descendientes.
 pub(crate) async fn walk(

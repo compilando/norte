@@ -31,6 +31,9 @@ keymap = [
     { on = ["alt+j"], run = "layout.processes" },
     # El registro (#323). `alt+l` de «log», libre en los siete presets.
     { on = ["alt+l"], run = "layout.log" },
+    # El mapa de disco (fase 4), `alt+z`: la única letra libre en los siete.
+    # Ver la nota en orthodox.toml.
+    { on = ["alt+z"], run = "layout.disk-map" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },

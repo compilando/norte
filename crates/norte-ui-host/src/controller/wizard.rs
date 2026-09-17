@@ -71,8 +71,11 @@ impl Estado {
             daemon: norte_frontend::splash::Daemon::Connected,
             sections: secciones,
         });
+        // El plazo sale de `[ui] splash_ms`, no de una constante: una portada
+        // que no da tiempo a leerse solo estorba, y cuánto es «tiempo» depende
+        // de quién mira.
         self.splash_hasta_ms = (modo == SplashMode::Brief)
-            .then(|| super::ahora_ms() + norte_frontend::splash::BRIEF_MS);
+            .then(|| super::ahora_ms() + i64::from(self.config.common.ui_chrome.splash_ms()));
         (self.aplicada(), vec![self.parche_splash()])
     }
 

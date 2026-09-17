@@ -58,6 +58,11 @@ const NO_SIGUEN: &[(&str, &str)] = &[
         "tree",
         "sigue al DIRECTORIO, que sólo cambia con un `cd`, no con una fila",
     ),
+    (
+        "disk-map",
+        "describe el DIRECTORIO que se está mirando, no la fila: mover el \
+         cursor no cambia de qué está hecho lo que hay alrededor",
+    ),
 ];
 
 /// A dónde se lleva el cursor: un FICHERO de verdad.
@@ -110,7 +115,8 @@ fn vista_de(snap: &ViewSnapshot, kind: &str) -> Option<SlotView> {
             | ("tree", SlotView::Tree(_))
             | ("processes", SlotView::Processes { .. })
             | ("log", SlotView::Log(_))
-            | ("viewer", SlotView::Preview(_)) => true,
+            | ("viewer", SlotView::Preview(_))
+            | ("disk-map", SlotView::DiskMap(_)) => true,
             (_, SlotView::Unsupported { kind_name, .. }) => kind_name == kind,
             _ => false,
         })

@@ -22,6 +22,7 @@
 
 mod ai;
 mod compare;
+mod diskmap;
 mod inflight;
 mod search;
 mod sync;
@@ -33,8 +34,10 @@ pub use compare::{
     COMPARE_PAGE_STEP, CompareKey, CompareRun, compare_key, drain_compare, launch_compare,
     on_compare_enter, on_compare_key,
 };
+pub use diskmap::{harvest as harvest_disk_map, lanzar as lanzar_disk_map};
 pub use inflight::{
-    AiRenameRun, ChecksumRun, InFlight, PendingAiPlan, Publicado, RenameBatchRun, SemanticRun,
+    AiRenameRun, ChecksumRun, DiskMapRun, InFlight, PendingAiPlan, Publicado, RenameBatchRun,
+    SemanticRun,
 };
 pub use search::{
     SEARCH_MAX_HITS, SearchRun, drain_search, finalize_search_state, launch_search,

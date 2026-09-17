@@ -1358,6 +1358,14 @@ pub struct UiChrome {
     pub history_size: Option<u32>,
     /// `[ui] splash` (None = brief), validated.
     pub splash: Option<SplashMode>,
+    /// `[ui] splash_ms` (None = 4000): how long `brief` covers the first
+    /// frame, in milliseconds, within `200..=60_000`.
+    ///
+    /// A cover that a reader cannot finish reading is a cover that only gets
+    /// in the way, and 1200 ms — what this used to be, fixed — was not enough
+    /// to take in the build and the core it talks to. Whoever wants it gone
+    /// has `off`; whoever wants it to stay has `home`.
+    pub splash_ms: Option<u32>,
     /// `[ui] processes_panel` (None = auto), validated.
     pub processes_panel: Option<ProcessesPanel>,
     /// `[ui] dir_indicator` (None = auto), validated.
@@ -1379,10 +1387,28 @@ impl UiChrome {
         self.history_size.unwrap_or(Self::DEFAULT_HISTORY_SIZE) as usize
     }
 
+    /// The shortest `splash_ms`: below it the cover is a flash, not a screen.
+    pub const MIN_SPLASH_MS: u32 = 200;
+    /// The longest `splash_ms`: a minute of cover is `home` with extra steps,
+    /// and `home` is the mode that stays until a key.
+    pub const MAX_SPLASH_MS: u32 = 60_000;
+    /// What `splash_ms` means when absent.
+    ///
+    /// It is also what `norte_frontend::splash::BRIEF_MS` reports, derived
+    /// from here rather than written twice: two numbers that must agree, with
+    /// nothing forcing them to, is how they stop agreeing.
+    pub const DEFAULT_SPLASH_MS: u32 = 4_000;
+
     /// Effective `splash` (absent = brief).
     #[must_use]
     pub fn splash(self) -> SplashMode {
         self.splash.unwrap_or_default()
+    }
+
+    /// Effective `splash_ms` (absent = 4000).
+    #[must_use]
+    pub fn splash_ms(self) -> u32 {
+        self.splash_ms.unwrap_or(Self::DEFAULT_SPLASH_MS)
     }
 
     /// Effective `processes_panel` (absent = auto).
@@ -1982,6 +2008,12 @@ fn merge_ui_chrome(
             return Err(bad("[ui] history_size inválido: entre 5 y 64"));
         }
         acc.history_size = Some(n);
+    }
+    if let Some(n) = ui.splash_ms {
+        if !(UiChrome::MIN_SPLASH_MS..=UiChrome::MAX_SPLASH_MS).contains(&n) {
+            return Err(bad("[ui] splash_ms inválido: entre 200 y 60000"));
+        }
+        acc.splash_ms = Some(n);
     }
     if let Some(raw) = &ui.splash {
         acc.splash = Some(match raw.as_str() {

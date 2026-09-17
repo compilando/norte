@@ -152,6 +152,20 @@ pub enum TaskKind {
     /// [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que
     /// `Search`/`Index`/`Embed`/`RenameBatch`/`Compare`/`DirSize`.
     Checksum,
+    /// Qué ocupa CADA HIJO de un directorio (`fs.dir_usage`, 0.75.0, fase 4
+    /// del programa 2026-09-15). Lectura pura, como `DirSize`: sin journal y
+    /// sin undo.
+    ///
+    /// Aparte de [`TaskKind::DirSize`] y no un parámetro suyo: aquel contesta
+    /// UN número sobre una selección —«¿cabe esto en el destino?»— y su total
+    /// viaja en el progreso; este contesta una LISTA, que no cabe ahí y se
+    /// recoge con `fs.dir_usage_report`. Dos preguntas distintas, dos clases
+    /// que el lector distingue en `task.list`.
+    ///
+    /// Entra CON el método. Un cliente N-1 (0.74.x) la degrada a
+    /// [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que
+    /// `Search`/`Index`/`Embed`/`RenameBatch`/`Compare`/`DirSize`/`Checksum`.
+    DirUsage,
     /// Cambio de permisos POSIX de un lote de rutas
     /// (`fs.set_mode`/[`FS_SET_MODE`](crate::methods::FS_SET_MODE), 0.60.0,
     /// #314). MUTA: journal con reversa y gate de política (regla 4).

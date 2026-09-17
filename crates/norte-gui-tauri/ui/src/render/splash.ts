@@ -36,6 +36,13 @@ export function paintSplash(this: Screen, splash: SplashView | null): void {
   caja.setAttribute("role", "dialog");
   caja.setAttribute("aria-modal", "true");
   caja.setAttribute("aria-label", this.t("splash-title"));
+  // PORTADA: `brief` viene SIN secciones a propósito, y sin lista que enmarcar
+  // una caja centrada es un marco alrededor de nada. Misma señal que usa el
+  // terminal, para que las dos superficies decidan igual sin que el modo tenga
+  // que viajar por el puente.
+  if (splash.sections.length === 0) {
+    caja.dataset["cover"] = "true";
+  }
 
   // El arte, en su propio bloque y ESCONDIDO para quien lee con los oídos:
   // una brújula dibujada con barras y guiones se deletrea como ruido.

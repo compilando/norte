@@ -177,6 +177,7 @@ commands! {
     "layout.processes" => LayoutProcesses,
     "layout.metadata" => LayoutMetadata,
     "layout.log" => LayoutLog,
+    "layout.disk-map" => LayoutDiskMap,
     "layout.pick" => LayoutPick,
     "profile.pick" => ProfilePick,
     "profile.save-as" => ProfileSaveAs,

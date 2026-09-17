@@ -96,6 +96,10 @@ keymap = [
     # El registro (#323): no lo atestigua NC, se ata igual porque es de norte
     # y `alt+l` está libre. Ver el bloque de divergencias de la cabecera.
     { on = ["alt+l"], run = "layout.log" },
+    # El mapa de disco (fase 4). Norton Commander no tiene un panel así: no hay
+    # nada que transcribir, y `alt+z` es la única letra libre en los siete
+    # presets. Ver orthodox.toml.
+    { on = ["alt+z"], run = "layout.disk-map" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },
