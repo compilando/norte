@@ -593,6 +593,14 @@ pub struct App {
     pub board: crate::tasks::TaskBoard,
     /// Viewer abierto (F3); None = navegando.
     pub viewer: Option<crate::viewer::Viewer>,
+    /// La miniatura pedida para [`Self::viewer`], si se pidió una (fase 5
+    /// WOW, T3): `[ui] images` resolvió a [`crate::viewer_open::Modo::Kitty`]
+    /// Y el fichero es una imagen. `None` cuando no aplica o el plugin no
+    /// supo — el visor se ve igual, sin píxeles (ADR 0037). Vive aquí y no
+    /// en [`crate::viewer::Viewer`] porque ese tipo es de `norte-frontend` y
+    /// lo comparten los dos frontends; la ventana pinta imágenes por su
+    /// propio camino y no necesita este campo.
+    pub viewer_imagen: Option<crate::viewer_open::ImagenColocada>,
     /// Help overlay open (F1, H3b): the navigable view over the `norte-help`
     /// corpus — sidebar, body, filter and history — plus the generated
     /// keyboard page, which is still built from the EFFECTIVE keymap (preset
@@ -1188,6 +1196,7 @@ impl App {
             session: SessionUi::default(),
             board: crate::tasks::TaskBoard::default(),
             viewer: None,
+            viewer_imagen: None,
             help: None,
             pending_collisions: std::collections::VecDeque::new(),
             pending_approvals: std::collections::VecDeque::new(),

@@ -14,7 +14,7 @@ use norte_frontend::layout::SlotId;
 use norte_proto::{Entry, Error, VPath};
 
 use crate::viewer::Viewer;
-use crate::viewer_open::viewer_for_width;
+use crate::viewer_open::{Modo, viewer_for_width};
 
 /// Sonda de stat del VIEWPORT (#52): hidrata size/mtime de las entradas
 /// VISIBLES que el listado lazy dejó en None — no solo la enfocada, o las
@@ -326,12 +326,18 @@ pub struct PreviewFetch {
 ///
 /// `columns` es el ancho del hueco en celdas, para el previewer (0.66.0):
 /// `None` cuando no se sabe, y el guest elige.
+///
+/// Pide `Modo::Nada` a [`viewer_for_width`] sin mirar `[ui] images`: el
+/// visor ACOPLADO de un hueco todavía no sabe colocar píxeles —eso es del
+/// visor a pantalla completa, T3/T4 de la fase 5 WOW—, así que pedir la
+/// miniatura aquí sería una llamada al plugin-host que nadie usa.
 pub fn spawn_preview_fetch(backend: &Backend, path: VPath, columns: Option<u32>) -> PreviewFetch {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
     let p = path.clone();
     tokio::spawn(async move {
-        let _ = tx.send(viewer_for_width(&b, &p, columns).await);
+        let res = viewer_for_width(&b, &p, columns, Modo::Nada).await;
+        let _ = tx.send(res.map(|(viewer, _imagen)| viewer));
     });
     PreviewFetch { path, rx }
 }
