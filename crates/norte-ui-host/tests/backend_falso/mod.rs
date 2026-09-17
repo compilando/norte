@@ -434,6 +434,12 @@ pub struct Falso {
     pub permisos: std::sync::Mutex<Vec<(Vec<VPath>, u32)>>,
     /// Las rutas de cada lote de sumas que se pidió (#311).
     pub sumas_pedidas: std::sync::Mutex<Vec<Vec<VPath>>>,
+    /// El directorio de cada medida de mapa de disco que se pidió (fase 4).
+    ///
+    /// Existe para poder afirmar que se midió UNA vez: la sonda corre tras cada
+    /// mensaje del actor, así que la mitad de su valor está en que no vuelva a
+    /// pedir lo mismo. Sin esta lista, «midió» y «mide en bucle» se ven igual.
+    pub mapas_pedidos: std::sync::Mutex<Vec<VPath>>,
     /// Los ids de task cuyo INFORME de sumas se pidió, en orden.
     ///
     /// Existe para poder esperar a que el informe haya vuelto: un test que
@@ -1639,6 +1645,10 @@ impl HostBackend for Falso {
         &self,
         params: norte_proto::methods::FsDirUsageParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.mapas_pedidos
+            .lock()
+            .expect("mapas")
+            .push(params.path.clone());
         self.latido();
         // Ya terminada: el host pide el informe en cuanto la Task es terminal,
         // así que un doble que la deje corriendo no llegaría nunca a aterrizar

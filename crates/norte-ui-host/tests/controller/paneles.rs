@@ -727,3 +727,118 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         "el destino es SIEMPRE otro hueco"
     );
 }
+
+// ---------------------------------------------------------------------------
+// El mapa de disco (fase 4): medir, aterrizar, y no repedir.
+// ---------------------------------------------------------------------------
+
+/// El hueco del mapa, en un árbol con el listado al lado.
+const SLOT_MAPA: u32 = 7;
+
+/// Un host con un listado y, al lado, el hueco del mapa de disco.
+async fn host_con_mapa(backend: Arc<Falso>) -> UiHost {
+    use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+
+    let arbol = Node::Split {
+        dir: Dir::Horizontal,
+        sizes: vec![Size::Weight(1), Size::Fixed(40)],
+        children: vec![
+            Node::slot(SlotId(1), KindId::browser()),
+            Node::slot(SlotId(SLOT_MAPA), KindId::new("disk-map")),
+        ],
+    };
+    norte_frontend::layout::validate(&arbol).expect("el árbol es válido");
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: arbol,
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    h
+}
+
+/// El mapa del hueco, si la foto lo trae.
+fn mapa_de(snap: &norte_ui_host::ViewSnapshot) -> Option<&norte_ui_host::dto::DiskMapSlotView> {
+    snap.slots.iter().find_map(|s| match s {
+        SlotView::DiskMap(m) if m.slot_id == SLOT_MAPA => Some(&**m),
+        _ => None,
+    })
+}
+
+/// La medida se pide sobre el directorio del LISTADO, y su informe aterriza.
+///
+/// Es lo que separa un panel declarado de uno que funciona: hasta T5 el hueco
+/// se pintaba —con su borde y su título— y no medía nada, así que `measuring`
+/// se quedaba en falso sobre un mapa vacío para siempre y nadie lo notaba.
+#[tokio::test]
+async fn el_mapa_mide_el_directorio_del_listado_y_el_informe_aterriza() {
+    let backend = arbol();
+    let h = host_con_mapa(Arc::clone(&backend)).await;
+    asentar().await;
+
+    let pedido = backend
+        .hasta("una medida del mapa", |f| {
+            f.mapas_pedidos.lock().expect("mapas").first().cloned()
+        })
+        .await;
+    assert_eq!(pedido, dir(), "se mide lo que el listado está enseñando");
+
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let vista = siguiente_foto(&mut sub).await;
+    let mapa = mapa_de(&vista).expect("el hueco sigue siendo un mapa");
+    assert!(
+        !mapa.measuring,
+        "el informe aterrizó: un mapa que sigue diciendo «midiendo» con la \
+         medida terminada es el panel congelado que esto existe para impedir"
+    );
+    // El doble contesta un informe LISTADO y vacío, que es lo que produce un
+    // directorio sin hijos. `squarify` sin hijos devuelve un marco vacío, así
+    // que se afirma ESO y no «todas las celdas en blanco»: con `lines` vacío un
+    // `all` sobre sus líneas se cumple sin mirar nada — un verde hueco.
+    assert!(
+        mapa.lines.is_empty(),
+        "sin hijos no hay reparto: {} líneas",
+        mapa.lines.len()
+    );
+    assert!(mapa.hits.is_empty(), "sin hijos no hay nada que pulsar");
+}
+
+/// Se mide UNA vez por directorio: no una por mensaje del actor.
+///
+/// La sonda corre tras cada mensaje, así que la mitad de su valor está aquí.
+/// Es el mismo fallo que el panel de plugin tuvo que evitar —una RPC por
+/// tecla—, y aquí sería peor: cada petición recorre un árbol entero.
+#[tokio::test]
+async fn el_mapa_no_se_mide_dos_veces_por_el_mismo_directorio() {
+    let backend = arbol();
+    let h = host_con_mapa(Arc::clone(&backend)).await;
+    asentar().await;
+    let _ = backend
+        .hasta("la primera medida", |f| {
+            f.mapas_pedidos.lock().expect("mapas").first().cloned()
+        })
+        .await;
+
+    for _ in 0..5 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        asentar().await;
+    }
+    let pedidos = backend.mapas_pedidos.lock().expect("mapas").len();
+    assert_eq!(pedidos, 1, "cinco mensajes, una medida: {pedidos}");
+}
