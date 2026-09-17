@@ -6,13 +6,13 @@
 
 use norte_theme::Role;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use super::text::{head, middle, two_fields, with_badge};
-use super::{HOSTILE_BADGE, placed_of_kind, resolved_for};
+use super::{HOSTILE_BADGE, placed_of_kind, rect_del_visor, resolved_for, visor_split};
 use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
@@ -83,11 +83,11 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // completa y no pasa por el reparto de huecos, así que con la barra de
     // menú fijada se metía debajo de ella y la barra le tapaba la primera
     // fila. La misma resta que hace el reparto, en el único otro sitio que
-    // pinta a pantalla completa.
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(super::geometry::body_area(app, frame.area()));
+    // pinta a pantalla completa. `visor_split` — no una copia del
+    // `Layout::split` — es la MISMA cuenta que usa el run loop (T4) para
+    // saber dónde van los píxeles: dos cuentas del mismo hueco divergen en
+    // silencio.
+    let (content_area, status_area) = visor_split(app, frame.area());
     let (title, hostile) =
         norte_frontend::path_display_with(&viewer.path, app.focused().name_encoding());
     let title = if hostile {
@@ -119,7 +119,82 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
         }
         block = block.title(Line::from(spans).right_aligned());
     }
-    let inner_h = rows[0].height.saturating_sub(2) as usize;
+    // T5 (fase 5 WOW): sin preview de plugin, un PNG en `Modo::Bloques` cae a
+    // hexview igual que un fichero que nadie sabe interpretar — nada en
+    // pantalla distinguía los dos casos hasta que el piloto lo encontró.
+    //
+    // Revisión de rama, hallazgo 3: `modo` NO se recalcula aquí — se lee de
+    // `App::viewer_modo`, el mismo valor que `viewer_open::open_viewer`
+    // resolvió al ABRIR el visor. Recalcularlo en cada frame contra
+    // `app.chrome.images()` (lo que hacía la primera versión) es lo que
+    // producía el bug: `[ui] images` se recarga EN CALIENTE
+    // (`config_reload::reload_config` reasigna `app.chrome` entero,
+    // `applies_live` en `norte-frontend::settings`), así que un cambio de
+    // `blocks` a `kitty` con el visor ya abierto hacía que este `match`
+    // pasara a `Modo::Kitty` para un fichero al que JAMÁS se le pidió una
+    // miniatura — el aviso «falta aprobar la extensión de miniaturas» sobre
+    // un fichero que nunca la pidió, mintiendo sobre lo que hace falta
+    // (reabrir, no aprobar nada). `App::viewer_modo` sólo cambia cuando el
+    // visor se abre de nuevo, o cuando `reload_config` suelta una miniatura
+    // `Kitty` que dejó de serlo (ver ahí el porqué de esa dirección única).
+    //
+    // El bucle de colocación (T4, `event_loop.rs`) no necesita mirar `modo`
+    // por su cuenta: `ui::imagen_a_colocar` sólo ve algo que colocar
+    // mientras `App::viewer_imagen` siga vivo, y `reload_config` ya lo
+    // suelta en el momento en que el modo deja de ser `Kitty` — un solo
+    // punto de corte en vez de una comprobación repetida en cada frame.
+    //
+    // NO va en el título de la cabecera pese a que el «via …» de arriba
+    // vive ahí: el título derecho se right-aligna SIN recortar cuando no
+    // cabe, así que el texto largo del aviso (con el hint de F12) se comía
+    // el título izquierdo entero — regresión real, cazada por
+    // `snapshot_viewer_texto_y_hex`. La barra de estado de abajo es de
+    // ancho completo y ya cede el sitio entero a `app.message` cuando hay
+    // uno; este aviso sigue el mismo patrón.
+    //
+    // Task 5b (hallazgo de revisión de T6): el mismo agujero existía en
+    // `Modo::Kitty` — sin plugin `thumbnail` aprobado, `viewer_for_width`
+    // nunca coloca `App::viewer_imagen` y el visor cae a hexview tan
+    // silenciosamente como en `Modo::Bloques` sin previewer. Qué condición
+    // hace innecesario el aviso depende del modo — el `previewer` de
+    // `Modo::Bloques` y el `thumbnail` de `Modo::Kitty` son dos plugins
+    // distintos, con documentación separada en
+    // `viewer_open::no_hace_falta_avisar_de_imagen` /
+    // `no_hace_falta_avisar_de_miniatura` (con la trampa de "simplificarlo"
+    // a `preview_plugin().is_some()` escrita en la primera); ese `match`
+    // decide cuál aplica.
+    let modo = app.viewer_modo;
+    let no_hace_falta_avisar = match modo {
+        crate::viewer_open::Modo::Kitty => crate::viewer_open::no_hace_falta_avisar_de_miniatura(
+            viewer,
+            app.viewer_imagen.as_ref(),
+        ),
+        crate::viewer_open::Modo::Bloques | crate::viewer_open::Modo::Nada => {
+            crate::viewer_open::no_hace_falta_avisar_de_imagen(viewer)
+        }
+    };
+    let aviso_imagen = crate::viewer_open::aviso_de_imagen(modo, no_hace_falta_avisar);
+    // `rect_del_visor` — la MISMA función que usa el run loop para el APC,
+    // no una resta a mano — es lo que garantiza que el hueco que se deja en
+    // blanco abajo y el hueco donde caen los píxeles sean estructuralmente
+    // el mismo (revisión, CRÍTICO 2).
+    let inner_h = rect_del_visor(app, frame.area()).height as usize;
+    // T4 (fase 5 WOW): con la imagen COLOCADA (el run loop pinta sus
+    // píxeles tras este frame, por fuera de ratatui), las líneas van
+    // VACÍAS. El terminal va a pintar ENCIMA de este hueco, y un texto ahí
+    // se vería DEBAJO de los píxeles o parpadearía al alternar con ellos en
+    // cada frame. El marco, el título y las barras de scroll de abajo
+    // siguen pintándose igual — nada de esto cambia por tener una imagen
+    // puesta.
+    // Revisión de rama, hallazgo 2: `imagen_a_colocar` (no una comprobación
+    // aparte del `path`) es la MISMA función que usa el run loop para
+    // decidir si coloca píxeles — antes esta línea sólo miraba el `path`, y
+    // el run loop añadía además `!algo_encima_del_visor` y que el rect no
+    // estuviera vacío; con un overlay que no tapa la pantalla entera (el
+    // menú, which-key…) este pintor blanqueaba el hueco igual que siempre
+    // mientras el run loop se negaba a colocar píxeles encima: ni imagen ni
+    // hexview.
+    let hay_imagen = super::imagen_a_colocar(app, frame.area()).is_some();
     // #29/G3a (ADR 0037): un preview de plugin trae color, por ANSI-SGR
     // saneado (`fg` únicamente) o por WIT estructurado (`role` VALIDADO +
     // `fg` de respaldo). `role` GANA sobre `fg` cuando ambos están
@@ -127,36 +202,48 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // de un plugin, ADR 0037 decisión 3) — se resuelve por el tema
     // (`app.theme.role`), no como RGB crudo. Sin ninguno de los dos, el
     // color por defecto del tema (sin `.style()`).
-    let lines: Vec<Line<'_>> = match viewer.plugin_styled_rows(inner_h) {
-        Some(styled) => styled
-            .into_iter()
-            .map(|line| {
-                Line::from(
-                    line.iter()
-                        .map(|span| {
-                            Span::raw(span.text.clone()).style(estilo_de_span(span, &app.theme))
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect(),
-        None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
+    let lines: Vec<Line<'_>> = if hay_imagen {
+        Vec::new()
+    } else {
+        match viewer.plugin_styled_rows(inner_h) {
+            Some(styled) => styled
+                .into_iter()
+                .map(|line| {
+                    Line::from(
+                        line.iter()
+                            .map(|span| {
+                                Span::raw(span.text.clone()).style(estilo_de_span(span, &app.theme))
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect(),
+            None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
+        }
     };
-    frame.render_widget(Paragraph::new(lines).block(block), rows[0]);
-    barras_del_visor(frame, rows[0], viewer, &app.theme, true);
+    frame.render_widget(Paragraph::new(lines).block(block), content_area);
+    barras_del_visor(frame, content_area, viewer, &app.theme, true);
     let pos = format!(
         "{}/{}",
         (viewer.scroll + 1).min(viewer.total_rows().max(1)),
         viewer.total_rows().max(1)
     );
-    let text = match &app.message {
-        Some(msg) => format!(" {msg}"),
-        None => format!(" {}  {pos}", crate::viewer::status(viewer)),
+    let text: Line<'_> = match &app.message {
+        Some(msg) => Line::styled(format!(" {msg}"), app.theme.role(Role::StatusBar)),
+        None => match aviso_imagen {
+            // Ronda de arreglo 1, IMPORTANTE 2: sin previewer aprobado es el
+            // estado por DEFECTO de cualquier instalación, así que esta
+            // rama es el caso común, no el raro — perder `pos` aquí es
+            // perderlo justo donde más se nota (un PNG grande en hexview,
+            // haciendo scroll sin más guía que el pulgar de la barra).
+            Some(aviso) => Line::styled(format!(" {aviso}  {pos}"), app.theme.role(Role::Info)),
+            None => Line::styled(
+                format!(" {}  {pos}", crate::viewer::status(viewer)),
+                app.theme.role(Role::StatusBar),
+            ),
+        },
     };
-    frame.render_widget(
-        Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
-        rows[1],
-    );
+    frame.render_widget(Paragraph::new(text), status_area);
 }
 
 /// El visor ACOPLADO (L3): el fichero bajo el cursor, en su hueco.

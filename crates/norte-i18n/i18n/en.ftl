@@ -299,6 +299,16 @@ viewer-image-too-large = image too large to preview
 viewer-image-unreadable = image header not understood
 viewer-image-loading = loading image…
 viewer-plugin-preview-lossy = [lossy decode]
+# Ronda de arreglo 2 (Task 5, fase 5 WOW): el texto largo original no cabía
+# junto a la posición de scroll (`pos`) en 80 columnas — ni siquiera solo,
+# en ES. Acortado a lo que quepa en los dos idiomas con `pos` al lado.
+viewer-image-needs-previewer = no image previewer approved yet — press F12
+# Task 5b (fase 5 WOW, review finding from T6): counterpart of the key above
+# for `Modo::Kitty`, which needs a `thumbnail` plugin approved (not a
+# `previewer`) — the help topic tells the two extensions apart, and pointing
+# the reader at the wrong one is worse than not warning at all. Same 80
+# column budget with `pos` next to it.
+viewer-image-needs-thumbnail = no image thumbnail plugin approved yet — press F12
 eol-mixed = mixed EOL
 eol-none = no EOL
 
@@ -1960,6 +1970,8 @@ setting-ui-splash-name = Start screen
 setting-ui-splash-desc = What the startup screen does: brief is a cover any key takes away, off shows none, and home stays until a key with recent and popular directories, bookmarks and profiles. The first-run wizard always wins over it.
 setting-ui-processes-panel-name = Processes panel
 setting-ui-processes-panel-desc = auto opens the panel when a task starts and closes it when the last one is gone; manual leaves it to the command and the panel bar. Opening or closing it by hand while a task runs wins until that task ends.
+setting-ui-images-name = Images in the viewer
+setting-ui-images-desc = auto paints an image with the terminal's own graphics when it has them, and falls back to coloured half-blocks from an approved image previewer otherwise; kitty and blocks force one of the two; off leaves the viewer showing the bytes. The window ignores this key.
 setting-ui-dir-indicator-name = Slash on directories
 setting-ui-dir-indicator-desc = The "/" in front of a directory: auto paints it only when the icon column is closed, because an icon already says what the row is; slash always, none never.
 setting-ui-history-size-name = History size

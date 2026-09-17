@@ -74,14 +74,41 @@ columna imprimible al lado. Es la vista honesta de lo que nunca fue texto, y es
 donde aterrizas cuando el detector dice binario.
 
 Las imágenes se reconocen por sus bytes mágicos —PNG, JPEG, GIF, BMP, WebP—,
-otra vez por contenido y no por nombre. El frontend gráfico las pinta; el
-terminal enseña el hex, porque es lo que un terminal puede enseñar sin mentir.
+otra vez por contenido y no por nombre. La ventana las pinta siempre, por su
+propio webview. En el terminal depende de `[ui] images` y de qué extensión
+tengas aprobada y activada — de eso va la sección siguiente.
 
 Una extensión también puede aportar una vista previa: un plugin que entiende un
 formato lo convierte en texto o en líneas con estilo, y su salida va acotada y
 enmascarada como cualquier otro texto de terceros. Un plugin que falla, que
 está desactivado o que tarda demasiado no bloquea el fichero: te quedas con la
 vista cruda, que es la que ibas a tener de todos modos.
+
+# Una imagen en el terminal
+
+`[ui] images` decide cómo, y tiene cuatro valores. `auto` (el que hay si no
+pones nada) usa el protocolo de gráficos del terminal cuando la sonda del
+arranque confirma que lo tiene, y si no cae a medios bloques. `kitty` y
+`blocks` fuerzan uno de los dos sin volver a preguntarle al terminal. `off`
+deja el visor en hexview sin más. La ventana no lee esta clave en absoluto:
+pinta imágenes por su cuenta, por el webview.
+
+Son dos extensiones DISTINTAS, con papeles distintos, y confundirlas es el
+error más fácil de cometer. Los píxeles de verdad —el camino `kitty`— los
+alimenta un plugin de categoría `thumbnail` (`image-thumb` en este
+repositorio); los medios bloques los pinta uno de categoría `previewer`
+(`image-ansi`). Tener uno aprobado no te da el otro: con `images = "kitty"` en
+un terminal que sí sabe gráficos, pero sin ningún `thumbnail` aprobado, no ves
+un solo píxel.
+
+Aprobar una extensión son dos pasos, y en ese orden: desde
+{{cmd:app.extensions}} (F12) primero se APRUEBA —lo que abre el diálogo que
+enumera las capacidades que le concedes— y sólo DESPUÉS se ACTIVA. Activar algo
+que no está aprobado se rechaza. Sin una extensión aprobada Y activada te
+quedas en hexview, y la barra de estado del visor lo dice ahora, con un aviso
+que nombra F12. De los dos pasos, y de qué más concede aprobar, va [[plugins]].
+
+> 💡 Dentro de tmux los píxeles no atraviesan la sesión sin `allow-passthrough` activado. La sonda del arranque lo detecta y cae a medios bloques por su cuenta, así que ahí no ves ningún aviso: no falta nada, es lo correcto.
 
 # Darle el fichero a otro programa
 

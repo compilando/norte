@@ -4,7 +4,7 @@
 //! también lo que consulta el enrutado de ratón para saber qué hay bajo el
 //! cursor sin haber pintado.
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Block, Borders};
 
 use super::chrome::TabStrip;
@@ -502,6 +502,40 @@ pub(crate) fn pane_chrome_rows(app: &App, side: usize) -> u16 {
 /// El interior de un bloque con borde por los cuatro lados./// El interior de un bloque con borde por los cuatro lados./// El interior de un bloque con borde por los cuatro lados.
 pub(crate) fn block_inner(area: Rect) -> Rect {
     Block::default().borders(Borders::ALL).inner(area)
+}
+
+/// El reparto del visor a pantalla completa en sus DOS filas: el marco de
+/// contenido (con sus bordes — lo que recibe el `Block` de `draw_viewer`) y
+/// la barra de estado de una fila debajo.
+///
+/// Única función que hace esta cuenta: [`rect_del_visor`] es su primera
+/// mitad, y `draw_viewer` toma las dos de aquí en vez de repetir el
+/// `Layout::split` a mano — dos cuentas del mismo hueco divergen en
+/// silencio (memoria `funcion-compartida-no-basta`).
+pub(crate) fn visor_split(app: &App, area: Rect) -> (Rect, Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(body_area(app, area));
+    (rows[0], rows[1])
+}
+
+/// El hueco donde el visor a pantalla completa pinta su CONTENIDO de verdad:
+/// el INTERIOR del marco, SIN bordes — donde `draw_viewer` deja las líneas
+/// en blanco cuando hay una imagen colocada.
+///
+/// `pub` porque el run loop (T4, fase 5 WOW) la necesita tras
+/// `terminal.draw` para saber dónde colocar los píxeles. Revisión, CRÍTICO
+/// 2: la primera versión devolvía el marco CON bordes (`visor_split(...).0`
+/// a secas) — dos celdas de más por eje, justo encima del borde y de las
+/// barras de scroll que `barras_del_visor` pinta ahí — así que ahora aplica
+/// `block_inner` (privado, sin enlazar) ella misma: la coincidencia con el
+/// hueco que `draw_viewer` deja vacío es ESTRUCTURAL, no algo que recordar
+/// en cada llamante. Sale de `visor_split` (privado también), la MISMA
+/// cuenta que pinta el marco — no una copia.
+#[must_use]
+pub fn rect_del_visor(app: &App, area: Rect) -> Rect {
+    block_inner(visor_split(app, area).0)
 }
 
 /// Como [`sync_layout`], desde el área EXTERNA del panel (la que recibe

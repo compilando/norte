@@ -685,7 +685,11 @@ pub async fn dispatch(
             if app.key_owner() == crate::app::KeyOwner::Preview {
                 app.return_keys_to_panes();
             } else {
-                app.viewer = None;
+                // `close_viewer` limpia el visor Y su miniatura a la vez
+                // (hallazgo de revisión, T3 fase 5): un `app.viewer = None`
+                // suelto aquí dejaba `app.viewer_imagen` apuntando a la
+                // imagen anterior mientras el visor ya no estaba.
+                app.close_viewer();
             }
         }
         Command::ViewerUp => viewer_do(app, |v| v.scroll_up(1)),

@@ -37,8 +37,8 @@ pub use dirs::{
 };
 pub use load::{
     AiSettings, AlignChoice, ColumnSpec, ColumnsConfig, CommonConfig, ConfirmQuit, DateFormat,
-    HotlistItem, KeymapList, KeymapWrite, PanelBarStyle, PersistSort, QuickSearch, SchemeColumns,
-    SortChoice, SortColumnKey, UiChrome, WidthChoice, load, persist_column_format,
+    HotlistItem, Images, KeymapList, KeymapWrite, PanelBarStyle, PersistSort, QuickSearch,
+    SchemeColumns, SortChoice, SortColumnKey, UiChrome, WidthChoice, load, persist_column_format,
     persist_column_width, persist_columns, persist_hotlist_add, persist_hotlist_remove,
     persist_keymap_bind, persist_keymap_unbind, persist_set, persist_ui_theme, persist_ui_theme_to,
 };

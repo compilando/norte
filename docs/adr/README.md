@@ -122,3 +122,4 @@ edits.
 | [0115](0115-the-start-screen-is-the-hosts-and-a-panel-that-opens-itself-closes-itself.md) | The start screen is the host's, and a panel that opens itself closes itself | accepted |
 | [0116](0116-a-plugin-describes-a-panel-and-norte-paints-it.md) | A plugin describes a panel, and norte paints it | accepted |
 | [0117](0117-the-disk-map-is-a-task-with-a-report-and-the-core-measures-it.md) | The disk map is a task with a report, and the core measures it | accepted |
+| [0118](0118-imagenes-en-la-tui.md) | The TUI paints an image as pixels, outside ratatui, or falls back | accepted |

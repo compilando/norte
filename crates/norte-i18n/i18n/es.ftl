@@ -301,6 +301,16 @@ viewer-image-too-large = imagen demasiado grande para previsualizarla
 viewer-image-unreadable = no se entiende la cabecera de la imagen
 viewer-image-loading = cargando la imagen…
 viewer-plugin-preview-lossy = [decodificación con pérdida]
+# Ronda de arreglo 2 (Task 5, fase 5 WOW): el texto largo original no cabía
+# junto a la posición de scroll (`pos`) en 80 columnas — ni siquiera solo.
+# Acortado a lo que quepa en los dos idiomas con `pos` al lado.
+viewer-image-needs-previewer = falta aprobar una extensión de vista previa de imagen — F12
+# Task 5b (fase 5 WOW, hallazgo de revisión de T6): la contraparte de la
+# clave de arriba para `Modo::Kitty`, que pide aprobar un plugin `thumbnail`
+# (no un `previewer`) — la ayuda distingue las dos extensiones, y mandar al
+# lector a aprobar la equivocada es peor que no avisar. Mismo presupuesto de
+# 80 columnas con `pos` al lado.
+viewer-image-needs-thumbnail = falta aprobar una extensión de miniaturas de imagen — F12
 eol-mixed = EOL mixto
 eol-none = sin EOL
 
@@ -1921,6 +1931,8 @@ setting-ui-splash-name = Pantalla de arranque
 setting-ui-splash-desc = Qué hace la pantalla de arranque: «brief» es una cubierta que quita cualquier tecla, «off» no enseña ninguna y «home» se queda hasta que pulses, con los directorios recientes y populares, los favoritos y los perfiles. El asistente de primer arranque siempre le gana.
 setting-ui-processes-panel-name = Panel de procesos
 setting-ui-processes-panel-desc = «auto» abre el panel cuando empieza una tarea y lo cierra cuando se va la última; «manual» lo deja al comando y a la barra de paneles. Abrirlo o cerrarlo a mano mientras hay una tarea manda hasta que esa tarea acabe.
+setting-ui-images-name = Imágenes en el visor
+setting-ui-images-desc = «auto» pinta la imagen con los gráficos del propio terminal cuando los tiene, y si no cae a medios bloques de un previewer de imagen aprobado; «kitty» y «blocks» fuerzan uno de los dos; «off» deja el visor enseñando los bytes. La ventana ignora esta clave.
 setting-ui-dir-indicator-name = Barra en los directorios
 setting-ui-dir-indicator-desc = La «/» delante de un directorio: «auto» la pinta solo cuando la columna de iconos está cerrada, porque el icono ya dice qué es la fila; «slash» siempre y «none» nunca.
 setting-ui-history-size-name = Tamaño de la historia

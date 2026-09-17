@@ -72,14 +72,42 @@ printable column beside them. It is the honest view for anything that was never
 text, and it is where you land when the detector says binary.
 
 Images are recognised by their magic bytes — PNG, JPEG, GIF, BMP, WebP — again
-by content and not by name. The graphical frontend paints them; the terminal
-shows the hex, because that is what a terminal can honestly show.
+by content and not by name. The window always paints them, through its own
+webview. In the terminal it depends on `[ui] images` and on which extension
+you have approved and enabled — that is the next section.
 
 An extension can also supply a preview: a plugin that knows a format turns it
 into text or into styled lines, and its output is bounded and masked like any
 other third-party text. A plugin that fails, is disabled, or takes too long
 does not block the file — you get the raw view, which is what you would have
 had anyway.
+
+# An image in the terminal
+
+`[ui] images` decides how, and it has four values. `auto` (what you get if you
+set nothing) uses the terminal's graphics protocol when the startup probe
+confirms it has one, and falls back to half-block cells otherwise. `kitty` and
+`blocks` force one or the other without asking the terminal again. `off`
+leaves the viewer on hexview, no more. The window never reads this key at
+all: it paints images on its own, through its webview.
+
+There are two DIFFERENT extensions here, with different jobs, and mixing them
+up is the easiest mistake to make. The real pixels — the `kitty` path — are
+fed by a plugin of category `thumbnail` (`image-thumb` in this repository);
+the half blocks are painted by one of category `previewer` (`image-ansi`).
+Having one approved does not give you the other: with `images = "kitty"` on a
+terminal that does support graphics, but with no `thumbnail` plugin approved,
+you see no pixels at all.
+
+Approving an extension is two steps, in this order: from
+{{cmd:app.extensions}} (F12) you first APPROVE it — which opens the dialog
+listing the capabilities you are granting — and only THEN do you ENABLE it.
+Enabling something that is not approved is refused. Without an extension both
+approved AND enabled you stay on hexview, and the viewer's status line says so
+now, in a warning that names F12. See [[plugins]] for the two steps, and for
+what else approving grants.
+
+> 💡 Inside tmux, pixels do not cross the session without `allow-passthrough` turned on. The startup probe detects that and falls back to half blocks on its own, so you see no warning there either: nothing is missing, that is the correct outcome.
 
 # Handing the file to another program
 

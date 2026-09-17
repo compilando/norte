@@ -659,10 +659,19 @@ impl Viewer {
 
     /// `true` si el contenido es una imagen reconocida (bytes mágicos) y no se
     /// ha forzado una decodificación de texto («recargar como…»). El frontend
-    /// con render de imagen (GUI) PINTA la imagen; el resto (TUI) ignora esto y
-    /// usa `rows` (hexview). El core NO decodifica: solo reconoce. Nota: NO
-    /// depende de `hex` — un frontend gráfico muestra siempre la imagen; el
-    /// hexview crudo sigue disponible por `rows` para quien no sepa pintarla.
+    /// con render de imagen (GUI) PINTA la imagen a través de éste. El core NO
+    /// decodifica: solo reconoce. Nota: NO depende de `hex` — un frontend
+    /// gráfico muestra siempre la imagen; el hexview crudo sigue disponible
+    /// por `rows` para quien no sepa pintarla.
+    ///
+    /// La TUI NO usa este getter para decidir si pide píxeles por el
+    /// protocolo de kitty (fase 5 WOW): es `false` en cuanto un previewer de
+    /// plugin sustituye la vista cruda por su propio `PluginPreview`, y esa
+    /// decisión necesita saber si el FICHERO es una imagen con independencia
+    /// de qué previewer ganó — mira los bytes por su cuenta con
+    /// [`image_format`] antes de que la cadena de preview tenga oportunidad
+    /// de esconder el formato (`norte-tui::viewer_open`). Cuando no pinta
+    /// píxeles, cae a `rows` (hexview) igual que siempre.
     #[must_use]
     pub fn is_image(&self) -> bool {
         self.plugin_preview.is_none() && self.image.is_some()

@@ -304,6 +304,14 @@ const CATALOG: &[SettingDef] = &[
         kind: SettingKind::Enum(&["auto", "manual"]),
         applies_live: true,
     },
+    // Fase 5, tarea 2: cómo el visor de la TUI pinta una imagen. Clave de
+    // TERMINAL — la ventana pinta imágenes por su propia webview y no la lee.
+    SettingDef {
+        id: "ui.images",
+        section: Section::General,
+        kind: SettingKind::Enum(&["auto", "kitty", "blocks", "off"]),
+        applies_live: true,
+    },
     SettingDef {
         id: "ui.dir-indicator",
         section: Section::General,
@@ -453,6 +461,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         "ui.history-size" => cfg.common.ui_chrome.history_size().to_string(),
         "ui.splash" => cfg.common.ui_chrome.splash().as_str().to_owned(),
         "ui.processes-panel" => cfg.common.ui_chrome.processes_panel().as_str().to_owned(),
+        "ui.images" => cfg.common.ui_chrome.images().as_str().to_owned(),
         "ui.dir-indicator" => cfg.common.ui_chrome.dir_indicator().as_str().to_owned(),
         "ui.dialog-buttons" => cfg.common.ui_chrome.dialog_buttons().to_string(),
         // Vacío = sin variante: la ventana pinta `theme` en los dos esquemas.

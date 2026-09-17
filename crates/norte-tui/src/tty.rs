@@ -105,6 +105,14 @@ pub fn restore(term: &mut Tui) -> io::Result<()> {
     // protocol must not leave the user in raw mode on the alternate screen.
     // The first error is the one reported.
     let protocolo = crate::alt_menu::set(false, || true, term.backend_mut());
+    // T4 (fase 5 WOW), momento 4 de 4: a placed viewer image is erased
+    // BEFORE leaving the alternate screen — same reasoning as the keyboard
+    // protocol above, and the same reason `suspend_terminal` does it before
+    // yielding: whatever comes next on this terminal (the user's shell)
+    // never asked for those pixels. Best-effort, like the rest of this
+    // module's error handling: a paint failure must never block the exit
+    // this function exists to guarantee.
+    crate::kitty_graphics::borrar_colocada(term.backend_mut());
     // Disabling raw mode first, same order as `ratatui::try_restore`: it has
     // more side effects than leaving the alternate screen buffer.
     let raw = disable_raw_mode();
@@ -128,6 +136,13 @@ fn install_panic_hook() {
         let _ = disable_raw_mode();
         if let Ok(mut out) = open_controlling_terminal() {
             let _ = crate::alt_menu::soltar_en_panico(&mut out);
+            // Not one of the plan's four named moments, but the same
+            // reasoning as `restore` just above: process-level state exists
+            // precisely so the panic hook can undo it without anyone
+            // threading it through. Left out, a panic while an image is
+            // placed leaves it stuck on the developer's terminal, on top of
+            // the very backtrace this hook exists to make readable.
+            crate::kitty_graphics::borrar_colocada(&mut out);
             let _ = execute!(
                 out,
                 DisableBracketedPaste,

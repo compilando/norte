@@ -593,6 +593,36 @@ pub struct App {
     pub board: crate::tasks::TaskBoard,
     /// Viewer abierto (F3); None = navegando.
     pub viewer: Option<crate::viewer::Viewer>,
+    /// La miniatura pedida para [`Self::viewer`], si se pidió una (fase 5
+    /// WOW, T3): `[ui] images` resolvió a [`crate::viewer_open::Modo::Kitty`]
+    /// Y el fichero es una imagen. `None` cuando no aplica o el plugin no
+    /// supo — el visor se ve igual, sin píxeles (ADR 0037). Vive aquí y no
+    /// en [`crate::viewer::Viewer`] porque ese tipo es de `norte-frontend` y
+    /// lo comparten los dos frontends; la ventana pinta imágenes por su
+    /// propio camino y no necesita este campo.
+    pub viewer_imagen: Option<crate::viewer_open::ImagenColocada>,
+    /// El [`crate::viewer_open::Modo`] con el que se abrió [`Self::viewer`]
+    /// — resuelto UNA VEZ, al abrir (`viewer_open::open_viewer`), no
+    /// recalculado en cada frame.
+    ///
+    /// Revisión de rama, hallazgo 3: `[ui] images` se recarga EN CALIENTE
+    /// (`applies_live` en `norte_frontend::settings`, `app.chrome` entero se
+    /// reasigna en `config_reload::reload_config`), y el aviso/colocación
+    /// recalculaban el modo EFECTIVO contra la config vigente en cada
+    /// frame, no contra lo que de verdad se pidió al abrir. Dos
+    /// consecuencias, las dos alcanzables sin cerrar el visor: cambiar de
+    /// `blocks` a `kitty` hacía salir el aviso «falta aprobar la extensión
+    /// de miniaturas» sobre un fichero al que NUNCA se le pidió una (el
+    /// aviso miente: lo que hace falta es reabrir, no aprobar nada); y
+    /// cambiar de `kitty` a `off`/`blocks` dejaba los píxeles ya colocados
+    /// en pantalla INDEFINIDAMENTE, violando lo que la ayuda promete de
+    /// `off` («deja el visor en hexview sin más»). Este campo fija el modo
+    /// resuelto al abrir para el aviso y la colocación; sólo
+    /// `config_reload::reload_config` lo cambia después, y sólo en la
+    /// dirección Kitty→algo-más (soltando [`Self::viewer_imagen`] a la vez)
+    /// — la dirección contraria se deja pineada a propósito, para no volver
+    /// a mentir sobre un fichero al que el modo nuevo nunca le pidió nada.
+    pub viewer_modo: crate::viewer_open::Modo,
     /// Help overlay open (F1, H3b): the navigable view over the `norte-help`
     /// corpus — sidebar, body, filter and history — plus the generated
     /// keyboard page, which is still built from the EFFECTIVE keymap (preset
@@ -1188,6 +1218,8 @@ impl App {
             session: SessionUi::default(),
             board: crate::tasks::TaskBoard::default(),
             viewer: None,
+            viewer_imagen: None,
+            viewer_modo: crate::viewer_open::Modo::Nada,
             help: None,
             pending_collisions: std::collections::VecDeque::new(),
             pending_approvals: std::collections::VecDeque::new(),

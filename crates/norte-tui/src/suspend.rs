@@ -364,6 +364,16 @@ pub fn suspend_terminal(
     // El protocolo de teclado de kitty (`[ui] alt_menu`), por lo mismo que la
     // captura: el shell no lo pidió y leería escapes en vez de letras.
     crate::alt_menu::ceder(terminal.backend_mut())?;
+    // T4 (fase 5 WOW), momento 3 de 4: si el visor tenía una imagen
+    // colocada, se borra ANTES de soltar la terminal — el programa que
+    // viene detrás tampoco la pidió, y sin borrarla quedaría flotando sobre
+    // su pantalla. Best-effort (nunca `?`): un fallo aquí no puede impedir
+    // ceder la terminal, que es lo que este momento existe para garantizar.
+    // Al volver ([`resume_terminal`]) no hace falta colocarla de vuelta a
+    // mano: `app.viewer_imagen` sigue vivo, y el primer frame que el run
+    // loop pinte tras la reanudación la vuelve a colocar solo (el mismo
+    // mecanismo que cierra el visor o lo mueve a otro fichero).
+    crate::kitty_graphics::borrar_colocada(terminal.backend_mut());
     disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),

@@ -1309,6 +1309,33 @@ impl ProcessesPanel {
     }
 }
 
+/// `[ui] images`, validado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Images {
+    /// El protocolo del terminal si lo hay; si no, el previewer.
+    #[default]
+    Auto,
+    /// El protocolo del terminal, aunque la sonda dijera que no.
+    Kitty,
+    /// Medios bloques por el previewer, aunque el terminal supiera más.
+    Blocks,
+    /// Ni uno ni otro: el visor se queda en hexview.
+    Off,
+}
+
+impl Images {
+    /// The wire string this variant round-trips from/to.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Kitty => "kitty",
+            Self::Blocks => "blocks",
+            Self::Off => "off",
+        }
+    }
+}
+
 /// `[ui] dir_indicator`: the `/` a directory row is prefixed with.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DirIndicator {
@@ -1368,6 +1395,9 @@ pub struct UiChrome {
     pub splash_ms: Option<u32>,
     /// `[ui] processes_panel` (None = auto), validated.
     pub processes_panel: Option<ProcessesPanel>,
+    /// `[ui] images` (None = auto), validated. A TERMINAL key: the GUI paints
+    /// images through its own webview and never reads it.
+    pub images: Option<Images>,
     /// `[ui] dir_indicator` (None = auto), validated.
     pub dir_indicator: Option<DirIndicator>,
 }
@@ -1421,6 +1451,13 @@ impl UiChrome {
     #[must_use]
     pub fn dir_indicator(self) -> DirIndicator {
         self.dir_indicator.unwrap_or_default()
+    }
+
+    /// Effective `images` (absent = auto). A TERMINAL key: the GUI paints
+    /// images through its own webview and never calls this.
+    #[must_use]
+    pub fn images(self) -> Images {
+        self.images.unwrap_or_default()
     }
 
     /// The upper bound of `notice_seconds`: ten minutes is already "never
@@ -2034,6 +2071,19 @@ fn merge_ui_chrome(
             _ => {
                 return Err(bad(
                     "[ui] processes_panel inválido: solo se admite «auto» o «manual»",
+                ));
+            }
+        });
+    }
+    if let Some(raw) = &ui.images {
+        acc.images = Some(match raw.as_str() {
+            "auto" => Images::Auto,
+            "kitty" => Images::Kitty,
+            "blocks" => Images::Blocks,
+            "off" => Images::Off,
+            _ => {
+                return Err(bad(
+                    "[ui] images inválido: sólo se admite «auto», «kitty», «blocks» u «off»",
                 ));
             }
         });
@@ -3333,7 +3383,7 @@ format = "exact"
             user.path().join("norte.toml"),
             "[ui]\nkey_bar = false\npanel_bar_style = \"letters\"\ndate_format = \"iso\"\n\
              notice_seconds = 30\nhistory_size = 12\nsplash = \"home\"\n\
-             processes_panel = \"manual\"\ndir_indicator = \"slash\"\n",
+             processes_panel = \"manual\"\nimages = \"blocks\"\ndir_indicator = \"slash\"\n",
         )
         .unwrap();
         let project = tempfile::tempdir().unwrap();
@@ -3356,6 +3406,7 @@ format = "exact"
         assert_eq!(c.history_size(), 12);
         assert_eq!(c.splash(), SplashMode::Home);
         assert_eq!(c.processes_panel(), ProcessesPanel::Manual);
+        assert_eq!(c.images(), Images::Blocks);
         assert_eq!(c.dir_indicator(), DirIndicator::Slash);
         assert!(!c.pane_footer());
         assert!(!c.dialog_buttons());
@@ -3369,6 +3420,7 @@ format = "exact"
         assert_eq!(empty.history_size(), 30);
         assert_eq!(empty.splash(), SplashMode::Brief);
         assert_eq!(empty.processes_panel(), ProcessesPanel::Auto);
+        assert_eq!(empty.images(), Images::Auto);
         assert_eq!(empty.dir_indicator(), DirIndicator::Auto);
 
         for bad in [
@@ -3379,6 +3431,7 @@ format = "exact"
             "history_size = 65",
             "splash = \"always\"",
             "processes_panel = \"si\"",
+            "images = \"si\"",
             "dir_indicator = \"arrow\"",
         ] {
             let dir = tempfile::tempdir().unwrap();
@@ -3389,6 +3442,38 @@ format = "exact"
             let err = load(&layers).expect_err(bad);
             assert!(matches!(err, ConfigError::Toml { .. }), "{bad}");
         }
+    }
+
+    #[test]
+    fn images_se_lee_y_se_valida() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "[ui]\nimages = \"kitty\"\n").unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let c = load(&layers).expect("carga").ui_chrome;
+        assert_eq!(c.images(), Images::Kitty);
+    }
+
+    #[test]
+    fn images_ausente_es_auto() {
+        let vacio = load(&Layers { dirs: vec![] }).expect("carga").ui_chrome;
+        assert_eq!(vacio.images(), Images::Auto);
+    }
+
+    #[test]
+    fn images_invalido_se_rechaza_con_motivo() {
+        // Un valor que no es de la lista NO se ignora en silencio: quien
+        // escribió "si" quería algo, y arrancar como si no hubiera escrito
+        // nada convierte su error en una preferencia que no eligió.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "[ui]\nimages = \"si\"\n").unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let err = load(&layers).expect_err("debe rechazar un valor desconocido");
+        let msg = err.to_string();
+        assert!(msg.contains("images"), "el motivo nombra la clave: {msg}");
     }
 
     #[test]
