@@ -73,9 +73,11 @@ static SOPORTE: OnceLock<bool> = OnceLock::new();
 /// quien llama, así que sin terminal en stdout no se pregunta.
 ///
 /// NO tiene test: lo que hace es escribir en la terminal de control y leerla
-/// con un plazo. Lo testeable es [`respuesta_dice_si`], que sí lo está. Un
-/// test de esto necesitaría un pty falso que contestara como kitty, y eso es
-/// probar el pty.
+/// con un plazo. Lo testeable es el parseo (`respuesta_dice_si`, privada —
+/// sin corchetes: enlazar desde aquí, que es público, a un ítem privado es
+/// un `rustdoc::private_intra_doc_links` denegado en el gate), que sí lo
+/// está. Un test de esto necesitaría un pty falso que contestara como
+/// kitty, y eso es probar el pty.
 ///
 /// Se manda el query APC y DETRÁS un DA1: un terminal que no habla el
 /// protocolo ignora el primero en silencio, y sin el segundo no habría nada
