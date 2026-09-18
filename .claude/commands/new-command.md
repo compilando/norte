@@ -37,7 +37,7 @@ nothing and does not say why, which has shipped three times already.
    `crates/norte-ui-host/src/controller/`. If the window can't do it yet, leave
    it out: the key then resolves to `NotHere` and says so. That is honest;
    binding it to a stub is not.
-6. **Menu** — `crates/norte-frontend/src/menu.rs::MENUS`. Everything built
+6. **Menu** — `crates/norte-frontend/src/chrome/menu.rs::MENUS`. Everything built
    goes in exactly one menu. Its colour comes from the effect, so don't add a
    role by hand.
 7. **Seven presets** — `crates/norte-frontend/presets/keymap/*.toml`. Follow

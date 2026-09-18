@@ -94,17 +94,20 @@ carpetas que ya agrupan (`keymap/`, `pane/`, `sync/`, `layout/`).
 
 **Lo que se hace.** Mover, sin tocar lógica, y **re-exportar cada módulo en
 su ruta antigua** (`pub use ops::chmod;`) para que ningún crate de fuera
-cambie una línea. Grupos:
+cambie una línea. Las carpetas son PRIVADAS (`mod ops;`): así la API sigue
+teniendo UNA ruta por módulo, en vez de dos (unos 700 usos de fuera no se
+tocan). Grupos:
 
 - `ops/`: chmod, checksums, organize, rename_pattern, compare, diffpair.
-- `nav/`: goto, history, places, tree, watch (y `nav.rs` pasa a `nav/mod.rs`).
+- `navigation/`: goto, history, places, tree, watch. No `nav/`: `nav.rs` ya
+  es un módulo con contenido propio.
 - `chrome/`: footer, keybar, menu, panelbar, splash, banners, frame.
 - `overlays/`: palette, palette_state, modal, whichkey, wizard y los
   `*_picker`.
 - `view/`: viewer, treemap, diskmap, columns, display, format.
 
-Una sola rama y un commit por carpeta. Si un módulo usa `super::` para llegar
-a un hermano de la raíz, el compilador lo dice; se corrige a `crate::`.
+Una sola rama y un solo commit: son movimientos, y ninguno necesitó tocar
+una línea (los `use super::` que hay son de módulos de test).
 
 Sin revisor: son movimientos. El gate es la prueba.
 

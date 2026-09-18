@@ -9,6 +9,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Structured logs** (ADR 0127). `[log] format = "json"` writes the log file
+  as one JSON object per line, with the event's fields and the spans it
+  happened in. The default stays `text`, and stderr is always text. Every
+  task now logs inside the request that asked for it:
+  `rpc{conn_id, req_id, method}` → `task{task_id, kind, provider, actor}`.
+  `jq` over a day's file gives everything one task did and who asked for it.
+  The method and id a client sends are escaped and cut to 64 characters, so
+  a newline in them cannot forge a line in the text log.
+
 - **Menus in sections** (ADR 0125, bridge 74), in the terminal and the window.
   Each menu is split into groups: some are separated by a plain rule, some
   carry a title (Archives, Split files, Integrity, History, Places…). Delete
@@ -272,7 +281,20 @@ independently through `PROTOCOL_VERSION`.
   adds mc's `Alt+Y` and `Alt+Shift+H`, vim adds `H`/`L`, and every preset
   says in its header why it binds what it does not.
 
+### Changed
+
+- **The command catalogue declares what each command does** (ADR 0126): it
+  writes, deletes, launches a program, reads contents or sends data out.
+  A read-only window and the menu's colours are derived from it, instead
+  of from two hand-kept lists. Nothing a user sees changes. A new command
+  can no longer be run by a read-only window just because someone forgot a
+  list.
+
 ### Fixed
+
+- **A batch-rename plan logged its directory unredacted.** Every other engine
+  span passes paths through the redaction that hides a `user:pass@`. This
+  one recorded the raw path.
 
 - **The terminal settings list follows the cursor.** Moving down past the
   bottom of the box left the cursor on a row nobody could see; the list now
