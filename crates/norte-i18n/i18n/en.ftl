@@ -1166,6 +1166,21 @@ menu-tabs = Tabs
 menu-find = Find
 menu-view = View
 menu-help = Help
+# Section labels inside a menu (ADR 0125). Only groups that do not explain
+# themselves carry one; the rest are a plain separator.
+menu-section-archives = Archives
+menu-section-pieces = Split files
+menu-section-integrity = Integrity
+menu-section-by-pattern = By pattern
+menu-section-by-kind = By kind
+menu-section-history = History
+menu-section-places = Places
+menu-section-shell = Shell
+menu-section-contents = Contents
+menu-section-split = Split
+menu-section-compare = Compare
+menu-section-side-panels = Side panels
+menu-section-profiles = Profiles
 # Ten groups (2026-09-10): three new titles, and labels for what until now
 # was reachable only by key or from the palette.
 menu-operate = Operate

@@ -399,7 +399,10 @@ use serde::{Deserialize, Serialize};
 ///   el host puede mandar la acción, y un motivo escrito por quien la manda
 ///   sería un mensaje que el host pintaría sin haberlo escrito. Y sólo hace
 ///   algo con un relevo EN CURSO; fuera de él es una acción obsoleta.
-pub const BRIDGE_VERSION: u32 = 73;
+/// - 74: `MenuItemView` gana `section` y `role` (ADR 0125): los menús van en
+///   secciones, con rótulo o sin él, y una entrada dice si borra o si la hace
+///   una IA. `chord` vacío en vez de `—` cuando no hay atajo.
+pub const BRIDGE_VERSION: u32 = 74;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

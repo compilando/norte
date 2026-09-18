@@ -123,3 +123,5 @@ edits.
 | [0116](0116-a-plugin-describes-a-panel-and-norte-paints-it.md) | A plugin describes a panel, and norte paints it | accepted |
 | [0117](0117-the-disk-map-is-a-task-with-a-report-and-the-core-measures-it.md) | The disk map is a task with a report, and the core measures it | accepted |
 | [0118](0118-imagenes-en-la-tui.md) | The TUI paints an image as pixels, outside ratatui, or falls back | accepted |
+| [0124](0124-columns-give-way-so-the-name-can-be-read.md) | Columns give way so the name can be read | accepted |
+| [0125](0125-menus-are-read-in-sections.md) | Menus are read in sections | accepted |

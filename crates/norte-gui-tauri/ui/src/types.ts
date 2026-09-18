@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 73;
+export const BRIDGE_VERSION = 74;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -764,6 +764,11 @@ export interface MenuItemView {
   /** Esta ventana puede ejecutarla. Una apagada SIGUE saliendo: el menú es
    *  donde se ve qué existe. */
   enabled: boolean;
+  /** Si con esta entrada EMPIEZA una sección (puente 74): `null` sigue en la
+   *  de la anterior, `""` es una raya sin rótulo, otro texto es el rótulo. */
+  section: string | null;
+  /** `normal`, `destructive` o `ai`. */
+  role: string;
 }
 
 export interface MenuView {

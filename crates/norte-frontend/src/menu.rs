@@ -5,14 +5,115 @@
 //! se recorre. Es la vía para quien llega de un gestor con menús y para quien
 //! usa el ratón, y su contenido son ids del catálogo compartido — un comando
 //! que no exista aquí no puede aparecer en un menú.
+//!
+//! Dentro de un menú, las órdenes van en SECCIONES (ADR 0125): diecisiete
+//! entradas seguidas se leen como una lista que hay que recorrer entera, y
+//! cinco grupos de tres se leen de un vistazo. El cursor no ve las secciones —
+//! recorre las órdenes como una sola lista—; las ven los que pintan.
 
-/// Un menú: su título y las órdenes que lista, por id.
+/// Un grupo de órdenes dentro de un menú.
+#[derive(Debug, Clone, Copy)]
+pub struct Section {
+    /// Clave Fluent del rótulo (`menu-section-*`), o `None` para una
+    /// separación sin nombre: cuando el grupo se entiende solo, un rótulo es
+    /// ruido.
+    pub title: Option<&'static str>,
+    /// Ids de comando, en el orden en que se pintan.
+    pub items: &'static [&'static str],
+}
+
+/// Un menú: su título y sus secciones.
 #[derive(Debug, Clone, Copy)]
 pub struct Menu {
     /// Clave Fluent del título (`menu-*`).
     pub title: &'static str,
-    /// Ids de comando, en el orden en que se pintan.
-    pub items: &'static [&'static str],
+    /// Las secciones, de arriba abajo.
+    pub sections: &'static [Section],
+}
+
+impl Menu {
+    /// Cuántas órdenes tiene, todas las secciones juntas.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.sections.iter().map(|s| s.items.len()).sum()
+    }
+
+    /// ¿No tiene ninguna orden?
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Las órdenes en el orden en que se pintan, sin secciones: es lo que
+    /// recorre el cursor.
+    pub fn items(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.sections.iter().flat_map(|s| s.items.iter().copied())
+    }
+
+    /// La orden `i` de la lista plana.
+    #[must_use]
+    pub fn item(&self, i: usize) -> Option<&'static str> {
+        self.items().nth(i)
+    }
+
+    /// Si una sección EMPIEZA en la orden `i` —y no es la primera—, su
+    /// rótulo: `Some(None)` es una separación sin nombre, `Some(Some(k))` una
+    /// con rótulo. `None`: `i` sigue en la sección de la anterior.
+    ///
+    /// La primera sección no lleva separación: la raya de arriba del menú ya
+    /// la hace. Un rótulo en la primera sí se pinta, y por eso se devuelve.
+    #[must_use]
+    pub fn section_at(&self, i: usize) -> Option<Option<&'static str>> {
+        let mut inicio = 0;
+        for (k, s) in self.sections.iter().enumerate() {
+            if inicio == i && !s.items.is_empty() && (k > 0 || s.title.is_some()) {
+                return Some(s.title);
+            }
+            inicio += s.items.len();
+        }
+        None
+    }
+}
+
+/// Qué clase de orden es, para pintarla como lo que es.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemRole {
+    /// Una orden cualquiera.
+    Normal,
+    /// Borra o no se puede deshacer: se pinta en el color de peligro, para
+    /// que la mano que baja por el menú la vea ANTES de pulsarla.
+    Destructive,
+    /// La hace un modelo de IA: lleva la marca `✦`, porque lo que propone no
+    /// lo ha decidido norte y conviene leerlo antes de aceptarlo.
+    Ai,
+}
+
+impl ItemRole {
+    /// El nombre estable que cruza el puente de la ventana.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Destructive => "destructive",
+            Self::Ai => "ai",
+        }
+    }
+}
+
+/// El papel de una orden del menú. Una lista y no un campo del catálogo: es
+/// una decisión de presentación, y los dos que pintan la leen de aquí.
+#[must_use]
+pub fn role(id: &str) -> ItemRole {
+    match id {
+        "pane.delete" | "pane.delete-permanent" => ItemRole::Destructive,
+        "pane.ai-rename" | "pane.semantic-search" => ItemRole::Ai,
+        _ => ItemRole::Normal,
+    }
+}
+
+/// Atajo para declarar una sección.
+const fn sec(title: Option<&'static str>, items: &'static [&'static str]) -> Section {
+    Section { title, items }
 }
 
 /// Los menús, de izquierda a derecha.
@@ -27,57 +128,76 @@ pub const MENUS: &[Menu] = &[
     // la ayuda. Todo lo construido está en alguno; nada en dos.
     Menu {
         title: "menu-file",
-        items: &[
-            "pane.view",
-            "pane.edit",
-            "pane.edit-new",
-            "pane.open",
+        sections: &[
+            sec(
+                None,
+                &["pane.view", "pane.edit", "pane.edit-new", "pane.open"],
+            ),
             // #139: las propiedades son del FICHERO, así que van con lo que se
             // hace a un fichero, no con lo que se cambia de la pantalla.
-            "pane.properties",
-            "pane.dir-size",
-            "pane.copy-path",
-            "app.quit",
+            sec(
+                None,
+                &["pane.properties", "pane.dir-size", "pane.copy-path"],
+            ),
+            sec(None, &["app.quit"]),
         ],
     },
     // Lo que ESCRIBE: aparte de lo que solo lee, porque es lo que pasa por el
-    // journal y lo que un lector quiere encontrar junto.
+    // journal y lo que un lector quiere encontrar junto. Borrar va en su
+    // propia sección: es lo único de aquí que no se deshace con un gesto.
     Menu {
         title: "menu-operate",
-        items: &[
-            "pane.copy",
-            "pane.move",
-            "pane.rename",
-            "pane.rename-batch",
-            "pane.ai-rename",
-            "pane.organize",
-            "pane.mkdir",
-            "pane.delete",
-            "pane.delete-permanent",
-            "pane.chmod",
-            "pane.pack",
-            "pane.unpack",
-            "pane.test-archive",
-            "pane.split-file",
-            "pane.combine-files",
-            "pane.checksum",
-            "pane.checksum-verify",
+        sections: &[
+            sec(
+                None,
+                &[
+                    "pane.copy",
+                    "pane.move",
+                    "pane.rename",
+                    "pane.rename-batch",
+                    "pane.ai-rename",
+                    "pane.organize",
+                ],
+            ),
+            sec(None, &["pane.mkdir", "pane.chmod"]),
+            sec(None, &["pane.delete", "pane.delete-permanent"]),
+            sec(
+                Some("menu-section-archives"),
+                &["pane.pack", "pane.unpack", "pane.test-archive"],
+            ),
+            sec(
+                Some("menu-section-pieces"),
+                &["pane.split-file", "pane.combine-files"],
+            ),
+            sec(
+                Some("menu-section-integrity"),
+                &["pane.checksum", "pane.checksum-verify"],
+            ),
         ],
     },
     Menu {
         title: "menu-mark",
-        items: &[
-            "mark.toggle",
-            "mark.all",
-            "mark.invert",
-            "mark.clear",
-            "mark.restore",
-            "mark.pattern-add",
-            "mark.pattern-remove",
-            "mark.extension-add",
-            "mark.extension-remove",
-            "mark.files",
-            "mark.dirs",
+        sections: &[
+            sec(
+                None,
+                &[
+                    "mark.toggle",
+                    "mark.all",
+                    "mark.invert",
+                    "mark.clear",
+                    "mark.restore",
+                ],
+            ),
+            sec(
+                Some("menu-section-by-pattern"),
+                &[
+                    "mark.pattern-add",
+                    "mark.pattern-remove",
+                    "mark.extension-add",
+                    "mark.extension-remove",
+                ],
+            ),
+            sec(Some("menu-section-by-kind"), &["mark.files", "mark.dirs"]),
         ],
     },
     // A DÓNDE mira un panel: subir, volver, favoritos, volúmenes, conectar.
@@ -85,120 +205,145 @@ pub const MENUS: &[Menu] = &[
     // navegación, es aquí donde se buscan.
     Menu {
         title: "menu-go",
-        items: &[
+        sections: &[
             // La primera del menú porque es la que sirve cuando no sabes
             // cuál de las otras quieres, y porque los cuatro presets
             // importados no la atan a ninguna tecla: aquí es donde la
             // encuentran.
-            "app.goto",
-            "nav.parent",
-            "nav.back",
-            "nav.forward",
-            "nav.jump-back",
-            "nav.set-jump-point",
-            "pane.history",
-            "pane.history-left",
-            "pane.history-right",
-            "pane.popular",
-            "pane.hotlist",
-            "pane.select-drive",
-            "pane.connect",
-            "pane.disconnect",
-            "pane.refresh",
-            "pane.command-line",
-            "app.terminal",
-            "app.handoff",
+            sec(None, &["app.goto"]),
+            sec(
+                None,
+                &["nav.parent", "nav.back", "nav.forward", "pane.refresh"],
+            ),
+            sec(
+                Some("menu-section-history"),
+                &[
+                    "nav.jump-back",
+                    "nav.set-jump-point",
+                    "pane.history",
+                    "pane.history-left",
+                    "pane.history-right",
+                    "pane.popular",
+                ],
+            ),
+            sec(
+                Some("menu-section-places"),
+                &[
+                    "pane.hotlist",
+                    "pane.select-drive",
+                    "pane.connect",
+                    "pane.disconnect",
+                ],
+            ),
+            sec(
+                Some("menu-section-shell"),
+                &["pane.command-line", "app.terminal", "app.handoff"],
+            ),
         ],
     },
     Menu {
         title: "menu-panels",
-        items: &[
-            "pane.switch",
-            "layout.focus-next",
-            "layout.focus-prev",
-            "pane.mirror",
-            "pane.mirror-target",
-            "pane.pull",
-            "pane.swap",
-            "layout.split-h",
-            "layout.split-v",
-            "layout.close-slot",
-            "layout.grow",
-            "layout.shrink",
-            "layout.equalize",
-            "layout.set-target",
-            "app.toggle-panels",
+        sections: &[
+            sec(
+                None,
+                &["pane.switch", "layout.focus-next", "layout.focus-prev"],
+            ),
+            sec(
+                Some("menu-section-contents"),
+                &[
+                    "pane.mirror",
+                    "pane.mirror-target",
+                    "pane.pull",
+                    "pane.swap",
+                ],
+            ),
+            sec(
+                Some("menu-section-split"),
+                &[
+                    "layout.split-h",
+                    "layout.split-v",
+                    "layout.close-slot",
+                    "layout.grow",
+                    "layout.shrink",
+                    "layout.equalize",
+                ],
+            ),
+            sec(None, &["layout.set-target", "app.toggle-panels"]),
         ],
     },
     Menu {
         title: "menu-tabs",
-        items: &[
-            "pane.tab-new",
-            "pane.tab-close",
-            "pane.tab-next",
-            "pane.tab-prev",
-            "pane.tab-move-left",
-            "pane.tab-move-right",
+        sections: &[
+            sec(None, &["pane.tab-new", "pane.tab-close"]),
+            sec(None, &["pane.tab-next", "pane.tab-prev"]),
+            sec(None, &["pane.tab-move-left", "pane.tab-move-right"]),
         ],
     },
     Menu {
         title: "menu-find",
-        items: &[
-            "pane.quick-search",
-            "pane.search",
-            "pane.semantic-search",
-            "pane.compare-files",
-            "pane.compare-dirs",
-            "pane.sync-dirs",
+        sections: &[
+            sec(
+                None,
+                &["pane.quick-search", "pane.search", "pane.semantic-search"],
+            ),
+            sec(
+                Some("menu-section-compare"),
+                &["pane.compare-files", "pane.compare-dirs", "pane.sync-dirs"],
+            ),
         ],
     },
     Menu {
         title: "menu-view",
-        items: &[
-            "pane.toggle-hidden",
-            "pane.columns",
-            // #138: el orden es de la VISTA, y aquí es donde se cambia lo que
-            // la vista enseña.
-            "pane.sort-menu",
-            "pane.names-encoding",
-            // #136: el árbol es otra columna de navegación al lado del
-            // listado, como el sidebar.
-            "pane.tree",
-            "layout.places",
-            "layout.preview",
-            "layout.processes",
-            "layout.metadata",
-            // #323: el registro va junto a procesos, que es su vecino de
-            // sentido — los dos contestan «¿qué está haciendo esto?».
-            "layout.log",
-            // Fase 4: el mapa de disco va con sus vecinos de sentido — los
-            // tres contestan «¿qué está pasando aquí?», y este además «¿en qué
-            // se ha ido el sitio?».
-            "layout.disk-map",
-            // Fase 7: la línea de tiempo con sus vecinos de sentido. Además
-            // es la única forma de TECLADO de abrirla —no tiene atajo en
-            // ningún preset, ver el catálogo—, así que aquí no es un extra.
-            "layout.timeline",
-            "layout.pick",
-            "app.theme",
+        sections: &[
+            sec(
+                None,
+                &[
+                    "pane.toggle-hidden",
+                    "pane.columns",
+                    // #138: el orden es de la VISTA, y aquí es donde se
+                    // cambia lo que la vista enseña.
+                    "pane.sort-menu",
+                    "pane.names-encoding",
+                ],
+            ),
+            // Lo que se abre AL LADO del listado. #136: el árbol es otra
+            // columna de navegación, como el sidebar. #323: el registro va
+            // junto a procesos —los dos contestan «¿qué está haciendo
+            // esto?»—, y el mapa de disco con ellos (fase 4). La línea de
+            // tiempo (fase 7) no tiene atajo en ningún preset: aquí es su
+            // única forma de teclado.
+            sec(
+                Some("menu-section-side-panels"),
+                &[
+                    "pane.tree",
+                    "layout.places",
+                    "layout.preview",
+                    "layout.processes",
+                    "layout.metadata",
+                    "layout.log",
+                    "layout.disk-map",
+                    "layout.timeline",
+                ],
+            ),
+            sec(None, &["layout.pick", "app.theme"]),
         ],
     },
     // Lo que se administra: extensiones, agentes, ajustes, perfiles. La
     // paleta va aquí y no en Ayuda, porque desde ella se HACE.
     Menu {
         title: "menu-tools",
-        items: &[
-            "app.extensions",
-            "app.agents",
-            "app.settings",
-            "profile.pick",
-            "profile.save-as",
-            "app.palette",
+        sections: &[
+            sec(None, &["app.extensions", "app.agents", "app.settings"]),
+            sec(
+                Some("menu-section-profiles"),
+                &["profile.pick", "profile.save-as"],
+            ),
+            sec(None, &["app.palette"]),
         ],
     },
     Menu {
         title: "menu-help",
-        items: &["app.help"],
+        sections: &[sec(None, &["app.help"])],
     },
 ];
 
@@ -261,7 +406,7 @@ impl MenuState {
     /// El id del comando resaltado.
     #[must_use]
     pub fn selected(&self) -> Option<&'static str> {
-        MENUS.get(self.menu)?.items.get(self.item).copied()
+        MENUS.get(self.menu)?.item(self.item)
     }
 
     /// Cambia de menú, ciclando. El cursor vuelve al primero: mantenerlo
@@ -279,7 +424,7 @@ impl MenuState {
 
     /// Mueve el cursor dentro del menú abierto, ciclando.
     pub fn cycle_item(&mut self, delta: isize) {
-        let Some(n) = MENUS.get(self.menu).map(|m| m.items.len()) else {
+        let Some(n) = MENUS.get(self.menu).map(Menu::len) else {
             return;
         };
         if n == 0 {
@@ -300,7 +445,7 @@ impl MenuState {
 
     /// Pone el cursor en un elemento del menú abierto.
     pub fn point_at(&mut self, item: usize) {
-        if MENUS.get(self.menu).is_some_and(|m| item < m.items.len()) {
+        if MENUS.get(self.menu).is_some_and(|m| item < m.len()) {
             self.item = item;
         }
     }
@@ -314,7 +459,7 @@ mod tests {
     /// —`menu-item-pane-properties` en mitad de la lista—, que es exactamente
     /// lo que pasó al añadir los de #138 y #139: la suite entera en verde y la
     /// pantalla enseñando el identificador. El menú lo pinta el frontend, así
-    /// que el gate vive aquí.
+    /// que el gate vive aquí. Los rótulos de sección, igual.
     #[test]
     fn cada_item_del_menu_tiene_etiqueta_en_los_dos_idiomas() {
         for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
@@ -326,12 +471,19 @@ mod tests {
                     "{lang:?}: el menú {} no tiene título",
                     menu.title
                 );
-                for id in menu.items {
+                for id in menu.items() {
                     let clave = format!("menu-item-{}", id.replace('.', "-"));
                     let etiqueta = norte_i18n::t(&clave);
                     assert!(
                         !etiqueta.is_empty() && etiqueta != clave,
                         "{lang:?}: {id} sale en el menú sin etiqueta ({clave})"
+                    );
+                }
+                for clave in menu.sections.iter().filter_map(|s| s.title) {
+                    let rotulo = norte_i18n::t(clave);
+                    assert!(
+                        !rotulo.is_empty() && rotulo != clave,
+                        "{lang:?}: la sección {clave} no tiene rótulo"
                     );
                 }
             }
@@ -347,7 +499,7 @@ mod tests {
     #[test]
     fn todo_lo_que_ofrece_un_menu_existe_y_esta_construido() {
         for m in MENUS {
-            for id in m.items {
+            for id in m.items() {
                 let def = lookup(id).unwrap_or_else(|| panic!("{id} no está en el catálogo"));
                 assert_eq!(def.status, Status::Live, "{id} está declarado Planned");
             }
@@ -360,10 +512,52 @@ mod tests {
     fn ningun_comando_esta_en_dos_menus() {
         let mut vistos = std::collections::BTreeSet::new();
         for m in MENUS {
-            for id in m.items {
-                assert!(vistos.insert(*id), "{id} aparece en dos menús");
+            for id in m.items() {
+                assert!(vistos.insert(id), "{id} aparece en dos menús");
             }
         }
+    }
+
+    /// Una sección vacía pintaría una raya sin nada debajo.
+    #[test]
+    fn ninguna_seccion_esta_vacia() {
+        for m in MENUS {
+            for s in m.sections {
+                assert!(!s.items.is_empty(), "{}: sección vacía", m.title);
+            }
+        }
+    }
+
+    /// Las secciones se anuncian donde empiezan, la primera sin raya.
+    #[test]
+    fn section_at_marca_el_principio_de_cada_seccion() {
+        let operar = MENUS
+            .iter()
+            .find(|m| m.title == "menu-operate")
+            .expect("Operar");
+        assert_eq!(operar.section_at(0), None, "la primera no lleva raya");
+        assert_eq!(operar.section_at(1), None, "Mover sigue en la de Copiar");
+        let borrar = operar
+            .items()
+            .position(|id| id == "pane.delete")
+            .expect("Borrar");
+        assert_eq!(operar.section_at(borrar), Some(None), "raya sin rótulo");
+        let empaquetar = operar
+            .items()
+            .position(|id| id == "pane.pack")
+            .expect("Empaquetar");
+        assert_eq!(
+            operar.section_at(empaquetar),
+            Some(Some("menu-section-archives"))
+        );
+        assert_eq!(operar.item(borrar), Some("pane.delete"));
+    }
+
+    #[test]
+    fn borrar_es_destructivo_y_la_ia_se_marca() {
+        assert_eq!(role("pane.delete-permanent"), ItemRole::Destructive);
+        assert_eq!(role("pane.ai-rename"), ItemRole::Ai);
+        assert_eq!(role("pane.copy"), ItemRole::Normal);
     }
 
     #[test]
@@ -382,7 +576,7 @@ mod tests {
         s.cycle_menu(-1);
         assert_eq!(s.menu(), MENUS.len() - 1);
         s.cycle_item(-1);
-        assert_eq!(s.item(), MENUS[MENUS.len() - 1].items.len() - 1);
+        assert_eq!(s.item(), MENUS[MENUS.len() - 1].len() - 1);
     }
 
     /// Apuntar fuera de rango NO mueve el cursor: el emisor de índices es el

@@ -57,9 +57,26 @@ pub struct MenuZone {
 pub(crate) struct MenuGeom {
     /// La caja del desplegable.
     drop: Rect,
-    /// `(label, chord)` de cada elemento del menú abierto.
-    items: Vec<(String, String)>,
+    /// Las líneas del desplegable, de arriba abajo: órdenes y separaciones.
+    lines: Vec<MenuLine>,
 }
+
+/// Una línea del desplegable.
+pub(crate) enum MenuLine {
+    /// El principio de una sección: una raya, con su rótulo si lo tiene.
+    Section(Option<String>),
+    /// Una orden: su índice en la lista plana del menú, etiqueta, tecla y
+    /// papel.
+    Item {
+        index: usize,
+        label: String,
+        chord: String,
+        role: norte_frontend::menu::ItemRole,
+    },
+}
+
+/// La marca de una orden que hace un modelo de IA.
+pub(crate) const AI_MARK: &str = " ✦";
 
 /// Tope de ancho del desplegable: un menú es una lista de etiquetas cortas,
 /// así que uno ancho es siempre un síntoma. El tope evita que una traducción
@@ -111,35 +128,68 @@ pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
     let titles = menu_titles(area);
     let st = app.menu.as_ref()?;
     let m = norte_frontend::menu::MENUS.get(st.menu())?;
-    let items: Vec<(String, String)> = m
-        .items
-        .iter()
-        .map(|id| {
-            // La etiqueta es CORTA y propia (`menu-item-*`), no la frase de
-            // `help-cmd-*`: esa es una descripción, y usarla hacía el
-            // desplegable de setenta columnas y tapaba los dos paneles. Lo
-            // destapó pilotar la TUI en tmux, no la suite.
-            let label = norte_i18n::t(&format!("menu-item-{}", id.replace('.', "-")));
-            let chord = app
-                .palette_rows
-                .iter()
-                .find(|r| r.key == *id)
-                .map_or_else(|| "—".to_owned(), |r| r.chord.clone());
-            (label, chord)
-        })
-        .collect();
+    let mut lines: Vec<MenuLine> = Vec::new();
+    for (index, id) in m.items().enumerate() {
+        if let Some(titulo) = m.section_at(index) {
+            lines.push(MenuLine::Section(titulo.map(norte_i18n::t)));
+        }
+        // La etiqueta es CORTA y propia (`menu-item-*`), no la frase de
+        // `help-cmd-*`: esa es una descripción, y usarla hacía el
+        // desplegable de setenta columnas y tapaba los dos paneles. Lo
+        // destapó pilotar la TUI en tmux, no la suite.
+        let label = norte_i18n::t(&format!("menu-item-{}", id.replace('.', "-")));
+        // Sin tecla, nada: una raya en cada orden sin atajo era ruido que
+        // se leía como «deshabilitada».
+        let chord = app
+            .palette_rows
+            .iter()
+            .find(|r| r.key == id)
+            .map_or_else(String::new, |r| r.chord.clone());
+        lines.push(MenuLine::Item {
+            index,
+            label,
+            chord,
+            role: norte_frontend::menu::role(id),
+        });
+    }
+    // Un menú que no cabe en alto pierde antes las rayas que las órdenes:
+    // primero las separaciones sin nombre, luego los rótulos. Las órdenes se
+    // quedan todas, que es para lo que está el menú.
+    let alto_max = usize::from(area.height.saturating_sub(3));
+    if lines.len() > alto_max {
+        lines.retain(|l| !matches!(l, MenuLine::Section(None)));
+    }
+    if lines.len() > alto_max {
+        lines.retain(|l| matches!(l, MenuLine::Item { .. }));
+    }
     // Ancho: la etiqueta más larga, su tecla, dos bordes y el hueco entre
-    // ambas columnas.
-    let text_width = items
+    // ambas columnas; y el rótulo de sección más largo con sus rayas.
+    let text_width = lines
         .iter()
-        .map(|(l, c)| UnicodeWidthStr::width(l.as_str()) + UnicodeWidthStr::width(c.as_str()) + 3)
+        .map(|l| match l {
+            MenuLine::Item {
+                label, chord, role, ..
+            } => {
+                let marca = if *role == norte_frontend::menu::ItemRole::Ai {
+                    UnicodeWidthStr::width(AI_MARK)
+                } else {
+                    0
+                };
+                UnicodeWidthStr::width(label.as_str())
+                    + marca
+                    + UnicodeWidthStr::width(chord.as_str())
+                    + 3
+            }
+            MenuLine::Section(Some(t)) => UnicodeWidthStr::width(t.as_str()) + 4,
+            MenuLine::Section(None) => 0,
+        })
         .max()
         .unwrap_or(10);
     let w = u16::try_from(text_width + 2)
         .unwrap_or(u16::MAX)
         .min(area.width)
         .min(DROP_MAX);
-    let h = u16::try_from(items.len() + 2)
+    let h = u16::try_from(lines.len() + 2)
         .unwrap_or(u16::MAX)
         .min(area.height.saturating_sub(1));
     let x0 = titles
@@ -153,7 +203,7 @@ pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
             width: w,
             height: h,
         },
-        items,
+        lines,
     })
 }
 
@@ -183,20 +233,25 @@ pub fn menu_zones(app: &App, area: Rect) -> Vec<MenuZone> {
     let Some(g) = menu_geom(app, area) else {
         return out;
     };
-    for (i, _) in g.items.iter().enumerate() {
+    // Por LÍNEA pintada, no por orden: con secciones, la orden `i` ya no
+    // cae en la fila `i`, y una raya no es pulsable.
+    for (fila, linea) in g.lines.iter().enumerate() {
         let row = g
             .drop
             .y
             .saturating_add(1)
-            .saturating_add(u16::try_from(i).unwrap_or(0));
+            .saturating_add(u16::try_from(fila).unwrap_or(0));
         if row >= g.drop.y.saturating_add(g.drop.height).saturating_sub(1) {
             break;
         }
+        let MenuLine::Item { index, .. } = linea else {
+            continue;
+        };
         out.push(MenuZone {
             row,
             x0: g.drop.x.saturating_add(1),
             x1: g.drop.x.saturating_add(g.drop.width).saturating_sub(2),
-            hit: MenuHit::Item(i),
+            hit: MenuHit::Item(*index),
         });
     }
     out
@@ -579,23 +634,79 @@ pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
     );
     let width = usize::from(inner.width);
     let lines: Vec<ratatui::text::Line<'static>> = g
-        .items
+        .lines
         .iter()
-        .enumerate()
-        .map(|(i, (label, chord))| {
+        .map(|linea| menu_line(app, linea, width, st.item()))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+    // La raya de una sección se une al borde (`├───┤`), como en mc: flotando
+    // entre dos `│` se lee como un subrayado, no como una división.
+    let derecha = g.drop.x.saturating_add(g.drop.width).saturating_sub(1);
+    for (i, linea) in g.lines.iter().enumerate() {
+        let fila = inner.y.saturating_add(u16::try_from(i).unwrap_or(u16::MAX));
+        if !matches!(linea, MenuLine::Section(_)) || fila >= inner.y.saturating_add(inner.height) {
+            continue;
+        }
+        let buf = frame.buffer_mut();
+        for (x, s) in [(g.drop.x, "├"), (derecha, "┤")] {
+            if let Some(c) = buf.cell_mut((x, fila)) {
+                c.set_symbol(s);
+            }
+        }
+    }
+}
+
+/// Una línea del desplegable, pintada a `width` celdas; `cursor` es la
+/// orden resaltada.
+fn menu_line(
+    app: &App,
+    linea: &MenuLine,
+    width: usize,
+    cursor: usize,
+) -> ratatui::text::Line<'static> {
+    match linea {
+        MenuLine::Section(None) => {
+            ratatui::text::Line::styled("─".repeat(width), app.theme.role(Role::Separator))
+        }
+        // El rótulo en el estilo apagado, entre rayas: se lee como cabecera
+        // de grupo, no como una orden más que no hace nada.
+        MenuLine::Section(Some(t)) => {
+            let t = super::text::take_width(t, width.saturating_sub(4));
+            let resto = width.saturating_sub(UnicodeWidthStr::width(t.as_str()) + 3);
+            ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled("─ ", app.theme.role(Role::Separator)),
+                ratatui::text::Span::styled(t, app.theme.role(Role::Muted)),
+                ratatui::text::Span::styled(
+                    format!(" {}", "─".repeat(resto)),
+                    app.theme.role(Role::Separator),
+                ),
+            ])
+        }
+        MenuLine::Item {
+            index,
+            label,
+            chord,
+            role,
+        } => {
+            use norte_frontend::menu::ItemRole;
+            let marca = if *role == ItemRole::Ai { AI_MARK } else { "" };
             let slot = width
                 .saturating_sub(UnicodeWidthStr::width(label.as_str()))
+                .saturating_sub(UnicodeWidthStr::width(marca))
                 .saturating_sub(UnicodeWidthStr::width(chord.as_str()));
-            let text = format!("{label}{}{chord}", " ".repeat(slot));
-            let style = if i == st.item() {
+            let text = format!("{label}{marca}{}{chord}", " ".repeat(slot));
+            // El color de peligro en lo que borra, salvo bajo el cursor: ahí
+            // manda la selección, que es lo que dice DÓNDE estás.
+            let style = if *index == cursor {
                 app.theme.role(Role::Selection)
+            } else if *role == ItemRole::Destructive {
+                app.theme.role(Role::Error)
             } else {
                 app.theme.role(Role::Regular)
             };
             ratatui::text::Line::styled(text, style)
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), inner);
+        }
+    }
 }
 
 /// Lo que se puede pulsar en una barra de pestañas.

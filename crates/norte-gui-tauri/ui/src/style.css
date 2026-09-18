@@ -372,6 +372,35 @@ body {
   opacity: 0.7;
 }
 
+/* Lo que borra, en el color de peligro: la mano que baja por el menú lo ve
+   ANTES de pulsarlo (ADR 0125). Bajo el cursor manda la selección, que es lo
+   que dice dónde estás. */
+.menu-item[data-role="destructive"]:not([data-current="true"]) {
+  color: var(--error-fg);
+}
+
+/* Lo que hace una IA lleva su marca: lo que propone no lo decidió norte. */
+.menu-item[data-role="ai"] .menu-label::after {
+  content: " ✦";
+  opacity: 0.8;
+}
+
+/* Una sección: raya fina, y su rótulo apagado encima si lo tiene. No es
+   pulsable, así que ni cursor de mano ni relleno de entrada. */
+.menu-section {
+  margin: 3px 0;
+  border-top: 1px solid var(--separator, var(--border));
+  list-style: none;
+}
+
+.menu-section[data-titled="true"] {
+  border-top: none;
+  padding: 4px 8px 0;
+  font-size: 0.85em;
+  color: var(--muted, var(--title-fg));
+  white-space: nowrap;
+}
+
 .slot {
   position: absolute;
   overflow: hidden;

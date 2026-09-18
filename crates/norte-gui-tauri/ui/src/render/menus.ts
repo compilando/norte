@@ -260,6 +260,19 @@ export function paintMenu(this: Screen, menu: MenuView): void {
     // menú que se abre siempre a la izquierda no dice de cuál es.
     lista.style.setProperty("--menu-open", String(menu.open));
     for (const [i, item] of menu.items.entries()) {
+      // Una sección empieza AQUÍ (puente 74): una raya, con su rótulo si lo
+      // tiene. Es un `separator` y no una entrada, así que el cursor, que
+      // cuenta entradas, no la ve.
+      if (item.section !== null) {
+        const raya = document.createElement("li");
+        raya.className = "menu-section";
+        raya.setAttribute("role", "separator");
+        if (item.section !== "") {
+          raya.textContent = item.section;
+          raya.dataset["titled"] = "true";
+        }
+        lista.append(raya);
+      }
       const fila = document.createElement("li");
       fila.className = "menu-item";
       fila.id = `menu-item-${String(i)}`;
@@ -267,6 +280,7 @@ export function paintMenu(this: Screen, menu: MenuView): void {
       fila.setAttribute("aria-disabled", String(!item.enabled));
       fila.dataset["enabled"] = String(item.enabled);
       fila.dataset["current"] = String(menu.cursor === i);
+      fila.dataset["role"] = item.role;
       const label = document.createElement("span");
       label.className = "menu-label";
       label.textContent = item.label;

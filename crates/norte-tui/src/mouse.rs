@@ -890,22 +890,18 @@ fn column_border_at(app: &App, col: u16, row: u16) -> Option<ColumnDrag> {
             continue;
         }
         let pane = app.panes.get(i)?;
-        let anchos = norte_frontend::columns::column_widths(
-            &app.columns,
-            pane.dir().scheme(),
-            g.width.saturating_sub(2),
-        );
+        let anchos = crate::ui::pane_columns(&app.columns, pane, g.width.saturating_sub(2));
         let mut x = g.x.saturating_add(1);
-        for (k, (id, w)) in anchos.iter().enumerate() {
+        for (k, f) in anchos.iter().enumerate() {
             if k > 0 && (col == x || col.saturating_add(1) == x) {
                 return Some(ColumnDrag {
-                    column: id.to_string(),
-                    inicio: *w,
+                    column: f.id.to_string(),
+                    inicio: f.width,
                     agarre: col,
                     movido: false,
                 });
             }
-            x = x.saturating_add(*w);
+            x = x.saturating_add(f.width);
         }
     }
     None

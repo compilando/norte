@@ -60,7 +60,9 @@ tecla; las teclas están en el pie. Pulsar una fila la elige, y pulsar la fila
 ya elegida abre sus ajustes, como `Intro`.
 
 Sin ratón: `Tab` mueve el foco entre la lista y los botones, uno a uno, y al
-llegar al último vuelve a la lista. El botón que lo tiene se enciende, y el
+llegar al último vuelve a la lista; `→` hace lo mismo y `←` recorre el anillo
+al revés. Dentro de los ajustes de una extensión, `Tab`, `←` o `Esc` vuelven
+a los botones. El botón que lo tiene se enciende, y el
 cursor de la lista se apaga para que no haya dudas sobre a dónde van las
 teclas; `Intro` dispara el botón enfocado. Mover el cursor por la lista
 devuelve el foco a ella, porque los botones son los de la extensión elegida.

@@ -733,12 +733,23 @@
         {
           "chord": "tab",
           "enabled": true,
-          "label": "Cambiar de panel"
+          "label": "Cambiar de panel",
+          "role": "normal",
+          "section": null
         },
         {
-          "chord": "—",
+          "chord": "",
           "enabled": false,
-          "label": "Desconectar"
+          "label": "Desconectar",
+          "role": "normal",
+          "section": "Sitios"
+        },
+        {
+          "chord": "F8",
+          "enabled": true,
+          "label": "Borrar",
+          "role": "destructive",
+          "section": ""
         }
       ],
       "open": 1,

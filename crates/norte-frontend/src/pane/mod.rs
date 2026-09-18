@@ -133,6 +133,36 @@ fn is_hidden_entry(e: &Entry) -> bool {
         .is_some_and(|n| n.as_bytes().first() == Some(&b'.'))
 }
 
+/// Cubos del histograma de anchos de nombre: el último cuenta todo lo que
+/// mide 64 celdas o más, que ya es más de lo que ningún panel le dará.
+const CUBOS_DE_NOMBRE: usize = 65;
+
+/// Suma a `cubos` el ancho (celdas) del nombre de cada una de `entries`.
+///
+/// Sin reservar nada por entrada: un nombre UTF-8 se mide en sitio, y solo
+/// uno que no lo es pasa por la conversión con pérdida — la misma que lo
+/// pinta. La reinterpretación de encoding por panel no se mira: cambia qué
+/// glifos salen, no cuántos caben.
+fn medir_nombres(cubos: &mut [u32; CUBOS_DE_NOMBRE], entries: &[Entry]) {
+    use unicode_width::UnicodeWidthStr;
+    for e in entries {
+        let bytes = e.path.file_name().map_or(&[][..], |n| n.as_bytes());
+        let ancho = match std::str::from_utf8(bytes) {
+            Ok(s) => s.width(),
+            Err(_) => String::from_utf8_lossy(bytes).width(),
+        };
+        let cubo = ancho.min(CUBOS_DE_NOMBRE - 1);
+        cubos[cubo] = cubos[cubo].saturating_add(1);
+    }
+}
+
+/// El histograma de anchos de nombre de `entries`, desde cero.
+fn cubos_de(entries: &[Entry]) -> [u32; CUBOS_DE_NOMBRE] {
+    let mut cubos = [0u32; CUBOS_DE_NOMBRE];
+    medir_nombres(&mut cubos, entries);
+    cubos
+}
+
 /// En qué estado está la fila `..` de un listado.
 ///
 /// Un enum y no dos `bool` porque el cuarto estado que dos booleanos
@@ -209,6 +239,14 @@ pub struct PaneState {
     /// one is a claim about mark IDENTITY (paths), and it is kept where it
     /// already was.
     listing_epoch: u64,
+    /// Histograma de anchos de nombre del listado, del que sale
+    /// [`Self::name_width_p80`]. Se mide cuando el listado cambia, no al
+    /// pintar: es lo que [`crate::columns::fitted_columns`] intenta dar al
+    /// nombre, y medirlo por frame sería recorrer el directorio entero en
+    /// cada tecla. Un lote de un relleno paginado SUMA sus nombres en vez de
+    /// remedir: `extend` es O(n+m) a propósito, y remedir lo haría
+    /// cuadrático en un directorio grande.
+    name_cubos: [u32; CUBOS_DE_NOMBRE],
     /// Extent (`lo..=hi`, clamped nowhere) the sweep in progress applied
     /// last, so the next [`Self::apply_sweep`] can give back exactly the
     /// rows that left the range instead of rebuilding the mark set.
@@ -329,7 +367,9 @@ impl PaneState {
     pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
         let (entries, sort_keys) =
             crate::sort::sort_with_keys_spec(entries, crate::sort::SortSpec::default());
+        let name_cubos = cubos_de(&entries);
         Self {
+            name_cubos,
             dir,
             entries,
             sort_keys,
@@ -1087,6 +1127,14 @@ impl PaneState {
     /// holding is the one outcome worth ruling out.
     fn listing_moved(&mut self) {
         self.listing_epoch = self.listing_epoch.saturating_add(1);
+        self.name_cubos = cubos_de(&self.entries);
+    }
+
+    /// Celdas que cubren al 80% de los nombres de este listado: lo que el
+    /// nombre necesita para leerse, medido al cambiar el listado.
+    #[must_use]
+    pub fn name_width_p80(&self) -> u16 {
+        crate::columns::name_width_p80(&self.name_cubos)
     }
 
     /// Fija el cursor real a `i` con clamp (jamás fuera de rango). Para re-anclar
@@ -1172,6 +1220,10 @@ impl PaneState {
         // orden, y una fila sintética metida ahí se duplicaría o acabaría en
         // medio del listado.
         self.quitar_padre();
+        // Los nombres del lote se SUMAN al histograma: remedir el listado
+        // entero en cada página haría cuadrático el relleno que el merge
+        // mantiene lineal.
+        medir_nombres(&mut self.name_cubos, &batch);
         let (batch, batch_keys) = crate::sort::sort_with_keys_spec(batch, self.sort);
         crate::sort::merge_keyed_spec(
             &mut self.entries,
@@ -1182,8 +1234,9 @@ impl PaneState {
         );
         self.poner_padre();
         // Una página de un relleno paginado también MUEVE índices: el
-        // merge inserta en su sitio ordenado, no al final.
-        self.listing_moved();
+        // merge inserta en su sitio ordenado, no al final. Solo la época:
+        // los nombres ya se sumaron arriba.
+        self.listing_epoch = self.listing_epoch.saturating_add(1);
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
@@ -2691,6 +2744,31 @@ mod tests {
         let mut plano: Vec<Entry> = lotes.into_iter().flatten().collect();
         crate::sort_entries(&mut plano);
         assert_eq!(p.entries(), plano.as_slice(), "merge ≡ sort completo");
+    }
+
+    /// El histograma de nombres que `extend` SUMA por lotes es el mismo que
+    /// medir el listado entero de golpe (ADR 0124): sumar es la optimización,
+    /// no otro resultado.
+    #[test]
+    fn extend_mide_los_nombres_igual_que_de_golpe() {
+        let lotes: Vec<Vec<Entry>> = vec![
+            vec![e("mem:///corto", EntryKind::File)],
+            vec![
+                e("mem:///un-nombre-bastante-largo.png", EntryKind::File),
+                e("mem:///%FF%FE", EntryKind::File),
+            ],
+            vec![e("mem:///otro-nombre-largo-ya.pdf", EntryKind::File)],
+        ];
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
+        for lote in lotes.clone() {
+            p.extend(lote);
+        }
+        let de_golpe = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            lotes.into_iter().flatten().collect(),
+        );
+        assert_eq!(p.name_width_p80(), de_golpe.name_width_p80());
+        assert!(p.name_width_p80() >= 20, "lo largo cuenta");
     }
 
     /// El contrato "ordénalas antes" deja de ser footgun: `set_listing`/`new`

@@ -90,6 +90,20 @@ pub fn siguiente_foco(foco: ExtFoco, botones: usize) -> ExtFoco {
     }
 }
 
+/// La parada ANTERIOR del mismo anillo (`←`): el inverso exacto de
+/// [`siguiente_foco`], así que desde la lista salta al último botón.
+#[must_use]
+pub fn anterior_foco(foco: ExtFoco, botones: usize) -> ExtFoco {
+    if botones == 0 {
+        return ExtFoco::Lista;
+    }
+    match foco {
+        ExtFoco::Lista => ExtFoco::Boton(botones - 1),
+        ExtFoco::Boton(0) => ExtFoco::Lista,
+        ExtFoco::Boton(i) => ExtFoco::Boton(i.min(botones) - 1),
+    }
+}
+
 /// The extension manager's config drill-down (G3c): which plugin, its
 /// masked name (for the header — `Row`'s `name`/`desc` inside `state` are
 /// ALREADY masked by `norte_frontend::plugin_config::sanitize_config_keys`,

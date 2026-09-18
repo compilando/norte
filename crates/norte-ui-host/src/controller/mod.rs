@@ -3159,6 +3159,13 @@ struct Estado {
     ultima_barra: Option<crate::dto::PanelBarView>,
     /// La última barra de TECLAS que cruzó, por lo mismo (spec 2026-09-10).
     ultima_teclas: Option<crate::dto::KeyBarView>,
+    /// El último ajuste de columnas que cruzó, por hueco
+    /// (`norte_frontend::columns::fitted_columns`). Depende del ancho del
+    /// hueco y de los nombres de su listado, y los dos cambian por caminos
+    /// que no mandan cabecera; `parche` lo compara y, si difiere, manda la
+    /// cabecera Y las filas juntas — una fila con una celda que su cabecera
+    /// ya no tiene se pintaría sin ancho.
+    ultimo_ajuste: std::collections::HashMap<u32, Vec<norte_frontend::columns::Fitted>>,
     /// Cuántos tics de un segundo lleva `status.message` en la barra (spec
     /// 2026-09-10): en TICS para que un test lo haga avanzar sin dormir.
     mensaje_ticks: u32,
@@ -3591,6 +3598,7 @@ impl Estado {
             kinds,
             ultima_barra: None,
             ultima_teclas: None,
+            ultimo_ajuste: std::collections::HashMap::new(),
             mensaje_ticks: 0,
             mensaje_contado: None,
             reparto,

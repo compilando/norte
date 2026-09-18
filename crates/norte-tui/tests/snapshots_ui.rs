@@ -2413,6 +2413,125 @@ fn snapshot_settings_abierta() {
     insta::assert_snapshot!(render_80x24(&app));
 }
 
+/// La lista de ajustes SIGUE al cursor cuando no cabe.
+///
+/// Se pintaba siempre desde arriba porque «ajustes cabe en una pantalla» — lo
+/// decía el editor de atajos, y fue verdad con nueve ajustes. Con ~30 dejó de
+/// serlo: bajar pasado el borde sacaba el cursor de la caja y la lista no se
+/// movía. Se vio en una terminal de verdad, no aquí: el snapshot de arriba se
+/// hace con el cursor en la primera fila, que es justo donde no falla.
+///
+/// Pasa por `before_frame`, como el bucle: es quien concilia la ventana, y un
+/// test que pintara sin él comprobaría una pantalla que nadie ve.
+#[test]
+fn la_lista_de_ajustes_sigue_al_cursor() {
+    let mut app = app_base();
+    let mut settings =
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
+    let ultima = settings.visible().len() - 1;
+    settings.set_cursor(ultima);
+    let nombre = settings.rows()[settings.visible()[ultima]].name.clone();
+    app.settings = Some(settings);
+    ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
+    let pantalla = render_80x24(&app);
+    assert!(
+        pantalla.lines().any(|l| l.contains(&format!("> {nombre}"))),
+        "la fila del cursor («{nombre}») tiene que verse, con su marca:\n{pantalla}"
+    );
+    // Y la ventana se ha movido: la primera fila ya no cabe.
+    assert!(
+        !pantalla.contains("Theme                        default")
+            && !pantalla.contains("Tema                         default"),
+        "con el cursor al final, la primera fila sale por arriba:\n{pantalla}"
+    );
+}
+
+/// La captura del 2026-09-18: dos paneles de ~50 columnas con Tipo, Tamaño
+/// y Fecha dejaban 16 celdas al nombre y cada captura de pantalla salía
+/// como `Ca….png`. El nombre se lee ahora entero: cede la clase, que ya
+/// dice la fila, y la fecha pasa a corta.
+#[test]
+fn los_nombres_largos_se_leen_enteros() {
+    let dir = vp("file:///capturas");
+    let entries = (0..5)
+        .map(|i| {
+            entry(
+                &dir,
+                format!("Captura de pantalla 202{i}.png").as_bytes(),
+                EntryKind::File,
+                Some(80_000),
+            )
+        })
+        .collect();
+    let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
+    app.dialog_hints = default_dialog_hints();
+    app.columns = norte_frontend::columns::ColumnsSettings::resolve(&norte_config::ColumnsConfig {
+        default_columns: Some(
+            ["name", "size", "mtime", "kind"]
+                .map(str::to_owned)
+                .to_vec(),
+        ),
+        ..Default::default()
+    });
+    let mut terminal = Terminal::new(TestBackend::new(100, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let pantalla = terminal.backend().to_string();
+    // Solo el panel IZQUIERDO: el derecho está vacío, no tiene nombres que
+    // leer y por eso conserva todas sus columnas.
+    let izquierdo: String = pantalla
+        .lines()
+        .map(|l| l.chars().take(51).collect::<String>() + "\n")
+        .collect();
+    assert!(
+        izquierdo.contains("Captura de pantalla 2024.png"),
+        "el nombre entero, sin elipsis:\n{pantalla}"
+    );
+    assert!(
+        !izquierdo.contains("Tipo"),
+        "la clase es lo primero que cede:\n{pantalla}"
+    );
+    assert!(
+        izquierdo.contains("Tamaño"),
+        "el tamaño se queda:\n{pantalla}"
+    );
+}
+
+/// Los menús van en secciones (ADR 0125): Operar pinta sus rótulos, y la
+/// fila de «Borrar» —debajo de dos rayas— ejecuta Borrar, no la orden que
+/// caería en esa fila si las rayas no contaran.
+#[test]
+fn el_menu_pinta_secciones_y_el_clic_sigue_a_la_orden() {
+    let mut app = app_base();
+    let operar = norte_frontend::menu::MENUS
+        .iter()
+        .position(|m| m.title == "menu-operate")
+        .expect("Operar");
+    let mut m = norte_frontend::menu::MenuState::new();
+    m.open(operar);
+    app.menu = Some(m);
+    let area = ratatui::layout::Rect::new(0, 0, 80, 32);
+    let mut terminal = Terminal::new(TestBackend::new(80, 32)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let pantalla = terminal.backend().to_string();
+    assert!(
+        pantalla.contains("├─ Archivos comprimidos"),
+        "el rótulo de la sección:\n{pantalla}"
+    );
+    let fila = pantalla
+        .lines()
+        .position(|l| l.contains("Borrar ") && !l.contains("permanente"))
+        .expect("la fila de Borrar");
+    let borrar = norte_frontend::menu::MENUS[operar]
+        .items()
+        .position(|id| id == "pane.delete")
+        .expect("Borrar en Operar");
+    let zona = ui::menu_zones(&app, area)
+        .into_iter()
+        .find(|z| usize::from(z.row) == fila)
+        .expect("la fila de Borrar es pulsable");
+    assert_eq!(zona.hit, ui::MenuHit::Item(borrar));
+}
+
 /// Revisión S, M3: con el overlay de ajustes Y un modal AMBOS abiertos (el
 /// enrutado de teclas ya trata al modal como AUTORITATIVO en este caso,
 /// `modal_preempts_settings`), el modal debe pintarse ENCIMA — antes se

@@ -1114,6 +1114,21 @@ menu-tabs = Pestañas
 menu-find = Buscar
 menu-view = Ver
 menu-help = Ayuda
+# Rótulos de sección dentro de un menú (ADR 0125). Solo los grupos que no se
+# explican solos lo llevan; los demás son una raya sin nombre.
+menu-section-archives = Archivos comprimidos
+menu-section-pieces = Trozos
+menu-section-integrity = Integridad
+menu-section-by-pattern = Por patrón
+menu-section-by-kind = Por clase
+menu-section-history = Historial
+menu-section-places = Sitios
+menu-section-shell = Terminal
+menu-section-contents = Contenido
+menu-section-split = Dividir
+menu-section-compare = Comparar
+menu-section-side-panels = Paneles laterales
+menu-section-profiles = Perfiles
 # Diez grupos (2026-09-10): tres títulos nuevos y las etiquetas de lo que
 # hasta ahora solo se alcanzaba por tecla o por la paleta.
 menu-operate = Operar

@@ -43,6 +43,7 @@ pub use overlays::{
     plugin_description_line,
 };
 pub use pane::painted_len_and_selection;
+pub(crate) use pane::pane_columns;
 pub use panels::{PlaceZone, TreeZone, places_zones, tree_zones};
 pub use pickers::draw_theme_picker;
 pub use status::{NoticeZone, SessionZone, notices_zone, session_zone};

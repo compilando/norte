@@ -138,6 +138,9 @@ pub const ALLOW_PLUGIN_CONFIG: &[&str] = &[
     "dialog.down",
     "dialog.confirm",
     "dialog.cancel",
+    // `tab` sale del panel como `Esc`: se entra con `tab` desde el anillo
+    // de botones, y salir por la misma tecla es lo que se espera.
+    "dialog.pane",
 ];
 
 /// ALLOWLIST del sidebar de sitios (L3, `on_places_key` en main.rs).

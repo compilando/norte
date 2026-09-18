@@ -713,9 +713,38 @@ pub struct SettingsState {
     /// cursor; `None` = normal browsing/filtering. Raw, like a name-input
     /// popup — sanitizing happens on paint.
     edit: Option<String>,
+    /// La primera LÍNEA visible de una lista que no cabe, en la unidad de
+    /// quien pinta ([`Self::reconcile_viewport`]).
+    ///
+    /// No existía porque los ajustes cabían en una pantalla — lo decía el
+    /// editor de atajos de la terminal, y era verdad cuando se escribió. Con
+    /// ~30 ajustes dejó de serlo: bajar con el cursor pasado el borde lo
+    /// dejaba fuera de la caja y la lista no se movía.
+    viewport_offset: usize,
 }
 
 impl SettingsState {
+    /// Deja la ventana lista para pintar `rows` líneas con el cursor a la
+    /// vista: la arrastra SÓLO si el cursor se salió, por la regla compartida
+    /// de [`crate::viewport::sticky_offset`]. Se llama una vez por frame,
+    /// antes de pintar.
+    ///
+    /// Recibe la línea del cursor y el total YA en líneas de pantalla, y no
+    /// en filas, porque quien pinta intercala cabeceras de sección entre las
+    /// filas: esa cuenta es suya, y hacerla aquí sería una segunda copia de
+    /// cómo se pinta. La ventana, que es web, ni lo llama — el navegador ya
+    /// desplaza la fila elegida hasta que se ve.
+    pub fn reconcile_viewport(&mut self, cursor_line: usize, total_lines: usize, rows: usize) {
+        self.viewport_offset =
+            crate::viewport::sticky_offset(self.viewport_offset, cursor_line, total_lines, rows);
+    }
+
+    /// La primera línea visible — ver [`Self::reconcile_viewport`].
+    #[must_use]
+    pub fn viewport_offset(&self) -> usize {
+        self.viewport_offset
+    }
+
     /// Opens the editor over `rows` (a [`build_rows`] snapshot): folds each
     /// row's haystack and starts with an empty query (everything visible),
     /// not editing.
@@ -729,6 +758,7 @@ impl SettingsState {
             visible: Vec::new(),
             cursor: 0,
             edit: None,
+            viewport_offset: 0,
         };
         s.recompute();
         s
