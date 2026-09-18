@@ -655,6 +655,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         retain: cfg_log.as_ref().and_then(|c| c.log_retain),
         // El fichero compartido: es el que lee `norte doctor`.
         prefix: None,
+        format: cfg_log.as_ref().map(|c| c.log_format).unwrap_or_default(),
     };
     // `norte daemon run` —y solo él— monta además un anillo en memoria (#328,
     // ADR 0092): es el registro que `log.tail` sirve a un frontend que vive en

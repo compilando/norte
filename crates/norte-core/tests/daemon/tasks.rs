@@ -1364,3 +1364,93 @@ async fn sync_report_ajeno_contesta_lo_mismo_que_un_id_inventado() {
         .await
         .expect("un humano ve los informes del daemon que gobierna");
 }
+
+/// Cada span nuevo, con la cadena de nombres de sus antepasados (de dentro
+/// afuera) y los campos con que nació.
+/// `(nombre, antepasados de dentro afuera, campos)`.
+type SpanVisto = (String, Vec<String>, String);
+
+#[derive(Clone, Default)]
+struct Spans(Arc<std::sync::Mutex<Vec<SpanVisto>>>);
+
+impl<S> tracing_subscriber::Layer<S> for Spans
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        struct Campos(String);
+        impl tracing::field::Visit for Campos {
+            fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                use std::fmt::Write as _;
+                let _ = write!(self.0, "{}={v:?};", f.name());
+            }
+        }
+        let mut campos = Campos(String::new());
+        attrs.record(&mut campos);
+        let Some(span) = ctx.span(id) else { return };
+        let antepasados = span.scope().skip(1).map(|s| s.name().to_owned()).collect();
+        self.0
+            .lock()
+            .expect("spans")
+            .push((span.name().to_owned(), antepasados, campos.0));
+    }
+}
+
+/// **Una tarea que pide el daemon cuelga de la petición que la pidió**
+/// (ADR 0127), y la petición es UN span `rpc` — no dos: `dispatch` llevaba ya
+/// su propio `#[instrument]`, y con los dos apilados la cadena era
+/// `dispatch → rpc → task`, con el método repetido y `spans[0]` equivocado.
+#[tokio::test]
+async fn la_tarea_de_una_peticion_cuelga_de_su_rpc() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let spans = Spans::default();
+    let _guard =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(spans.clone()));
+
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///src.bin", &[0xAB; 10]).await;
+    let mut c = connected_client(&d).await;
+    let task: FsTaskResult = c
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///src.bin"),
+                to: vp("mem:///dst.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
+            },
+        )
+        .await
+        .expect("fs.copy");
+    let _ = drain_task(&mut c, task.task_id.get()).await;
+
+    let vistos = spans.0.lock().expect("spans").clone();
+    assert!(
+        !vistos.iter().any(|(n, _, _)| n == "dispatch"),
+        "dispatch abre UN span, `rpc`: {vistos:?}"
+    );
+    let copia = vistos
+        .iter()
+        .find(|(n, _, c)| n == "rpc" && c.contains("method=fs.copy"))
+        .expect("el rpc de fs.copy");
+    assert!(copia.1.is_empty(), "rpc es la raíz: {copia:?}");
+    assert!(copia.2.contains("conn_id="), "{copia:?}");
+    assert!(copia.2.contains("req_id="), "{copia:?}");
+    let tarea = vistos
+        .iter()
+        .find(|(n, _, c)| n == "task" && c.contains(&format!("task_id={}", task.task_id)))
+        .expect("el span de la tarea");
+    assert!(
+        tarea.1.iter().any(|a| a == "rpc"),
+        "la tarea cuelga de su petición: {tarea:?}"
+    );
+}

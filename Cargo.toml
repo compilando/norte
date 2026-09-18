@@ -276,7 +276,9 @@ tracing = "0.1"
 # Sink de tracing + bridge log→tracing (feature default `tracing-log`): captura
 # el `log` de suppaftp para poder CAPARLO (issue #43, regla 10). env-filter para
 # RUST_LOG. Solo lo usan los binarios (cli/daemon), no las libs de wire.
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# `json`: `[log] format = "json"` (ADR 0127). Trae `tracing-serde`, del mismo
+# repositorio tokio-rs/tracing, MIT; `serde_json` ya estaba en el árbol.
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 clap = { version = "4", features = ["derive"] }
 # Frontend TUI (decisión cerrada en plan-m1: widgets de librería, no a mano).
 # ratatui: estándar de facto, MIT, mantenimiento activo, Table/List/Gauge de

@@ -156,6 +156,24 @@ pub struct LogSection {
     /// How many rotated files survive. Absent = the appender's own default.
     #[serde(default)]
     pub retain: Option<usize>,
+    /// How the FILE is written (ADR 0127). Absent = `text`. stderr stays text
+    /// whatever this says: it is read by a person in a terminal.
+    #[serde(default)]
+    pub format: Option<LogFormat>,
+}
+
+/// `[log] format`: one line per event, for a person or for a program.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum LogFormat {
+    /// `tracing`'s readable line (the default).
+    #[default]
+    Text,
+    /// One JSON object per line, with the event's fields and the spans it
+    /// happened in (`spans`, outermost first), so a request and its tasks can
+    /// be followed with `jq`.
+    Json,
 }
 
 /// Core transport. This changes transport only, not behaviour.

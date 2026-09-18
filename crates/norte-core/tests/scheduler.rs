@@ -320,3 +320,116 @@ async fn los_ids_de_task_caben_donde_f64_es_exacto() {
         assert_eq!(par[1], par[0] + 1);
     }
 }
+
+/// Un buffer compartido donde escribe la capa JSON del test.
+#[derive(Clone, Default)]
+struct Buffer(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Buffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("buffer").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// **Lo que una tarea registra lleva su `task` y la petición que la pidió**
+/// (ADR 0127).
+///
+/// Con un solo permiso y prioridades cruzadas, el runner que lanzó un
+/// `submit` saca del heap OTRO job: el span tiene que viajar con el job, no
+/// con el runner. Y `tokio::spawn` a pelo no hereda nada, así que sin el span
+/// guardado un evento de dentro de la tarea salía sin padre.
+#[tokio::test]
+async fn cada_evento_de_una_tarea_lleva_su_span_y_el_de_la_peticion() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let buf = Buffer::default();
+    let escritor = buf.clone();
+    let sub = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .json()
+            .with_span_list(true)
+            .with_writer(move || escritor.clone()),
+    );
+    let _guard = tracing::subscriber::set_default(sub);
+
+    let sched = Scheduler::new(1);
+    let (abrir, cerrado) = tokio::sync::oneshot::channel::<()>();
+    let tarea = |marca: &'static str| {
+        body(move |_| {
+            Box::pin(async move {
+                tracing::info!(marca, "dentro");
+                Ok(())
+            })
+        })
+    };
+
+    let rpc = tracing::info_span!("rpc", method = "fs.copy");
+    let (bloqueo, baja, alta) = {
+        let _e = rpc.enter();
+        // Ocupa el único permiso hasta que el test lo suelte.
+        let bloqueo = sched.submit(
+            "mem",
+            TaskKind::Copy,
+            Priority::Normal,
+            Actor::User,
+            body(move |_| {
+                Box::pin(async move {
+                    let _ = cerrado.await;
+                    Ok(())
+                })
+            }),
+        );
+        let baja = sched.submit(
+            "mem",
+            TaskKind::Copy,
+            Priority::Low,
+            Actor::User,
+            tarea("baja"),
+        );
+        let alta = sched.submit(
+            "mem",
+            TaskKind::Move,
+            Priority::High,
+            Actor::User,
+            tarea("alta"),
+        );
+        (bloqueo, baja, alta)
+    };
+    let esperado = [
+        ("baja", baja.id().to_string()),
+        ("alta", alta.id().to_string()),
+    ];
+    let _ = abrir.send(());
+    let _ = bloqueo.join().await;
+    let _ = baja.join().await;
+    let _ = alta.join().await;
+
+    let texto = String::from_utf8(buf.0.lock().expect("buffer").clone()).expect("utf-8");
+    let eventos: Vec<serde_json::Value> = texto
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("línea JSON"))
+        .filter(|v: &serde_json::Value| v["fields"]["message"] == "dentro")
+        .collect();
+    assert_eq!(eventos.len(), 2, "un evento por tarea: {texto}");
+    for v in &eventos {
+        let marca = v["fields"]["marca"].as_str().expect("marca");
+        let id = &esperado
+            .iter()
+            .find(|(m, _)| *m == marca)
+            .expect("marca conocida")
+            .1;
+        let spans = v["spans"].as_array().expect("spans");
+        assert_eq!(spans[0]["name"], "rpc", "la petición, fuera: {v}");
+        assert_eq!(spans[0]["method"], "fs.copy");
+        assert_eq!(spans[1]["name"], "task", "la tarea, dentro: {v}");
+        assert_eq!(
+            spans[1]["task_id"],
+            id.as_str(),
+            "el evento de «{marca}» lleva el id de SU tarea"
+        );
+    }
+}

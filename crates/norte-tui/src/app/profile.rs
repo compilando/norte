@@ -206,6 +206,7 @@ mod tests {
             archive_rar_delegate: _,
             log_dir: _,
             log_retain: _,
+            log_format: _,
             ai: _,
             // — Diagnóstico de la carga, no ajustes.
             sources: _,

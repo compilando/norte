@@ -1088,6 +1088,7 @@ fn logging(cfg: &norte_frontend::config::FrontendConfig) -> Option<norte_config:
             dir: cfg.common.log_dir.as_deref(),
             retain: cfg.common.log_retain,
             prefix: Some("norte-gui.log"),
+            format: cfg.common.log_format,
         },
         norte_config::logring::RING_DEFAULT,
     )

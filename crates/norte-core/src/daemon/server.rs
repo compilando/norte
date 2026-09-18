@@ -2591,7 +2591,22 @@ fn to_value<T: serde::Serialize>(v: &T) -> Result<serde_json::Value, RpcError> {
     clippy::too_many_lines,
     reason = "tabla plana método→handler; ver `dispatch_fs_task`"
 )]
-#[tracing::instrument(skip_all, fields(method = %req.method))]
+// ADR 0127: todo lo que se registre al servir una petición —y toda tarea que
+// abra, porque `Scheduler::submit` cuelga su `task` de aquí— lleva la conexión,
+// el `id` JSON-RPC que el cliente ya conoce y el método. Nunca los params: ahí
+// van rutas. El método y el id los elige el PEER, así que pasan por
+// `campo_del_peer`: acotados y escapados, para que un `\n` no fabrique una
+// línea en el log de texto ni un id de 16 MiB se repita en cada línea de sus
+// tareas.
+#[tracing::instrument(
+    name = "rpc",
+    skip_all,
+    fields(
+        conn_id = conn_id,
+        method = %campo_del_peer(&req.method),
+        req_id = %id_para_el_log(&req.id),
+    )
+)]
 async fn dispatch(
     req: Request,
     conn_id: u64,
@@ -6558,8 +6573,58 @@ fn register_task_id(
     Ok(task_id)
 }
 
+/// Hasta dónde se copia al log un texto que eligió el peer.
+const CAMPO_DEL_PEER_MAX: usize = 64;
+
+/// Un texto que eligió el peer, apto para un campo de span: los caracteres de
+/// control escapados (`\n` sale como `\\n`, así que no parte la línea del log
+/// de texto) y cortado a [`CAMPO_DEL_PEER_MAX`] caracteres, con `…` si se
+/// cortó. Un método conocido es ASCII corto y sale igual.
+fn campo_del_peer(s: &str) -> String {
+    let mut out: String = s
+        .chars()
+        .take(CAMPO_DEL_PEER_MAX)
+        .flat_map(char::escape_debug)
+        .collect();
+    if s.chars().nth(CAMPO_DEL_PEER_MAX).is_some() {
+        out.push('…');
+    }
+    out
+}
+
+/// El `id` JSON-RPC para el log: el número tal cual, y una cadena por
+/// [`campo_del_peer`].
+fn id_para_el_log(id: &norte_proto::wire::RequestId) -> String {
+    match id {
+        norte_proto::wire::RequestId::Num(n) => n.to_string(),
+        norte_proto::wire::RequestId::Str(s) => campo_del_peer(s),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// Un id o un método con salto de línea no parte la línea del log, y uno
+    /// enorme no se copia entero (ADR 0127).
+    #[test]
+    fn lo_que_elige_el_peer_llega_al_log_acotado_y_escapado() {
+        use super::{CAMPO_DEL_PEER_MAX, campo_del_peer, id_para_el_log};
+        use norte_proto::wire::RequestId;
+
+        assert_eq!(campo_del_peer("fs.copy"), "fs.copy");
+        let forjado = campo_del_peer("1\n2026-09-19T00:00:00Z  INFO policy allow");
+        assert!(!forjado.contains('\n'), "{forjado}");
+        assert!(forjado.starts_with("1\\n"), "{forjado}");
+        let largo = campo_del_peer(&"x".repeat(10_000));
+        assert_eq!(
+            largo.chars().count(),
+            CAMPO_DEL_PEER_MAX + 1,
+            "cortado, con `…`"
+        );
+        assert!(largo.ends_with('…'));
+        assert_eq!(id_para_el_log(&RequestId::Num(7)), "7");
+        assert_eq!(id_para_el_log(&RequestId::Str("a\rb".to_owned())), "a\\rb");
+    }
+
     use std::os::unix::fs::PermissionsExt;
 
     use super::{DirIdentity, is_default_tmp_fallback, peer_allowed, prepare_socket_dir};

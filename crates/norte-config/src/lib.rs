@@ -49,7 +49,7 @@ pub use profiles::{
 };
 pub use schema::{
     AiProviderEntry, AiSection, ArchiveSection, ConfigError, DEFAULT_PRESET, DaemonMode,
-    DaemonSection, HotlistEntry, KeymapSection, NorteToml, UiSection,
+    DaemonSection, HotlistEntry, KeymapSection, LogFormat, NorteToml, UiSection,
 };
 #[cfg(feature = "watch")]
 pub use watch::{Watch, WatchMode, watch, watch_polling};

@@ -3374,7 +3374,14 @@ impl Engine {
     ///
     /// # Errors
     /// Las de [`Self::rename_batch_plan`].
-    #[tracing::instrument(skip(self, pairs), fields(actor = ?actor, pairs = pairs.len()))]
+    // `dir` por `span_path`, como en todos sus hermanos: con `skip(self,
+    // pairs)` a secas se registraba por `Debug`, que es el wire entero —con
+    // un `user:pass@` si la ruta lo lleva— y colgado ahora de cada línea de
+    // la petición (ADR 0127).
+    #[tracing::instrument(
+        skip(self, dir, pairs),
+        fields(dir = %span_path(dir), actor = ?actor, pairs = pairs.len())
+    )]
     pub async fn rename_batch_plan_as(
         &self,
         dir: &VPath,

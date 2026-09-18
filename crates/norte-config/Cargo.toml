@@ -28,6 +28,9 @@ tracing-appender = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+# Para leer de vuelta las líneas de `[log] format = "json"` (ADR 0127). Ya está
+# en el árbol: lo trae el propio formato.
+serde_json.workspace = true
 # Para probar la cota de secretos POR EL CAMINO REAL. `suppaftp` no emite
 # eventos de `tracing`: emite `log::trace!`, y el puente `tracing-log` cambia el
 # `target` del evento despachado a `"log"`, dejando el verdadero como campo. Los

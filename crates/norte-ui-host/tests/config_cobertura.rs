@@ -34,6 +34,7 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         ui_layout: _,
         log_dir: _,
         log_retain: _,
+        log_format: _,
         daemon_socket: _,
 
         // ─── El host las lee de `self.config`, en caliente respecto a su
