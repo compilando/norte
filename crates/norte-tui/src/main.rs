@@ -140,6 +140,7 @@ async fn main() -> Result<()> {
             // coinciden vivos sobre el mismo estado como sí lo hacen el daemon
             // y la ventana.
             prefix: None,
+            format: cfg.common.log_format,
         },
         norte_config::logring::RING_DEFAULT,
     );

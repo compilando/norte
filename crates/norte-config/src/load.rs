@@ -1759,6 +1759,9 @@ pub struct CommonConfig {
     /// `[log] retain` (last-wins; None = the appender's default). How many
     /// rotated files survive.
     pub log_retain: Option<usize>,
+    /// `[log] format` (last-wins; default `text`; never from Project). How
+    /// the log FILE is written (ADR 0127).
+    pub log_format: crate::schema::LogFormat,
     /// `[ai]` merged (never from Project).
     pub ai: AiSettings,
     /// Files that participated (watcher + diagnostics).
@@ -1871,6 +1874,7 @@ fn merge_daemon_layer(
 fn merge_log_layer(
     log_dir: &mut Option<PathBuf>,
     log_retain: &mut Option<usize>,
+    log_format: &mut crate::schema::LogFormat,
     l: crate::schema::LogSection,
 ) {
     if let Some(d) = l.dir {
@@ -1878,6 +1882,9 @@ fn merge_log_layer(
     }
     if let Some(r) = l.retain {
         *log_retain = Some(r);
+    }
+    if let Some(f) = l.format {
+        *log_format = f;
     }
 }
 
@@ -2554,6 +2561,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut daemon_socket: Option<PathBuf> = None;
     let mut log_dir: Option<PathBuf> = None;
     let mut log_retain: Option<usize> = None;
+    let mut log_format = crate::schema::LogFormat::default();
     let mut hotlist: Vec<HotlistItem> = Vec::new();
     let mut archive = ArchiveAccum::default();
     let mut ai = AiSettings::default();
@@ -2701,7 +2709,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 ui_diff_detached = parsed.ui.diff_detached.or(ui_diff_detached);
                 merge_archive_layer(&mut archive, &parsed.archive);
                 merge_daemon_layer(&mut daemon_mode, &mut daemon_socket, parsed.daemon);
-                merge_log_layer(&mut log_dir, &mut log_retain, parsed.log);
+                merge_log_layer(&mut log_dir, &mut log_retain, &mut log_format, parsed.log);
                 merge_ai_layer(&mut ai, parsed.ai, &norte)?;
             }
             sources.push(norte);
@@ -2736,6 +2744,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         daemon_socket,
         log_dir,
         log_retain,
+        log_format,
         hotlist,
         archive_max_entries: archive.max_entries,
         archive_max_decompressed_bytes: archive.max_decompressed_bytes,
@@ -3724,7 +3733,7 @@ format = "exact"
         let proyecto = tempfile::tempdir().unwrap();
         std::fs::write(
             proyecto.path().join("norte.toml"),
-            "[log]\ndir = \"/del-repo\"\nretain = 99\n",
+            "[log]\ndir = \"/del-repo\"\nretain = 99\nformat = \"json\"\n",
         )
         .unwrap();
         let layers = Layers {
@@ -3740,6 +3749,11 @@ format = "exact"
             "gana la capa de usuario; la de proyecto ni se mira"
         );
         assert_eq!(cfg.log_retain, Some(3));
+        assert_eq!(
+            cfg.log_format,
+            crate::schema::LogFormat::Text,
+            "un repositorio tampoco decide el formato del log"
+        );
     }
 
     /// Security review item 4 (C1, NIT F4): the persist helpers' "existing

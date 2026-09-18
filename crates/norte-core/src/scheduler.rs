@@ -12,6 +12,7 @@ use futures::future::BoxFuture;
 use norte_proto::{Error, TaskId, TaskKind, TaskProgress, TaskState};
 use tokio::sync::{Semaphore, watch};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument as _;
 
 use crate::progress::ProgressReporter;
 
@@ -99,6 +100,11 @@ struct QueuedJob {
     seq: u64,
     body: TaskBody,
     ctx: TaskCtx,
+    /// `task{task_id, kind, provider}`, hijo de lo que estuviera abierto al
+    /// hacer `submit` — la petición `rpc` en el daemon (ADR 0127). Viaja con
+    /// el JOB y no con el runner, porque el runner saca del heap el que la
+    /// prioridad diga, que no tiene por qué ser el que él empujó.
+    span: tracing::Span,
 }
 
 impl PartialEq for QueuedJob {
@@ -182,13 +188,16 @@ impl Scheduler {
         }
     }
 
-    /// Encola una task para `provider_key` (normalmente el scheme) y devuelve
-    /// su handle. El cuerpo corre cuando le toque (prioridad + semáforo).
+    /// Encola una task para `provider_key` y devuelve su handle. El cuerpo
+    /// corre cuando le toque (prioridad + semáforo).
+    ///
+    /// `provider_key` es el SCHEME (`file`, `sftp`…), nunca una clave con
+    /// autoridad: va tal cual al span `task` del log (ADR 0127), y una
+    /// autoridad puede llevar `user:pass@`.
     ///
     /// # Panics
     /// Nunca en la práctica: solo por envenenamiento de un lock interno
     /// (otro hilo panicó con él tomado), que ya sería un bug del core.
-    #[tracing::instrument(skip(self, body), fields(provider = provider_key))]
     pub fn submit(
         &self,
         provider_key: &str,
@@ -199,6 +208,18 @@ impl Scheduler {
     ) -> TaskHandle {
         let seq = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let id = TaskId::new(seq);
+        // Ids y tipos, nunca rutas ni parámetros (ADR 0127). `provider` es el
+        // SCHEME que pasan todos los llamadores, no `Engine::provider_key`
+        // (que lleva la autoridad, y con ella un posible `user:pass@`).
+        // `actor` es lo que más correlaciona el trabajo de un agente: su
+        // sesión es un id, como el de la tarea.
+        let span = tracing::info_span!(
+            "task",
+            task_id = %id,
+            kind = ?kind,
+            provider = provider_key,
+            actor = ?actor
+        );
         let (reporter, rx) = ProgressReporter::new(id, kind);
         let reporter = Arc::new(reporter);
         let cancel = CancellationToken::new();
@@ -219,6 +240,7 @@ impl Scheduler {
                 seq,
                 body,
                 ctx,
+                span,
             });
         }
 
@@ -238,7 +260,9 @@ impl Scheduler {
                 // Imposible: cada runner corresponde a un push. Defensivo.
                 return;
             };
-            run_job(job).await;
+            // `tokio::spawn` no hereda el span de nadie: se lo pone el JOB.
+            let span = job.span.clone();
+            run_job(job).instrument(span).await;
         });
 
         TaskHandle {
@@ -261,7 +285,6 @@ impl Scheduler {
 
 /// Ejecuta un job supervisado: panic → `Failed{Internal{panic}}`, jamás tumba
 /// el proceso; el estado terminal SIEMPRE se publica.
-#[tracing::instrument(skip(job), fields(task_id = %job.ctx.progress.snapshot().task_id))]
 async fn run_job(job: QueuedJob) {
     let QueuedJob { body, ctx, .. } = job;
     let progress = Arc::clone(&ctx.progress);

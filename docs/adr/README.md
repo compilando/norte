@@ -126,3 +126,4 @@ edits.
 | [0124](0124-columns-give-way-so-the-name-can-be-read.md) | Columns give way so the name can be read | accepted |
 | [0125](0125-menus-are-read-in-sections.md) | Menus are read in sections | accepted |
 | [0126](0126-the-catalogue-declares-what-a-command-does.md) | The catalogue declares what a command does | accepted |
+| [0127](0127-logs-are-structured-and-a-task-is-logged-inside-its-request.md) | Logs are structured, and a task is logged inside the request that asked for it | accepted |

@@ -248,6 +248,21 @@
       },
       "type": "object"
     },
+    "LogFormat": {
+      "description": "`[log] format`: one line per event, for a person or for a program.",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "`tracing`'s readable line (the default).",
+          "type": "string"
+        },
+        {
+          "const": "json",
+          "description": "One JSON object per line, with the event's fields and the spans it\nhappened in (`spans`, outermost first), so a request and its tasks can\nbe followed with `jq`.",
+          "type": "string"
+        }
+      ]
+    },
     "LogSection": {
       "additionalProperties": false,
       "description": "`[log]`: the local diagnostic log (roadmap item 9).\n\nNever honoured from the project layer, same as [`DaemonSection`] and for the\nsame reason: deciding where a process writes is not presentation, and a\n`norte.toml` arriving with somebody else's repository must not redirect it.\n\nThere is no level key on purpose. `RUST_LOG` already selects levels, and a\nsecond mechanism for one setting is how the two drift apart.",
@@ -259,6 +274,17 @@
             "string",
             "null"
           ]
+        },
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the FILE is written (ADR 0127). Absent = `text`. stderr stays text\nwhatever this says: it is read by a person in a terminal."
         },
         "retain": {
           "default": null,

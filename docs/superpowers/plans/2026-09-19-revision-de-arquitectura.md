@@ -51,8 +51,9 @@ igual).
 ## 2. `feat/structured-logs` — logs en JSON y spans correlacionables (ADR 0127)
 
 **Lo que hay.** `tracing` + `EnvFilter` + fichero rotado diario + anillo del
-panel + cap de `suppaftp`. Formato sólo texto. Y **ni el daemon ni el
-scheduler abren un span**, salvo el `#[instrument]` de `Scheduler::submit`.
+panel + cap de `suppaftp`. Formato sólo texto. El `dispatch` del daemon y el
+scheduler tienen spans, pero la tarea corre en un `tokio::spawn` sin padre:
+lo que registra no se puede atar a la petición que la pidió.
 
 **Lo que se hace.**
 

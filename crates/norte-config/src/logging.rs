@@ -16,9 +16,40 @@
 //! materializaría con `RUST_LOG=trace`. [`init`](crate::logging::init) añade una directiva estática
 //! `suppaftp=info` AL FINAL del filtro, así que gana a cualquier `RUST_LOG`
 //! —incluido `suppaftp=trace` explícito— y la password nunca llega al sink.
+//!
+//! # Qué nivel usar (ADR 0127)
+//!
+//! | nivel | cuándo |
+//! | --- | --- |
+//! | `error!` | falló algo que el usuario pidió y no se recupera |
+//! | `warn!` | algo se degradó y se siguió (inotify → sondeo) |
+//! | `info!` | ciclo de vida: arrancar, conectar, empezar y acabar una tarea |
+//! | `debug!` | decisiones: veredictos de política, resolución del keymap |
+//! | `trace!` | por entrada o por bloque; nunca encendido por defecto |
+//!
+//! No hay `fatal`. Un fallo fatal es un `error!` en el `main` de un binario
+//! seguido de la salida por `anyhow`: una biblioteca no termina el proceso.
+//!
+//! # Dónde se abren los spans
+//!
+//! No se inyecta ningún logger: `tracing` ya es la fachada, y los binarios la
+//! atan a un subscriber aquí. El núcleo abre spans en dos fronteras y nada
+//! más, y todo evento emitido dentro los hereda sin tocar su línea:
+//!
+//! ```text
+//! rpc{conn_id, req_id, method}       el daemon, alrededor de cada petición
+//! └─ task{task_id, kind, provider}   `Scheduler::submit`, viaja con el job
+//! ```
+//!
+//! Los campos de esos dos son identificadores, tipos, un scheme y nombres de
+//! método. **Nunca una ruta ni un parámetro.** Los spans del motor que
+//! quedan entre medias (`copy_anchored{from, to}`) sí llevan rutas, pero
+//! siempre por `span_path`, que redacta un `user:pass@`. Lo que elige el peer
+//! (método, id) entra acotado y escapado.
 
 use std::path::Path;
 
+pub use crate::schema::LogFormat;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::LevelFilter;
@@ -105,7 +136,15 @@ fn create_dir_locked(dir: &Path, _prefix: &str) -> std::io::Result<()> {
 ///
 /// `None` en vez de `Err`: un log es diagnóstico, y un diagnóstico que impide
 /// arrancar es peor que no tenerlo.
-fn file_layer<S>(dir: &Path, retain: usize, prefix: &str) -> Option<impl Layer<S>>
+///
+/// `format` decide cómo se escribe cada línea (ADR 0127): texto para una
+/// persona, o JSON con los campos y la cadena de spans para un programa.
+fn file_layer<S>(
+    dir: &Path,
+    retain: usize,
+    prefix: &str,
+    format: LogFormat,
+) -> Option<Box<dyn Layer<S> + Send + Sync>>
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
@@ -118,12 +157,21 @@ where
         .max_log_files(retain.max(1))
         .build(dir)
         .ok()?;
-    Some(
-        tracing_subscriber::fmt::layer()
-            // Un fichero no es una terminal: los códigos de color lo ensucian.
-            .with_ansi(false)
-            .with_writer(appender),
-    )
+    // Un fichero no es una terminal: los códigos de color lo ensucian.
+    let layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(appender);
+    Some(match format {
+        LogFormat::Text => layer.boxed(),
+        LogFormat::Json => layer
+            .json()
+            // `span`: el más interno; `spans`: la cadena entera, de fuera
+            // adentro. Con los dos, una línea dice en qué tarea pasó y qué
+            // petición la pidió sin buscar líneas anteriores.
+            .with_current_span(true)
+            .with_span_list(true)
+            .boxed(),
+    })
 }
 
 /// Cuántos ficheros rotados se conservan cuando la config no dice otra cosa.
@@ -172,6 +220,9 @@ pub struct LogConfig<'a> {
     /// la ventana gráfica y el daemon pueden estar vivos a la vez, y la
     /// retención de uno podadaría los ficheros del otro.
     pub prefix: Option<&'a str>,
+    /// `[log] format`: cómo se escribe el FICHERO (ADR 0127). El stderr sigue
+    /// en texto sea cual sea, porque lo lee una persona en una terminal.
+    pub format: LogFormat,
 }
 
 /// Instala el subscriber global: stderr MÁS el fichero rotatorio, con el cap de
@@ -252,6 +303,7 @@ fn init_with(stderr: bool, cfg: LogConfig<'_>, ring: Option<&crate::logring::Log
             &d,
             cfg.retain.unwrap_or(RETAIN_DEFAULT),
             cfg.prefix.unwrap_or(LOG_PREFIX),
+            cfg.format,
         ),
         None => None,
     }
@@ -332,7 +384,7 @@ mod tests {
     #[test]
     fn el_log_aterriza_en_un_fichero() {
         let dir = tempfile::tempdir().expect("tmp");
-        let layer = file_layer(dir.path(), 3, LOG_PREFIX).expect("appender");
+        let layer = file_layer(dir.path(), 3, LOG_PREFIX, LogFormat::Text).expect("appender");
         let sub = tracing_subscriber::registry()
             .with(layer)
             .with(filter_from(None));
@@ -345,6 +397,52 @@ mod tests {
         assert!(texto.contains("una linea"), "el evento está: {texto}");
     }
 
+    /// `format = "json"`: una línea JSON por evento, con sus campos Y la
+    /// cadena de spans en que ocurrió (ADR 0127). Es lo que permite seguir
+    /// una tarea y la petición que la pidió con `jq`, sin expresiones
+    /// regulares sobre texto.
+    #[test]
+    fn el_formato_json_lleva_los_campos_y_los_spans() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let layer = file_layer(dir.path(), 3, LOG_PREFIX, LogFormat::Json).expect("appender");
+        let sub = tracing_subscriber::registry()
+            .with(layer)
+            .with(filter_from(None));
+        tracing::subscriber::with_default(sub, || {
+            let rpc = tracing::info_span!("rpc", conn_id = 3_u64, method = "fs.copy");
+            let _r = rpc.enter();
+            let task = tracing::info_span!("task", task_id = 7_u64);
+            let _t = task.enter();
+            tracing::warn!(entradas = 2_u64, "una copia a medias");
+        });
+
+        let (_, texto) = volcado(dir.path());
+        let linea = texto.lines().next().expect("una línea");
+        let v: serde_json::Value = serde_json::from_str(linea).expect("la línea es JSON");
+        assert_eq!(v["level"], "WARN");
+        assert_eq!(v["fields"]["message"], "una copia a medias");
+        assert_eq!(v["fields"]["entradas"], 2);
+        assert_eq!(v["span"]["name"], "task", "el span actual");
+        assert_eq!(v["spans"][0]["name"], "rpc", "de fuera adentro");
+        assert_eq!(v["spans"][0]["method"], "fs.copy");
+        assert_eq!(v["spans"][1]["task_id"], 7);
+    }
+
+    /// Y el texto sigue siendo el de siempre: el JSON es opcional.
+    #[test]
+    fn el_formato_por_defecto_es_texto() {
+        assert_eq!(LogFormat::default(), LogFormat::Text);
+        let dir = tempfile::tempdir().expect("tmp");
+        let layer = file_layer(dir.path(), 3, LOG_PREFIX, LogFormat::Text).expect("appender");
+        let sub = tracing_subscriber::registry()
+            .with(layer)
+            .with(filter_from(None));
+        tracing::subscriber::with_default(sub, || tracing::info!("una linea"));
+        let (_, texto) = volcado(dir.path());
+        assert!(serde_json::from_str::<serde_json::Value>(texto.trim()).is_err());
+        assert!(texto.contains("una linea"));
+    }
+
     /// **El cap de `suppaftp` cubre el FICHERO igual que cubre stderr.**
     ///
     /// Se filtra en el registry, antes de cualquier capa, así que debería
@@ -352,24 +450,29 @@ mod tests {
     /// seguirse» no es una prueba, y lo que está en juego es una contraseña en
     /// un fichero que PERSISTE, que es peor que una que pasó por una terminal
     /// (regla dura 10).
+    ///
+    /// En los DOS formatos (ADR 0127): la capa JSON se construye aparte, y una
+    /// cota que dependiera de cómo se monta la capa se la saltaría callada.
     #[test]
     fn la_password_de_ftp_no_llega_al_fichero() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let layer = file_layer(dir.path(), 3, LOG_PREFIX).expect("appender");
-        let sub = tracing_subscriber::registry()
-            .with(layer)
-            .with(filter_from(Some("trace,suppaftp=trace")));
-        tracing::subscriber::with_default(sub, || {
-            tracing::trace!(target: "suppaftp", "PASS hunter2");
-            tracing::info!(target: "suppaftp", "conectado");
-        });
+        for formato in [LogFormat::Text, LogFormat::Json] {
+            let dir = tempfile::tempdir().expect("tmp");
+            let layer = file_layer(dir.path(), 3, LOG_PREFIX, formato).expect("appender");
+            let sub = tracing_subscriber::registry()
+                .with(layer)
+                .with(filter_from(Some("trace,suppaftp=trace")));
+            tracing::subscriber::with_default(sub, || {
+                tracing::trace!(target: "suppaftp", "PASS hunter2");
+                tracing::info!(target: "suppaftp", "conectado");
+            });
 
-        let (_, texto) = volcado(dir.path());
-        assert!(
-            !texto.contains("hunter2"),
-            "la password llegó al fichero: {texto}"
-        );
-        assert!(texto.contains("conectado"), "y lo que sí pasa, pasa");
+            let (_, texto) = volcado(dir.path());
+            assert!(
+                !texto.contains("hunter2"),
+                "la password llegó al fichero ({formato:?}): {texto}"
+            );
+            assert!(texto.contains("conectado"), "y lo que sí pasa, pasa");
+        }
     }
 
     /// **El directorio del log es 0700, y los ficheros que caen dentro 0600.**
@@ -385,7 +488,7 @@ mod tests {
 
         let tmp = tempfile::tempdir().expect("tmp");
         let dir = tmp.path().join("logs");
-        let layer = file_layer(&dir, 3, LOG_PREFIX).expect("appender");
+        let layer = file_layer(&dir, 3, LOG_PREFIX, LogFormat::Text).expect("appender");
         let sub = tracing_subscriber::registry()
             .with(layer)
             .with(filter_from(None));
@@ -451,8 +554,13 @@ mod tests {
 
         let tmp = tempfile::tempdir().expect("tmp");
         let state = tmp.path().join("state").join("norte");
-        let _layer = file_layer::<tracing_subscriber::Registry>(&state.join("logs"), 3, LOG_PREFIX)
-            .expect("appender");
+        let _layer = file_layer::<tracing_subscriber::Registry>(
+            &state.join("logs"),
+            3,
+            LOG_PREFIX,
+            LogFormat::Text,
+        )
+        .expect("appender");
 
         let modo = std::fs::metadata(&state)
             .expect("stat")
@@ -471,7 +579,8 @@ mod tests {
         // Un FICHERO donde debería ir el directorio: `create_dir_all` falla.
         let ocupado = dir.path().join("ocupado");
         std::fs::write(&ocupado, b"no soy un directorio").expect("fichero");
-        let capa = file_layer::<tracing_subscriber::Registry>(&ocupado, 3, LOG_PREFIX);
+        let capa =
+            file_layer::<tracing_subscriber::Registry>(&ocupado, 3, LOG_PREFIX, LogFormat::Text);
         assert!(capa.is_none(), "no se puede crear ahí, así que no hay capa");
     }
 }
