@@ -250,6 +250,7 @@ pub(crate) mod tests_soporte {
             backend: Arc::new(backend),
             initial_dir: vp("mem:///casa"),
             initial_dir_pedido: false,
+            attach: false,
             locale: "es".to_owned(),
             keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
             keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),

@@ -442,6 +442,20 @@ impl Estado {
                 .historial
                 .seed(estado.back.clone(), estado.forward.clone());
             hueco.historial.seed_jump(estado.jump.clone());
+            // Las marcas de un RELEVO (fase 9), y sólo con `--attach`. Van a
+            // `marcas_a_restaurar`, el mecanismo con el que un refresco ya
+            // conserva la selección: `aterriza_en` lo consume TRAS
+            // `set_listing` —que limpia lo marcado— y por `restore_marks`, que
+            // pasa por el embudo de la fila `..`.
+            //
+            // Por ahí y no por un camino propio, y es la lección de este
+            // arreglo: una primera versión las sembraba en
+            // `aterrizar_listado`, y el listado del ARRANQUE no pasa por ahí
+            // —va por `listar_inicial`—, así que nunca llegaban. `aterriza_en`
+            // es por donde pasan todos.
+            if self.attach && !estado.marks.is_empty() {
+                hueco.marcas_a_restaurar.clone_from(&estado.marks);
+            }
         }
     }
 

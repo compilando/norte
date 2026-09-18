@@ -797,6 +797,7 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
         initial_dir: dir(),
         initial_dir_pedido: false,
+        attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset_con(
             "orthodox",

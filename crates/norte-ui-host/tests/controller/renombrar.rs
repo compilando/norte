@@ -934,6 +934,7 @@ async fn el_estilo_por_columna_manda_en_la_ventana() {
         backend: Arc::new(falso),
         initial_dir: dir(),
         initial_dir_pedido: false,
+        attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),

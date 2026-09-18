@@ -655,6 +655,18 @@ pub fn request_handoff(app: &mut App, st: &mut SessionPush) -> bool {
     true
 }
 
+/// Vuelve a pedir la sesión en el tic siguiente (fase 9): el relevo la soltó
+/// para una ventana que no llegó a vivir.
+///
+/// Por el camino de siempre —`Ask`, que el escritor ya sabe contestar— y no
+/// con un `session.get` aquí: este es el bucle de eventos (#230), y la
+/// propiedad la gestiona el escritor. Si otro frontend la reclamó mientras
+/// tanto, `Ask` contesta que no y esta terminal sigue suelta, que es la
+/// verdad.
+pub fn reclaim_soon(st: &mut SessionPush) {
+    st.policy.ask_soon();
+}
+
 /// Lo que el escritor contó desde la última vuelta.
 pub fn drain_notices(app: &mut App, st: &mut SessionPush) {
     while let Ok(notice) = st.avisos.try_recv() {

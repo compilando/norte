@@ -1,5 +1,81 @@
 use super::*;
 
+/// Arranca el host sobre una sesión guardada que trae `a.txt` MARCADO, con o
+/// sin `--attach`, y devuelve la primera foto en la que el listado ya llegó.
+async fn arrancar_con_marca(attach: bool) -> norte_ui_host::ViewSnapshot {
+    let mut falso = Falso::default();
+    falso.pon(
+        "mem:///casa",
+        vec![(b"a.txt".to_vec(), false), (b"b.txt".to_vec(), false)],
+    );
+    let mut sesion = crate::base::sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut body: norte_frontend::session::SessionBody =
+        serde_json::from_value(sesion.body.clone()).expect("cuerpo");
+    body.slots.get_mut(&1).expect("hueco").marks =
+        vec![VPath::parse("mem:///casa/a.txt").expect("vpath")];
+    sesion.body = serde_json::to_value(&body).expect("json");
+    *falso.sesion.lock().expect("sesión") = (sesion, true);
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(falso),
+        initial_dir: VPath::parse("mem:///casa").expect("vpath"),
+        initial_dir_pedido: false,
+        attach,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    foto_hasta(&h, &mut sub, "el listado de casa con sus dos filas", |s| {
+        (listado(s).rows.len() == 2).then(|| s.clone())
+    })
+    .await
+}
+
+/// La ventana DEVUELVE las marcas de un relevo con `--attach` (fase 9) — y
+/// sólo entonces.
+///
+/// Las escribía en la sesión y no las leía nunca: el relevo desde la terminal
+/// abría en el sitio correcto y sin lo señalado, que es justo la mitad que no
+/// se rehace con un cd. Y se siembran cuando el LISTADO llega, no al leer la
+/// sesión: el listado que aterriza limpia las marcas, la misma trampa que
+/// mordió a la terminal.
+#[tokio::test]
+async fn con_attach_la_ventana_devuelve_las_marcas_del_relevo() {
+    // En el montón: el future lleva el `Estado` entero, y en pila pasa del
+    // tope de `large_futures` (ver `host_grande` en `payload.rs`).
+    let foto = Box::pin(arrancar_con_marca(true)).await;
+    let filas = &listado(&foto).rows;
+    let a = filas.iter().find(|r| r.display_name == "a.txt").expect("a");
+    let b = filas.iter().find(|r| r.display_name == "b.txt").expect("b");
+    assert!(a.marked, "la marca del relevo vuelve");
+    assert!(!b.marked, "y sólo ésa");
+}
+
+/// Sin `--attach` un arranque es un arranque: unas marcas de un relevo que se
+/// quedó a medias no resucitan al día siguiente.
+#[tokio::test]
+async fn sin_attach_las_marcas_guardadas_no_vuelven() {
+    let foto = Box::pin(arrancar_con_marca(false)).await;
+    assert!(
+        listado(&foto).rows.iter().all(|r| !r.marked),
+        "un arranque cualquiera no devuelve lo marcado"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // El RELEVO a la terminal (fase 9 del programa WOW).
 // ---------------------------------------------------------------------------

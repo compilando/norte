@@ -144,7 +144,10 @@ msg-organize-too-many = this directory has too many entries for an extension to 
 msg-handoff-needs-daemon = handing over needs the daemon: without it there is no session to share (start with --daemon)
 msg-handoff-needs-desktop = handing over needs a desktop: there is nowhere here to open a window
 msg-handoff-failed = the screen could not be handed over; you are still where you were
-msg-handoff-no-window = the screen was handed over but the window did not open: start it yourself with `ntc-gui --attach --daemon`
+# The handoff's window did not live (it exited at once, or could not be
+# launched). The terminal stays and takes the screen back: the reason is the
+# exit code or the system error, which is what lets anyone find out why.
+msg-handoff-window-died = the window did not start ({ $reason }); you are still here, with your screen
 msg-handoff-running = handing the screen over…
 msg-handoff-no-terminal = the screen was handed over but the terminal did not open: start it yourself with `ntc --attach --daemon`
 host-handoff-not-owner = this window does not hold the screen: another one does, and only its owner can hand it over

@@ -330,10 +330,11 @@ fn relevo(daemon: bool) -> Resultado {
     let Some(ntc) = norte_frontend::openers::resolve_program(std::ffi::OsStr::new("ntc")) else {
         return Resultado::SinPrograma;
     };
-    let mut orden = vec![ntc.to_string_lossy().into_owned(), "--attach".to_owned()];
-    if daemon {
-        orden.push("--daemon".to_owned());
-    }
+    // Los flags del MISMO sitio del que la terminal saca su test de que los
+    // acepta (`norte_frontend::handoff`): escritos a mano en dos binarios, un
+    // lado cambió sin el otro y el relevo moría en silencio.
+    let mut orden = vec![ntc.to_string_lossy().into_owned()];
+    orden.extend(norte_frontend::handoff::terminal_args(daemon));
     for argv in norte_frontend::shell::terminal_command_candidates(&orden) {
         let Some(programa) = argv.first() else {
             continue;

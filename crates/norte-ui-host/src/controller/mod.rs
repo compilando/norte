@@ -342,6 +342,14 @@ pub struct UiHostOptions {
     /// pantalla de memoria que nadie pidió tirar. Es la misma regla que
     /// `App::pin_start_dir` en el terminal.
     pub initial_dir_pedido: bool,
+    /// Esta ventana es el otro extremo de un RELEVO (`--attach`, fase 9), así
+    /// que además de la pantalla reclama lo MARCADO que el otro frontend dejó.
+    ///
+    /// La misma naturaleza que [`Self::initial_dir_pedido`] —cómo se lanzó el
+    /// proceso—, y por eso vive a su lado. Sin él, un arranque es un arranque:
+    /// unas marcas de un relevo que se quedó a medias no resucitan al día
+    /// siguiente.
+    pub attach: bool,
     /// Idioma ya negociado, para que el renderer pida su catálogo.
     pub locale: String,
     /// El keymap EFECTIVO de la pantalla de listado, ya fusionado
@@ -3211,6 +3219,9 @@ struct Estado {
     /// estuvieras ayer. Lo consume [`Self::leer_sesion`] y no vuelve a hacer
     /// falta — una intención de arranque vale una vez.
     dir_pedido: Option<VPath>,
+    /// Viene de un RELEVO (`--attach`, fase 9): las marcas de la sesión se
+    /// reclaman. Sin él se ignoran — un arranque no es un relevo.
+    attach: bool,
     status: StatusView,
     conexion: ConnectionView,
     /// Las sesiones de provider que viajan sin cifrar (#44), acotadas por el
@@ -3458,6 +3469,7 @@ impl Estado {
             backend,
             initial_dir,
             initial_dir_pedido,
+            attach,
             locale,
             keymap,
             keymap_viewer: keymap_visor,
@@ -3598,6 +3610,7 @@ impl Estado {
                 sembrados: std::collections::BTreeSet::new(),
             },
             dir_pedido: initial_dir_pedido.then(|| initial_dir.clone()),
+            attach,
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
             degradadas: norte_frontend::banners::DegradedSet::default(),
