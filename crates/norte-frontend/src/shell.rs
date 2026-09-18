@@ -474,6 +474,85 @@ fn cwd_args(program: &str, dir: &std::path::Path) -> Vec<std::ffi::OsString> {
     }
 }
 
+/// The flag a known terminal emulator needs before the command it should RUN,
+/// and whether that command must be the last thing on the line (fase 9).
+///
+/// Same closed set and same reasoning as [`cwd_args`]: the flag differs per
+/// emulator, and guessing one does not degrade — it stops the terminal
+/// opening at all. `$TERMINAL` gets `-e`, which is the near-universal
+/// spelling and the one an unknown emulator most likely honours; if it does
+/// not, the launch fails and the caller says so instead of opening a terminal
+/// that runs nothing.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn exec_flag(program: &str) -> &'static str {
+    match program {
+        // `--` rather than `-e`: gnome-terminal deprecated `-e` and parses
+        // what follows as ONE string, so a command with arguments arrived
+        // mangled.
+        "gnome-terminal" => "--",
+        // Everything else on the list takes `-e` followed by the argv, and
+        // ghostty takes `-e` too since 1.0.
+        _ => "-e",
+    }
+}
+
+/// Every argv worth trying to open a terminal emulator that RUNS `orden`
+/// (fase 9: the window handing the screen back to `ntc`).
+///
+/// A list and not one answer, for the same reason as
+/// [`terminal_candidates`]: choosing needs a PATH probe, and this function
+/// does no I/O.
+///
+/// `orden` is already resolved and quoted by the caller — the program and its
+/// arguments, in order. It goes at the END of the line, after the emulator's
+/// exec flag, which is where every emulator on the list expects it.
+#[must_use]
+pub fn terminal_command_candidates(orden: &[String]) -> Vec<Vec<std::ffi::OsString>> {
+    terminal_command_candidates_from(std::env::var_os("TERMINAL").as_deref(), orden)
+}
+
+/// Testable core of [`terminal_command_candidates`].
+#[must_use]
+pub fn terminal_command_candidates_from(
+    env_terminal: Option<&std::ffi::OsStr>,
+    orden: &[String],
+) -> Vec<Vec<std::ffi::OsString>> {
+    use std::ffi::OsString;
+    let mut out: Vec<Vec<OsString>> = Vec::new();
+    if orden.is_empty() {
+        return out;
+    }
+    let cola: Vec<OsString> = orden.iter().map(OsString::from).collect();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(t) = env_terminal.filter(|t| !t.is_empty()) {
+            let conocido = std::path::Path::new(t)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .filter(|n| UNIX_TERMINALS.contains(n));
+            let mut argv = vec![OsString::from(t)];
+            argv.push(OsString::from(exec_flag(conocido.unwrap_or(""))));
+            argv.extend(cola.clone());
+            out.push(argv);
+        }
+        for t in UNIX_TERMINALS {
+            let mut argv = vec![OsString::from(*t)];
+            argv.push(OsString::from(exec_flag(t)));
+            argv.extend(cola.clone());
+            out.push(argv);
+        }
+    }
+    // macOS y Windows no entran hoy: el relevo es de la fase 9 y esta máquina
+    // es Linux, así que inventar la ortografía de `open -a Terminal` con un
+    // comando dentro sería escribir algo que nadie puede probar. Devolver la
+    // lista vacía es lo honesto — el llamante lo dice en vez de tragárselo.
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = (env_terminal, cola);
+    }
+    out
+}
+
 /// The bytes to put on the clipboard for `paths`: one per line, no trailing
 /// newline.
 ///

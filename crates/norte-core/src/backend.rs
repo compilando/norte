@@ -1468,6 +1468,24 @@ impl Backend {
         }
     }
 
+    /// Suelta la propiedad de la sesión de UI (0.78.0, fase 9). Devuelve si
+    /// esta conexión ERA la dueña.
+    ///
+    /// **En EMBEBIDO no hay a quién soltársela**: el proceso es el único que
+    /// toca esa sesión, así que contesta `false` sin tocar nada. No es una
+    /// degradación silenciosa — es la razón por la que `app.handoff` se
+    /// declara no disponible fuera del modo daemon, con su motivo.
+    ///
+    /// # Errors
+    /// Lo que dé el transporte. Un daemon 0.77 contesta `Unsupported`.
+    pub async fn session_release(&self) -> Result<bool, Error> {
+        match self {
+            Self::Embedded(_) => Ok(false),
+            #[cfg(unix)]
+            Self::Remote(r) => r.session_release().await,
+        }
+    }
+
     /// Búsqueda viva (`fs.search`, live search): devuelve la Task
     /// ([`TaskRef`], cancelable con `TaskRef::cancel`) y el STREAM de lotes de
     /// hits ([`norte_proto::methods::SearchHits`]).

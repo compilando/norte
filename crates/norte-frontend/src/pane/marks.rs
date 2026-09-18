@@ -54,6 +54,24 @@ impl PaneState {
         self.marks.insert(path)
     }
 
+    /// Siembra las marcas que traía un relevo entre frontends (fase 9).
+    ///
+    /// Se puede llamar ANTES de que el listado llegue, y es lo normal: el
+    /// pane se levanta sobre la ruta guardada y sus entradas se drenan
+    /// después. Las marcas viven en un conjunto de `VPath`, así que sembrarlas
+    /// pronto no depende de que la fila exista todavía — cuando llegue,
+    /// aparecerá marcada.
+    ///
+    /// Una ruta que ya no está en el directorio se queda en el conjunto y no
+    /// hace nada: [`Self::marked_paths`] filtra por las entradas, así que no
+    /// puede ser el operando de una operación. Y la fila `..` no entra, por
+    /// la misma puerta que el resto.
+    pub fn seed_marks(&mut self, paths: impl IntoIterator<Item = VPath>) {
+        for p in paths {
+            self.marcar(p);
+        }
+    }
+
     /// Togglea la marca de la entrada seleccionada (respeta el filtro quick:
     /// marca la entrada VISIBLE bajo la selección). No-op si no hay selección.
     pub fn toggle_mark(&mut self) {

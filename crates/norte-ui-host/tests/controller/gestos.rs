@@ -1018,6 +1018,7 @@ async fn la_sesion_devuelve_el_orden_y_los_ocultos() {
             columns: Vec::new(),
             show_hidden: false,
             touched_ms: 0,
+            marks: Vec::new(),
         },
     );
     *falso.sesion.lock().expect("sesión") = (

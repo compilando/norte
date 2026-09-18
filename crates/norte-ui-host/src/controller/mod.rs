@@ -702,6 +702,12 @@ enum Mensaje {
     /// La sesión releída tras un conflicto: otra ventana escribió en medio y
     /// la revisión sobre la que se escribe ya no vale.
     SesionReleida(Result<(norte_proto::methods::Session, bool), Error>),
+    /// El RELEVO a la terminal terminó (fase 9): la pantalla está escrita y
+    /// la sesión, soltada — o no se pudo, y entonces no pasa nada y se dice.
+    Relevado {
+        /// Esta ventana era la dueña y ha dejado de serlo.
+        soltada: bool,
+    },
     /// A esta task TERMINADA se le acabó su rato en el tablero
     /// ([`TTL_TASK_TERMINAL`]). Lleva la ÉPOCA de conexión en la que se
     /// registró: tras un relevo del daemon los ids vuelven a empezar en 1, y
@@ -1467,6 +1473,11 @@ async fn actor(
             Mensaje::SesionPuesta(datos) => {
                 let (res, cuerpo) = *datos;
                 for u in estado.sesion_puesta(res, cuerpo, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::Relevado { soltada } => {
+                for u in estado.relevo_terminado(soltada) {
                     let _ = updates.send(u);
                 }
             }

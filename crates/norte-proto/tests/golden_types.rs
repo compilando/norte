@@ -1229,7 +1229,7 @@ fn golden_methods() {
     // único que separa este plan del de renombrar— y el resultado va DOS
     // veces, con plan y con `refused`, porque la regla del receptor («con
     // motivo, el plan no cuenta») no la congela nadie si sólo se escribe una.
-    assert_eq!(fixtures.len(), 229, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 231, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -1929,6 +1929,20 @@ fn check_methods_ui_session(fixtures: &BTreeMap<String, Value>) {
         fixtures,
         "session_put_result",
         &SessionPutResult { revision: 4 },
+    );
+    // 0.78.0 (fase 9): las DOS respuestas de `session.release`, porque el
+    // `false` no es un error sino un hecho —«no eras tú»— y quien releva
+    // decide con él si lanza el otro frontend. Una sola fixture dejaría sin
+    // congelar justamente la mitad que se lee mal.
+    check_one(
+        fixtures,
+        "session_release_result",
+        &norte_proto::methods::SessionReleaseResult { released: true },
+    );
+    check_one(
+        fixtures,
+        "session_release_result_not_owner",
+        &norte_proto::methods::SessionReleaseResult { released: false },
     );
 }
 
@@ -4841,7 +4855,12 @@ fn method_names_frozen() {
     assert_eq!(methods::AI_ORGANIZE_PLAN, "ai.organize_plan");
     assert_eq!(methods::PLUGIN_ORGANIZE_PLAN, "plugin.organize_plan");
     assert_eq!(methods::FS_ORGANIZE, "fs.organize");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.77.0");
+    // 0.78.0 (fase 9): soltar la sesión de UI sin desconectarse, que es lo
+    // que hace posible el relevo entre frontends. Hasta aquí soltar sólo
+    // pasaba al DESCONECTAR, así que el que se iba tenía que morirse antes de
+    // que el que llegaba pudiera reclamar.
+    assert_eq!(methods::SESSION_RELEASE, "session.release");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.78.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

@@ -2664,6 +2664,9 @@ async fn dispatch(
             let p: methods::SessionPutParams = parse_params(req.params)?;
             handle_session_put(&conn.actor, conn_id, p, shared)
         }
+        // Sin params, como `session.get`: quién suelta lo dice la CONEXIÓN, y
+        // un id que viajara sería un id que puede mandar cualquiera.
+        methods::SESSION_RELEASE => handle_session_release(&conn.actor, conn_id, shared),
         // fs.list vive AQUÍ (no en dispatch_fs_task): necesita el ConnState
         // para retener el stream paginado entre páginas (ADR 0017).
         methods::FS_LIST => {
@@ -3080,6 +3083,42 @@ fn handle_session_get(
     to_value(&methods::SessionGetResult {
         session: shared.ui_session.get(),
         owner,
+    })
+}
+
+/// `session.release` (0.78.0, fase 9) — la conexión dueña renuncia a la
+/// sesión de UI sin desconectarse.
+///
+/// Es lo que hace posible el relevo entre frontends: volcar la pantalla,
+/// soltarla, y que el otro la reclame en su `session.get`. Hasta 0.78 soltar
+/// solo pasaba al DESCONECTAR, así que el que se iba tenía que morirse antes
+/// de que el que llegaba pudiera reclamar — y si el que llegaba no arrancaba,
+/// la pantalla se iba con el muerto.
+///
+/// **Soltar lo ajeno no hace nada y se DICE.** `released: false` es «no eras
+/// tú», y quien releva lo necesita: sin esa distinción lanzaría el otro
+/// frontend a reclamar una sesión que sigue teniendo dueño, y la ventana
+/// abriría vacía sin que nadie pudiera explicar por qué.
+///
+/// El cuerpo NO se toca: lo que se suelta es la propiedad. El documento sigue
+/// donde estaba con su revisión, que es justo lo que el otro va a leer.
+fn handle_session_release(
+    actor: &Actor,
+    conn_id: u64,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection has a UI session",
+        ));
+    }
+    let era_dueña = shared.ui_session.owner() == Some(conn_id);
+    if era_dueña {
+        shared.ui_session.release(conn_id);
+    }
+    to_value(&methods::SessionReleaseResult {
+        released: era_dueña,
     })
 }
 

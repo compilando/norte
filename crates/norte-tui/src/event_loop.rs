@@ -377,6 +377,32 @@ pub async fn run(
         )
         .await;
         turn::open_retained_modals(app, &mut work);
+        // Fase 9, las dos mitades del RELEVO, y aquí y no en el tic de un
+        // segundo: el lector acaba de pulsarlo, y esperar un tic a mandar la
+        // orden se nota. El escritor de sesión es del bucle, así que la
+        // fontanería del canal vive aquí — mismo reparto que el resto de los
+        // `pending_*`.
+        if std::mem::take(&mut app.pending_handoff) {
+            let _ = crate::session_push::request_handoff(app, &mut session_push);
+        }
+        crate::session_push::drain_notices(app, &mut session_push);
+        if std::mem::take(&mut app.handoff_ready) {
+            // La pantalla está escrita y la sesión, soltada: se lanza la
+            // ventana con `--attach` y este proceso se va. `--attach` es lo
+            // que hace que las marcas vuelvan; sin él, la ventana abriría
+            // donde estabas pero sin lo que tenías señalado.
+            match crate::handoff::spawn_window(&crate::handoff::window_argv(app.backend_daemon)) {
+                Ok(()) => app.quit = true,
+                // No se lanzó, y la sesión ya está suelta: quedarse es lo
+                // correcto —la pantalla sigue en el core y este proceso sigue
+                // enseñándola—, pero hay que DECIRLO, porque a partir de aquí
+                // deja de guardarse.
+                Err(e) => {
+                    tracing::warn!(error = %e, "el relevo no pudo abrir la ventana");
+                    app.message = Some(t("msg-handoff-no-window"));
+                }
+            }
+        }
         turn::prepare_frame(app, backend, terminal, lua_host.as_ref()).await?;
         // Exención puntual de la regla 2: el draw escribe la terminal de
         // control síncronamente (patrón async oficial de ratatui; acotado,

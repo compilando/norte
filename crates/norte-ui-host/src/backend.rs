@@ -236,6 +236,13 @@ pub trait HostBackend: Send + Sync + 'static {
         body: serde_json::Value,
     ) -> BoxFuture<'static, Result<u64, Error>>;
 
+    /// Suelta la propiedad de la sesión (fase 9): devuelve si ERA la dueña.
+    ///
+    /// `false` no es un error sino un hecho —«no eras tú»— y quien releva lo
+    /// necesita: sin él lanzaría la terminal a reclamar una sesión que sigue
+    /// ocupada, y el lector se quedaría mirando un listado que no es el suyo.
+    fn session_release(&self) -> BoxFuture<'static, Result<bool, Error>>;
+
     /// El canal de eventos de conexión (perdida y restaurada), si esta
     /// conexión lo tiene y nadie lo ha tomado ya.
     fn take_conn_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>>;
@@ -968,6 +975,11 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<u64, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.session_put(version, revision, body).await })
+    }
+
+    fn session_release(&self) -> BoxFuture<'static, Result<bool, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.session_release().await })
     }
 
     fn log_tail(

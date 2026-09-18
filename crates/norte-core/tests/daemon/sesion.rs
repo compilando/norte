@@ -602,6 +602,96 @@ async fn session_get_y_put_por_el_socket() {
     assert_eq!(g2.session.revision, 1);
 }
 
+/// `session.release` (fase 9) suelta la propiedad SIN desconectar, y lo que
+/// suelta es la propiedad y no el contenido.
+///
+/// Las tres cosas que tiene que demostrar, y ninguna es obvia:
+///
+/// - la dueña recibe `released: true` y deja de serlo;
+/// - el CUERPO sigue donde estaba —es justo lo que el otro frontend va a
+///   leer—, y con su revisión;
+/// - la siguiente conexión humana se la lleva, que es lo que hace posible el
+///   relevo.
+#[tokio::test]
+async fn session_release_suelta_la_propiedad_y_conserva_el_cuerpo() {
+    let estado = tempfile::tempdir().expect("tempdir");
+    let daemon = spawn_daemon_estado(estado.path()).await;
+    let cliente = connected_client(&daemon).await;
+    let g: methods::SessionGetResult = cliente
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(g.owner, "la primera conexión humana se la queda");
+
+    let cuerpo = serde_json::json!({ "version": 1, "slots": {} });
+    let p: methods::SessionPutResult = cliente
+        .call(
+            methods::SESSION_PUT,
+            &methods::SessionPutParams {
+                version: 1,
+                revision: 0,
+                body: cuerpo.clone(),
+            },
+        )
+        .await
+        .expect("session.put");
+    assert_eq!(p.revision, 1);
+
+    let r: methods::SessionReleaseResult = cliente
+        .call(methods::SESSION_RELEASE, &serde_json::json!({}))
+        .await
+        .expect("session.release");
+    assert!(r.released, "era la dueña");
+
+    // Soltar DOS veces contesta `false` la segunda: ya no era ella, y eso hay
+    // que poder distinguirlo de un fallo.
+    let r2: methods::SessionReleaseResult = cliente
+        .call(methods::SESSION_RELEASE, &serde_json::json!({}))
+        .await
+        .expect("session.release");
+    assert!(!r2.released, "ya no era la dueña");
+
+    // Y otra conexión se la lleva, con el cuerpo intacto: es el relevo.
+    let cliente2 = connected_client(&daemon).await;
+    let g2: methods::SessionGetResult = cliente2
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(g2.owner, "la sesión estaba libre y se la lleva");
+    assert_eq!(g2.session.body, cuerpo, "lo que se soltó fue la propiedad");
+    assert_eq!(g2.session.revision, 1);
+}
+
+/// Un AGENTE no suelta la sesión de nadie: no tiene pantalla, y la respuesta
+/// es la misma que a `session.get` — `INVALID_REQUEST` antes de mirar nada.
+#[tokio::test]
+async fn session_release_se_le_niega_a_un_agente() {
+    let estado = tempfile::tempdir().expect("tempdir");
+    let daemon = spawn_daemon_estado(estado.path()).await;
+    let humano = connected_client(&daemon).await;
+    let g: methods::SessionGetResult = humano
+        .call(methods::SESSION_GET, &serde_json::json!({}))
+        .await
+        .expect("session.get");
+    assert!(g.owner);
+
+    let agente = connected_agent(&daemon, "claude").await;
+    let err = agente
+        .call::<_, methods::SessionReleaseResult>(methods::SESSION_RELEASE, &serde_json::json!({}))
+        .await
+        .expect_err("un agente no tiene sesión");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_REQUEST),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+    // Y la del humano SIGUE siendo suya: el intento del agente no la tocó.
+    let r: methods::SessionReleaseResult = humano
+        .call(methods::SESSION_RELEASE, &serde_json::json!({}))
+        .await
+        .expect("session.release");
+    assert!(r.released, "el humano seguía siendo el dueño");
+}
+
 /// Una revisión rancia por el wire es la taxonomía `Conflict` en `data`, no un
 /// error de transporte: el cliente distingue «vuelve a leer» de «el daemon se
 /// rompió».

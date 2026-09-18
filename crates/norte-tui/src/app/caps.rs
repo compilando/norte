@@ -144,6 +144,11 @@ impl App {
                 .pane_read_only(self.target_index().unwrap_or_else(|| self.focus())),
             degraded: self.degraded_for(pane.dir().scheme()).is_some(),
             journalled: self.backend_journalled,
+            // Fase 9: los dos impedimentos del relevo, que se deciden UNA vez
+            // al arrancar (el brazo del backend no cambia en vida del proceso,
+            // y tampoco aparece un escritorio a mitad de sesión).
+            daemon: self.backend_daemon,
+            windowed: self.has_desktop,
         }
     }
 

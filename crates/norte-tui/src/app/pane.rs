@@ -661,6 +661,12 @@ impl Pane {
         self.state.marked_paths()
     }
 
+    /// Siembra las marcas que traía un relevo (fase 9,
+    /// [`norte_frontend::PaneState::seed_marks`]).
+    pub fn seed_marks(&mut self, paths: impl IntoIterator<Item = VPath>) {
+        self.state.seed_marks(paths);
+    }
+
     /// Las entradas MARCADAS, sin caer al cursor. Delegado puro (#312).
     #[must_use]
     pub fn marked_entries(&self) -> Vec<&Entry> {

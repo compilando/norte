@@ -139,6 +139,15 @@ msg-organize-hidden = the tree is ready: close this dialog and ask again
 # An extension does not list directories: we hand it the names, and that list
 # has a cap. The AI has no such limit, because the core lists for it.
 msg-organize-too-many = this directory has too many entries for an extension to organize
+# Handing the screen over between frontends (phase 9). Each refusal says WHICH
+# of the two things is missing, because they are fixed differently.
+msg-handoff-needs-daemon = handing over needs the daemon: without it there is no session to share (start with --daemon)
+msg-handoff-needs-desktop = handing over needs a desktop: there is nowhere here to open a window
+msg-handoff-failed = the screen could not be handed over; you are still where you were
+msg-handoff-no-window = the screen was handed over but the window did not open: start it yourself with `ntc-gui --attach --daemon`
+msg-handoff-running = handing the screen over…
+msg-handoff-no-terminal = the screen was handed over but the terminal did not open: start it yourself with `ntc --attach --daemon`
+host-handoff-not-owner = this window does not hold the screen: another one does, and only its owner can hand it over
 modal-ai-rename = AI rename — instruction
 modal-ai-rename-hint = Enter: request plan · Esc: cancel
 modal-ai-rename-empty-instruction = type an instruction first
@@ -655,6 +664,7 @@ msg-subshell-bad-cwd = the shell reported a directory norte cannot open; the pan
 msg-terminal-none = $TERMINAL is { $configured } and no terminal emulator was found; norte also tried its own list ({ $tried })
 msg-terminal-none-unset = $TERMINAL is not set and no terminal emulator was found; norte tried { $tried }
 help-cmd-app-terminal = open a shell in the active pane's directory
+help-cmd-app-handoff = hand the screen to the other frontend and carry on there (daemon only)
 help-cmd-app-toggle-panels = hide the panels and show the terminal
 help-cmd-pane-command-line = run a command in the active pane's directory
 cli-ls-skipped = warning: { $n } container entries omitted from the index (hostile names/limits)
@@ -1189,6 +1199,7 @@ menu-item-pane-select-drive = Volumes
 menu-item-pane-refresh = Refresh
 menu-item-pane-command-line = Command line
 menu-item-app-terminal = Terminal here
+menu-item-app-handoff = Carry on in the other frontend
 menu-item-layout-focus-next = Next panel
 menu-item-layout-focus-prev = Previous panel
 menu-item-pane-mirror-target = Send what is under the cursor
@@ -1744,6 +1755,7 @@ err-overlapping-roots-same = source and destination are the same directory
 err-overlapping-roots-source-inside = the source is inside the destination
 err-overlapping-roots-dest-inside = the destination is inside the source
 reason-needs-daemon = needs the daemon (--daemon)
+reason-needs-desktop = needs a desktop: there is nowhere here to open a window
 
 on-yes = on
 on-no = off

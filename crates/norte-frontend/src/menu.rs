@@ -107,6 +107,7 @@ pub const MENUS: &[Menu] = &[
             "pane.refresh",
             "pane.command-line",
             "app.terminal",
+            "app.handoff",
         ],
     },
     Menu {

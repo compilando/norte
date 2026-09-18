@@ -3,7 +3,7 @@ id = "shell"
 title = "Dropping to a shell"
 tags = ["doing"]
 see_also = ["panes", "settings"]
-commands = ["app.terminal", "app.toggle-panels", "pane.command-line", "pane.copy-path"]
+commands = ["app.terminal", "app.toggle-panels", "pane.command-line", "pane.copy-path", "app.handoff"]
 context = ["dialog.command-line"]
 +++
 A file manager you cannot leave is a file manager you stop using. Three
@@ -106,6 +106,23 @@ The graphical version cannot always promise this. A terminal window served by
 an already-running instance — GNOME Terminal and Konsole both do this, and so
 does macOS — is actually started by that server, not by norte, so it inherits
 the server's environment and not ours.
+
+## Carrying on in the other frontend
+
+{{cmd:app.handoff}} hands the screen to the OTHER frontend: the terminal passes
+it to the window, and the window to the terminal. What travels is what you were
+looking at — the tabs, the directories, the cursor, where you have been — and
+also what you had **marked**, which is the one part a `cd` does not rebuild.
+
+It only works **with the daemon**, for a reason that fits in a sentence: the
+daemon is what holds the screen. Without it there is nothing to hand over, and
+over SSH there is no window to put it in; in both cases the command is
+announced as unavailable with that reason rather than failing afterwards.
+
+When you ask for it, the one leaving writes the screen, **releases** it and
+launches the other. If the other does not start, nothing bad happens: the
+screen is saved and the one that was leaving is still where it was. The worst
+case is that it tells you.
 
 ## Copying the path
 

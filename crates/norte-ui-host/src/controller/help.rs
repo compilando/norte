@@ -318,6 +318,13 @@ impl Estado {
             // el journal (ADR 0066): lo que muta por aquí se registra y se
             // puede deshacer.
             journalled: true,
+            // Y por lo mismo hay daemon con quien compartir la sesión: esta
+            // ventana no tiene otro brazo (fase 9).
+            daemon: true,
+            // Una ventana se está pintando, así que hay escritorio donde
+            // abrir la otra mitad del relevo. Preguntárselo al entorno aquí
+            // sería preguntar si existe lo que se está usando.
+            windowed: true,
         }
     }
 

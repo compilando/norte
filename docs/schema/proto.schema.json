@@ -5329,6 +5329,17 @@
       },
       "type": "object"
     },
+    "SessionReleaseResult": {
+      "description": "Result de [`SESSION_RELEASE`] (0.78.0).\n\n```\nuse norte_proto::methods::SessionReleaseResult;\nlet r = SessionReleaseResult { released: true };\nlet j = serde_json::to_value(&r).expect(\"json\");\nassert_eq!(j[\"released\"], serde_json::json!(true));\n```",
+      "properties": {
+        "released": {
+          "default": false,
+          "description": "`true` si esta conexión ERA la dueña y ha dejado de serlo.\n\n`false` es «no eras tú», y hay que distinguirlo: quien releva necesita\nsaber si la sesión quedó libre antes de lanzar al otro frontend a\nreclamarla. Contestar que sí siempre convertiría un relevo imposible en\nuna ventana que abre y no encuentra nada.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ShutdownMode": {
       "description": "Qué clase de apagado es (0.46.0).\n\nORTOGONAL a [`DaemonShutdownParams::graceful`], que decide qué pasa con las\ntasks vivas. Éste decide quién viene después.\n\n**Sin `#[serde(other)]`, a diferencia de casi todo este wire.** El resto de\nlos enums degradan ante un valor desconocido porque malinterpretarlos cuesta\nuna feature; malinterpretar éste apaga un daemon de una forma que el que\nllamó no pidió. Misma asimetría que las políticas de mutación (ADR 0005).\n\n```\nuse norte_proto::methods::ShutdownMode;\nassert_eq!(ShutdownMode::default(), ShutdownMode::Stop);\nassert!(serde_json::from_str::<ShutdownMode>(r#\"\"inventado\"\"#).is_err());\n```",
       "oneOf": [
@@ -7097,6 +7108,9 @@
     "session_put_result": {
       "$ref": "#/$defs/SessionPutResult"
     },
+    "session_release_result": {
+      "$ref": "#/$defs/SessionReleaseResult"
+    },
     "side": {
       "$ref": "#/$defs/Side"
     },
@@ -7381,6 +7395,7 @@
     "session_get_result",
     "session_put_params",
     "session_put_result",
+    "session_release_result",
     "side",
     "span_wire",
     "step_reversal",

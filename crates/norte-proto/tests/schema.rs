@@ -209,6 +209,7 @@ struct ProtocolSchema {
     session_get_result: SessionGetResult,
     session_put_params: SessionPutParams,
     session_put_result: SessionPutResult,
+    session_release_result: SessionReleaseResult,
     side: Side,
     span_wire: SpanWire,
     step_reversal: StepReversal,

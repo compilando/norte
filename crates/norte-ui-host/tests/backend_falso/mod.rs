@@ -292,6 +292,12 @@ pub struct Falso {
     /// entero. Es lo que permite comprobar que marcar cinco ficheros no manda
     /// los mil del directorio al proveedor.
     pub nombres_ia: std::sync::Mutex<Vec<Vec<String>>>,
+    /// Lo que contesta `session.release` (fase 9): si esta conexión era la
+    /// dueña. `false` es la rama que importa — la que NO tiene que lanzar
+    /// nada.
+    pub suelta_la_sesion: bool,
+    /// Cuántas veces se pidió soltar la sesión.
+    pub sueltas: std::sync::atomic::AtomicUsize,
     /// Lo que contesta un plan de ORGANIZAR (fase 8), venga del modelo o de un
     /// plugin: `(nombre actual, destino relativo)`. `None` = el daemon falla.
     pub plan_organizar: Option<Vec<(String, String)>>,
@@ -1995,6 +2001,17 @@ impl HostBackend for Falso {
         // Un test que quiera una ventana SUELTA pone una sesión y dice `false`.
         let duena = duena || sesion.revision == 0;
         Box::pin(async move { Ok((sesion, duena)) })
+    }
+
+    fn session_release(&self) -> BoxFuture<'static, Result<bool, Error>> {
+        self.sueltas.fetch_add(1, Ordering::SeqCst);
+        self.latido();
+        // Lo que contesta el daemon de verdad: `true` si esta conexión era la
+        // dueña. El doble lo dice por bandera, para poder probar las dos
+        // ramas — y el `false` es la que importa, porque es la que NO tiene
+        // que lanzar nada.
+        let suelta = self.suelta_la_sesion;
+        Box::pin(async move { Ok(suelta) })
     }
 
     fn session_put(

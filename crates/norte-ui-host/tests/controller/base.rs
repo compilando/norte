@@ -850,6 +850,7 @@ pub(super) fn sesion_guardada(
             columns: Vec::new(),
             show_hidden: false,
             touched_ms: 0,
+            marks: Vec::new(),
         },
     );
     norte_proto::methods::Session {
@@ -1192,6 +1193,7 @@ async fn cerrar_la_ventana_no_le_toca_la_disposicion_ni_los_huecos_al_tui() {
                     .map_or(0, |d| d.as_millis()),
             )
             .unwrap_or(0),
+            marks: Vec::new(),
         },
     );
 

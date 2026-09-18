@@ -47,7 +47,26 @@ impl App {
     /// intactos, en el rincón de huérfanos de [`super::SessionUi`].
     #[must_use]
     pub fn session_body(&self) -> norte_frontend::session::SessionBody {
-        use norte_frontend::session::{SessionBody, SlotState};
+        self.session_body_con_marcas(false)
+    }
+
+    /// La misma pantalla, CON lo marcado (fase 9): lo que se vuelca para un
+    /// relevo entre frontends.
+    ///
+    /// **Las marcas viajan aquí y no en el volcado de siempre**, y esa es toda
+    /// la diferencia entre los dos métodos. En un relevo pasan segundos entre
+    /// soltar y reclamar, así que devolver lo señalado es devolver el trabajo
+    /// que se estaba haciendo; en un arranque cualquiera han pasado horas, y
+    /// devolverlo sería poner un `F8` sobre lo que uno marcó ayer. El
+    /// razonamiento de `session_body` sigue valiendo: lo que cambia no es la
+    /// doctrina, es que un relevo no es un arranque.
+    #[must_use]
+    pub fn session_body_for_handoff(&self) -> norte_frontend::session::SessionBody {
+        self.session_body_con_marcas(true)
+    }
+
+    fn session_body_con_marcas(&self, marcas: bool) -> norte_frontend::session::SessionBody {
+        use norte_frontend::session::{MARKS_CAP, SessionBody, SlotState};
 
         // La disposición de ESTE perfil va bajo su nombre; las de los demás
         // vuelven tal cual. Escribir solo la del activo borraría del documento
@@ -84,6 +103,19 @@ impl App {
                     columns: Vec::new(),
                     show_hidden: pane.show_hidden(),
                     touched_ms: self.session.touched.get(&id.0).copied().unwrap_or_default(),
+                    // Por RUTA, que es la identidad de la fila: un índice
+                    // restaurado sobre un listado que cambió señala otro
+                    // fichero, y lo que se devolvería es una selección que
+                    // nadie hizo. El tope es del modelo.
+                    marks: if marcas {
+                        pane.marked_entries()
+                            .iter()
+                            .take(MARKS_CAP)
+                            .map(|e| e.path.clone())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
                 },
             );
         }
@@ -168,6 +200,21 @@ impl App {
                 Some(estado.show_hidden),
             );
             self.session.cursors.insert(*raw, estado.cursor);
+            // Las marcas de un RELEVO (fase 9), y solo entonces: `attach` lo
+            // pone `--attach`. Sin esa condición, un cuerpo que las trajera
+            // —porque el relevo se quedó a medias— resucitaría al día
+            // siguiente una selección que nadie hizo, que es exactamente lo
+            // que `session_body` se niega a guardar.
+            //
+            // Se siembran ANTES de que llegue el listado a propósito: las
+            // marcas son un conjunto de rutas, no de índices, así que la fila
+            // aparece marcada cuando se drene.
+            if self.session.attach
+                && !estado.marks.is_empty()
+                && let Some(pane) = self.panes.browser_mut(id)
+            {
+                pane.seed_marks(estado.marks.iter().cloned());
+            }
             let history = self.history.for_slot_mut(id);
             history.seed(estado.back.clone(), estado.forward.clone());
             history.seed_jump(estado.jump.clone());

@@ -1507,6 +1507,12 @@
   "session_put_result": {
     "revision": 4
   },
+  "session_release_result": {
+    "released": true
+  },
+  "session_release_result_not_owner": {
+    "released": false
+  },
   "span_wire_bare": {
     "text": "fn"
   },

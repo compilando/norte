@@ -1206,7 +1206,54 @@ use crate::{
 /// La otra dirección NO cuenta: un cliente 0.75 contra un daemon 0.74 no llega
 /// a pedir nada, porque [`version_compatible`] rechaza a un cliente con minor
 /// mayor que el del servidor y muere en el `initialize`.
-pub const PROTOCOL_VERSION: &str = "0.77.0";
+/// # 0.76.0 — la línea de tiempo del journal (fase 7 del programa 2026-09-15)
+///
+/// Dos métodos nuevos: [`JOURNAL_LIST`], que pagina el journal hacia atrás, y
+/// [`JOURNAL_UNDO_AFTER`], que deshace lo del HUMANO posterior a un `seq` y
+/// devuelve una Task con el informe de `policy.undo_report`. Aditivo: ningún
+/// mensaje que existía cambia de forma.
+///
+/// Los dos se rehúsan a una conexión de AGENTE antes de parsear sus params: el
+/// journal nombra todo lo que se ha tocado en esta máquina, que para un agente
+/// acotado es un oráculo de existencia, y deshacer el trabajo del humano no es
+/// decisión suya.
+///
+/// Un **cliente 0.76 contra un daemon 0.75** recibe `MethodNotFound` en los
+/// dos y se queda sin panel de línea de tiempo — la pantalla que tenía. Un
+/// cliente 0.75 contra un daemon 0.76 no los pide.
+/// # 0.77.0 — organizar un directorio (fase 8, ADR 0122)
+///
+/// Tres métodos nuevos: [`AI_ORGANIZE_PLAN`] y [`PLUGIN_ORGANIZE_PLAN`], que
+/// PROPONEN un plan revisable con destinos que pueden llevar carpetas, y
+/// [`FS_ORGANIZE`], que lo aplica como UN lote deshacible. Más
+/// [`PluginCommandKind::Organizer`], para que un frontend se entere de que un
+/// plugin trae un organizer.
+///
+/// La variante del enum es la única parte que no es puramente aditiva, y es la
+/// misma exposición que aceptó 0.67.0 con `renamer`: el campo `kind` se omite
+/// cuando vale `command`, así que un peer viejo solo lo ve si el plugin
+/// declara de verdad un organizer, y entonces falla al deserializar ESE
+/// `PluginInfo`.
+///
+/// Un **cliente 0.77 contra un daemon 0.76** recibe `MethodNotFound` y se
+/// queda sin organizar, que es lo que había. Un cliente 0.76 contra un daemon
+/// 0.77 no lo pide.
+/// # 0.78.0 — soltar la sesión de UI (fase 9 del programa 2026-09-15)
+///
+/// Un método nuevo, [`SESSION_RELEASE`]: la conexión DUEÑA de la sesión de UI
+/// renuncia a serlo sin desconectarse. Es lo que hace posible el relevo entre
+/// frontends (`app.handoff`) — volcar la pantalla, soltarla, y que el otro la
+/// reclame en su `session.get`—, y hasta ahora solo pasaba al desconectar.
+///
+/// Aditivo: ningún mensaje que existía cambia de forma. Soltar lo AJENO no
+/// hace nada y se dice ([`SessionReleaseResult::released`]), en vez de fingir
+/// que se hizo: una conexión no desaloja a otra.
+///
+/// Un **cliente 0.78 contra un daemon 0.77** recibe `MethodNotFound`, y el
+/// relevo se degrada a lo honesto: no se suelta nada, así que no se lanza al
+/// otro frontend a reclamar algo que no va a poder tener. Un cliente 0.77
+/// contra un daemon 0.78 no lo pide.
+pub const PROTOCOL_VERSION: &str = "0.78.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -9315,6 +9362,34 @@ pub const SESSION_GET: &str = "session.get";
 /// ```
 pub const SESSION_PUT: &str = "session.put";
 
+/// `session.release` — la conexión DUEÑA renuncia a la sesión de UI (0.78.0,
+/// fase 9 del programa WOW).
+///
+/// **Para qué existe.** El relevo entre frontends (`app.handoff`) es volcar la
+/// pantalla, soltarla y lanzar al otro, que la reclama en su `session.get`.
+/// Sin este método, «soltar» solo pasaba al DESCONECTAR, así que el que se va
+/// tenía que morirse antes de que el que llega pudiera reclamar — y si el que
+/// llega no arranca, no queda nadie y la pantalla se ha ido con el que murió.
+///
+/// **Soltar lo ajeno no hace nada**, y se DICE
+/// ([`SessionReleaseResult::released`]) en vez de contestar que sí: una
+/// conexión no desaloja a otra, y un `true` mentiroso dejaría a quien llama
+/// creyendo que puede reclamar algo que sigue teniendo dueño.
+///
+/// **No borra el cuerpo.** Lo que se suelta es la PROPIEDAD, no el contenido:
+/// el documento sigue donde estaba y con su revisión, que es exactamente lo
+/// que el otro frontend va a leer. Si nadie lo reclama, la sesión se queda sin
+/// dueño y el primer humano que pregunte se la lleva — el mismo camino de
+/// siempre.
+///
+/// SOLO conexiones humanas, como sus dos hermanos: un agente no tiene pantalla
+/// que soltar, y recibe `INVALID_REQUEST`.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::SESSION_RELEASE, "session.release");
+/// ```
+pub const SESSION_RELEASE: &str = "session.release";
+
 /// Tope del `body` de una sesión, en bytes serializados: 1 MiB.
 ///
 /// Lo comprueba el core, que es lo ÚNICO que puede comprobar honestamente de
@@ -9433,6 +9508,29 @@ pub struct SessionPutParams {
 pub struct SessionPutResult {
     /// Revisión resultante; el cliente la guarda para su siguiente `put`.
     pub revision: u64,
+}
+
+/// Result de [`SESSION_RELEASE`] (0.78.0).
+///
+/// ```
+/// use norte_proto::methods::SessionReleaseResult;
+/// let r = SessionReleaseResult { released: true };
+/// let j = serde_json::to_value(&r).expect("json");
+/// assert_eq!(j["released"], serde_json::json!(true));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+// Campos con default, como el resto del wire: a un par que omita uno le
+// falta un campo, no le sobra un error.
+#[serde(default)]
+pub struct SessionReleaseResult {
+    /// `true` si esta conexión ERA la dueña y ha dejado de serlo.
+    ///
+    /// `false` es «no eras tú», y hay que distinguirlo: quien releva necesita
+    /// saber si la sesión quedó libre antes de lanzar al otro frontend a
+    /// reclamarla. Contestar que sí siempre convertiría un relevo imposible en
+    /// una ventana que abre y no encuentra nada.
+    pub released: bool,
 }
 
 /// El vocabulario CERRADO de niveles de registro que viaja por el wire, del

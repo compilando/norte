@@ -2096,6 +2096,25 @@ impl RemoteBackend {
         Ok(r.revision)
     }
 
+    /// `session.release` contra el daemon (0.78.0, fase 9): esta conexión
+    /// renuncia a ser la dueña de la sesión de UI.
+    ///
+    /// Devuelve si ERA la dueña. `false` no es un error: es «no eras tú», y
+    /// quien releva lo necesita para no lanzar al otro frontend a reclamar una
+    /// sesión que sigue ocupada.
+    ///
+    /// Un daemon 0.77 contesta `Unsupported` —`MethodNotFound` traducido—, y
+    /// ahí la degradación honesta es no soltar nada.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon.
+    pub async fn session_release(&self) -> Result<bool, Error> {
+        let r: methods::SessionReleaseResult = self
+            .call_no_method_is_unsupported(methods::SESSION_RELEASE, &serde_json::json!({}))
+            .await?;
+        Ok(r.released)
+    }
+
     /// `log.tail` contra el daemon (L2): lo que su anillo de registro tiene
     /// después de `cursor` (0.65.0, #328, ADR 0092).
     ///

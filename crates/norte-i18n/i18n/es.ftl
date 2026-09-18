@@ -140,6 +140,15 @@ msg-organize-hidden = el árbol está listo: cierra este diálogo y vuelve a ped
 # un tope para esa lista. La IA no tiene este límite porque el core lista por
 # ella.
 msg-organize-too-many = este directorio tiene demasiadas entradas para que las organice una extensión
+# El relevo entre frontends (fase 9). Cada negativa dice CUÁL de las dos cosas
+# falta, porque se arreglan de formas distintas.
+msg-handoff-needs-daemon = el relevo necesita el daemon: sin él no hay sesión que compartir (arranca con --daemon)
+msg-handoff-needs-desktop = el relevo necesita un escritorio: aquí no hay dónde abrir una ventana
+msg-handoff-failed = no se pudo entregar la pantalla; sigues donde estabas
+msg-handoff-no-window = la pantalla se entregó pero la ventana no abrió: ábrela a mano con `ntc-gui --attach --daemon`
+msg-handoff-running = entregando la pantalla…
+msg-handoff-no-terminal = la pantalla se entregó pero la terminal no abrió: ábrela a mano con `ntc --attach --daemon`
+host-handoff-not-owner = esta ventana no tiene la pantalla: la lleva otra, y sólo su dueña la puede entregar
 modal-ai-rename = Renombrado IA — instrucción
 modal-ai-rename-hint = Enter: pedir plan · Esc: cancelar
 modal-ai-rename-empty-instruction = escribe una instrucción primero
@@ -658,6 +667,7 @@ msg-subshell-bad-cwd = el shell dice estar en un directorio que norte no puede a
 msg-terminal-none = $TERMINAL es { $configured } y no se encontró ningún emulador de terminal; norte probó además su propia lista ({ $tried })
 msg-terminal-none-unset = $TERMINAL no está definido y no se encontró ningún emulador de terminal; norte probó { $tried }
 help-cmd-app-terminal = abrir un shell en el directorio del pane activo
+help-cmd-app-handoff = entregar la pantalla al otro frontend y seguir allí (solo con daemon)
 help-cmd-app-toggle-panels = ocultar los paneles y enseñar la terminal
 help-cmd-pane-command-line = ejecutar un comando en el directorio del pane activo
 cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nombres hostiles/límites)
@@ -1137,6 +1147,7 @@ menu-item-pane-select-drive = Volúmenes
 menu-item-pane-refresh = Refrescar
 menu-item-pane-command-line = Línea de comandos
 menu-item-app-terminal = Terminal aquí
+menu-item-app-handoff = Seguir en la otra ventana
 menu-item-layout-focus-next = Panel siguiente
 menu-item-layout-focus-prev = Panel anterior
 menu-item-pane-mirror-target = Llevar lo del cursor al otro
@@ -1697,6 +1708,7 @@ err-overlapping-roots-same = el origen y el destino son el mismo directorio
 err-overlapping-roots-source-inside = el origen está dentro del destino
 err-overlapping-roots-dest-inside = el destino está dentro del origen
 reason-needs-daemon = necesita el daemon (--daemon)
+reason-needs-desktop = necesita un escritorio: aquí no hay dónde abrir una ventana
 
 on-yes = sí
 on-no = no

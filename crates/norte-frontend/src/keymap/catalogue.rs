@@ -106,6 +106,11 @@ pub const CATALOGUE: &[CommandDef] = &[
     // reference sheet greys out.
     live("app.terminal", false),
     live("app.toggle-panels", false),
+    // Fase 9: el RELEVO entre frontends. Vive aquí y no en un preset porque
+    // lo que decide si se puede hacer es estado de ejecución —hay daemon,
+    // hay a dónde abrir una ventana— que un fichero de keymap no sabe
+    // expresar; la disponibilidad lo dice con su motivo.
+    live("app.handoff", false),
     // --- pane ---
     live("pane.command-line", false),
     live("pane.switch", false),

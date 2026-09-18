@@ -209,6 +209,7 @@ commands! {
     "app.settings" => AppSettings,
     "app.pick-accept" => AppPickAccept,
     "app.terminal" => AppTerminal,
+    "app.handoff" => AppHandoff,
     "app.toggle-panels" => AppTogglePanels,
     "pane.command-line" => PaneCommandLine,
     "pane.ai-rename" => PaneAiRename,

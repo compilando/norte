@@ -74,6 +74,7 @@ rpc.cancel	Notification	Direct	methods::RpcCancelParams	()
 search.hits	Notification	Stream	methods::SearchHits	()	
 session.get	Request	Direct	()	methods::SessionGetResult	
 session.put	Request	Direct	methods::SessionPutParams	methods::SessionPutResult	
+session.release	Request	Direct	()	methods::SessionReleaseResult	
 sync.apply	Request	Task	methods::SyncApplyParams	methods::FsTaskResult	
 sync.plan	Request	Stream	methods::SyncPlanParams	methods::FsTaskResult	sync.steps,sync.plan_done
 sync.plan_done	Notification	Stream	methods::SyncPlanDone	()	

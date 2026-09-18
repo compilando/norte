@@ -3487,6 +3487,23 @@ pub enum NativeEffect {
         /// Dónde se sienta.
         dir: norte_proto::VPath,
     },
+    /// El RELEVO a la TERMINAL (fase 9): la pantalla ya está escrita y la
+    /// sesión, soltada; ahora lanza `ntc --attach` y CIERRA esta ventana.
+    ///
+    /// Va por este canal y no por la vista porque lanzar un proceso y cerrarse
+    /// es de quien hospeda: el host no sabe abrir un emulador de terminal, ni
+    /// debe. Lo que el host garantiza antes de emitirlo es lo que hace seguro
+    /// el relevo — que la sesión está guardada y libre.
+    ///
+    /// Si el lanzamiento falla, quien hospeda lo dice y NO se cierra: la
+    /// sesión está suelta pero la pantalla sigue aquí, que es el fallo
+    /// barato.
+    HandoffToTerminal {
+        /// `true` si este proceso habla con el daemon, para que la terminal
+        /// arranque igual. Sin él iría contra su core embebido y no
+        /// encontraría la sesión que se acaba de soltar.
+        daemon: bool,
+    },
     /// El tema activo es ahora este: vuelve a resolver lo que salga de él.
     ///
     /// Va por ESTE canal y no por el de la vista porque el tema no cruza al

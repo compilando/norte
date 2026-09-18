@@ -9,6 +9,38 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Carrying on in the other frontend** (ADR 0123, protocol 0.78.0), phase 9 of
+  the WOW programme and its last. `app.handoff` — in the palette, the Go menu
+  and the help in both locales — hands the screen to the other frontend: the
+  terminal passes it to the window, and the window to the terminal. What
+  travels is what you were looking at (tabs, directories, cursor, history) and
+  also what you had **marked**, which is the one part a `cd` does not rebuild.
+  Marks travel by PATH and never by index: a list that reorders itself or loses
+  a neighbour above would otherwise hand back a selection nobody made, under a
+  cursor about to press delete.
+
+  The sequence is write → release → launch, and each step gates the next: the
+  screen is written first (releasing first would leave the other one reading
+  the screen from a second ago), it is released only if the write landed, and
+  the other frontend is launched only if the release came back `true`. That
+  last answer is a new wire method, `session.release`, which gives up ownership
+  of the UI session WITHOUT disconnecting — until now that only happened on
+  disconnect, so the one leaving had to die before the one arriving could
+  claim, and if the arrival failed the screen went with it. Releasing what is
+  not yours does nothing and says so, because a `true` there would turn a
+  refused handover into a window opening onto nobody's screen. When any step
+  fails, nothing happens and the process stays where it was, which is the
+  cheapest failure available.
+
+  It only works against the daemon — the daemon is what holds the screen — and
+  needs a desktop to open a window on. Both impediments are announced through
+  the availability table with their own reason, separately, because they are
+  fixed differently: start norte against the daemon, or sit at the machine.
+  Over SSH the command is dimmed rather than offered, which is what stops it
+  releasing a screen and launching a window nobody would see. The arriving side
+  is `--attach`, new on both binaries; without it a start is a start, and marks
+  from an interrupted handover are not resurrected the next day.
+
 - **Organizing a directory** (ADR 0122, protocol 0.77.0, bridge 72), phase 8 of
   the WOW programme. `pane.organize` — in the palette, the File menu and the
   help in both locales — asks for a plan that puts the files of the current

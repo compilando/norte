@@ -264,6 +264,7 @@ rpc_catalogo! {
     // Sesión de la ventana.
     SESSION_GET, Request, Direct, (), methods::SessionGetResult;
     SESSION_PUT, Request, Direct, methods::SessionPutParams, methods::SessionPutResult;
+    SESSION_RELEASE, Request, Direct, (), methods::SessionReleaseResult;
 
     // El registro del daemon, que un frontend con proceso aparte no puede ver
     // de otra forma. `Direct` y no `Stream`: se TIRA con un cursor, así que no

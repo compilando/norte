@@ -690,6 +690,24 @@ pub async fn dispatch(
             }
             Err(msg) => app.message = Some(msg),
         },
+        // Fase 9: el RELEVO a la ventana. Aquí sólo se COMPRUEBA y se pide;
+        // volcar la pantalla, soltar la sesión y lanzar la ventana son tres
+        // viajes que no caben en el despacho de una tecla, así que los hace el
+        // escritor de sesión y el run loop (`request_handoff`).
+        //
+        // Los dos impedimentos se dicen ANTES, con su motivo, y son los
+        // mismos que atenúan la fila en la paleta y en la hoja de referencia:
+        // que la tecla no haga nada es tolerable; que suelte la pantalla y
+        // lance una ventana que nadie va a ver, no.
+        Command::AppHandoff => {
+            if !app.backend_daemon {
+                app.message = Some(t("msg-handoff-needs-daemon"));
+            } else if !app.has_desktop {
+                app.message = Some(t("msg-handoff-needs-desktop"));
+            } else {
+                app.pending_handoff = true;
+            }
+        }
         // #142: el SUBSHELL de mc, no el scrollback. Aquí solo se PIDE; lo
         // arranca —perezosamente, la primera vez— y le cede la pantalla el run
         // loop, que es el dueño de la terminal. Mismo reparto que los tres de

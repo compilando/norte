@@ -49,6 +49,13 @@ async fn main() -> Result<()> {
     // `NORTE_NO_SPLASH` para los pilotos y los tests que abren un `ntc` de
     // verdad.
     let cli_no_splash = args.has("--no-splash");
+    // `--attach` (fase 9): este arranque es el otro extremo de un RELEVO
+    // (`app.handoff`), así que además de la pantalla reclama lo MARCADO que el
+    // frontend que se fue dejó en la sesión. Sin la bandera, un cuerpo que
+    // traiga marcas —porque un relevo se quedó a medias— no las devuelve: un
+    // arranque cualquiera no es un relevo, y resucitar una selección de ayer
+    // es poner un `F8` sobre lo que uno marcó entonces.
+    let cli_attach = args.has("--attach");
     let (cli_preset, cli_layout, cli_profile, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
         args.text("--preset"),
         // `--layout` NO es texto por contrato: acaba siendo un nombre de
@@ -176,6 +183,7 @@ async fn main() -> Result<()> {
     // sesión no lo pise: el lector nombró uno para esta vez.
     app.active_profile.clone_from(&cli_profile);
     app.pick = cli_pick; // `--pick` (S2): see the field's rustdoc (`app.rs`).
+    app.session.attach = cli_attach; // `--attach` (fase 9): ver su rustdoc.
     app.columns = columns;
     app.user_themes.clone_from(&cfg.user_themes);
     // Sincronizar necesita journal Y spool (regla dura 4: `sync.apply` abre un
@@ -186,6 +194,13 @@ async fn main() -> Result<()> {
     // que atenúa, que es sincronizar. Se decide UNA vez, aquí, porque el
     // `Backend` no cambia de brazo en vida del proceso.
     app.backend_journalled = backend.is_journalled();
+    // Fase 9: los dos impedimentos del relevo, decididos una vez. Sin daemon
+    // no hay a quién soltarle la pantalla; sin escritorio no hay dónde
+    // ponerla, que es el caso de una sesión por SSH. Los dos se DICEN antes de
+    // la tecla, con su motivo, en vez de fallar después.
+    app.backend_daemon = cli_daemon;
+    app.has_desktop = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
+        || std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty());
     // Y si hay un daemon del que hablar (#328). Aquí y una sola vez, por lo
     // mismo que la línea de arriba: el `Backend` no cambia de brazo en vida del
     // proceso. Sin esto, un `ntc` corriente —sin daemon ninguno— abría el panel
@@ -637,7 +652,7 @@ fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -
 }
 
 /// Flags booleanos del TUI.
-const BOOL_FLAGS: &[&str] = &["--daemon", "--pick", "--setup", "--no-splash"];
+const BOOL_FLAGS: &[&str] = &["--daemon", "--pick", "--setup", "--no-splash", "--attach"];
 /// Flags con valor del TUI.
 const VALUE_FLAGS: &[&str] = &["--preset", "--layout", "--profile", "--socket", "--cd-file"];
 
@@ -668,6 +683,9 @@ Options:
                          NORTE_NO_WIZARD=1 keeps it closed
       --no-splash        No start screen this run, whatever `[ui] splash` says
                          (NORTE_NO_SPLASH=1 does the same)
+      --attach           Take over the screen another frontend just handed off
+                         (`app.handoff`): its marks come back too. Without it,
+                         a start is a start and marks stay where they were
   -h, --help             Print help
   -V, --version          Print version
 ";

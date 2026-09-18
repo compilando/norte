@@ -150,6 +150,9 @@ impl Estado {
             | Efecto::EditarExterno
             | Efecto::CompararFicheros
             | Efecto::Terminal
+            // Fase 9: el relevo escribe la sesión, la suelta y cierra la
+            // ventana. Ninguna de las tres las hace una de solo mirar.
+            | Efecto::Relevo
                 if self.efectos == crate::commands::Efectos::SoloLectura =>
             {
                 Self::no_muta()
@@ -163,6 +166,7 @@ impl Estado {
             Efecto::EditarExterno => self.editar_externo(),
             Efecto::CompararFicheros => self.comparar_ficheros(),
             Efecto::Terminal => self.abrir_terminal(),
+            Efecto::Relevo => self.pedir_relevo(backend, buzon),
             Efecto::Comparar => self.pedir_comparacion(backend, buzon),
             Efecto::Desconectar => self.desconectar(backend, buzon),
             Efecto::TamanoDeDirectorio

@@ -140,6 +140,24 @@ pub struct SlotState {
     /// barrer, y el core no lee este documento.
     #[serde(default)]
     pub touched_ms: u64,
+    /// Lo MARCADO en este hueco, a lo sumo [`MARKS_CAP`] (fase 9).
+    ///
+    /// Las marcas son lo único de la pantalla que no sobrevivía a un relevo
+    /// entre frontends, y es justo lo que más caro cuesta rehacer: recuperar
+    /// un directorio y un cursor es un `cd`; recuperar cuarenta ficheros
+    /// señalados a mano es volver a señalarlos.
+    ///
+    /// **Son `VPath`, o sea la IDENTIDAD de la fila, y jamás su índice.** Una
+    /// lista que se reordena o que pierde una vecina por encima deja un índice
+    /// apuntando a otro fichero, y lo que se restauraría sería una selección
+    /// que nadie hizo — sobre la que después se pulsa borrar. Es la misma
+    /// razón por la que las marcas vivas se guardan por ruta.
+    ///
+    /// Aditivo: un cuerpo viejo lo lee vacío y no sube [`SCHEMA_VERSION`],
+    /// igual que `jump` o `palette_recent`. Y se omite si está vacío, que es
+    /// lo normal: un hueco sin marcas produce los MISMOS bytes que antes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<VPath>,
 }
 
 /// La pantalla guardada: las disposiciones por nombre y el estado por hueco.
@@ -206,6 +224,16 @@ mod populares {
 /// Cuántos comandos recientes guarda la paleta. Cinco: los que caben en la
 /// vista sin empujar la lista entera bajo el borde.
 pub const PALETTE_RECENT_CAP: usize = 5;
+
+/// Marcas que conserva un hueco (fase 9, spec 2026-09-15).
+///
+/// El tope vive AQUÍ y no en cada llamante, por lo mismo que los demás: un
+/// documento acotado en cinco sitios está acotado en cuatro. Cuatro mil
+/// noventa y seis rutas de este repositorio rondan los 160 KiB —holgado bajo
+/// el [`norte_proto::methods::SESSION_BODY_MAX`] de 1 MiB— y por encima de esa
+/// cifra lo que hay no es una selección que un humano hizo a mano, sino un
+/// «marcar todo» sobre un directorio enorme, que se rehace con una tecla.
+pub const MARKS_CAP: usize = 4096;
 
 /// Anota `key` como el comando más reciente de la paleta: lo pone primero,
 /// quita su repetición anterior y recorta a [`PALETTE_RECENT_CAP`].
@@ -803,6 +831,7 @@ mod tests {
             columns: Vec::new(),
             show_hidden: false,
             touched_ms: 0,
+            marks: Vec::new(),
         }
     }
 
@@ -827,6 +856,35 @@ mod tests {
             b.layouts.insert((*nombre).to_owned(), arbol);
         }
         b
+    }
+
+    /// Las MARCAS (fase 9) son aditivas: un cuerpo sin ellas se lee igual que
+    /// antes, y uno con ellas las devuelve por RUTA.
+    ///
+    /// Aditivo de verdad quiere decir dos cosas, y las dos se comprueban: un
+    /// documento viejo —que no tiene el campo— sigue leyéndose sin subir
+    /// [`SCHEMA_VERSION`], y un hueco sin marcas produce los MISMOS bytes que
+    /// producía antes de que el campo existiera. Sin lo segundo, cada tic
+    /// escribiría un cuerpo distinto del anterior y el coalescing dejaría de
+    /// coalescer.
+    #[test]
+    fn las_marcas_son_aditivas_y_viajan_por_ruta() {
+        let mut s = slot("mem:///casa");
+        assert_eq!(
+            serde_json::to_value(&s).expect("json").get("marks"),
+            None,
+            "un hueco sin marcas no escribe el campo"
+        );
+        // Y se lee un documento que no lo trae, que es todo lo que había
+        // guardado hasta esta versión.
+        let viejo = serde_json::json!({"path": "mem:///casa"});
+        let leido: SlotState = serde_json::from_value(viejo).expect("un cuerpo viejo se lee");
+        assert!(leido.marks.is_empty());
+
+        s.marks = vec![vp("mem:///casa/a.txt"), vp("mem:///casa/b.txt")];
+        let ida = serde_json::to_value(&s).expect("json");
+        let vuelta: SlotState = serde_json::from_value(ida).expect("json");
+        assert_eq!(vuelta.marks, s.marks, "vuelven las RUTAS, no unos índices");
     }
 
     /// Pasado el tope, el estado del perfil que hace más que nadie activa se va

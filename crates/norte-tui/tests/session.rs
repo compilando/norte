@@ -459,6 +459,7 @@ fn la_sesion_gana_a_profile_start() {
             columns: Vec::new(),
             show_hidden: false,
             touched_ms: 0,
+            marks: Vec::new(),
         },
     );
     app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());

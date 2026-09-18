@@ -38,6 +38,7 @@ mod organizar;
 mod paneles;
 mod paneles_de_plugin;
 mod registro;
+mod relevo;
 mod renombrar;
 mod revisiones;
 mod splash;

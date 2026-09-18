@@ -1339,10 +1339,15 @@ fn version_ventana_actual() {
     // que es lo que tenía. Nada de lo viejo cambia de forma: tres métodos
     // nuevos y cinco tipos nuevos, y ningún tipo existente gana ni pierde un
     // campo.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.77.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.76.0"), "N-1");
+    // 0.78.0 (fase 9): un cliente 0.77 no sabe pedir `session.release`, así
+    // que no lo pide; lo que pierde es el relevo entre frontends, y el propio
+    // comando se declara no disponible con su motivo en vez de fingir que
+    // funciona. Nada de lo viejo cambia de forma: un método nuevo y un tipo
+    // nuevo, y ningún tipo existente gana ni pierde un campo.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.78.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.77.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.75.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.76.9"),
         "N-2 fuera de la ventana"
     );
 }
