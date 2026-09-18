@@ -1,0 +1,23 @@
+# `org.norte.by-extension`: an organizer that files names into folders named
+# after their extension (demo of the `organizer` category, phase 8). Not a
+# workspace member, like every guest.
+[workspace]
+
+[package]
+name = "by-extension"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "File names into folders named after their extension, as a norte organizer plugin"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true

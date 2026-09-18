@@ -49,6 +49,14 @@ pub enum Category {
     /// nombran COMANDOS del catálogo: un clic suyo no puede hacer nada que el
     /// lector no pudiera hacer con una tecla.
     Panel,
+    /// Propone a dónde MOVER cada fichero, con subdirectorios (fase 8,
+    /// paquete `norte:organizer`, world `norte-organizer`). Generaliza
+    /// [`Category::Renamer`]: allí el destino es un nombre y aquí una ruta
+    /// relativa, así que el plan además crea carpetas. Los organizers que
+    /// aporta van en `[[contributions.organizer]]`, y el core los ejecuta por
+    /// el mismo camino que el plan de la IA — con la misma validación del
+    /// destino, que es lo que impide escribir fuera del directorio.
+    Organizer,
 }
 
 impl Category {
@@ -65,6 +73,7 @@ impl Category {
             Category::Renamer => "renamer",
             Category::Thumbnail => "thumbnail",
             Category::Panel => "panel",
+            Category::Organizer => "organizer",
         }
     }
 
@@ -89,6 +98,10 @@ impl Category {
             // están aprobados no pueden moverse porque exista una categoría
             // más.
             Category::Panel => 8,
+            // Y el siguiente detrás (fase 8). Un tag es PARA SIEMPRE: los
+            // manifiestos ya aprobados no pueden cambiar de digest porque
+            // exista una categoría más.
+            Category::Organizer => 9,
         }
     }
 }
@@ -176,6 +189,19 @@ pub struct ThumbnailContrib {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RenamerContrib {
+    /// Id estable dentro del plugin.
+    pub id: String,
+    /// Título legible. Texto del plugin — NO confiable.
+    pub title: String,
+}
+
+/// Un organizer declarado (fase 8): un proponente de REORGANIZACIÓN con su
+/// id y su título. Misma forma que [`RenamerContrib`] porque cumple el mismo
+/// papel; lo que cambia es lo que propone —una ruta relativa en vez de un
+/// nombre— y eso vive en el WIT, no aquí.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrganizerContrib {
     /// Id estable dentro del plugin.
     pub id: String,
     /// Título legible. Texto del plugin — NO confiable.
@@ -321,6 +347,9 @@ pub struct Contributions {
     /// manifiestos anteriores no lo traen y su digest no se mueve.
     #[serde(default)]
     pub renamer: Vec<RenamerContrib>,
+    /// Organizers (fase 8). Aditivo y con default, como los demás.
+    #[serde(default)]
+    pub organizer: Vec<OrganizerContrib>,
     /// Paneles que el plugin pinta (fase 3 del programa 2026-09-15). Sigue el
     /// patrón OPCIONAL del digest, como `decorator` y `[config]`: un
     /// manifiesto sin `[[contributions.panel]]` digesta byte a byte igual que
@@ -420,6 +449,18 @@ impl Contributions {
                 h.update(c.min_cols.unwrap_or_default().to_le_bytes());
                 h.update([u8::from(c.min_rows.is_some())]);
                 h.update(c.min_rows.unwrap_or_default().to_le_bytes());
+            }
+        }
+        // Y los organizers, detrás de todo y solo si hay (fase 8), por lo
+        // mismo que sus cinco predecesores: un manifiesto sin ninguno digesta
+        // byte a byte lo que digestaba antes, así que ninguna aprobación
+        // humana se resetea porque esta categoría exista.
+        if !self.organizer.is_empty() {
+            h.update(b"organizer:\n");
+            h.update((self.organizer.len() as u64).to_le_bytes());
+            for c in &self.organizer {
+                update_str(h, &c.id);
+                update_str(h, &c.title);
             }
         }
     }

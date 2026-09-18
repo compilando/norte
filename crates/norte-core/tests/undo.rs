@@ -595,6 +595,150 @@ async fn undo_created_sin_trash_con_drift_bloquea() {
     assert!(matches!(err, norte_proto::Error::NotFound));
 }
 
+/// **Organizar se deshace ENTERO: los ficheros vuelven y las carpetas que
+/// creó desaparecen** (fase 8).
+///
+/// Es la propiedad que obliga a que `fs.organize` sea un método y no N
+/// llamadas del cliente. Con los `fs.create` fuera del lote, deshacer
+/// devolvería los ficheros y dejaría un árbol de directorios vacíos que el
+/// humano no hizo — y que tendría que ir borrando a mano sin saber cuáles
+/// eran suyos.
+#[tokio::test]
+async fn organizar_se_deshace_entero_con_sus_carpetas() {
+    let (engine, mem, journal) = setup().await;
+    mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+    write_file(&mem, "mem:///d/factura.pdf", b"x").await;
+    write_file(&mem, "mem:///d/nota.txt", b"y").await;
+
+    let moves = vec![
+        norte_proto::methods::OrganizeMove {
+            current: "factura.pdf".to_owned(),
+            proposed_rel: "facturas/2026/marzo.pdf".to_owned(),
+        },
+        norte_proto::methods::OrganizeMove {
+            current: "nota.txt".to_owned(),
+            proposed_rel: "notas/nota.txt".to_owned(),
+        },
+    ];
+    let dir = vp("mem:///d");
+    let plan = norte_core::organize::OrganizePlan::bind(&dir, &moves).expect("plan válido");
+    let h = engine
+        .organize(&dir, &moves, plan.hash(), Actor::User)
+        .await
+        .expect("organize");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    assert!(
+        mem.stat(&vp("mem:///d/facturas/2026/marzo.pdf"))
+            .await
+            .is_ok()
+    );
+    assert!(mem.stat(&vp("mem:///d/notas/nota.txt")).await.is_ok());
+    assert!(matches!(
+        mem.stat(&vp("mem:///d/factura.pdf")).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+
+    // Y ahora entero para atrás.
+    let (state, r) = run_undo(&engine, Actor::User).await;
+    assert_eq!(state, TaskState::Completed);
+    assert!(
+        r.blocked.is_none(),
+        "nada debería bloquear: {:?}",
+        r.blocked
+    );
+
+    assert!(
+        mem.stat(&vp("mem:///d/factura.pdf")).await.is_ok(),
+        "el fichero vuelve a su sitio"
+    );
+    assert!(mem.stat(&vp("mem:///d/nota.txt")).await.is_ok());
+    for carpeta in [
+        "mem:///d/facturas/2026",
+        "mem:///d/facturas",
+        "mem:///d/notas",
+    ] {
+        assert!(
+            matches!(
+                mem.stat(&vp(carpeta)).await,
+                Err(norte_proto::Error::NotFound)
+            ),
+            "la carpeta {carpeta} la creó el lote, así que el undo se la lleva"
+        );
+    }
+
+    // Y las entradas del lote comparten `batch_id`: eso es lo que las hace
+    // UNA unidad deshacible, y sin ello nada de lo de arriba se sostiene.
+    let filas = journal
+        .journal()
+        .page(None, 50, Some("user"))
+        .await
+        .expect("page");
+    let del_lote: Vec<_> = filas
+        .iter()
+        .filter(|e| e.entry.undoes_seq.is_none())
+        .collect();
+    let primero = del_lote[0].entry.batch_id;
+    assert!(primero.is_some(), "el lote tiene id");
+    assert!(
+        del_lote.iter().all(|e| e.entry.batch_id == primero),
+        "las carpetas y los movimientos van en el MISMO lote"
+    );
+}
+
+/// Un destino que se sale del directorio no llega ni a intentarse: el plan
+/// entero se rechaza antes de crear una sola carpeta.
+#[tokio::test]
+async fn organizar_rechaza_un_destino_que_se_sale() {
+    let (engine, mem, _j) = setup().await;
+    mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+    write_file(&mem, "mem:///d/a.txt", b"x").await;
+    let dir = vp("mem:///d");
+    let bueno = vec![norte_proto::methods::OrganizeMove {
+        current: "a.txt".to_owned(),
+        proposed_rel: "sub/a.txt".to_owned(),
+    }];
+    let plan = norte_core::organize::OrganizePlan::bind(&dir, &bueno).expect("plan");
+
+    let malo = vec![norte_proto::methods::OrganizeMove {
+        current: "a.txt".to_owned(),
+        proposed_rel: "../fuera.txt".to_owned(),
+    }];
+    let Err(err) = engine.organize(&dir, &malo, plan.hash(), Actor::User).await else {
+        panic!("un `..` no se aplica");
+    };
+    assert!(matches!(err, norte_proto::Error::InvalidPath));
+    assert!(
+        mem.stat(&vp("mem:///d/a.txt")).await.is_ok(),
+        "y no se tocó nada"
+    );
+}
+
+/// Un `plan_hash` que no es el del plan que se revisó se rechaza: lo que se
+/// aplica tiene que ser lo que un humano leyó.
+#[tokio::test]
+async fn organizar_rechaza_un_plan_que_no_es_el_revisado() {
+    let (engine, mem, _j) = setup().await;
+    mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
+    write_file(&mem, "mem:///d/a.txt", b"x").await;
+    let dir = vp("mem:///d");
+    let revisado = vec![norte_proto::methods::OrganizeMove {
+        current: "a.txt".to_owned(),
+        proposed_rel: "sub/a.txt".to_owned(),
+    }];
+    let plan = norte_core::organize::OrganizePlan::bind(&dir, &revisado).expect("plan");
+
+    // El humano aprobó «a sub/», y lo que llega mueve a otro sitio.
+    let otro = vec![norte_proto::methods::OrganizeMove {
+        current: "a.txt".to_owned(),
+        proposed_rel: "otro/a.txt".to_owned(),
+    }];
+    let Err(err) = engine.organize(&dir, &otro, plan.hash(), Actor::User).await else {
+        panic!("el token es del plan que se leyó");
+    };
+    assert!(matches!(err, norte_proto::Error::PlanStale));
+}
+
 /// **Deshacer HASTA UN PUNTO deja intacto lo anterior** (fase 7,
 /// `journal.undo_after`).
 ///

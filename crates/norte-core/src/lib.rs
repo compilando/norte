@@ -27,6 +27,7 @@ pub mod journal;
 pub use norte_config::logging;
 mod observer;
 mod ops;
+pub mod organize;
 mod pack;
 pub mod plugin_provider;
 pub mod plugins;
@@ -67,4 +68,4 @@ pub use policy::{
 };
 pub use progress::ProgressReporter;
 pub use scheduler::{Priority, Scheduler, TaskBody, TaskCtx, TaskHandle};
-pub use undo::{UNDO_MAX_UNREVERTED_PATHS, UndoReport};
+pub use undo::{OP_ORGANIZED, UNDO_MAX_UNREVERTED_PATHS, UndoReport};

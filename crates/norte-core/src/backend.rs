@@ -1312,6 +1312,60 @@ impl Backend {
         }
     }
 
+    /// Plan de ORGANIZAR por IA (0.77.0, fase 8): revisable, no muta nada.
+    ///
+    /// # Errors
+    /// `Unsupported` sin proveedor; el gate de IA con su motivo; la taxonomía
+    /// del protocolo. `ProviderUnavailable` al agotar el timeout, como su
+    /// hermano.
+    pub async fn ai_organize_plan(
+        &self,
+        dir: &VPath,
+        instruction: &str,
+        names: &[String],
+    ) -> Result<norte_proto::methods::AiOrganizePlanResult, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let plan = tokio::time::timeout(
+                    AI_CALL_TIMEOUT,
+                    engine.ai_organize_plan_for(dir, instruction, names),
+                )
+                .await
+                .map_err(|_| Error::ProviderUnavailable { retryable: true })??;
+                Ok(norte_proto::methods::AiOrganizePlanResult {
+                    moves: plan.moves,
+                    refused: None,
+                })
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.ai_organize_plan(dir, instruction, names).await,
+        }
+    }
+
+    /// Aplica un plan de organizar (0.77.0, fase 8): crea las carpetas y
+    /// mueve, como UN lote deshacible.
+    ///
+    /// # Errors
+    /// `PlanStale` si el token no es el del plan revisado; `InvalidPath` si
+    /// algún destino se sale del directorio; la taxonomía del protocolo.
+    pub async fn organize(
+        &self,
+        dir: &VPath,
+        moves: &[norte_proto::methods::OrganizeMove],
+        plan_hash: &norte_proto::methods::PlanHash,
+    ) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let handle = engine
+                    .organize(dir, moves, plan_hash, crate::journal::Actor::User)
+                    .await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.organize(dir, moves, plan_hash).await.map(TaskRef::from),
+        }
+    }
+
     /// GC de staging `.norte-partial` huérfano bajo `dir` (#11, ADR 0012):
     /// operación PUNTUAL, no una Task ni una mutación del journal. Devuelve
     /// cuántos barrió.

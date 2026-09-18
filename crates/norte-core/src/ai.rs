@@ -569,6 +569,189 @@ pub fn validate_rename_reply(reply: &str, inputs: &[Segment]) -> Result<RenamePl
     Ok(RenamePlan { entries })
 }
 
+/// Un plan de ORGANIZAR tal y como sale del proveedor (fase 8).
+///
+/// Lleva los destinos como TEXTO y no como segmentos, a propósito: quien
+/// valida la ruta relativa es [`norte_proto::methods::validar_proposed_rel`],
+/// y tiene que ser la misma función que aplica el core al ejecutar. Dos
+/// validaciones para la misma regla divergen, y la que se relaja siempre es
+/// la que no borra ficheros.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OrganizePlanReply {
+    /// Los movimientos propuestos.
+    pub moves: Vec<norte_proto::methods::OrganizeMove>,
+}
+
+/// El contrato de salida tipada de un plan de organizar.
+fn contrato_de_organize() -> JsonContract {
+    JsonContract::new(
+        "norte_organize_plan",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "moves": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "current": {"type": "string"},
+                            "proposed_rel": {"type": "string"}
+                        },
+                        "required": ["current", "proposed_rel"],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "required": ["moves"],
+            "additionalProperties": false
+        }),
+    )
+}
+
+#[derive(Deserialize)]
+struct RawOrganizeMove {
+    current: String,
+    proposed_rel: String,
+}
+
+/// El prompt de organizar.
+///
+/// Dice la forma además de mandar el contrato, por lo mismo que el de
+/// renombrar: es lo único que tiene un proveedor que no atienda
+/// `response_format`.
+///
+/// # Errors
+/// [`AiError::Protocol`] si algún nombre no es representable en UTF-8: un
+/// nombre así no puede formar parte de un plan que viaja por el wire, y se
+/// aparta ANTES de que salga de la máquina.
+pub fn build_organize_prompt(names: &[Segment], instruction: &str) -> Result<ChatRequest, AiError> {
+    let mut lines = Vec::with_capacity(names.len());
+    for n in names {
+        let display = String::from_utf8_lossy(n.as_bytes());
+        if display.contains('\u{FFFD}') {
+            return Err(AiError::Protocol(
+                "nombre no-UTF8 no representable; organizar por IA no lo envía".into(),
+            ));
+        }
+        lines.push(display.into_owned());
+    }
+    let system = "You organise files into folders. Reply with STRICT JSON only: an object \
+         {\"moves\": [{\"current\": <existing name>, \"proposed_rel\": <destination>}]}. \
+         Include ONLY files that should move. `current` must exactly match an input name. \
+         `proposed_rel` is a path RELATIVE to the current directory, using `/` as separator, \
+         and it must end in the file's new name: e.g. \"invoices/2026/march.pdf\". \
+         It must NOT be absolute, must NOT contain `..` or `.` segments, and must not be \
+         empty. No prose, no code fences — just the JSON."
+        .to_owned();
+    let user = format!(
+        "Instruction: {instruction}\n\nFiles (one per line):\n{}",
+        lines.join("\n")
+    );
+    Ok(ChatRequest {
+        system: Some(system),
+        messages: vec![ChatMessage::user(user)],
+        max_tokens: Some(4096),
+        json_schema: Some(contrato_de_organize()),
+    })
+}
+
+/// Valida la respuesta de un plan de organizar contra los nombres que se
+/// mandaron.
+///
+/// Lo que comprueba, y por qué cada cosa:
+///
+/// - **`current` existe entre los nombres enviados.** Un plan sobre un
+///   fichero que nadie mencionó es un plan sobre otro directorio.
+/// - **`proposed_rel` pasa [`norte_proto::methods::validar_proposed_rel`]**,
+///   que es la misma puerta que el core aplica al ejecutar: ni absoluto, ni
+///   `..`, ni vacío, ni más hondo que el tope. Un modelo comprometido —o
+///   simplemente uno malo— no puede escribir fuera del directorio.
+/// - **Ni `!` ni `\` en ningún segmento.** El backslash es separador en
+///   Windows, así que `..\fuera` es traversal en cuanto el plan cruza de
+///   sistema; `!` es el marcador de archivo-como-directorio (ADR 0018).
+/// - **Sin orígenes ni destinos repetidos**: un plan que se contradice no se
+///   puede cumplir entero, y aplicarlo a medias es lo que esto existe para
+///   impedir.
+///
+/// # Errors
+/// [`AiError::Protocol`] con lo que falló, para el log del operador.
+pub fn validate_organize_reply(
+    reply: &str,
+    inputs: &[Segment],
+) -> Result<OrganizePlanReply, AiError> {
+    let trimmed = reply.trim();
+    let raw: Vec<RawOrganizeMove> = parsear_organize(trimmed)?;
+
+    let input_set: std::collections::HashSet<&[u8]> =
+        inputs.iter().map(Segment::as_bytes).collect();
+    let mut moves = Vec::with_capacity(raw.len());
+    let mut origenes: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+    let mut destinos: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for r in raw {
+        let current = Segment::new(r.current.clone().into_bytes())
+            .map_err(|_| AiError::Protocol(format!("`current` inválido: {:?}", r.current)))?;
+        if !input_set.contains(current.as_bytes()) {
+            return Err(AiError::Protocol(format!(
+                "`current` no existe en el dir: {:?}",
+                r.current
+            )));
+        }
+        if current.as_bytes() == b"!" {
+            return Err(AiError::Protocol(
+                "`current` marcador de archivo prohibido".into(),
+            ));
+        }
+        // LA puerta: la misma que el core aplica al ejecutar.
+        let segs = norte_proto::methods::validar_proposed_rel(&r.proposed_rel).map_err(|e| {
+            AiError::Protocol(format!(
+                "`proposed_rel` inválido ({e}): {:?}",
+                r.proposed_rel
+            ))
+        })?;
+        for s in &segs {
+            if s.as_bytes() == b"!" || s.as_bytes().contains(&b'\\') {
+                return Err(AiError::Protocol(format!(
+                    "`proposed_rel` prohibido: {:?}",
+                    r.proposed_rel
+                )));
+            }
+        }
+        if !origenes.insert(current.as_bytes().to_vec()) {
+            return Err(AiError::Protocol(format!(
+                "`current` duplicado: {:?}",
+                r.current
+            )));
+        }
+        if !destinos.insert(r.proposed_rel.clone()) {
+            return Err(AiError::Protocol(format!(
+                "`proposed_rel` duplicado: {:?}",
+                r.proposed_rel
+            )));
+        }
+        moves.push(norte_proto::methods::OrganizeMove {
+            current: r.current,
+            proposed_rel: r.proposed_rel,
+        });
+    }
+    Ok(OrganizePlanReply { moves })
+}
+
+/// Saca el array de movimientos de la respuesta, con la misma tolerancia que
+/// el de renombrado: el objeto con su clave, o el array pelado que devuelve
+/// un proveedor que ignora el contrato.
+fn parsear_organize(s: &str) -> Result<Vec<RawOrganizeMove>, AiError> {
+    #[derive(Deserialize)]
+    struct Envoltura {
+        moves: Vec<RawOrganizeMove>,
+    }
+    if let Ok(e) = serde_json::from_str::<Envoltura>(s) {
+        return Ok(e.moves);
+    }
+    serde_json::from_str::<Vec<RawOrganizeMove>>(s)
+        .map_err(|e| AiError::Protocol(format!("respuesta no es un plan de organizar: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -879,6 +1062,121 @@ mod tests {
         let inputs = [seg(b"A")];
         assert!(matches!(
             validate_rename_reply("no soy json", &inputs),
+            Err(AiError::Protocol(_))
+        ));
+    }
+
+    /// **Un destino que se sale del directorio se rechaza**, venga como
+    /// venga: es la propiedad de seguridad de la fase 8, y el proveedor está
+    /// al otro lado de una red.
+    #[test]
+    fn organizar_rechaza_todo_lo_que_se_sale_del_directorio() {
+        let inputs = [seg(b"a.txt")];
+        for malo in [
+            "../fuera.txt",
+            "x/../../fuera.txt",
+            "/etc/passwd",
+            "",
+            "x//y.txt",
+            "x/",
+            "./x.txt",
+            "..\\fuera.txt",
+            "x/..\\y.txt",
+            "!/x.txt",
+        ] {
+            let reply = serde_json::json!({
+                "moves": [{"current": "a.txt", "proposed_rel": malo}]
+            })
+            .to_string();
+            assert!(
+                matches!(
+                    validate_organize_reply(&reply, &inputs),
+                    Err(AiError::Protocol(_))
+                ),
+                "«{malo}» tenía que rechazarse"
+            );
+        }
+    }
+
+    /// Un `current` que no estaba entre los nombres enviados es un plan sobre
+    /// otro directorio.
+    #[test]
+    fn organizar_rechaza_un_origen_que_no_se_mando() {
+        let inputs = [seg(b"a.txt")];
+        let reply = serde_json::json!({
+            "moves": [{"current": "otro.txt", "proposed_rel": "x/otro.txt"}]
+        })
+        .to_string();
+        assert!(matches!(
+            validate_organize_reply(&reply, &inputs),
+            Err(AiError::Protocol(_))
+        ));
+    }
+
+    /// Y un plan que se contradice —dos veces el mismo origen, o dos veces el
+    /// mismo destino— tampoco pasa: no se puede cumplir entero.
+    #[test]
+    fn organizar_rechaza_un_plan_que_se_contradice() {
+        let inputs = [seg(b"a.txt"), seg(b"b.txt")];
+        let mismo_origen = serde_json::json!({
+            "moves": [
+                {"current": "a.txt", "proposed_rel": "x/1.txt"},
+                {"current": "a.txt", "proposed_rel": "x/2.txt"}
+            ]
+        })
+        .to_string();
+        assert!(matches!(
+            validate_organize_reply(&mismo_origen, &inputs),
+            Err(AiError::Protocol(_))
+        ));
+        let mismo_destino = serde_json::json!({
+            "moves": [
+                {"current": "a.txt", "proposed_rel": "x/1.txt"},
+                {"current": "b.txt", "proposed_rel": "x/1.txt"}
+            ]
+        })
+        .to_string();
+        assert!(matches!(
+            validate_organize_reply(&mismo_destino, &inputs),
+            Err(AiError::Protocol(_))
+        ));
+    }
+
+    /// Un plan bueno pasa, con subdirectorios y todo — que es el punto de la
+    /// fase.
+    #[test]
+    fn organizar_acepta_un_plan_con_subdirectorios() {
+        let inputs = [seg(b"factura.pdf"), seg(b"nota.txt")];
+        let reply = serde_json::json!({
+            "moves": [
+                {"current": "factura.pdf", "proposed_rel": "facturas/2026/marzo.pdf"},
+                {"current": "nota.txt", "proposed_rel": "notas/nota.txt"}
+            ]
+        })
+        .to_string();
+        let plan = validate_organize_reply(&reply, &inputs).expect("plan válido");
+        assert_eq!(plan.moves.len(), 2);
+        assert_eq!(plan.moves[0].proposed_rel, "facturas/2026/marzo.pdf");
+    }
+
+    /// El array pelado también, como en el plan de renombrar: un proveedor
+    /// que ignore el contrato sigue siendo útil.
+    #[test]
+    fn organizar_acepta_el_array_pelado() {
+        let inputs = [seg(b"a.txt")];
+        let reply = r#"[{"current": "a.txt", "proposed_rel": "x/a.txt"}]"#;
+        let plan = validate_organize_reply(reply, &inputs).expect("plan válido");
+        assert_eq!(plan.moves.len(), 1);
+    }
+
+    /// Un nombre que no es UTF-8 no sale de la máquina: el prompt se niega a
+    /// construirse, en vez de mandar un reemplazo que el proveedor no puede
+    /// devolver bien.
+    #[test]
+    fn organizar_no_manda_un_nombre_que_no_es_texto() {
+        let inputs = [seg(b"caf\xff")];
+        assert!(matches!(
+            build_organize_prompt(&inputs, "ordena"),
             Err(AiError::Protocol(_))
         ));
     }

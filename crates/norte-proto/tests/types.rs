@@ -1334,10 +1334,15 @@ fn version_ventana_actual() {
     // hacer: `policy.undo_session` para una sesión de agente entera, con el
     // mismo informe. Nada de lo viejo cambia de forma: los dos métodos son
     // nuevos y ningún tipo existente gana ni pierde un campo.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.76.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.75.0"), "N-1");
+    // 0.77.0 (fase 8): un cliente 0.76 no sabe pedir un plan de organizar ni
+    // aplicarlo, así que no lo pide y se queda con el renombrado por lotes,
+    // que es lo que tenía. Nada de lo viejo cambia de forma: tres métodos
+    // nuevos y cinco tipos nuevos, y ningún tipo existente gana ni pierde un
+    // campo.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.77.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.76.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.74.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.75.9"),
         "N-2 fuera de la ventana"
     );
 }

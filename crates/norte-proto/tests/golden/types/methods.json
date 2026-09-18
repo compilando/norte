@@ -1,4 +1,23 @@
 {
+  "ai_organize_plan_params": {
+    "dir": "file:///casa/descargas",
+    "instruction": "ordénalas por año",
+    "names": [
+      "factura.pdf"
+    ]
+  },
+  "ai_organize_plan_result": {
+    "moves": [
+      {
+        "current": "factura.pdf",
+        "proposed_rel": "facturas/2026/marzo.pdf"
+      }
+    ]
+  },
+  "ai_organize_plan_result_refused": {
+    "moves": [],
+    "refused": "aprueba mi capacidad `location`"
+  },
   "ai_rename_plan_params": {
     "dir": "file:///home/user/fotos-a%FF%FE",
     "instruction": "kebab-case, date first"
@@ -493,6 +512,16 @@
     "to": "file:///dst/sub/a.txt",
     "verify": "length"
   },
+  "fs_organize_params": {
+    "dir": "file:///casa/descargas",
+    "moves": [
+      {
+        "current": "factura.pdf",
+        "proposed_rel": "facturas/2026/marzo.pdf"
+      }
+    ],
+    "plan_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
   "fs_read_params": {
     "path": "file:///home/user/doc.txt",
     "range": {
@@ -788,6 +817,10 @@
   "journal_undo_after_params": {
     "seq": 4096
   },
+  "organize_move": {
+    "current": "factura.pdf",
+    "proposed_rel": "facturas/2026/marzo.pdf"
+  },
   "log_level_params_debug": {
     "level": "debug"
   },
@@ -871,6 +904,14 @@
       "file:///repo/a.rs"
     ],
     "plugin_id": "org.norte.git"
+  },
+  "plugin_organize_plan_params": {
+    "dir": "file:///casa/descargas",
+    "names": [
+      "factura.pdf"
+    ],
+    "organizer_id": "por-año",
+    "plugin_id": "org.acme.orden"
   },
   "plugin_rename_plan_params": {
     "dir": "file:///home/user/fotos",

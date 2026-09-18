@@ -1,5 +1,53 @@
 {
   "$defs": {
+    "AiOrganizePlanParams": {
+      "description": "Params de [`AI_ORGANIZE_PLAN`] (0.77.0, fase 8 del programa WOW).\n\nLos mismos tres campos que [`AiRenamePlanParams`] y por la misma razón:\norganizar es renombrar con permiso para mover a un subdirectorio, así que\nlo que se le pide al proveedor —un directorio, una instrucción y los\nnombres sobre los que actuar— no cambia.",
+      "properties": {
+        "dir": {
+          "$ref": "#/$defs/VPath",
+          "description": "Directorio cuyos basenames se envían al proveedor (tras el gate de IA)."
+        },
+        "instruction": {
+          "description": "Instrucción del usuario.",
+          "type": "string"
+        },
+        "names": {
+          "description": "Los basenames sobre los que se pide el plan, dentro de [`Self::dir`].\nVacío es el directorio entero. Mismo tope que el plan de renombrado\n([`AI_RENAME_NAMES_MAX`]), porque mide lo mismo: cuántas cosas señala\nun humano de una vez.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "dir",
+        "instruction"
+      ],
+      "type": "object"
+    },
+    "AiOrganizePlanResult": {
+      "description": "Resultado de [`AI_ORGANIZE_PLAN`]: el plan REVISABLE. Vacío = el productor\nno propuso nada.\n\nEl plan es el producto; aplicarlo es [`FS_ORGANIZE`], que es quien muta.\nEste método jamás toca un byte.",
+      "properties": {
+        "moves": {
+          "description": "Los movimientos propuestos. Sólo los que cambian algo.",
+          "items": {
+            "$ref": "#/$defs/OrganizeMove"
+          },
+          "type": "array"
+        },
+        "refused": {
+          "description": "Por qué el productor NO propuso nada, con el mismo contrato que\n[`AiRenamePlanResult::refused`]: texto de un TERCERO, ya enmascarado y\nacotado por el daemon, y si hay motivo `moves` no cuenta.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "moves"
+      ],
+      "type": "object"
+    },
     "AiRenameEntry": {
       "description": "Una pareja del plan de [`AI_RENAME_PLAN`]. Nombres BASE, UTF-8 garantizado:\nel engine rechaza nombres hostiles fail-loud ANTES de llamar al proveedor y\nvalida `to` como `Segment` (sin `/`, `..`, NUL, `!` ni `\\`).",
       "properties": {
@@ -2317,6 +2365,32 @@
       ],
       "type": "object"
     },
+    "FsOrganizeParams": {
+      "description": "Params de [`FS_ORGANIZE`] (0.77.0, fase 8): aplicar un plan de organizar.",
+      "properties": {
+        "dir": {
+          "$ref": "#/$defs/VPath",
+          "description": "El directorio en el que viven TODOS los movimientos."
+        },
+        "moves": {
+          "description": "Lo que se va a mover, la MISMA intención que produjo `plan_hash`.",
+          "items": {
+            "$ref": "#/$defs/OrganizeMove"
+          },
+          "type": "array"
+        },
+        "plan_hash": {
+          "$ref": "#/$defs/PlanHash",
+          "description": "El hash del plan que el humano aprobó. Que case es lo que comprueba el\ncore; no casar es [`Error::PlanStale`](crate::Error::PlanStale)."
+        }
+      },
+      "required": [
+        "dir",
+        "moves",
+        "plan_hash"
+      ],
+      "type": "object"
+    },
     "FsReadParams": {
       "description": "Params de [`FS_READ`].\n\n```\nuse norte_proto::methods::FsReadParams;\nuse norte_proto::VPath;\nlet p = FsReadParams { path: VPath::parse(\"file:///x\").unwrap(), range: None };\n// El emisor canónico escribe `range: null` explícito (ADR 0004).\nassert!(serde_json::to_string(&p).unwrap().contains(r#\"\"range\":null\"#));\n```",
       "properties": {
@@ -3246,6 +3320,24 @@
         }
       ]
     },
+    "OrganizeMove": {
+      "description": "Un movimiento del plan de organizar: qué hay y a dónde va.\n\nLa diferencia con [`AiRenameEntry`] —y la razón de que esto sea otra\nfamilia y no un campo más— es [`Self::proposed_rel`]: un destino que puede\nllevar subdirectorios. Eso convierte el plan en algo que además CREA\ndirectorios, y por tanto en otra operación, con otra reversa y otro\ndiálogo de revisión.",
+      "properties": {
+        "current": {
+          "description": "Nombre BASE existente en el directorio del plan.",
+          "type": "string"
+        },
+        "proposed_rel": {
+          "description": "A dónde va, RELATIVO a ese mismo directorio, con `/` de separador.\n\nPuede llevar subdirectorios (`facturas/2026/marzo.pdf`), y ahí está\ntodo el valor de esta fase — y todo su riesgo. Lo que NO puede ser:\nabsoluto, vacío, con un segmento `.` o `..`, con NUL, ni terminar en\n`/`. Cada segmento tiene que ser un [`crate::Segment`] válido, y eso\nlo comprueba el CORE antes de crear nada\n([`validar_proposed_rel`]): un plan lo produce un tercero —un modelo o\nun plugin— y un `..` aquí es una escritura fuera del directorio que el\nhumano estaba mirando.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "current",
+        "proposed_rel"
+      ],
+      "type": "object"
+    },
     "PackRiskyName": {
       "description": "Una entrada cuyo nombre SIGNIFICA otra cosa en otro sistema (0.58.0, #250).\n\n```\nuse norte_proto::methods::PackRiskyName;\nlet r: PackRiskyName =\n    serde_json::from_str(r#\"{\"path\":\"a%5Cb.txt\",\"name\":\"a\\\\b.txt\",\"risk\":\"separator\"}\"#)\n        .expect(\"riesgo\");\nassert_eq!(r.risk, \"separator\");\n```",
       "properties": {
@@ -3956,6 +4048,37 @@
       "required": [
         "plugin_id",
         "kind"
+      ],
+      "type": "object"
+    },
+    "PluginOrganizePlanParams": {
+      "description": "Params de [`PLUGIN_ORGANIZE_PLAN`] (0.77.0, fase 8).\n\nLos mismos cuatro campos que [`PluginRenamePlanParams`], con el id del\nORGANIZER en vez del renamer: un plugin puede declarar varios de cada\nclase, y se pide uno concreto.",
+      "properties": {
+        "dir": {
+          "$ref": "#/$defs/VPath",
+          "description": "El directorio de los nombres, contra el que se comprueba el plan."
+        },
+        "names": {
+          "description": "Los nombres sobre los que actúa, como texto y por lo mismo que en el\nrenamer: lo que no sea UTF-8 se aparta antes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "organizer_id": {
+          "description": "Qué organizer de los que declara.",
+          "type": "string"
+        },
+        "plugin_id": {
+          "description": "Qué plugin, por id reverse-DNS: ESE o ninguno.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "organizer_id",
+        "dir",
+        "names"
       ],
       "type": "object"
     },
@@ -6409,6 +6532,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Aggregate root: one field per top-level wire type. `schema_for!` emits each\nas a property and pulls every nested type into `$defs`, so the single\ndocument covers the whole protocol surface. Field values are never read.",
   "properties": {
+    "ai_organize_plan_params": {
+      "$ref": "#/$defs/AiOrganizePlanParams"
+    },
+    "ai_organize_plan_result": {
+      "$ref": "#/$defs/AiOrganizePlanResult"
+    },
     "ai_rename_entry": {
       "$ref": "#/$defs/AiRenameEntry"
     },
@@ -6625,6 +6754,9 @@
     "fs_move_params": {
       "$ref": "#/$defs/FsMoveParams"
     },
+    "fs_organize_params": {
+      "$ref": "#/$defs/FsOrganizeParams"
+    },
     "fs_read_params": {
       "$ref": "#/$defs/FsReadParams"
     },
@@ -6736,6 +6868,9 @@
     "on_unknown": {
       "$ref": "#/$defs/OnUnknown"
     },
+    "organize_move": {
+      "$ref": "#/$defs/OrganizeMove"
+    },
     "pack_risky_name": {
       "$ref": "#/$defs/PackRiskyName"
     },
@@ -6807,6 +6942,9 @@
     },
     "plugin_notice": {
       "$ref": "#/$defs/PluginNotice"
+    },
+    "plugin_organize_plan_params": {
+      "$ref": "#/$defs/PluginOrganizePlanParams"
     },
     "plugin_panel_info": {
       "$ref": "#/$defs/PluginPanelInfo"
@@ -7200,6 +7338,11 @@
     "policy_decide_params",
     "policy_decide_result",
     "policy_pending_result",
+    "ai_organize_plan_params",
+    "ai_organize_plan_result",
+    "fs_organize_params",
+    "organize_move",
+    "plugin_organize_plan_params",
     "journal_list_params",
     "journal_list_result",
     "journal_row",

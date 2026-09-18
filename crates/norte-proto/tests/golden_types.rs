@@ -1074,6 +1074,7 @@ fn golden_methods() {
     check_methods_sync_apply(&fixtures);
     check_methods_log(&fixtures);
     check_methods_journal(&fixtures);
+    check_methods_organize(&fixtures);
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
@@ -1223,7 +1224,12 @@ fn golden_methods() {
     // congela nadie si no se escribe. La fila lleva lote, compensación y una
     // ruta saneada con su bandera `hostile`: son los tres campos de los que
     // depende que una confirmación de deshacer diga la verdad.
-    assert_eq!(fixtures.len(), 223, "[methods.json] fixtures sin caso Rust");
+    // 223 → 229 en 0.77.0 (fase 8): las seis de organizar. El `proposed_rel`
+    // con subdirectorios es la forma que de verdad hay que congelar —es lo
+    // único que separa este plan del de renombrar— y el resultado va DOS
+    // veces, con plan y con `refused`, porque la regla del receptor («con
+    // motivo, el plan no cuenta») no la congela nadie si sólo se escribe una.
+    assert_eq!(fixtures.len(), 229, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -1266,6 +1272,82 @@ fn check_methods_log(fixtures: &BTreeMap<String, Value>) {
         },
     );
     check_methods_log_resto(fixtures);
+}
+
+/// Organizar (0.77.0, fase 8): el plan, su rechazo, y el lote que lo aplica.
+///
+/// El `proposed_rel` con subdirectorios es la forma que de verdad hay que
+/// congelar: es lo único que distingue este plan del de renombrar, y es la
+/// cadena sobre la que el core decide si crea carpetas.
+fn check_methods_organize(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        AiOrganizePlanParams, AiOrganizePlanResult, FsOrganizeParams, OrganizeMove,
+        PluginOrganizePlanParams,
+    };
+    check_one(
+        fixtures,
+        "ai_organize_plan_params",
+        &AiOrganizePlanParams {
+            dir: vpath("file:///casa/descargas"),
+            instruction: "ordénalas por año".to_owned(),
+            names: vec!["factura.pdf".to_owned()],
+        },
+    );
+    check_one(
+        fixtures,
+        "organize_move",
+        &OrganizeMove {
+            current: "factura.pdf".to_owned(),
+            proposed_rel: "facturas/2026/marzo.pdf".to_owned(),
+        },
+    );
+    check_one(
+        fixtures,
+        "ai_organize_plan_result",
+        &AiOrganizePlanResult {
+            moves: vec![OrganizeMove {
+                current: "factura.pdf".to_owned(),
+                proposed_rel: "facturas/2026/marzo.pdf".to_owned(),
+            }],
+            refused: None,
+        },
+    );
+    // Un rechazo: `refused` puesto y `moves` vacío. La regla del RECEPTOR es
+    // que con motivo el plan no cuenta, y esta fixtura es la que la deja
+    // escrita en bytes.
+    check_one(
+        fixtures,
+        "ai_organize_plan_result_refused",
+        &AiOrganizePlanResult {
+            moves: Vec::new(),
+            refused: Some("aprueba mi capacidad `location`".to_owned()),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_organize_plan_params",
+        &PluginOrganizePlanParams {
+            plugin_id: "org.acme.orden".to_owned(),
+            organizer_id: "por-año".to_owned(),
+            dir: vpath("file:///casa/descargas"),
+            names: vec!["factura.pdf".to_owned()],
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_organize_params",
+        &FsOrganizeParams {
+            dir: vpath("file:///casa/descargas"),
+            moves: vec![OrganizeMove {
+                current: "factura.pdf".to_owned(),
+                proposed_rel: "facturas/2026/marzo.pdf".to_owned(),
+            }],
+            plan_hash: norte_proto::methods::PlanHash::parse(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("hash de test"),
+        },
+    );
 }
 
 /// La línea de tiempo del journal (0.76.0, fase 7): las dos formas de los
@@ -4740,7 +4822,18 @@ fn method_names_frozen() {
     // deshacer trabajo es decisión de quien lo hizo.
     assert_eq!(methods::JOURNAL_LIST, "journal.list");
     assert_eq!(methods::JOURNAL_UNDO_AFTER, "journal.undo_after");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.76.0");
+    // 0.77.0 (fase 8): organizar. El plan lo propone un modelo
+    // (`ai.organize_plan`) o un plugin del kind `organizer`
+    // (`plugin.organize_plan`), y los dos contestan el MISMO tipo — lo que
+    // hace segura la operación no es de dónde salieron los nombres.
+    // Aplicarlo es `fs.organize`, que es un método y no N llamadas del
+    // cliente porque crear los directorios y mover tiene que ir bajo un solo
+    // `batch_id`: si no, deshacer el lote devuelve los ficheros y se olvida
+    // las carpetas.
+    assert_eq!(methods::AI_ORGANIZE_PLAN, "ai.organize_plan");
+    assert_eq!(methods::PLUGIN_ORGANIZE_PLAN, "plugin.organize_plan");
+    assert_eq!(methods::FS_ORGANIZE, "fs.organize");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.77.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

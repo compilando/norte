@@ -1454,6 +1454,48 @@ impl PluginRegistry {
         })
     }
 
+    /// El plugin `organizer` consentido `plugin_id` que declara
+    /// `organizer_id` (fase 8): ESE o ninguno, aprobado y encendido, con su
+    /// `.wasm` verificado contra el digest aprobado. Misma forma exacta que
+    /// [`Self::resolve_renamer`], con su categoría.
+    #[must_use]
+    pub fn resolve_organizer(
+        &self,
+        plugin_id: &str,
+        organizer_id: &str,
+    ) -> Option<ResolvedDecorator> {
+        self.catalog.plugins.iter().find_map(|e| {
+            if e.manifest.category != norte_plugin_host::Category::Organizer
+                || e.manifest.id != plugin_id
+            {
+                return None;
+            }
+            let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+            if !Self::approval_is_current(&st, e) || !st.enabled {
+                return None;
+            }
+            if !e
+                .manifest
+                .contributions
+                .organizer
+                .iter()
+                .any(|r| r.id == organizer_id)
+            {
+                return None;
+            }
+            let wasm = Self::verified_wasm(&e.dir)?;
+            Some((
+                e.manifest.id.clone(),
+                e.manifest.name.clone(),
+                wasm,
+                e.manifest.capabilities.clone(),
+                self.settings_of(&e.manifest.id)
+                    .cloned()
+                    .unwrap_or_default(),
+            ))
+        })
+    }
+
     /// Los plugins `hook` consentidos (ADR 0100), cada uno con los eventos
     /// que escucha, en orden de catálogo. Misma forma que
     /// [`Self::resolve_renamer`]: aprobado y encendido, `.wasm` verificado
@@ -4428,6 +4470,106 @@ pub fn run_rename_plan(
             })
             .collect(),
     )
+}
+
+/// Lo que devuelve [`run_organize_plan`] (fase 8): el plan, o por qué no lo
+/// hay.
+#[derive(Debug)]
+pub enum OrganizePlanOutcome {
+    /// Los movimientos que el plugin propone, ya limpios y VALIDADOS.
+    Plan(Vec<norte_proto::methods::OrganizeMove>),
+    /// El guest rehusó con una frase para el lector. Texto de un tercero.
+    Refused(String),
+    /// El guest no instanció, atrapó, o se pasó de los topes.
+    Failed,
+    /// El guest propuso un destino que se sale del directorio (un `..`, una
+    /// ruta absoluta, un segmento vacío…).
+    ///
+    /// Es un caso APARTE de [`Self::Failed`] a propósito: un plugin que
+    /// atrapa está roto, y uno que propone escribir fuera del directorio
+    /// está haciendo otra cosa. El lector merece saber cuál de las dos, y el
+    /// operador tiene la traza con el id del plugin.
+    Escapes,
+}
+
+/// Le pide a un plugin `organizer` (fase 8) su plan para `names` en
+/// `location_dir`, con la misma sesión de ubicación que un renamer.
+///
+/// **Aquí sí se valida el destino, y es lo que distingue este camino del del
+/// renamer.** Un renamer propone un nombre, que `Segment` ya acota; un
+/// organizer propone una RUTA, y un `..` ahí es una escritura fuera del
+/// directorio que el humano está mirando. Se comprueba con
+/// [`norte_proto::methods::validar_proposed_rel`] — la MISMA función que
+/// aplica el core al ejecutar y la misma que valida el plan de un modelo —
+/// y un solo destino malo tumba el plan entero: aplicar «lo que se pudo» de
+/// una propuesta que traía eso sería quedarse con la mitad de algo que nadie
+/// revisó.
+pub fn run_organize_plan(
+    runtime: &norte_plugin_host::PluginRuntime,
+    resolved: ResolvedDecorator,
+    organizer_id: &str,
+    location_dir: Option<&norte_proto::VPath>,
+    climb: bool,
+    names: &[String],
+) -> OrganizePlanOutcome {
+    let (id, _name, wasm, caps, settings) = resolved;
+    let sesion = if caps.location.granted() {
+        let mint = LocationMint::new(norte_vfs_local::Bounds::default());
+        location_dir.and_then(|dir| mint.mint_for(dir, caps.location_root_marker.as_deref(), climb))
+    } else {
+        None
+    };
+    let host: Option<std::sync::Arc<dyn norte_plugin_host::LocationHost>> =
+        sesion.as_ref().map(|s| {
+            std::sync::Arc::clone(&s.mint) as std::sync::Arc<dyn norte_plugin_host::LocationHost>
+        });
+    let Ok(mut inst) = runtime.instantiate_organizer_with_location(&wasm, caps, host) else {
+        tracing::warn!(plugin = %id, "organizer: fallo al instanciar");
+        return OrganizePlanOutcome::Failed;
+    };
+    inst.set_settings(settings);
+    let refe = sesion.as_ref().map(LocationSession::as_ref).map(|r| {
+        norte_plugin_host::organizer_iface::LocationRef {
+            token: r.token,
+            prefix: r.prefix,
+        }
+    });
+    let movs = match inst.plan(organizer_id, refe.as_ref(), names) {
+        Ok(Ok(p)) => p,
+        Ok(Err(frase)) => return OrganizePlanOutcome::Refused(frase),
+        Err(e) => {
+            tracing::warn!(plugin = %id, error = %e, "organizer: fallo al ejecutar");
+            return OrganizePlanOutcome::Failed;
+        }
+    };
+    let pedidos: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+    let mut out = Vec::with_capacity(movs.len());
+    for m in movs {
+        // Un `current` que no se pidió es un plan sobre otro directorio: se
+        // descarta en silencio, como hace el renamer.
+        if !pedidos.contains(m.current.as_str()) {
+            continue;
+        }
+        // Un destino que se sale NO se descarta en silencio: tumba el plan y
+        // se dice. Descartarlo dejaría al lector revisando una propuesta a la
+        // que le faltan filas sin saber por qué.
+        if norte_proto::methods::validar_proposed_rel(&m.proposed_rel).is_err() {
+            tracing::warn!(
+                plugin = %id,
+                "organizer: propuso un destino fuera del directorio; se rechaza el plan entero"
+            );
+            return OrganizePlanOutcome::Escapes;
+        }
+        // Un movimiento a donde ya está no es un movimiento.
+        if m.proposed_rel == m.current {
+            continue;
+        }
+        out.push(norte_proto::methods::OrganizeMove {
+            current: m.current,
+            proposed_rel: m.proposed_rel,
+        });
+    }
+    OrganizePlanOutcome::Plan(out)
 }
 
 pub(crate) fn run_column_values(

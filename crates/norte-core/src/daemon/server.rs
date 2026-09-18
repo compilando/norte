@@ -2847,6 +2847,12 @@ async fn dispatch(
         methods::PLUGIN_RENAME_PLAN => {
             handle_plugin_rename_plan(req.params, &conn.actor, shared).await
         }
+        // El mismo reparto para el organizer (fase 8): abierto como su
+        // hermano —proponer no muta nada— y con el gate de lectura del
+        // directorio dentro del handler.
+        methods::PLUGIN_ORGANIZE_PLAN => {
+            handle_plugin_organize_plan(req.params, &conn.actor, shared).await
+        }
         // plugin.get_config (G3c): ABIERTO, mismo criterio que plugin.list.
         // plugin.set_config (G3c): SOLO humanos, mismo criterio que
         // plugin.set_approval/set_enabled — ajustes de plugin son datos de
@@ -4380,6 +4386,69 @@ async fn handle_plugin_rename_plan(
     }
 }
 
+/// `plugin.organize_plan` (0.77.0, fase 8): el plan de un plugin del kind
+/// `organizer`. Mismas puertas que el del renamer, y una respuesta más.
+async fn handle_plugin_organize_plan(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginOrganizePlanParams = parse_params(params)?;
+    read_gate(actor, &p.dir, shared)?;
+    if p.names.len() > methods::AI_RENAME_NAMES_MAX {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            format!("names supera {}", methods::AI_RENAME_NAMES_MAX),
+        ));
+    }
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_organizer(&p.plugin_id, &p.organizer_id)
+    };
+    let Some(resolved) = resolved else {
+        return Err(RpcError::from(norte_proto::Error::NotFound));
+    };
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let climb = matches!(actor, Actor::User);
+    let (plugin_id, organizer_id, dir, names) = (p.plugin_id, p.organizer_id, p.dir, p.names);
+    let salida = tokio::task::spawn_blocking(move || {
+        crate::plugins::run_organize_plan(
+            &runtime,
+            resolved,
+            &organizer_id,
+            Some(&dir),
+            climb,
+            &names,
+        )
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "organize plan task panicked"))?;
+    match salida {
+        crate::plugins::OrganizePlanOutcome::Plan(moves) => {
+            to_value(&methods::AiOrganizePlanResult {
+                moves,
+                refused: None,
+            })
+        }
+        crate::plugins::OrganizePlanOutcome::Refused(frase) => {
+            tracing::info!(plugin = %plugin_id, motivo = %frase, "organizer: rehusó");
+            to_value(&methods::AiOrganizePlanResult {
+                moves: Vec::new(),
+                refused: Some(crate::plugins::guest_reason(&frase)),
+            })
+        }
+        // Proponer una escritura fuera del directorio no es un fallo de E/S y
+        // no se cuenta como uno: es `InvalidPath`, que es exactamente lo que
+        // pasó, y el operador tiene el id del plugin en la traza.
+        crate::plugins::OrganizePlanOutcome::Escapes => {
+            Err(RpcError::from(norte_proto::Error::InvalidPath))
+        }
+        crate::plugins::OrganizePlanOutcome::Failed => {
+            Err(RpcError::from(norte_proto::Error::Io { retryable: false }))
+        }
+    }
+}
+
 /// La ubicación que se le acuña a un plugin de columnas: el directorio padre
 /// de la página, **si el actor podría leerlo él mismo** (#239).
 ///
@@ -5812,6 +5881,50 @@ async fn dispatch_fs_task(
             // Mapeo core→proto compartido con `Backend::Embedded`
             // (`ai_plan_to_proto`): lossy-identidad por invariante del engine.
             to_value(&crate::ai::ai_plan_to_proto(plan))
+        }
+        // `ai.organize_plan` (0.77.0, fase 8): el gemelo del de arriba, con
+        // las MISMAS puertas y en el mismo orden — humano primero, luego el
+        // parseo, los dos topes, y el gate de lectura del directorio. Que sea
+        // «como el otro» no basta: cada una de esas cuatro está por un motivo
+        // distinto, y saltarse la primera convierte el método en un oráculo.
+        methods::AI_ORGANIZE_PLAN => {
+            human_only(&actor)?;
+            let p: methods::AiOrganizePlanParams = parse_params(req.params)?;
+            if p.instruction.len() > MAX_AI_INSTRUCTION_BYTES {
+                return Err(RpcError::protocol(
+                    codes::INVALID_PARAMS,
+                    format!("instruction supera {MAX_AI_INSTRUCTION_BYTES} bytes"),
+                ));
+            }
+            if p.names.len() > methods::AI_RENAME_NAMES_MAX {
+                return Err(RpcError::protocol(
+                    codes::INVALID_PARAMS,
+                    format!("names supera {}", methods::AI_RENAME_NAMES_MAX),
+                ));
+            }
+            read_gate(&actor, &p.dir, shared)?;
+            let plan = shared
+                .engine
+                .ai_organize_plan_for(&p.dir, &p.instruction, &p.names)
+                .await
+                .map_err(RpcError::from)?;
+            to_value(&methods::AiOrganizePlanResult {
+                moves: plan.moves,
+                refused: None,
+            })
+        }
+        // `fs.organize` (0.77.0, fase 8): aplicar el plan. MUTA, así que va
+        // por el actor de la conexión y lo gatea el engine —un solo gate para
+        // todas las rutas que toca, carpetas incluidas—. Devuelve Task.
+        methods::FS_ORGANIZE => {
+            let p: methods::FsOrganizeParams = parse_params(req.params)?;
+            let handle = shared
+                .engine
+                .organize(&p.dir, &p.moves, &p.plan_hash, actor.clone())
+                .await
+                .map_err(RpcError::from)?;
+            let task_id = register_task_id(shared, handle, actor.clone())?;
+            to_value(&methods::FsTaskResult { task_id })
         }
         // index.build (0.25.0, M4): Task. El resultado (indexed/removed) NO se
         // reenvía por wire aún (task completa = hecho); un fetch de report es

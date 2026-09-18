@@ -72,6 +72,22 @@ pub mod renamer_world {
     });
 }
 
+/// Bindings del world `norte-organizer` (fase 8, paquete
+/// `norte:organizer`). Mismo patrón exacto que [`renamer_world`], porque es
+/// su hermano: lo único que cambia es que el destino de cada propuesta es
+/// una ruta relativa y no un nombre.
+pub mod organizer_world {
+    wasmtime::component::bindgen!({
+        world: "norte:organizer/norte-organizer",
+        path: "wit",
+        with: {
+            "norte:host/host-log": crate::bindings::norte::host::host_log,
+            "norte:host/host-config": crate::bindings::norte::host::host_config,
+            "norte:location/location": crate::bindings::columns_world::norte::location::location,
+        },
+    });
+}
+
 /// Bindings del world `norte-hook` (H1, ADR 0100). Mismo patrón que
 /// [`renamer_world`]: las tres interfaces importadas son las de los otros
 /// worlds, servidas por el mismo `HostState`.

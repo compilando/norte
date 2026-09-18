@@ -1,3 +1,4 @@
+ai.organize_plan	Request	Direct	methods::AiOrganizePlanParams	methods::AiOrganizePlanResult	
 ai.rename_plan	Request	Direct	methods::AiRenamePlanParams	methods::AiRenamePlanResult	
 archive.pack	Request	Task	methods::ArchivePackParams	methods::FsTaskResult	
 archive.pack_report	Request	Direct	methods::ArchivePackReportParams	methods::ArchivePackReportResult	
@@ -27,6 +28,7 @@ fs.dir_usage_report	Request	Direct	methods::FsDirUsageReportParams	methods::FsDi
 fs.list	Request	Direct	methods::FsListParams	methods::FsListResult	
 fs.mkdir	Request	Task	methods::FsMkdirParams	methods::FsTaskResult	
 fs.move	Request	Task	methods::FsMoveParams	methods::FsTaskResult	
+fs.organize	Request	Task	methods::FsOrganizeParams	methods::FsTaskResult	
 fs.read	Request	Direct	methods::FsReadParams	methods::FsReadResult	
 fs.rename_batch	Request	Task	methods::FsRenameBatchParams	methods::FsTaskResult	
 fs.rename_batch_plan	Request	Direct	methods::FsRenameBatchPlanParams	methods::FsRenameBatchPlanResult	
@@ -50,6 +52,7 @@ plugin.get_config	Request	Direct	methods::PluginGetConfigParams	methods::PluginG
 plugin.help	Request	Direct	methods::PluginHelpParams	methods::PluginHelpResult	
 plugin.list	Request	Direct	methods::PluginListParams	methods::PluginListResult	
 plugin.notice	Notification	Direct	methods::PluginNotice	()	
+plugin.organize_plan	Request	Direct	methods::PluginOrganizePlanParams	methods::AiOrganizePlanResult	
 plugin.panel_render	Request	Direct	methods::PluginPanelRenderParams	methods::PluginPanelRenderResult	
 plugin.preview	Request	Direct	methods::PluginPreviewParams	methods::PluginPreviewResult	
 plugin.preview_styled	Request	Direct	methods::PluginPreviewStyledParams	methods::PluginPreviewStyledResult	
