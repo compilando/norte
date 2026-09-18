@@ -4127,7 +4127,9 @@ describe("la revisión de un plan de organizar", () => {
     const v = vista({});
     v.organize = arbol();
     screen.paint(v);
-    const botones = Array.from(document.querySelectorAll(".organize .choices button"));
+    const botones = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".organize .choices button"),
+    );
     expect(botones[0]?.disabled).toBe(true);
     // Descartar SIEMPRE se puede: quien no quiere esto tiene que poder
     // quitárselo de encima.
