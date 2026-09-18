@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Menus in sections** (ADR 0125, bridge 74), in the terminal and the window.
+  Each menu is split into groups: some are separated by a plain rule, some
+  carry a title (Archives, Split files, Integrity, History, Places…). Delete
+  is painted in the danger colour, AI entries carry `✦`, and an entry with no
+  key leaves the column empty instead of showing `—`. In the terminal the
+  rules join the border (`├───┤`). A menu taller than the screen drops its
+  rules before it would drop a command.
 - **Columns give way so the name can be read** (ADR 0124), in the terminal and
   the window alike. The name aims for the width that covers 80% of the names
   in the listing (at most 3/5 of the pane). Until it gets there, the other

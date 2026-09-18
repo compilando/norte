@@ -2107,13 +2107,45 @@ describe("la barra de menús", () => {
         open === null
           ? []
           : [
-              { label: "Cambiar de panel", chord: "tab", enabled: true },
-              { label: "Desconectar", chord: "—", enabled: false },
+              {
+                label: "Cambiar de panel",
+                chord: "tab",
+                enabled: true,
+                section: null,
+                role: "normal",
+              },
+              {
+                label: "Desconectar",
+                chord: "",
+                enabled: false,
+                section: "Sitios",
+                role: "normal",
+              },
+              {
+                label: "Borrar",
+                chord: "F8",
+                enabled: true,
+                section: "",
+                role: "destructive",
+              },
             ],
       cursor: 1,
     };
     return v;
   }
+
+  it("pinta las secciones sin contarlas como entradas", () => {
+    const { screen } = montar();
+    screen.paint(conMenu(1));
+    const secciones = [...document.querySelectorAll(".menu-section")];
+    expect(secciones.map((s) => s.textContent)).toEqual(["Sitios", ""]);
+    expect(secciones.every((s) => s.getAttribute("role") === "separator")).toBe(true);
+    // El cursor sigue nombrando ENTRADAS: la 1 es «Desconectar», no la raya.
+    const actual = document.querySelector('.menu-item[data-current="true"]');
+    expect(actual?.id).toBe("menu-item-1");
+    const borrar = document.querySelector("#menu-item-2");
+    expect(borrar?.getAttribute("data-role")).toBe("destructive");
+  });
 
   it("pinta los títulos y reserva su fila", () => {
     const { screen } = montar();

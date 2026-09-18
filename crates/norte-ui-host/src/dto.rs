@@ -201,7 +201,8 @@ pub struct MenuItemView {
     /// La etiqueta CORTA (`menu-item-*`), no la frase de la ayuda: esa es una
     /// descripción, y con ella el desplegable se va a setenta columnas.
     pub label: String,
-    /// El atajo que la corre, o `—` si no tiene ninguno en este preset.
+    /// El atajo que la corre, o vacío si no tiene ninguno en este preset
+    /// (puente 74: antes una raya, que se leía como «deshabilitada»).
     pub chord: String,
     /// Esta ventana puede ejecutarla.
     ///
@@ -210,6 +211,15 @@ pub struct MenuItemView {
     /// limitación en un misterio. Es la misma regla que la paleta aplica a
     /// las filas que no puede correr.
     pub enabled: bool,
+    /// Si con esta entrada EMPIEZA una sección (ADR 0125, puente 74): `None`
+    /// sigue en la de la anterior, `Some("")` es una raya sin rótulo y
+    /// `Some(r)` una con el rótulo `r`, ya traducido. Va en la entrada y no
+    /// como elemento propio para que el cursor siga contando entradas.
+    pub section: Option<String>,
+    /// `normal`, `destructive` (se pinta en el color de peligro) o `ai` (lleva
+    /// la marca de IA). Lo decide `norte_frontend::menu::role`, el mismo que
+    /// lee el terminal.
+    pub role: String,
 }
 
 /// La barra de paneles (#324, puente 51): una fila de botones, uno por

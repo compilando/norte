@@ -300,9 +300,9 @@ impl Estado {
         let ejecutables = crate::commands::todos_con(self.efectos);
         let items = self.menu.as_ref().map_or_else(Vec::new, |m| {
             MENUS.get(m.menu()).map_or_else(Vec::new, |menu| {
-                menu.items
-                    .iter()
-                    .map(|id| crate::dto::MenuItemView {
+                menu.items()
+                    .enumerate()
+                    .map(|(i, id)| crate::dto::MenuItemView {
                         // La etiqueta CORTA y propia (`menu-item-*`), no la
                         // frase de `help-cmd-*`: esa es una descripción, y con
                         // ella el desplegable tapa los dos paneles. Mismo
@@ -316,9 +316,15 @@ impl Estado {
                                 .or_else(|| {
                                     norte_frontend::palette::first_chord(id, &self.efectivo_visor)
                                 })
-                                .unwrap_or_else(|| "—".to_owned()),
+                                .unwrap_or_default(),
                         ),
-                        enabled: ejecutables.contains(id),
+                        enabled: ejecutables.contains(&id),
+                        section: menu.section_at(i).map(|titulo| {
+                            titulo.map_or_else(String::new, |k| {
+                                clamp_display(norte_i18n::t_in(self.lang, k))
+                            })
+                        }),
+                        role: norte_frontend::menu::role(id).as_str().to_owned(),
                     })
                     .collect()
             })

@@ -1410,11 +1410,22 @@ fn menu_de_referencia() -> norte_ui_host::dto::MenuView {
                 label: "Cambiar de panel".to_owned(),
                 chord: "tab".to_owned(),
                 enabled: true,
+                section: None,
+                role: "normal".to_owned(),
             },
             norte_ui_host::dto::MenuItemView {
                 label: "Desconectar".to_owned(),
-                chord: "—".to_owned(),
+                chord: String::new(),
                 enabled: false,
+                section: Some("Sitios".to_owned()),
+                role: "normal".to_owned(),
+            },
+            norte_ui_host::dto::MenuItemView {
+                label: "Borrar".to_owned(),
+                chord: "F8".to_owned(),
+                enabled: true,
+                section: Some(String::new()),
+                role: "destructive".to_owned(),
             },
         ],
         cursor: 1,
@@ -2622,7 +2633,8 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // Puente 70: el panel que pinta un PLUGIN (`SlotView::Panel` con sus
     // `lines`/`hits`) y el clic sobre una de sus zonas (`UiAction::PanelClick`,
     // que manda la CELDA y no un comando; fase 3).
-    const FORMA: u64 = 15_479_893_442_482_284_036;
+    // Puente 74: `MenuItemView.section` y `.role` (ADR 0125).
+    const FORMA: u64 = 9_770_681_050_816_723_760;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

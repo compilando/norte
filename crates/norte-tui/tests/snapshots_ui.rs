@@ -2496,6 +2496,42 @@ fn los_nombres_largos_se_leen_enteros() {
     );
 }
 
+/// Los menús van en secciones (ADR 0125): Operar pinta sus rótulos, y la
+/// fila de «Borrar» —debajo de dos rayas— ejecuta Borrar, no la orden que
+/// caería en esa fila si las rayas no contaran.
+#[test]
+fn el_menu_pinta_secciones_y_el_clic_sigue_a_la_orden() {
+    let mut app = app_base();
+    let operar = norte_frontend::menu::MENUS
+        .iter()
+        .position(|m| m.title == "menu-operate")
+        .expect("Operar");
+    let mut m = norte_frontend::menu::MenuState::new();
+    m.open(operar);
+    app.menu = Some(m);
+    let area = ratatui::layout::Rect::new(0, 0, 80, 32);
+    let mut terminal = Terminal::new(TestBackend::new(80, 32)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let pantalla = terminal.backend().to_string();
+    assert!(
+        pantalla.contains("├─ Archivos comprimidos"),
+        "el rótulo de la sección:\n{pantalla}"
+    );
+    let fila = pantalla
+        .lines()
+        .position(|l| l.contains("Borrar ") && !l.contains("permanente"))
+        .expect("la fila de Borrar");
+    let borrar = norte_frontend::menu::MENUS[operar]
+        .items()
+        .position(|id| id == "pane.delete")
+        .expect("Borrar en Operar");
+    let zona = ui::menu_zones(&app, area)
+        .into_iter()
+        .find(|z| usize::from(z.row) == fila)
+        .expect("la fila de Borrar es pulsable");
+    assert_eq!(zona.hit, ui::MenuHit::Item(borrar));
+}
+
 /// Revisión S, M3: con el overlay de ajustes Y un modal AMBOS abiertos (el
 /// enrutado de teclas ya trata al modal como AUTORITATIVO en este caso,
 /// `modal_preempts_settings`), el modal debe pintarse ENCIMA — antes se
