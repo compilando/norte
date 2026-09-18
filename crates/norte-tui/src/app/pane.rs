@@ -474,6 +474,13 @@ impl Pane {
         self.state.any_icon()
     }
 
+    /// Celdas que cubren al 80% de los nombres del listado — delegado puro a
+    /// [`norte_frontend::PaneState::name_width_p80`].
+    #[must_use]
+    pub fn name_width_p80(&self) -> u16 {
+        self.state.name_width_p80()
+    }
+
     /// ¿Está marcada esta entrada? (#103) — delegado puro a
     /// [`norte_frontend::PaneState::is_marked`]. El render pinta un canalón
     /// textual (`*`) al inicio de la fila.

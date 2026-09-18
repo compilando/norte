@@ -280,7 +280,7 @@ pub(crate) fn column_header_line(
 /// aún no llegó o falló — defaults Opaque, jamás bloquea el render.
 pub(crate) fn styled_columns(
     settings: &norte_frontend::columns::ColumnsSettings,
-    scheme: &str,
+    pane: &Pane,
     inner_w: u16,
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<(
@@ -288,13 +288,35 @@ pub(crate) fn styled_columns(
     u16,
     norte_frontend::columns::ColumnStyle,
 )> {
-    norte_frontend::columns::column_widths(settings, scheme, inner_w)
+    let scheme = pane.dir().scheme();
+    pane_columns(settings, pane, inner_w)
         .into_iter()
-        .map(|(id, w)| {
-            let s = settings.style_for_id(scheme, &id, catalog);
-            (id, w, s)
+        .map(|f| {
+            let s = settings
+                .style_for_id(scheme, &f.id, catalog)
+                .compacted(f.compact);
+            (f.id, f.width, s)
         })
         .collect()
+}
+
+/// Las columnas de un pane, ajustadas para que sus NOMBRES se lean
+/// ([`norte_frontend::columns::fitted_columns`]). Única fuente de los
+/// anchos: la pintura y el borde que arrastra el ratón salen de aquí, y dos
+/// cálculos distintos harían que el arrastre agarrase la columna de al lado.
+///
+/// Lo que el nombre quiere es lo que miden sus nombres más lo que va delante
+/// de ellos en la fila: canalón, badge, clase y —si los hay— iconos.
+pub(crate) fn pane_columns(
+    settings: &norte_frontend::columns::ColumnsSettings,
+    pane: &Pane,
+    inner_w: u16,
+) -> Vec<norte_frontend::columns::Fitted> {
+    let delante = 3 + if pane.any_icon() { ICON_GUTTER } else { 0 };
+    let quiere = pane
+        .name_width_p80()
+        .saturating_add(u16::try_from(delante).unwrap_or(u16::MAX));
+    norte_frontend::columns::fitted_columns(settings, pane.dir().scheme(), inner_w, quiere)
 }
 
 /// El título del borde del pane: dónde está, qué le pasa y a dónde va.
@@ -471,7 +493,7 @@ pub(crate) fn draw_pane(
     // frame — las filas y la cabecera comparten el mismo layout (con el
     // estilo 7b resuelto por columna, ver `styled_columns`).
     let inner_w = block.inner(area).width;
-    let cols = &styled_columns(settings, pane.dir().scheme(), inner_w, catalog);
+    let cols = &styled_columns(settings, pane, inner_w, catalog);
     // La selección PINTADA sale de la misma función que la usa el hit test
     // del ratón ([`painted_len_and_selection`]): el scroll de abajo se
     // deriva de ella, y dos cálculos distintos harían que un click cayera

@@ -448,6 +448,10 @@ pub enum SizeFormat {
     Iec,
     /// Decimal (`kB`/`MB`).
     Si,
+    /// Corto, binario y sin espacio (`80K`, `1.3M`, `512B`): nunca más de
+    /// cinco celdas. No es un formato de configuración: es el que pone
+    /// [`fitted_columns`] cuando el nombre necesita el sitio.
+    Short,
 }
 
 /// Formato de tiempo.
@@ -464,6 +468,10 @@ pub enum TimeFormat {
     /// ([`format_mtime_tz`] para fijarla; [`format_mtime_in`] usa la del
     /// sistema).
     Smart,
+    /// Lo de [`Self::Smart`] en cinco celdas: `14:02` si es de hoy, `09-10`
+    /// si es de este año, `2025` si es anterior. Como [`SizeFormat::Short`],
+    /// lo pone [`fitted_columns`], no la configuración.
+    Short,
 }
 
 /// Formato de un word de modo POSIX (#117).
@@ -616,6 +624,29 @@ pub fn format_size(n: u64, fmt: SizeFormat) -> String {
             }
             format!("{value:.1} {}", UNITS[unit])
         }
+        SizeFormat::Short => short_size(n),
+    }
+}
+
+/// [`SizeFormat::Short`]: `512B`, `9.5K`, `80K`, `1.3M`. Una cifra decimal
+/// solo por debajo de 10, que es donde cambia la lectura; el redondeo que
+/// llega a 1000 sube de unidad, así que jamás pasa de cinco celdas.
+fn short_size(n: u64) -> String {
+    const UNITS: [char; 6] = ['K', 'M', 'G', 'T', 'P', 'E'];
+    if n < 1024 {
+        return format!("{n}B");
+    }
+    #[expect(clippy::cast_precision_loss, reason = "magnitudes lejos de 2^53")]
+    let mut value = n as f64 / 1024.0;
+    let mut unit = 0usize;
+    while value.round() >= 1000.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if (value * 10.0).round() < 100.0 {
+        format!("{value:.1}{}", UNITS[unit])
+    } else {
+        format!("{value:.0}{}", UNITS[unit])
     }
 }
 
@@ -659,6 +690,7 @@ pub fn format_mtime_tz(
     match fmt {
         TimeFormat::Iso => iso_utc_minutes(mtime_ms),
         TimeFormat::Smart => smart_local(mtime_ms, now_ms, tz),
+        TimeFormat::Short => short_local(mtime_ms, now_ms, tz),
         TimeFormat::Relative => {
             let delta_s = (now_ms.saturating_sub(mtime_ms)) / 1000;
             if delta_s < 60 {
@@ -703,6 +735,26 @@ fn smart_local(mtime_ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
         )
     } else {
         format!("{:04}-{:02}-{:02}", z.year(), z.month(), z.day())
+    }
+}
+
+/// [`TimeFormat::Short`]: la parte de [`smart_local`] que distingue a esa
+/// distancia, y nada más. Fuera del rango de `jiff`, el año del ISO.
+fn short_local(mtime_ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
+    let (Ok(ts), Ok(now)) = (
+        jiff::Timestamp::from_millisecond(mtime_ms),
+        jiff::Timestamp::from_millisecond(now_ms),
+    ) else {
+        return iso_utc_minutes(mtime_ms).chars().take(4).collect();
+    };
+    let z = ts.to_zoned(tz.clone());
+    let n = now.to_zoned(tz.clone());
+    if z.date() == n.date() {
+        format!("{:02}:{:02}", z.hour(), z.minute())
+    } else if z.year() == n.year() {
+        format!("{:02}-{:02}", z.month(), z.day())
+    } else {
+        format!("{:04}", z.year())
     }
 }
 
@@ -1227,6 +1279,17 @@ pub struct ColumnStyle {
 }
 
 impl ColumnStyle {
+    /// El mismo estilo en formato corto, si `compact` (lo que dice
+    /// [`Fitted::compact`]). Toca los dos formatos: cada columna lee el suyo.
+    #[must_use]
+    pub fn compacted(mut self, compact: bool) -> Self {
+        if compact {
+            self.size_format = SizeFormat::Short;
+            self.time_format = TimeFormat::Short;
+        }
+        self
+    }
+
     /// Los defaults del builtin sin spec: iec/relative, nombre a la
     /// izquierda y el resto a la derecha — la convención que ya pintaban
     /// ambos frontends.
@@ -1702,6 +1765,33 @@ impl ColumnsSettings {
             .is_some_and(|sp| sp.format.is_some())
     }
 
+    /// ¿Tiene `id` un `width` en algún spec (global o del scheme)? Es lo que
+    /// escribe arrastrar un borde, así que es «el usuario lo tocó», y
+    /// [`fitted_columns`] no lo mueve.
+    #[must_use]
+    pub fn width_pinned(&self, scheme: &str, id: &ColumnId) -> bool {
+        self.spec_field(scheme, id, |s| s.width.is_some())
+    }
+
+    /// ¿Tiene `id` un `format` en algún spec (global o del scheme)? Quien
+    /// eligió un formato no quiere que se lo cambien por el corto.
+    #[must_use]
+    pub fn format_pinned(&self, scheme: &str, id: &ColumnId) -> bool {
+        self.spec_field(scheme, id, |s| s.format.is_some())
+    }
+
+    fn spec_field(
+        &self,
+        scheme: &str,
+        id: &ColumnId,
+        campo: impl Fn(&norte_config::ColumnSpec) -> bool,
+    ) -> bool {
+        let key = id.to_string();
+        let global = self.specs_global.get(&key);
+        let scoped = self.specs_schemes.get(scheme).and_then(|m| m.get(&key));
+        [global, scoped].into_iter().flatten().any(campo)
+    }
+
     fn collect_diagnostics(&mut self, ids: &[String]) {
         // #117 review: el cap de attrs pedibles es POR LISTA pintada
         // (default o scheme), con el mismo dedup que `layout_items_for` —
@@ -2095,6 +2185,143 @@ pub fn column_widths(
         .zip(placed)
         .filter_map(|((id, _), w)| w.map(|w| (id, w)))
         .collect()
+}
+
+/// Ancho de una columna compacta, separador incluido: `1023B`, `1.3M`,
+/// `22:19` y `09-16` caben en cinco celdas.
+pub const COMPACT_WIDTH: u16 = 6;
+
+/// Una columna tal como se pinta tras [`fitted_columns`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fitted {
+    /// Qué columna.
+    pub id: ColumnId,
+    /// Su ancho en celdas, separador incluido.
+    pub width: u16,
+    /// Va en formato corto ([`SizeFormat::Short`] / [`TimeFormat::Short`]):
+    /// quien pinta lo aplica al estilo con [`ColumnStyle::compacted`].
+    pub compact: bool,
+}
+
+/// Un peldaño de la escalera de [`fitted_columns`].
+#[derive(Debug, Clone, Copy)]
+enum Peldano {
+    Ocultar,
+    Compactar,
+}
+
+/// El orden en que las columnas ceden sitio al nombre. Primero lo que ya se
+/// dice de otra forma —la clase la cuentan el icono, el color y la `/`—,
+/// luego lo que se puede decir más corto, y solo al final lo que se pierde.
+const ESCALERA: [(Builtin, Peldano); 5] = [
+    (Builtin::Kind, Peldano::Ocultar),
+    (Builtin::Mtime, Peldano::Compactar),
+    (Builtin::Size, Peldano::Compactar),
+    (Builtin::Mtime, Peldano::Ocultar),
+    (Builtin::Size, Peldano::Ocultar),
+];
+
+/// Anchos que dan prioridad a LEER el nombre.
+///
+/// [`column_widths`] reparte sin mirar lo que hay en el directorio: el nombre
+/// se queda con lo que sobra y, en un panel estrecho, eso es `Cap….png`.
+/// Aquí el nombre tiene un objetivo, `name_wanted` (lo que quien pinta midió
+/// del listado, ver [`name_width_p80`]), acotado a 3/5 del ancho para que
+/// un nombre larguísimo no se coma todas las demás. Mientras no llega, las
+/// demás columnas ceden un peldaño cada vez —ocultar la clase, fecha corta,
+/// tamaño corto, ocultar la fecha, ocultar el tamaño— y se para en cuanto
+/// llega: un panel ancho no pierde nada.
+///
+/// Solo cede lo que el usuario no ha tocado: una columna con `width` en su
+/// spec no se compacta ni se oculta, una con `format` no se compacta, y un
+/// nombre con ancho fijo desactiva la escalera entera. Las columnas `attr:`
+/// y `plugin:` no están en la escalera: las pidió alguien a propósito.
+#[must_use]
+pub fn fitted_columns(
+    settings: &ColumnsSettings,
+    scheme: &str,
+    inner_width: u16,
+    name_wanted: u16,
+) -> Vec<Fitted> {
+    let nombre = ColumnId::Builtin(Builtin::Name);
+    let techo = u16::try_from(u32::from(inner_width) * 3 / 5).unwrap_or(u16::MAX);
+    let objetivo = name_wanted.min(techo).max(NAME_MIN);
+    let libre = !settings.width_pinned(scheme, &nombre);
+    let mut set = settings.layout_items_for(scheme);
+    let mut vivas = vec![true; set.len()];
+    let mut cortas = vec![false; set.len()];
+    let mut escalera = ESCALERA.iter();
+    loop {
+        let items: Vec<LayoutItem> = set
+            .iter()
+            .zip(&vivas)
+            .filter(|(_, v)| **v)
+            .map(|((_, it), _)| *it)
+            .collect();
+        let mut anchos = layout(inner_width, &items).into_iter();
+        let out: Vec<Fitted> = set
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| vivas[*i])
+            .filter_map(|(i, (id, _))| {
+                anchos.next().flatten().map(|width| Fitted {
+                    id: id.clone(),
+                    width,
+                    compact: cortas[i],
+                })
+            })
+            .collect();
+        let tiene = out.iter().find(|f| f.id == nombre).map_or(0, |f| f.width);
+        if !libre || tiene >= objetivo {
+            return out;
+        }
+        // El siguiente peldaño que se PUEDE dar; sin ninguno, esto es lo
+        // mejor que cabe.
+        loop {
+            let Some(&(b, peldano)) = escalera.next() else {
+                return out;
+            };
+            let id = ColumnId::Builtin(b);
+            let Some(i) = set.iter().position(|(c, _)| *c == id) else {
+                continue;
+            };
+            if !vivas[i] || settings.width_pinned(scheme, &id) {
+                continue;
+            }
+            match peldano {
+                Peldano::Ocultar => vivas[i] = false,
+                Peldano::Compactar => {
+                    if cortas[i] || settings.format_pinned(scheme, &id) {
+                        continue;
+                    }
+                    cortas[i] = true;
+                    set[i].1.policy = WidthPolicy::Fixed(COMPACT_WIDTH);
+                }
+            }
+            break;
+        }
+    }
+}
+
+/// El ancho que cubre al 80% de los nombres, a partir de un histograma de
+/// anchos (`counts[w]` = cuántos nombres miden `w` celdas; el último cubo
+/// cuenta también a los más anchos). El 80% y no el máximo: un solo nombre
+/// kilométrico no debe dejar al resto del listado sin fecha.
+#[must_use]
+pub fn name_width_p80(counts: &[u32]) -> u16 {
+    let total: u64 = counts.iter().map(|c| u64::from(*c)).sum();
+    if total == 0 {
+        return 0;
+    }
+    let meta = (total * 4).div_ceil(5);
+    let mut acumulado = 0u64;
+    for (w, c) in counts.iter().enumerate() {
+        acumulado += u64::from(*c);
+        if acumulado >= meta {
+            return u16::try_from(w).unwrap_or(u16::MAX);
+        }
+    }
+    u16::try_from(counts.len().saturating_sub(1)).unwrap_or(u16::MAX)
 }
 
 /// La columna de orden que corresponde a un builtin, si es ordenable.
@@ -3083,5 +3310,172 @@ mod attr_funnel_tests {
         assert_eq!(painted.len(), norte_proto::ATTRS_MAX_REQUEST);
         assert_eq!(painted, st.attr_ids_for("file"), "pintado == pedido");
         assert_eq!(st.attrs_over_cap, vec!["attr:mem.a16".to_owned()]);
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    fn con_clase() -> ColumnsSettings {
+        ColumnsSettings::resolve(&norte_config::ColumnsConfig {
+            default_columns: Some(
+                ["name", "size", "mtime", "kind"]
+                    .map(str::to_owned)
+                    .to_vec(),
+            ),
+            ..Default::default()
+        })
+    }
+
+    fn con_spec(id: &str, spec: norte_config::ColumnSpec) -> ColumnsSettings {
+        let mut cfg = norte_config::ColumnsConfig {
+            default_columns: Some(
+                ["name", "size", "mtime", "kind"]
+                    .map(str::to_owned)
+                    .to_vec(),
+            ),
+            ..Default::default()
+        };
+        cfg.specs.insert(id.to_owned(), spec);
+        ColumnsSettings::resolve(&cfg)
+    }
+
+    fn resumen(f: &[Fitted]) -> Vec<String> {
+        f.iter()
+            .map(|c| format!("{}{}", c.id, if c.compact { "~" } else { "" }))
+            .collect()
+    }
+
+    fn nombre(f: &[Fitted]) -> u16 {
+        f.iter()
+            .find(|c| c.id == ColumnId::Builtin(Builtin::Name))
+            .map_or(0, |c| c.width)
+    }
+
+    /// La captura que motivó esto: un panel de 46 celdas con clase, tamaño
+    /// y fecha dejaba 14 al nombre. Con nombres de ~20, cede la clase —que
+    /// ya dicen el icono y la `/`— y nada más.
+    #[test]
+    fn la_clase_cede_primero_y_basta() {
+        let f = fitted_columns(&con_clase(), "file", 46, 20);
+        assert_eq!(resumen(&f), ["name", "size", "mtime"]);
+        assert!(nombre(&f) >= 20, "{f:?}");
+    }
+
+    /// Nombres largos (capturas de pantalla): tras la clase se compacta la
+    /// fecha, y se para en cuanto el nombre llega a su objetivo acotado.
+    #[test]
+    fn nombres_largos_compactan_la_fecha() {
+        let f = fitted_columns(&con_clase(), "file", 46, 40);
+        assert_eq!(resumen(&f), ["name", "size", "mtime~"]);
+        // Objetivo acotado a 3/5 de 46 = 27.
+        assert!(nombre(&f) >= 27, "{f:?}");
+    }
+
+    /// Un panel ancho no pierde nada: la escalera solo se sube si hace falta.
+    #[test]
+    fn ancho_de_sobra_no_toca_nada() {
+        let f = fitted_columns(&con_clase(), "file", 120, 30);
+        assert_eq!(resumen(&f), ["name", "size", "mtime", "kind"]);
+    }
+
+    /// Una columna con ancho fijado por el usuario no se oculta ni se
+    /// compacta; la escalera salta al peldaño siguiente.
+    #[test]
+    fn lo_que_el_usuario_fijo_no_cede() {
+        let s = con_spec(
+            "kind",
+            norte_config::ColumnSpec {
+                width: Some(norte_config::WidthChoice::Fixed(9)),
+                ..Default::default()
+            },
+        );
+        let f = fitted_columns(&s, "file", 46, 20);
+        assert_eq!(resumen(&f), ["name", "size", "mtime~", "kind"]);
+    }
+
+    /// Un formato elegido tampoco se cambia por el corto.
+    #[test]
+    fn un_formato_elegido_no_se_compacta() {
+        let s = con_spec(
+            "mtime",
+            norte_config::ColumnSpec {
+                format: Some("iso".to_owned()),
+                ..Default::default()
+            },
+        );
+        let f = fitted_columns(&s, "file", 46, 40);
+        assert_eq!(resumen(&f), ["name", "size~", "mtime"]);
+    }
+
+    /// Con el nombre de ancho fijo no hay escalera: es exactamente el
+    /// reparto de siempre.
+    #[test]
+    fn nombre_fijo_desactiva_la_escalera() {
+        let s = con_spec(
+            "name",
+            norte_config::ColumnSpec {
+                width: Some(norte_config::WidthChoice::Fixed(12)),
+                ..Default::default()
+            },
+        );
+        let f = fitted_columns(&s, "file", 46, 40);
+        let antes: Vec<_> = column_widths(&s, "file", 46)
+            .into_iter()
+            .map(|(id, width)| Fitted {
+                id,
+                width,
+                compact: false,
+            })
+            .collect();
+        assert_eq!(f, antes);
+    }
+
+    #[test]
+    fn el_p80_ignora_la_cola_larga() {
+        let mut counts = [0u32; 65];
+        counts[8] = 8;
+        counts[64] = 2;
+        assert_eq!(name_width_p80(&counts), 8);
+        assert_eq!(name_width_p80(&[0; 65]), 0);
+    }
+
+    #[test]
+    fn tamanos_cortos_caben_en_cinco() {
+        for (n, esperado) in [
+            (0, "0B"),
+            (1023, "1023B"),
+            (1024, "1.0K"),
+            (9 * 1024 + 900, "9.9K"),
+            (81_715, "80K"),
+            (1_023 * 1024 + 1000, "1.0M"),
+            (1_363_149, "1.3M"),
+            (u64::MAX, "16E"),
+        ] {
+            let s = format_size(n, SizeFormat::Short);
+            assert_eq!(s, esperado, "{n}");
+            assert!(s.chars().count() <= 5, "{s}");
+        }
+    }
+
+    #[test]
+    fn fechas_cortas_caben_en_cinco() {
+        let tz = jiff::tz::TimeZone::UTC;
+        let ahora = 1_789_000_000_000; // 2026-09-10 00:26 UTC
+        let lang = norte_i18n::Lang::Es;
+        let hoy = format_mtime_tz(ahora - 60_000, TimeFormat::Short, ahora, lang, &tz);
+        let este_ano =
+            format_mtime_tz(ahora - 40 * 86_400_000, TimeFormat::Short, ahora, lang, &tz);
+        let antes = format_mtime_tz(
+            ahora - 400 * 86_400_000,
+            TimeFormat::Short,
+            ahora,
+            lang,
+            &tz,
+        );
+        assert_eq!(hoy, "00:25");
+        assert_eq!(este_ano, "08-01");
+        assert_eq!(antes, "2025");
     }
 }

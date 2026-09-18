@@ -133,6 +133,31 @@ fn is_hidden_entry(e: &Entry) -> bool {
         .is_some_and(|n| n.as_bytes().first() == Some(&b'.'))
 }
 
+/// Cubos del histograma de anchos de nombre: el último cuenta todo lo que
+/// mide 64 celdas o más, que ya es más de lo que ningún panel le dará.
+const CUBOS_DE_NOMBRE: usize = 65;
+
+/// El ancho (celdas) que cubre al 80% de los nombres de `entries`.
+///
+/// Sin reservar nada por entrada: un nombre UTF-8 se mide en sitio, y solo
+/// uno que no lo es pasa por la conversión con pérdida — la misma que lo
+/// pinta. La reinterpretación de encoding por panel no se mira: cambia qué
+/// glifos salen, no cuántos caben.
+fn medir_nombres(entries: &[Entry]) -> u16 {
+    use unicode_width::UnicodeWidthStr;
+    let mut cubos = [0u32; CUBOS_DE_NOMBRE];
+    for e in entries {
+        let bytes = e.path.file_name().map_or(&[][..], |n| n.as_bytes());
+        let ancho = match std::str::from_utf8(bytes) {
+            Ok(s) => s.width(),
+            Err(_) => String::from_utf8_lossy(bytes).width(),
+        };
+        let cubo = ancho.min(CUBOS_DE_NOMBRE - 1);
+        cubos[cubo] = cubos[cubo].saturating_add(1);
+    }
+    crate::columns::name_width_p80(&cubos)
+}
+
 /// En qué estado está la fila `..` de un listado.
 ///
 /// Un enum y no dos `bool` porque el cuarto estado que dos booleanos
@@ -209,6 +234,12 @@ pub struct PaneState {
     /// one is a claim about mark IDENTITY (paths), and it is kept where it
     /// already was.
     listing_epoch: u64,
+    /// Celdas que cubren al 80% de los nombres del listado
+    /// ([`crate::columns::name_width_p80`]). Se mide cuando el listado
+    /// cambia, no al pintar: es lo que [`crate::columns::fitted_columns`]
+    /// intenta dar al nombre, y medirlo por frame sería recorrer el
+    /// directorio entero en cada tecla.
+    name_p80: u16,
     /// Extent (`lo..=hi`, clamped nowhere) the sweep in progress applied
     /// last, so the next [`Self::apply_sweep`] can give back exactly the
     /// rows that left the range instead of rebuilding the mark set.
@@ -329,7 +360,9 @@ impl PaneState {
     pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
         let (entries, sort_keys) =
             crate::sort::sort_with_keys_spec(entries, crate::sort::SortSpec::default());
+        let name_p80 = medir_nombres(&entries);
         Self {
+            name_p80,
             dir,
             entries,
             sort_keys,
@@ -1087,6 +1120,14 @@ impl PaneState {
     /// holding is the one outcome worth ruling out.
     fn listing_moved(&mut self) {
         self.listing_epoch = self.listing_epoch.saturating_add(1);
+        self.name_p80 = medir_nombres(&self.entries);
+    }
+
+    /// Celdas que cubren al 80% de los nombres de este listado: lo que el
+    /// nombre necesita para leerse, medido al cambiar el listado.
+    #[must_use]
+    pub fn name_width_p80(&self) -> u16 {
+        self.name_p80
     }
 
     /// Fija el cursor real a `i` con clamp (jamás fuera de rango). Para re-anclar

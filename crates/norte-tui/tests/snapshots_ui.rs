@@ -2446,6 +2446,56 @@ fn la_lista_de_ajustes_sigue_al_cursor() {
     );
 }
 
+/// La captura del 2026-09-18: dos paneles de ~50 columnas con Tipo, Tamaño
+/// y Fecha dejaban 16 celdas al nombre y cada captura de pantalla salía
+/// como `Ca….png`. El nombre se lee ahora entero: cede la clase, que ya
+/// dice la fila, y la fecha pasa a corta.
+#[test]
+fn los_nombres_largos_se_leen_enteros() {
+    let dir = vp("file:///capturas");
+    let entries = (0..5)
+        .map(|i| {
+            entry(
+                &dir,
+                format!("Captura de pantalla 202{i}.png").as_bytes(),
+                EntryKind::File,
+                Some(80_000),
+            )
+        })
+        .collect();
+    let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
+    app.dialog_hints = default_dialog_hints();
+    app.columns = norte_frontend::columns::ColumnsSettings::resolve(&norte_config::ColumnsConfig {
+        default_columns: Some(
+            ["name", "size", "mtime", "kind"]
+                .map(str::to_owned)
+                .to_vec(),
+        ),
+        ..Default::default()
+    });
+    let mut terminal = Terminal::new(TestBackend::new(100, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let pantalla = terminal.backend().to_string();
+    // Solo el panel IZQUIERDO: el derecho está vacío, no tiene nombres que
+    // leer y por eso conserva todas sus columnas.
+    let izquierdo: String = pantalla
+        .lines()
+        .map(|l| l.chars().take(51).collect::<String>() + "\n")
+        .collect();
+    assert!(
+        izquierdo.contains("Captura de pantalla 2024.png"),
+        "el nombre entero, sin elipsis:\n{pantalla}"
+    );
+    assert!(
+        !izquierdo.contains("Tipo"),
+        "la clase es lo primero que cede:\n{pantalla}"
+    );
+    assert!(
+        izquierdo.contains("Tamaño"),
+        "el tamaño se queda:\n{pantalla}"
+    );
+}
+
 /// Revisión S, M3: con el overlay de ajustes Y un modal AMBOS abiertos (el
 /// enrutado de teclas ya trata al modal como AUTORITATIVO en este caso,
 /// `modal_preempts_settings`), el modal debe pintarse ENCIMA — antes se
