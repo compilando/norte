@@ -336,7 +336,15 @@ impl DialogHints {
                     .collect::<Vec<_>>(),
                 eff,
             ),
-            plugin_config: dialog_hints(&without_navigation(ALLOW_PLUGIN_CONFIG), eff),
+            // `dialog.pane` fuera del pie por la misma razón que arriba: sale
+            // como `Esc`, que ya se deletrea.
+            plugin_config: dialog_hints(
+                &without_navigation(ALLOW_PLUGIN_CONFIG)
+                    .into_iter()
+                    .filter(|c| *c != "dialog.pane")
+                    .collect::<Vec<_>>(),
+                eff,
+            ),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
             nav_volumes: dialog_hints(&without_navigation(ALLOW_NAV_VOLUMES), eff),
             // Solo los verbos PROPIOS de la lista: con confirmar y cancelar

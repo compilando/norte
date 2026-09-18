@@ -110,6 +110,10 @@ pub async fn on_extensions_key(
         on_plugin_config_edit_key(app, backend, mods, code).await;
         return;
     }
+    if flecha_de_botones(app, mods, code) {
+        resolver.reset();
+        return;
+    }
     let Some(chord) = chord_from_crossterm(mods, code) else {
         return; // tecla no modelada por el keymap: ignorar
     };
@@ -162,6 +166,38 @@ pub async fn on_extensions_key(
     } else {
         on_extensions_list_cmd(app, backend, &cmd).await;
     }
+}
+
+/// `←`/`→` sin modificadores recorren el anillo de botones de la ficha, como
+/// `tab` hacia delante y hacia atrás. Devuelve si consumió la tecla.
+///
+/// Cableado a la tecla, no al keymap, a propósito: ningún preset ata
+/// `left`/`right` en `[dialog]`, y una fila de botones que no se recorre con
+/// las flechas es lo raro, no lo configurable. Con el panel de ajustes
+/// abierto, `←` es «atrás»: lo cierra y deja el foco en el botón por el que
+/// se entró; `→` no hace nada ahí.
+fn flecha_de_botones(app: &mut App, mods: KeyModifiers, code: KeyCode) -> bool {
+    if !mods.is_empty() || !matches!(code, KeyCode::Left | KeyCode::Right) {
+        return false;
+    }
+    let Some(mgr) = &mut app.extensions else {
+        return false;
+    };
+    if mgr.config.is_some() {
+        if code == KeyCode::Left {
+            mgr.config = None;
+        }
+        return true;
+    }
+    let botones = crate::mouse::painted_extension_buttons(app).len();
+    if let Some(mgr) = &mut app.extensions {
+        mgr.foco = if code == KeyCode::Right {
+            crate::app::siguiente_foco(mgr.foco, botones)
+        } else {
+            crate::app::anterior_foco(mgr.foco, botones)
+        };
+    }
+    true
 }
 
 /// El comando del botón que el foco señala, si el foco está en uno y ese
@@ -263,7 +299,10 @@ async fn on_plugin_config_panel_cmd(app: &mut App, backend: &Backend, cmd: &str)
     match cmd {
         "dialog.up" => panel.state.up(),
         "dialog.down" => panel.state.down(),
-        "dialog.cancel" => {
+        // `tab` sale igual que `Esc`: se entra al panel desde el anillo de
+        // botones con `tab`, y sin esto era la única tecla del recorrido
+        // que dejaba al lector encerrado dentro.
+        "dialog.cancel" | "dialog.pane" => {
             if let Some(mgr) = &mut app.extensions {
                 mgr.config = None;
             }
@@ -664,6 +703,7 @@ mod aprobacion_tests {
 mod foco_tests {
     use super::App;
     use crate::app::{ExtFoco, ExtensionManager, Modal, Pane};
+    use crossterm::event::{KeyCode, KeyModifiers};
     use ratatui::layout::Rect;
 
     /// Un app con el gestor abierto y las zonas del último frame ya
@@ -787,6 +827,90 @@ mod foco_tests {
         }
 
         assert_eq!(super::boton_enfocado(&app), None);
+    }
+
+    /// `→` recorre los botones como `tab`, y `←` vuelve: desde la lista
+    /// salta al último. Arriba/abajo siguen siendo la lista.
+    #[tokio::test]
+    async fn las_flechas_recorren_los_botones() {
+        let mut app = app_pintado(100);
+        let botones = crate::mouse::painted_extension_buttons(&app).len();
+        assert!(botones >= 2, "la ficha pinta varios botones");
+
+        assert!(super::flecha_de_botones(
+            &mut app,
+            KeyModifiers::NONE,
+            KeyCode::Right
+        ));
+        assert_eq!(foco(&app), ExtFoco::Boton(0));
+        assert!(super::flecha_de_botones(
+            &mut app,
+            KeyModifiers::NONE,
+            KeyCode::Right
+        ));
+        assert_eq!(foco(&app), ExtFoco::Boton(1));
+        assert!(super::flecha_de_botones(
+            &mut app,
+            KeyModifiers::NONE,
+            KeyCode::Left
+        ));
+        assert!(super::flecha_de_botones(
+            &mut app,
+            KeyModifiers::NONE,
+            KeyCode::Left
+        ));
+        assert_eq!(foco(&app), ExtFoco::Lista);
+        assert!(super::flecha_de_botones(
+            &mut app,
+            KeyModifiers::NONE,
+            KeyCode::Left
+        ));
+        assert_eq!(foco(&app), ExtFoco::Boton(botones - 1));
+
+        assert!(
+            !super::flecha_de_botones(&mut app, KeyModifiers::NONE, KeyCode::Down),
+            "abajo no es de los botones"
+        );
+        assert!(
+            !super::flecha_de_botones(&mut app, KeyModifiers::CONTROL, KeyCode::Right),
+            "con modificador la tecla sigue al keymap"
+        );
+    }
+
+    /// Dentro de los ajustes de un plugin, `tab` y `←` devuelven al anillo
+    /// de botones, y el foco sigue en el botón por el que se entró. Antes
+    /// solo `Esc` salía, y el lector que entró con `tab` se quedaba dentro.
+    #[tokio::test]
+    async fn tab_y_flecha_salen_de_los_ajustes() {
+        for salida in ["tab", "left"] {
+            let mut app = app_pintado(100);
+            if let Some(mgr) = &mut app.extensions {
+                mgr.foco = ExtFoco::Boton(2);
+                mgr.config = Some(crate::app::PluginConfigPanel {
+                    plugin_id: "org.acme.demo".into(),
+                    plugin_name: "Demo".into(),
+                    state: norte_frontend::plugin_config::PluginConfigState::new(Vec::new()),
+                });
+            }
+
+            if salida == "tab" {
+                super::on_plugin_config_panel_cmd(&mut app, &backend(), "dialog.pane").await;
+            } else {
+                assert!(super::flecha_de_botones(
+                    &mut app,
+                    KeyModifiers::NONE,
+                    KeyCode::Left
+                ));
+            }
+
+            let mgr = app.extensions.as_ref().expect("el gestor sigue abierto");
+            assert!(mgr.config.is_none(), "{salida} cierra los ajustes");
+            assert_eq!(
+                mgr.foco,
+                ExtFoco::Boton(2),
+                "{salida}: el foco no se pierde"
+            );
+        }
     }
 
     /// Mover el cursor devuelve el foco a la lista: los botones son los del

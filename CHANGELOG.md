@@ -260,6 +260,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The terminal settings list follows the cursor.** Moving down past the
+  bottom of the box left the cursor on a row nobody could see; the list now
+  scrolls with the same sticky-window rule every other list uses
+  (`norte_frontend::viewport::sticky_offset`).
+- **The terminal extension manager is walkable with the arrows.** `←`/`→`
+  move between the card's buttons like `Tab` does, and inside a plugin's
+  settings `Tab` or `←` go back to the buttons — before, only `Esc` left
+  that panel, so a reader who came in with `Tab` was stuck. Approving still
+  asks for an explicit `y`, on purpose (#280).
 - **The window puts the cursor back where the session left it.** It saved
   the cursor row in the UI session and never read it back — place, sort
   order, hidden files and history came back, the cursor always landed on
