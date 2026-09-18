@@ -603,6 +603,18 @@ impl Estado {
                         None if cmd.starts_with("renamer:") => {
                             self.ejecutar_de_renamer(&cmd, backend, buzon)
                         }
+                        // Una fila de ORGANIZER (fase 8): el mismo reparto,
+                        // otro método, y el plan aterriza en el mismo árbol
+                        // revisable que el del modelo.
+                        None if cmd.starts_with("organizer:") => {
+                            match norte_frontend::palette::parse_organizer_key(&cmd) {
+                                Some((id, org)) => {
+                                    let (id, org) = (id.to_owned(), org.to_owned());
+                                    self.pedir_plan_de_organizar(Some((id, org)), backend, buzon)
+                                }
+                                None => self.no_implementado(&cmd),
+                            }
+                        }
                         None => self.no_implementado(&cmd),
                     };
                     let mut envios = vec![cierre];

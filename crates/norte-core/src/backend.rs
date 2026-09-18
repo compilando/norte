@@ -3131,6 +3131,13 @@ impl Backend {
     /// [`Self::organize`] acepta, y calcularlo en el frontend pondría el
     /// digest en dos sitios.
     ///
+    /// **`names` es el operando, y aquí vacío significa vacío** — no «todo»,
+    /// que es lo que significa en [`Self::ai_organize_plan`]. La asimetría no
+    /// es un descuido: el modelo recibe el listado porque el ENGINE lista el
+    /// directorio por él, y un plugin no puede listar nada (regla 9), así que
+    /// lo que no le den no existe para él. Un organizer llamado con la lista
+    /// vacía contesta, correctamente, que no mueve nada.
+    ///
     /// # Errors
     /// [`Error::NotFound`] si ese plugin/organizer no está consentido;
     /// [`Error::InvalidPath`] si el plugin propone un destino que se sale del
@@ -3142,12 +3149,13 @@ impl Backend {
         plugin_id: &str,
         organizer_id: &str,
         dir: &VPath,
+        names: &[String],
     ) -> Result<norte_proto::methods::AiOrganizePlanResult, Error> {
         match self {
             Self::Embedded(_) => {
                 let cfg = crate::connect::config_dir();
                 let (plugin_id, organizer_id) = (plugin_id.to_owned(), organizer_id.to_owned());
-                let dir = dir.clone();
+                let (dir, names) = (dir.clone(), names.to_vec());
                 tokio::task::spawn_blocking(move || {
                     let reg = crate::PluginRegistry::discover(&cfg)
                         .map_err(|_| Error::Io { retryable: false })?;
@@ -3161,7 +3169,7 @@ impl Backend {
                         &organizer_id,
                         Some(&dir),
                         true,
-                        &[],
+                        &names,
                     ) {
                         crate::plugins::OrganizePlanOutcome::Plan(moves) => {
                             let plan_hash = if moves.is_empty() {
@@ -3195,11 +3203,8 @@ impl Backend {
                 .map_err(|_| Error::Internal { panic: true })?
             }
             #[cfg(unix)]
-            // `names` vacío es «todo el directorio», el mismo convenio que el
-            // plan de renombrado: organizar es una decisión sobre la forma
-            // del directorio entero.
             Self::Remote(r) => {
-                r.plugin_organize_plan(plugin_id, organizer_id, dir, &[])
+                r.plugin_organize_plan(plugin_id, organizer_id, dir, names)
                     .await
             }
         }

@@ -9,6 +9,45 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Organizing a directory** (ADR 0122, protocol 0.77.0, bridge 72), phase 8 of
+  the WOW programme. `pane.organize` — in the palette, the File menu and the
+  help in both locales — asks for a plan that puts the files of the current
+  directory INTO FOLDERS, and comes back with a tree you review before anything
+  moves. A tree and not a list of pairs, because what changes is the shape of
+  the directory: forty rows of `a.pdf → facturas/2026/a.pdf` do not let you see
+  how many folders appear, which ones, or what ends up inside each. Above the
+  tree goes the count — "creates 3 folders and moves 12 files" — which is what
+  you read to decide without counting lines, and which survives a box taller
+  than the terminal, since those are cropped from the bottom. A folder that
+  ALREADY existed is not painted as new: that is the difference between "this
+  creates three folders" and "this puts things into folders you already had".
+  Each line says what it is twice, with a role or a CSS class AND a marker
+  glyph, because a colour does not survive a monochrome theme or a screen
+  reader; the marker is never part of the name and the indentation is never
+  spaces in the text, so a file called `+ facturas` cannot disguise itself as a
+  new folder. Approving requires having reached the end of the tree, with
+  scroll in both frontends and a mouse gesture in the window — otherwise that
+  requirement made the screen unapprovable without a keyboard.
+
+  Applying it is ONE batch: `fs.organize` creates the missing folders and moves
+  everything under a single `batch_id`, so undoing it puts the files back and
+  takes away the folders nobody else filled, in one step. `fs.create` plus
+  `fs.move` from a client would have left a batch nobody owns. A destination
+  that escapes the directory — an absolute path, a `..`, a segment that is not
+  legal, a duplicated origin or destination — rejects the plan WHOLE, never
+  halfway: a plan is an intention approved in one go.
+
+  Plans come from a model (`ai.organize_plan`, through the same AI gate as
+  renaming) or from an extension of the new kind `organizer`
+  (`plugin.organize_plan`, WIT package `norte:organizer@0.1.0`) — the plugin
+  proposes and the core executes, exactly as ADR 0095 set out for renamers, and
+  the two plans are indistinguishable downstream because what makes the
+  operation safe is not where the names came from. An organizer appears in the
+  palette with its own label, as `PluginCommandKind::Organizer`. The plan's
+  token travels WITH the plan rather than in a second call, which keeps the
+  digest in one place and removes the window where a human stares at a plan
+  that cannot yet be approved.
+
 - **The journal timeline, and undoing back to a point** (ADR 0121, protocol
   0.76.0), phase 7 of the WOW programme. A new `timeline` panel — in the panel
   bar for every preset, and in the View menu — lists what has been done on this

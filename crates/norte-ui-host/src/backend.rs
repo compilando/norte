@@ -434,11 +434,16 @@ pub trait HostBackend: Send + Sync + 'static {
 
     /// El mismo plan, propuesto por un plugin del kind `organizer` (fase 8).
     /// Mismo reparto que el `renamer`: el plugin propone y el core ejecuta.
+    ///
+    /// **`names` es el operando, y vacío significa vacío**, no «todo»: un
+    /// plugin no lista directorios (regla 9), así que lo que no le den no
+    /// existe para él y contesta que no mueve nada.
     fn plugin_organize_plan(
         &self,
         plugin_id: String,
         organizer_id: String,
         dir: VPath,
+        names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>>;
 
     /// Aplica un plan de organizar ya revisado (fase 8): crea las carpetas
@@ -1434,13 +1439,12 @@ impl HostBackend for norte_client::RemoteBackend {
         plugin_id: String,
         organizer_id: String,
         dir: VPath,
+        names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>> {
         let backend = self.clone();
         Box::pin(async move {
-            // `names` vacío es «todo el directorio»: organizar es una
-            // decisión sobre la forma del directorio entero.
             backend
-                .plugin_organize_plan(&plugin_id, &organizer_id, &dir, &[])
+                .plugin_organize_plan(&plugin_id, &organizer_id, &dir, &names)
                 .await
         })
     }

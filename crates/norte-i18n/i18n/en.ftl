@@ -128,9 +128,17 @@ msg-rename-batch-no-changes = the template leaves every name unchanged
 # you need to decide without counting lines.
 modal-organize-plan = Organize — review the tree
 modal-organize-summary = creates { $dirs } folders and moves { $files } files
-msg-organize-running = organizing…
+msg-organize-running = asking for a plan to organize…
 msg-organize-empty = the plan moves nothing
-msg-organize-no-producer = nothing can propose a plan: configure the AI or install an organizer extension
+msg-organize-failed = could not ask for the plan: { $error }
+# A plan that cannot be approved is not shown: without a token there is
+# nothing to redeem, and opening the tree would promise a button that cannot
+# do anything.
+msg-organize-invalid-plan = the plan is not applicable and was discarded whole
+msg-organize-hidden = the tree is ready: close this dialog and ask again
+# An extension does not list directories: we hand it the names, and that list
+# has a cap. The AI has no such limit, because the core lists for it.
+msg-organize-too-many = this directory has too many entries for an extension to organize
 modal-ai-rename = AI rename — instruction
 modal-ai-rename-hint = Enter: request plan · Esc: cancel
 modal-ai-rename-empty-instruction = type an instruction first

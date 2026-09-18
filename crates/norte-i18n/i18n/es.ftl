@@ -129,9 +129,17 @@ msg-rename-batch-no-changes = la plantilla deja todos los nombres igual
 # se necesita para decidir sin contar líneas.
 modal-organize-plan = Organizar — revisa el árbol
 modal-organize-summary = crea { $dirs } carpetas y mueve { $files } ficheros
-msg-organize-running = organizando…
+msg-organize-running = pidiendo un plan para organizar…
 msg-organize-empty = el plan no mueve nada
-msg-organize-no-producer = no hay quien proponga un plan: configura la IA o instala una extensión de organizar
+msg-organize-failed = no se pudo pedir el plan: { $error }
+# Un plan que no se puede aprobar no se enseña: sin token no hay nada que
+# canjear, y abrir el árbol prometería un botón que no puede hacer nada.
+msg-organize-invalid-plan = el plan no es aplicable y se ha descartado entero
+msg-organize-hidden = el árbol está listo: cierra este diálogo y vuelve a pedirlo
+# Una extensión no lista directorios: los nombres se los damos nosotros, y hay
+# un tope para esa lista. La IA no tiene este límite porque el core lista por
+# ella.
+msg-organize-too-many = este directorio tiene demasiadas entradas para que las organice una extensión
 modal-ai-rename = Renombrado IA — instrucción
 modal-ai-rename-hint = Enter: pedir plan · Esc: cancelar
 modal-ai-rename-empty-instruction = escribe una instrucción primero

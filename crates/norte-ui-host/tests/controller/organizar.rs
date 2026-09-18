@@ -179,6 +179,64 @@ async fn aprobar_exige_haber_llegado_al_final() {
     assert_eq!(hecho[0].1.len(), 12);
 }
 
+/// A un plugin hay que DARLE los nombres: no lista directorios (regla 9), y
+/// con la lista vacía contesta —correctamente— que no mueve nada.
+///
+/// Este es el bug que destapó pilotar la fase 8 en un terminal de verdad: el
+/// árbol nunca se abría y la barra decía «el plan no mueve nada» sobre un
+/// directorio con cinco ficheros dentro.
+#[tokio::test]
+async fn a_un_organizer_se_le_dan_los_nombres_del_directorio() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"a.pdf".to_vec(), false), (b"b.txt".to_vec(), false)],
+    );
+    f.plan_organizar = Some(vec![("a.pdf".to_owned(), "pdf/a.pdf".to_owned())]);
+    f.organizar_hash = Some(hash());
+    let mut ext = crate::ayuda::extension("org.norte.by-extension", "By extension", false);
+    ext.commands = vec![norte_proto::methods::PluginCommandInfo {
+        id: "by-extension".to_owned(),
+        title: "Into folders by extension".to_owned(),
+        kind: norte_proto::methods::PluginCommandKind::Organizer,
+    }];
+    *f.plugins.lock().expect("plugins") = vec![ext];
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    // Por la PALETA, que es la vía del organizer de un plugin.
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    let mut llego = false;
+    for _ in 0..2_000 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
+        if p.rows.iter().any(|r| r.text.contains("Into folders")) {
+            llego = true;
+            break;
+        }
+    }
+    assert!(llego, "la fila del organizer nunca llegó");
+    for c in "Into folders".chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let pedido = hasta(&backend, "la petición al organizer", |f| {
+        f.organizers_pedidos
+            .lock()
+            .expect("organizers")
+            .first()
+            .cloned()
+    })
+    .await;
+    assert_eq!(
+        pedido.2,
+        vec!["a.pdf".to_owned(), "b.txt".to_owned()],
+        "el operando es el directorio entero, no una lista vacía"
+    );
+}
+
 /// Descartar no aplica nada y deja la revisión cerrada.
 #[tokio::test]
 async fn descartar_cierra_y_no_aplica_nada() {

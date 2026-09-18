@@ -84,29 +84,24 @@ pub fn spawn_organize_plan(
     // Los nombres del dir al LANZAR: el árbol necesita saber qué carpeta ya
     // existía, y para cuando el productor conteste el pane puede apuntar a
     // otro sitio.
-    let existentes: Vec<String> = app
-        .focused()
-        .entries()
-        .iter()
-        // Sólo los nombres que son TEXTO: el árbol los compara contra los
-        // segmentos de un `proposed_rel`, que viaja UTF-8. Un nombre que no
-        // lo es no puede ser el destino de nadie, así que omitirlo no esconde
-        // ninguna coincidencia — como mucho pinta como nueva una carpeta que
-        // el plan no podía nombrar.
-        .filter_map(|e| {
-            e.path
-                .file_name()
-                .and_then(|s| std::str::from_utf8(s.as_bytes()).ok().map(str::to_owned))
-        })
-        .collect();
+    let existentes = app.focused().existing_names();
+    // Un plugin NO lista el directorio —no toca el disco, regla 9—, así que
+    // los nombres se los tiene que dar quien llama: con la lista vacía, un
+    // organizer contesta «no muevo nada» y la barra lo dice, que es lo que
+    // pasó la primera vez que esto se pilotó. El modelo es el caso
+    // contrario: el engine lista el dir por él, y ahí la lista vacía SÍ
+    // significa «todo», sin tope que respetar.
+    let operando = app.focused().organizable_names();
+    if organizer.is_some() && operando.len() > norte_proto::methods::AI_RENAME_NAMES_MAX {
+        app.message = Some(t("msg-organize-too-many"));
+        return;
+    }
     let b = backend.clone();
     let d = dir.clone();
-    // Sin instrucción y sin subconjunto: el productor mira el directorio. El
-    // `only` vacío es «todo», el mismo convenio que el plan de renombrado.
     let handle = match organizer {
         Some((id, org)) => {
             let (id, org) = (id.to_owned(), org.to_owned());
-            tokio::spawn(async move { b.plugin_organize_plan(&id, &org, &d).await })
+            tokio::spawn(async move { b.plugin_organize_plan(&id, &org, &d, &operando).await })
         }
         None => tokio::spawn(async move { b.ai_organize_plan(&d, "", &[]).await }),
     };
@@ -152,13 +147,13 @@ pub fn harvest_organize(
         // legítimo queda muy por debajo del tope, y superarlo delata un
         // daemon hostil o N+1 inflando la respuesta.
         Ok(Ok(plan)) if plan.moves.len() > norte_frontend::MAX_AI_PLAN_ENTRIES => {
-            app.message = Some(t("msg-ai-rename-invalid-plan"));
+            app.message = Some(t("msg-organize-invalid-plan"));
         }
         Ok(Ok(plan)) => {
             // Sin token no hay nada que aprobar: confirmar sería un botón
             // que no puede hacer nada, y abrir el árbol lo prometería.
             let Some(plan_hash) = plan.plan_hash else {
-                app.message = Some(t("msg-ai-rename-invalid-plan"));
+                app.message = Some(t("msg-organize-invalid-plan"));
                 return;
             };
             let lines = norte_frontend::organize::tree_lines(&plan.moves, &run.existentes);
@@ -177,8 +172,11 @@ pub fn harvest_organize(
             }
         }
         Ok(Err(e)) => {
+            // SU propio mensaje, y no el de renombrar: sin proveedor de IA
+            // configurado, pedir organizar decía «falló el renombrado IA» —
+            // una barra que nombra una operación que el lector no pidió.
             app.message = Some(ta(
-                "msg-ai-rename-failed",
+                "msg-organize-failed",
                 &[("error", &detail_for_bar(&error_category(&e)))],
             ));
         }

@@ -302,8 +302,8 @@ pub struct Falso {
     /// manda un plan SIN token, que es un plan que no se puede aprobar — y
     /// esta es la forma de comprobar que la revisión no se abre.
     pub organizar_hash: Option<norte_proto::methods::PlanHash>,
-    /// Qué organizer se pidió: `(plugin, organizer)`.
-    pub organizers_pedidos: std::sync::Mutex<Vec<(String, String)>>,
+    /// Qué organizer se pidió y con qué nombres: `(plugin, organizer, nombres)`.
+    pub organizers_pedidos: std::sync::Mutex<Vec<(String, String, Vec<String>)>>,
     /// Los planes de organizar que se mandaron EJECUTAR: `(dir, moves, hash)`.
     pub organizados: std::sync::Mutex<
         Vec<(
@@ -2132,11 +2132,15 @@ impl HostBackend for Falso {
         plugin_id: String,
         organizer_id: String,
         _dir: VPath,
+        names: Vec<String>,
     ) -> BoxFuture<'static, Result<norte_proto::methods::AiOrganizePlanResult, Error>> {
+        // Los NOMBRES que viajaron: un plugin no lista nada, así que con la
+        // lista vacía contesta que no mueve nada — y eso es un fallo del
+        // llamante que ningún test vería si esto no se anotara.
         self.organizers_pedidos
             .lock()
             .expect("organizers")
-            .push((plugin_id, organizer_id));
+            .push((plugin_id, organizer_id, names));
         self.latido();
         self.respuesta_de_organizar()
     }

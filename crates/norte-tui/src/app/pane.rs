@@ -133,6 +133,21 @@ impl Pane {
         self.state.real_entries()
     }
 
+    /// Los ficheros que un plan de ORGANIZAR puede mover (fase 8), en texto
+    /// ([`norte_frontend::PaneState::organizable_names`]).
+    #[must_use]
+    pub fn organizable_names(&self) -> Vec<String> {
+        self.state.organizable_names()
+    }
+
+    /// Los nombres que ya ocupan este directorio, para distinguir una carpeta
+    /// nueva de una que estaba
+    /// ([`norte_frontend::PaneState::existing_names`]).
+    #[must_use]
+    pub fn existing_names(&self) -> Vec<String> {
+        self.state.existing_names()
+    }
+
     /// A dónde apunta el cursor para un gesto de panel: la carpeta bajo él si
     /// lo es, y si no este directorio
     /// ([`norte_frontend::PaneState::target_dir`]).

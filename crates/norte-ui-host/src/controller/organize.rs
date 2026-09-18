@@ -45,22 +45,27 @@ impl Estado {
         // carpeta ya existía, y para cuando el productor conteste el lector
         // puede estar en otro sitio. Sólo los que son TEXTO — el árbol los
         // compara contra segmentos de un `proposed_rel`, que viaja UTF-8.
-        let existentes: Vec<String> = self
-            .hueco()
-            .pane
-            .entries()
-            .iter()
-            .filter_map(|e| e.path.file_name())
-            .filter_map(|s| String::from_utf8(s.as_bytes().to_vec()).ok())
-            .collect();
+        let existentes = self.hueco().pane.existing_names();
+        // Un plugin NO lista el directorio (regla 9), así que los nombres se
+        // los tiene que dar quien llama: con la lista vacía, un organizer
+        // contesta —correctamente— que no mueve nada. El modelo es el caso
+        // contrario: el engine lista por él, y ahí vacío SÍ significa «todo»,
+        // sin tope que respetar.
+        let operando = self.hueco().pane.organizable_names();
+        if organizer.is_some() && operando.len() > norte_proto::methods::AI_RENAME_NAMES_MAX {
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "msg-organize-too-many",
+            )));
+            let cambio = ViewChange::Status(self.status.clone());
+            return (self.aplicada(), vec![self.parche(vec![cambio])]);
+        }
         self.organizar_en_vuelo = Some((epoca, dir.clone(), existentes));
         let b = Arc::clone(backend);
         let buz = buzon.clone();
         tokio::spawn(async move {
             let peticion = match organizer {
-                Some((plugin, org)) => b.plugin_organize_plan(plugin, org, dir),
-                // Sin instrucción y sin subconjunto: el productor mira el
-                // directorio entero, que es el convenio del `names` vacío.
+                Some((plugin, org)) => b.plugin_organize_plan(plugin, org, dir, operando),
                 None => b.ai_organize_plan(dir, String::new(), Vec::new()),
             };
             let res = (tokio::time::timeout(PLAZO_IA, peticion).await)
@@ -130,10 +135,10 @@ impl Estado {
             return self.decir_de_organizar(epoca, "msg-organize-empty");
         }
         if plan.moves.len() > norte_frontend::MAX_AI_PLAN_ENTRIES {
-            return self.decir_de_organizar(epoca, "msg-ai-rename-invalid-plan");
+            return self.decir_de_organizar(epoca, "msg-organize-invalid-plan");
         }
         let Some(plan_hash) = plan.plan_hash else {
-            return self.decir_de_organizar(epoca, "msg-ai-rename-invalid-plan");
+            return self.decir_de_organizar(epoca, "msg-organize-invalid-plan");
         };
         let lineas = norte_frontend::organize::tree_lines(&plan.moves, &existentes);
         self.revision_organizar = Some(RevisionOrganizar {

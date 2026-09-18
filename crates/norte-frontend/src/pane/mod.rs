@@ -995,6 +995,51 @@ impl PaneState {
         }
     }
 
+    /// Los nombres que puede ORGANIZAR un productor de planes (fase 8): los
+    /// ficheros de este directorio, en texto.
+    ///
+    /// Tres filtros, y cada uno tapa un agujero que se vio pilotando:
+    ///
+    /// - **Sin la fila `..`** — sale de [`Self::real_entries`]. Leyendo
+    ///   `entries()` a pelo, un organizer proponía mover el DIRECTORIO PADRE
+    ///   dentro de una carpeta nueva; es la misma trampa que ya documenta
+    ///   `real_entries`, y la razón de que esto viva aquí y no en cada
+    ///   frontend.
+    /// - **Sin directorios.** Organizar es archivar FICHEROS en carpetas.
+    ///   Dejar entrar los directorios deja que el plan mueva una carpeta que
+    ///   otro movimiento del mismo plan usa de destino: el árbol enseña
+    ///   `pdf/a.pdf`, y al aplicarlo `pdf` se ha ido a otro sitio con `a.pdf`
+    ///   dentro. Nada se pierde, pero lo aplicado no es lo revisado, que es
+    ///   peor.
+    /// - **Solo lo que es texto.** `proposed_rel` viaja UTF-8, así que un
+    ///   nombre que no lo es no puede ser origen de un movimiento. Se queda
+    ///   fuera en vez de viajar lossy y volver apuntando a otro fichero.
+    #[must_use]
+    pub fn organizable_names(&self) -> Vec<String> {
+        self.real_entries()
+            .iter()
+            .filter(|e| e.kind != norte_proto::EntryKind::Dir)
+            .filter_map(|e| e.path.file_name())
+            .filter_map(|s| std::str::from_utf8(s.as_bytes()).ok().map(str::to_owned))
+            .collect()
+    }
+
+    /// Los nombres que ya OCUPAN este directorio, en texto: lo que el árbol
+    /// de organizar necesita para distinguir una carpeta nueva de una que ya
+    /// estaba.
+    ///
+    /// Aquí los directorios SÍ entran —son justo los que importan— y la fila
+    /// `..` sigue fuera: el padre no es una entrada de este directorio, y
+    /// contarlo haría «existente» a una carpeta que se llame como él.
+    #[must_use]
+    pub fn existing_names(&self) -> Vec<String> {
+        self.real_entries()
+            .iter()
+            .filter_map(|e| e.path.file_name())
+            .filter_map(|s| std::str::from_utf8(s.as_bytes()).ok().map(str::to_owned))
+            .collect()
+    }
+
     /// Índice bajo el cursor real (0 incluso con lista vacía).
     #[must_use]
     pub fn cursor(&self) -> usize {
@@ -1267,6 +1312,41 @@ mod tests {
         let mut p = PaneState::new(VPath::parse("mem:///casa").unwrap(), es);
         p.set_parent_row(true);
         p
+    }
+
+    /// El operando de organizar deja fuera la fila `..` y los directorios.
+    ///
+    /// Las dos cosas se vieron pilotando la fase 8: el árbol proponía mover
+    /// el DIRECTORIO PADRE dentro de una carpeta nueva —la trampa que
+    /// `real_entries` ya documenta, y que se salta quien lee `entries()`— y
+    /// proponía mover una carpeta que otro movimiento del mismo plan usaba de
+    /// destino, con lo que lo aplicado dejaba de ser lo revisado.
+    #[test]
+    fn organizar_no_ve_ni_el_padre_ni_los_directorios() {
+        let mut p = pane_hijo(&[]);
+        // Una carpeta de verdad entre las entradas.
+        p.set_listing(
+            VPath::parse("mem:///casa").unwrap(),
+            vec![
+                e("mem:///casa/a.txt", EntryKind::File),
+                e("mem:///casa/fotos", EntryKind::Dir),
+                e("mem:///casa/b.txt", EntryKind::File),
+            ],
+        );
+        assert!(p.is_parent_row(0), "el pilar del test: la fila está");
+        assert_eq!(
+            p.organizable_names(),
+            vec!["a.txt".to_owned(), "b.txt".to_owned()],
+            "ni el padre ni la carpeta entran en lo que se va a mover"
+        );
+        // Los nombres que YA ocupan el directorio sí cuentan la carpeta —son
+        // justo los que distinguen una nueva de una que estaba— y siguen sin
+        // contar al padre.
+        // En el orden del listado, que pone los directorios delante.
+        assert_eq!(
+            p.existing_names(),
+            vec!["fotos".to_owned(), "a.txt".to_owned(), "b.txt".to_owned()]
+        );
     }
 
     /// La fila `..` es la PRIMERA, y en una raíz no aparece: no hay a dónde
