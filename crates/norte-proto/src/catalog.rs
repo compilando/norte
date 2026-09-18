@@ -230,6 +230,12 @@ rpc_catalogo! {
     POLICY_UNDO_SESSION, Request, Task, methods::PolicyUndoSessionParams, methods::PolicyUndoSessionResult;
     POLICY_UNDO_REPORT, Request, Direct, methods::PolicyUndoReportParams, methods::PolicyUndoReportResult;
 
+    // La línea de tiempo (fase 7): leer el journal, y deshacer hasta un punto
+    // de él. El undo devuelve Task e informa por `POLICY_UNDO_REPORT`, que es
+    // el de arriba: es el mismo undo con otro criterio de selección.
+    JOURNAL_LIST, Request, Direct, methods::JournalListParams, methods::JournalListResult;
+    JOURNAL_UNDO_AFTER, Request, Task, methods::JournalUndoAfterParams, methods::PolicyUndoSessionResult;
+
     // Extensiones.
     PLUGIN_LIST, Request, Direct, methods::PluginListParams, methods::PluginListResult;
     PLUGIN_SET_APPROVAL, Request, Direct, methods::PluginSetApprovalParams, methods::PluginSetApprovalResult;

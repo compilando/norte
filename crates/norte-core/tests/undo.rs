@@ -594,3 +594,109 @@ async fn undo_created_sin_trash_con_drift_bloquea() {
     let (_seq, err) = r.blocked.expect("bloquea en el drift");
     assert!(matches!(err, norte_proto::Error::NotFound));
 }
+
+/// **Deshacer HASTA UN PUNTO deja intacto lo anterior** (fase 7,
+/// `journal.undo_after`).
+///
+/// Es la propiedad de la que depende toda la línea de tiempo: el humano
+/// señala una fila y dice «vuelve aquí». Si el corte se fuera una entrada
+/// hacia atrás, deshacer se llevaría por delante una mutación que el humano
+/// estaba mirando y quería conservar — y el journal no distingue una
+/// compensación pedida de una pedida por error.
+#[tokio::test]
+async fn deshacer_hasta_un_punto_respeta_lo_anterior() {
+    let (engine, mem, journal) = setup().await;
+    write_file(&mem, "mem:///uno.txt", b"1").await;
+    write_file(&mem, "mem:///dos.txt", b"2").await;
+
+    // Dos copias del humano, una detrás de otra.
+    for (src, dst) in [
+        ("mem:///uno.txt", "mem:///uno.copia"),
+        ("mem:///dos.txt", "mem:///dos.copia"),
+    ] {
+        let h = engine.copy(&vp(src), &vp(dst)).await.expect("copy");
+        assert_eq!(h.join().await, TaskState::Completed);
+    }
+
+    // El corte: el `seq` de la PRIMERA copia. Se conserva.
+    let seq_primera = journal
+        .journal()
+        .page(None, 50, Some("user"))
+        .await
+        .expect("page")
+        .last()
+        .expect("hay entradas")
+        .entry
+        .seq;
+
+    let (h, report) = engine.undo_after(seq_primera).await.expect("undo submit");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let r = report.lock().expect("lock").clone();
+
+    assert_eq!(r.undone, 1, "sólo la segunda copia");
+    assert!(r.blocked.is_none());
+    assert!(
+        mem.stat(&vp("mem:///uno.copia")).await.is_ok(),
+        "lo anterior al corte NO se toca"
+    );
+    assert!(
+        matches!(
+            mem.stat(&vp("mem:///dos.copia")).await,
+            Err(norte_proto::Error::NotFound)
+        ),
+        "lo posterior sí"
+    );
+}
+
+/// Y no se lleva lo de un AGENTE, aunque sea posterior al corte: «deshaz lo
+/// mío» es lo mío. Lo de un agente se deshace por `policy.undo_session`, que
+/// es otra pregunta con otra respuesta.
+#[tokio::test]
+async fn deshacer_hasta_un_punto_no_toca_lo_de_un_agente() {
+    let (engine, mem, journal) = setup().await;
+    write_file(&mem, "mem:///a.txt", b"a").await;
+
+    let h = engine
+        .copy(&vp("mem:///a.txt"), &vp("mem:///humano.copia"))
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let corte = journal
+        .journal()
+        .page(None, 50, Some("user"))
+        .await
+        .expect("page")
+        .first()
+        .expect("hay entradas")
+        .entry
+        .seq;
+
+    // La mutación del agente se SIEMBRA en el journal con el fichero ya
+    // puesto, que es como lo hacen los demás tests de este fichero: lo que se
+    // comprueba es a quién mira el undo, no por qué puerta entró la entrada.
+    write_file(&mem, "mem:///agente.copia", b"a").await;
+    journal
+        .journal()
+        .record(
+            "created",
+            b"mem:///agente.copia",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::Agent {
+                session: "s-1".into(),
+            },
+        )
+        .await
+        .expect("record del agente");
+
+    let (h, report) = engine.undo_after(corte).await.expect("undo submit");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let r = report.lock().expect("lock").clone();
+
+    assert_eq!(r.undone, 0, "nada del humano después del corte");
+    assert!(
+        mem.stat(&vp("mem:///agente.copia")).await.is_ok(),
+        "lo del agente sigue donde estaba"
+    );
+}

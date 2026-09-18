@@ -1073,6 +1073,7 @@ fn golden_methods() {
     check_methods_sync_notifs(&fixtures);
     check_methods_sync_apply(&fixtures);
     check_methods_log(&fixtures);
+    check_methods_journal(&fixtures);
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
@@ -1214,7 +1215,15 @@ fn golden_methods() {
     // mapa es lo que se pudo leer», y que sin fixtura nadie congela. Y el
     // nombre de un hijo lleva un byte que no es UTF-8, porque un mapa de disco
     // pinta nombres reales y esa es la forma que el wire tiene que conservar.
-    assert_eq!(fixtures.len(), 217, "[methods.json] fixtures sin caso Rust");
+    // 217 → 223 en 0.76.0 (fase 7): los seis de la línea de tiempo. `params`
+    // va dos veces porque `before_seq` ausente serializa como `null` explícito
+    // y significa «desde la más nueva», que es otra pregunta que un número; y
+    // `result` va dos veces porque el FINAL de la lista es `next_before_seq`
+    // a `null`, y una forma que sólo existe al terminar de paginar no la
+    // congela nadie si no se escribe. La fila lleva lote, compensación y una
+    // ruta saneada con su bandera `hostile`: son los tres campos de los que
+    // depende que una confirmación de deshacer diga la verdad.
+    assert_eq!(fixtures.len(), 223, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -1225,9 +1234,7 @@ fn golden_methods() {
 /// vacío es `lines: []` con `lost: 0`. Las tres cosas son la diferencia entre
 /// un panel que dice la verdad sobre lo que hubo y uno con un hueco callado.
 fn check_methods_log(fixtures: &BTreeMap<String, Value>) {
-    use norte_proto::methods::{
-        LOG_LEVELS, LogLevelParams, LogLevelResult, LogLine, LogTailParams, LogTailResult,
-    };
+    use norte_proto::methods::{LOG_LEVELS, LogLevelParams, LogLevelResult, LogTailParams};
     // Una fixtura por valor del vocabulario. El bucle va sobre `LOG_LEVELS`
     // para que añadir un nivel sin su fixtura se ponga rojo aquí, en vez de
     // pasar desapercibido hasta que un frontend no sepa colorearlo.
@@ -1258,6 +1265,101 @@ fn check_methods_log(fixtures: &BTreeMap<String, Value>) {
             max: 500,
         },
     );
+    check_methods_log_resto(fixtures);
+}
+
+/// La línea de tiempo del journal (0.76.0, fase 7): las dos formas de los
+/// params, las dos del result, la fila con todo lo que la distingue, y el
+/// corte del undo.
+fn check_methods_journal(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        JournalListParams, JournalListResult, JournalRow, JournalUndoAfterParams,
+    };
+    // `before_seq` ausente serializa como `null` explícito y significa «desde
+    // la más nueva», que es lo que manda una pantalla al abrirse: caso aparte
+    // por lo mismo que `log_tail_params_sin_cursor`.
+    check_one(
+        fixtures,
+        "journal_list_params",
+        &JournalListParams {
+            before_seq: Some(4_096),
+            limit: 50,
+            actor_kind: Some("user".to_owned()),
+        },
+    );
+    check_one(
+        fixtures,
+        "journal_list_params_desde_el_final",
+        &JournalListParams {
+            before_seq: None,
+            limit: 50,
+            actor_kind: None,
+        },
+    );
+    // Una fila con TODO lo que la distingue: un lote, una compensación, y una
+    // ruta que hubo que sanear —con su bandera—. El `path` va ya enmascarado
+    // por el servidor y `hostile` es lo que impide leerlo como fiel.
+    check_one(
+        fixtures,
+        "journal_row",
+        &JournalRow {
+            seq: 4_096,
+            ts_ms: 1_756_000_000_000,
+            actor_kind: "user".to_owned(),
+            actor_id: None,
+            op: "renamed".to_owned(),
+            path: "file:///a/%EF%BF%BDgpj.exe".to_owned(),
+            path_to: Some("file:///a/antes".to_owned()),
+            hostile: true,
+            reversible: true,
+            undoes_seq: None,
+            undone: false,
+            batch_id: Some(7),
+        },
+    );
+    // El cursor PUESTO y el cursor a `null` son las dos formas del final de
+    // la lista, y la segunda es la que dice «ya no queda nada más viejo».
+    // Congelar sólo una dejaría el final sin forma escrita.
+    check_one(
+        fixtures,
+        "journal_list_result",
+        &JournalListResult {
+            rows: vec![JournalRow {
+                seq: 12,
+                ts_ms: 1_756_000_000_000,
+                actor_kind: "agent".to_owned(),
+                actor_id: Some("s-1".to_owned()),
+                op: "created".to_owned(),
+                path: "file:///a/x".to_owned(),
+                path_to: None,
+                hostile: false,
+                reversible: true,
+                undoes_seq: Some(11),
+                undone: false,
+                batch_id: None,
+            }],
+            next_before_seq: Some(12),
+        },
+    );
+    check_one(
+        fixtures,
+        "journal_list_result_final",
+        &JournalListResult {
+            rows: Vec::new(),
+            next_before_seq: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "journal_undo_after_params",
+        &JournalUndoAfterParams { seq: 4_096 },
+    );
+}
+
+/// El resto de las fixturas del registro: `log.tail` y su vacío. Está
+/// separado de [`check_methods_log`] sólo por longitud.
+fn check_methods_log_resto(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{LogLine, LogTailParams, LogTailResult};
     // `cursor` ausente serializa como `null` explícito (ADR 0004; `Option` sin
     // `skip`), y esa forma es la que manda un panel al abrirse. Es un caso
     // aparte a propósito: `null` quiere decir «lo que tengas» y `0` quiere
@@ -4630,7 +4732,15 @@ fn method_names_frozen() {
     // `fs.dir_size` de 0.49.0 sigue contestando lo suyo, que es otra pregunta.
     assert_eq!(methods::FS_DIR_USAGE, "fs.dir_usage");
     assert_eq!(methods::FS_DIR_USAGE_REPORT, "fs.dir_usage_report");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.75.0");
+    // 0.76.0 (fase 7): la línea de tiempo del journal. `journal.list` lo LEE
+    // paginando hacia atrás por `seq`, y `journal.undo_after` deshace lo del
+    // humano posterior a un `seq` — con el undo de siempre, o sea que informa
+    // por `policy.undo_report`. Los dos, solo conexiones humanas: el journal
+    // entero es un oráculo sobre todo lo que se ha tocado en la máquina, y
+    // deshacer trabajo es decisión de quien lo hizo.
+    assert_eq!(methods::JOURNAL_LIST, "journal.list");
+    assert_eq!(methods::JOURNAL_UNDO_AFTER, "journal.undo_after");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.76.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

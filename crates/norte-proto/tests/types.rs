@@ -1328,10 +1328,16 @@ fn version_ventana_actual() {
     // ve la Task de otro en `task.list`, su `TaskKind` cae en `Unknown` por el
     // `serde(other)`: la pinta como una tarea que no sabe nombrar, con su
     // progreso y su botón de cancelar, en vez de fallar el parse.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.75.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.74.0"), "N-1");
+    // 0.76.0 (fase 7): un cliente 0.75 no sabe pedir `journal.list` ni
+    // `journal.undo_after`, así que no los pide y se queda sin línea de
+    // tiempo — que es lo que tenía. Deshacer sigue siendo lo que ya sabía
+    // hacer: `policy.undo_session` para una sesión de agente entera, con el
+    // mismo informe. Nada de lo viejo cambia de forma: los dos métodos son
+    // nuevos y ningún tipo existente gana ni pierde un campo.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.76.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.75.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.73.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.74.9"),
         "N-2 fuera de la ventana"
     );
 }

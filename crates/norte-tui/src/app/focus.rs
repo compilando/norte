@@ -270,6 +270,7 @@ impl App {
             crate::tree::KIND => Some(FocusStop::Side(KeyOwner::Tree)),
             crate::logview::KIND => Some(FocusStop::Side(KeyOwner::Log)),
             crate::diskmap::KIND => Some(FocusStop::Side(KeyOwner::DiskMap)),
+            crate::timeline::KIND => Some(FocusStop::Side(KeyOwner::Timeline)),
             _ => None,
         }
     }

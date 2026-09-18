@@ -3609,6 +3609,10 @@ async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
             // aquí desde que se declara — que es justo lo que este test
             // comprueba: los mismos botones y el mismo orden que la TUI.
             "disk-map",
+            // Fase 7: la línea de tiempo, igual — el kind es del registro
+            // compartido, así que su botón sale aquí desde que se declara
+            // aunque la ventana todavía no la pinte (#359).
+            "timeline",
         ],
         "los mismos botones y el mismo orden que `panelbar::buttons`"
     );

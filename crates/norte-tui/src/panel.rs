@@ -77,6 +77,13 @@ pub enum TuiPanel {
     /// En caja como el árbol: el informe lleva hasta 4096 hijos, y eso no
     /// puede fijar el tamaño de este enum para todos los demás paneles.
     DiskMap(Box<norte_frontend::diskmap::DiskMap>),
+    /// La línea de tiempo del journal (fase 7): lo que se ha hecho, con su
+    /// cursor y el cursor de paginación hacia atrás.
+    ///
+    /// En caja como el mapa y el árbol: una página trae hasta 200 filas y
+    /// varias páginas se acumulan, y eso no puede fijar el tamaño de este
+    /// enum para todos los demás paneles.
+    Timeline(Box<norte_frontend::timeline::Timeline>),
     /// Un kind que este binario no conoce: se pinta como una caja con su
     /// nombre y sus `params` se conservan intactos, para que abrir el layout
     /// de la GUI en el TUI no le borre nada.
@@ -100,6 +107,7 @@ impl TuiPanel {
             | Self::Tree(_)
             | Self::Metadata(_)
             | Self::DiskMap(_)
+            | Self::Timeline(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -114,6 +122,7 @@ impl TuiPanel {
             | Self::Tree(_)
             | Self::Metadata(_)
             | Self::DiskMap(_)
+            | Self::Timeline(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -129,6 +138,7 @@ impl TuiPanel {
             | Self::Tree(_)
             | Self::Metadata(_)
             | Self::DiskMap(_)
+            | Self::Timeline(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -143,6 +153,7 @@ impl TuiPanel {
             | Self::Tree(_)
             | Self::Metadata(_)
             | Self::DiskMap(_)
+            | Self::Timeline(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -439,6 +450,28 @@ impl PaneSlots {
     /// Mete el mapa de disco en un hueco.
     pub fn insert_disk_map(&mut self, id: SlotId, m: norte_frontend::diskmap::DiskMap) {
         self.store.insert(id, TuiPanel::DiskMap(Box::new(m)));
+    }
+
+    /// La línea de tiempo de un hueco, si lo es (fase 7).
+    #[must_use]
+    pub fn timeline(&self, id: SlotId) -> Option<&norte_frontend::timeline::Timeline> {
+        match self.store.get(id) {
+            Some(TuiPanel::Timeline(t)) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// La línea de tiempo de un hueco, para mutarla.
+    pub fn timeline_mut(&mut self, id: SlotId) -> Option<&mut norte_frontend::timeline::Timeline> {
+        match self.store.get_mut(id) {
+            Some(TuiPanel::Timeline(t)) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Coloca la línea de tiempo de un hueco.
+    pub fn insert_timeline(&mut self, id: SlotId, t: norte_frontend::timeline::Timeline) {
+        self.store.insert(id, TuiPanel::Timeline(Box::new(t)));
     }
 
     /// Lo que enseña la hoja de atributos de un hueco, si lo hay.

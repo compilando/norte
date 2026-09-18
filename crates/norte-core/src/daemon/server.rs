@@ -2703,6 +2703,31 @@ async fn dispatch(
             let p: methods::PolicyUndoReportParams = parse_params(req.params)?;
             handle_policy_undo_report(&conn.actor, &p, shared)
         }
+        // La línea de tiempo (fase 7). Los dos son SOLO-User, y el gate va
+        // ANTES del parseo, como en `log.tail` y `host.volumes` y por el
+        // mismo motivo: si primero se parsea, un agente distingue «vedado»
+        // (params buenos) de «params malos» probando formas, y eso convierte
+        // la negativa en un oráculo sobre el propio protocolo. El handler
+        // vuelve a comprobarlo por su cuenta — es la puerta, no un adorno, y
+        // los tests lo llaman directamente.
+        methods::JOURNAL_LIST => {
+            if !matches!(conn.actor, Actor::User) {
+                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                    rule: "not-approved".into(),
+                }));
+            }
+            let p: methods::JournalListParams = parse_params(req.params)?;
+            handle_journal_list(&conn.actor, &p, shared).await
+        }
+        methods::JOURNAL_UNDO_AFTER => {
+            if !matches!(conn.actor, Actor::User) {
+                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                    rule: "not-approved".into(),
+                }));
+            }
+            let p: methods::JournalUndoAfterParams = parse_params(req.params)?;
+            handle_journal_undo_after(&conn.actor, &p, shared).await
+        }
         // host.volumes (0.37.0, #131): enumeración de los volúmenes del HOST,
         // SOLO para una conexión User (diseño §C de
         // `2026-08-10-volumes-design.md`) — la tabla de montaje nombra los
@@ -3291,6 +3316,92 @@ async fn handle_policy_undo_session(
     // Task YA corre desde el submit y la cancelación es cooperativa — pueden
     // aterrizar reverts reales cuyo informe se pierde (el journal sí registra
     // las compensaciones; el cliente solo ve el OVERLOADED).
+    {
+        let mut reports = shared.undo_reports.lock().expect("undo_reports lock sano");
+        reports.push_back((task_id.get(), report));
+        while reports.len() > UNDO_REPORTS_MAX {
+            reports.pop_front();
+        }
+    }
+    to_value(&methods::PolicyUndoSessionResult { task_id })
+}
+
+/// `journal.list` (0.76.0, fase 7): una página de la línea de tiempo.
+///
+/// SOLO-User, y el gate va ANTES del parseo por el mismo motivo que en
+/// `host.volumes` y `log.tail`: un agente ve `PolicyDenied` sea cual sea la
+/// forma de sus params, y no puede distinguir «vedado» de «params malos»
+/// fuzzeando los campos. Lo que hay detrás es más sensible que el registro:
+/// el journal nombra TODO lo que se ha tocado en esta máquina, incluido lo
+/// que está fuera del recinto del agente y lo que hicieron otras sesiones.
+///
+/// El `limit` se acota aquí, como `fs.list` con su página: pedir de más no
+/// es un error y no pierde nada, porque lo que no quepa sigue estando detrás
+/// del cursor.
+async fn handle_journal_list(
+    actor: &Actor,
+    p: &methods::JournalListParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+            rule: "not-approved".into(),
+        }));
+    }
+    let limit = p.limit.clamp(1, methods::JOURNAL_LIST_MAX_PAGE);
+    let entries = shared
+        .engine
+        .journal_page(p.before_seq, limit, p.actor_kind.as_deref())
+        .await
+        .map_err(RpcError::from)?;
+    // El cursor sale del ÚLTIMO `seq` servido y sólo si la página iba llena:
+    // con una página a medias no queda nada más viejo, y ofrecer cursor ahí
+    // haría que un cliente pidiera otra vuelta para recibir cero filas en
+    // bucle. Si va llena, el siguiente pide «anterior a éste», que es
+    // exactamente el contrato de `before_seq` (estricto).
+    to_value(&crate::journal::page_to_wire(&entries, limit))
+}
+
+/// `journal.undo_after` (0.76.0, fase 7): deshace lo del HUMANO posterior a
+/// un `seq`.
+///
+/// SOLO-User, como el `policy.undo_session` con el que comparte informe: esto
+/// revierte trabajo, y hasta dónde llega lo decide quien lo hizo. Una sesión
+/// de agente que pudiera pedirlo borraría la huella de lo suyo.
+async fn handle_journal_undo_after(
+    actor: &Actor,
+    p: &methods::JournalUndoAfterParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+            rule: "not-approved".into(),
+        }));
+    }
+    let (handle, report) = shared
+        .engine
+        .undo_after(p.seq)
+        .await
+        .map_err(RpcError::from)?;
+    let task_id = register_task_id(shared, handle, Actor::User)?;
+    // Material de auditoría, como el undo de una sesión de agente: hasta
+    // dónde, quién y con qué Task. Sin el `task_id` la línea no se puede
+    // cruzar ni con el informe ni con las compensaciones que aparecen
+    // después en el propio journal.
+    //
+    // Va DESPUÉS del registro a propósito: `register_task_id` todavía puede
+    // contestar OVERLOADED, y entonces no hay Task que nombrar. La honestidad
+    // que `handle_policy_undo_session` documenta en su sitio vale aquí igual
+    // —la Task ya corre desde el submit, así que puede haber reversas reales
+    // cuyo informe se pierda—; lo que esto evita es apuntar un id que no
+    // llegó a existir.
+    tracing::info!(
+        after_seq = p.seq,
+        task_id = task_id.get(),
+        "undo hasta un punto pedido por el humano"
+    );
+    // El MISMO anillo de informes que `policy.undo_session`, porque es el
+    // mismo undo y se lee por el mismo `policy.undo_report`.
     {
         let mut reports = shared.undo_reports.lock().expect("undo_reports lock sano");
         reports.push_back((task_id.get(), report));

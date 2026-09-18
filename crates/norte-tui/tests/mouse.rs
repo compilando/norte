@@ -510,9 +510,14 @@ fn cada_boton_de_la_barra_cae_en_su_sitio() {
     assert_eq!(
         pulsa(&mut app, 19).as_deref(),
         Some("layout.disk-map"),
-        "el último: el mapa de disco (fase 4) entró detrás del registro"
+        "el mapa de disco (fase 4) entró detrás del registro"
     );
-    assert_eq!(pulsa(&mut app, 21), None, "pasado el último no hay botón");
+    assert_eq!(
+        pulsa(&mut app, 22).as_deref(),
+        Some("layout.timeline"),
+        "y la línea de tiempo (fase 7) detrás del mapa, por orden de registro"
+    );
+    assert_eq!(pulsa(&mut app, 24), None, "pasado el último no hay botón");
 }
 
 /// REGRESIÓN de un BLOCKER: con un overlay delante, la barra ni se pinta ni se

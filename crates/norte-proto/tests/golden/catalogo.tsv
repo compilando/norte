@@ -40,6 +40,8 @@ index.embed	Request	Task	methods::IndexEmbedParams	methods::FsTaskResult
 index.query	Request	Direct	methods::IndexQueryParams	methods::IndexQueryResult	
 index.search_semantic	Request	Direct	methods::IndexSearchSemanticParams	methods::IndexSearchSemanticResult	
 initialize	Request	Handshake	methods::InitializeParams	methods::InitializeResult	
+journal.list	Request	Direct	methods::JournalListParams	methods::JournalListResult	
+journal.undo_after	Request	Task	methods::JournalUndoAfterParams	methods::PolicyUndoSessionResult	
 log.level	Request	Direct	methods::LogLevelParams	methods::LogLevelResult	
 log.tail	Request	Direct	methods::LogTailParams	methods::LogTailResult	
 plugin.column_values	Request	Direct	methods::PluginColumnValuesParams	methods::PluginColumnValuesResult	

@@ -146,6 +146,12 @@ pub async fn drain_pending(
     if std::mem::take(&mut app.disk_map_stale) {
         crate::jobs::lanzar_disk_map(app, backend, work).await;
     }
+    // Fase 7: la línea de tiempo pide su primera página, por lo mismo. Lo
+    // marca quien la abre y quien la HEREDA de una disposición guardada, que
+    // es el caso que no pasa por ninguna tecla.
+    if std::mem::take(&mut app.timeline_stale) {
+        crate::dispatch::cargar_timeline(app, backend, None).await;
+    }
     // Y entrar en un hijo del mapa es un `cd` NORMAL, con su ritual de vuelta:
     // el mapa señala, y navegar es del mismo camino por el que se navega
     // siempre. Un segundo camino es lo que ADR 0077 existe para impedir.

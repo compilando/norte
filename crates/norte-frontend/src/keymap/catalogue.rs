@@ -172,6 +172,15 @@ pub const CATALOGUE: &[CommandDef] = &[
     // acorde que ya significa otra cosa en el gestor que alguien viene
     // imitando. Una tecla rara se aprende; una que hace dos cosas, no.
     live("layout.disk-map", false),
+    // La línea de tiempo del journal (fase 7): qué se ha hecho y hasta dónde
+    // se puede volver. SIN tecla en ningún preset, y es deliberado: el
+    // espacio de `alt+<letra>` para paneles está agotado —b, j, l, t, z ya
+    // son otros— y no queda ninguna libre en los siete a la vez. Atarla en
+    // tres y en cuatro no es peor que no atarla en ninguno: es una capacidad
+    // que la mitad de los lectores no tendría y que nadie les diría por qué.
+    // Se llega por la barra de paneles, que se genera del registro de kinds y
+    // por tanto la tiene en LOS SIETE, y por el menú Ver.
+    live("layout.timeline", false),
     // El selector de disposición. Sin acorde por el mismo #228, y además
     // porque el nombre de una disposición NO es el de un preset de teclas
     // aunque coincida: el diálogo lo dice en su pie.

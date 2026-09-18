@@ -1737,6 +1737,57 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Undo))
     }
 
+    /// `journal.list` (0.76.0, fase 7): una página de la línea de tiempo,
+    /// de la más nueva hacia atrás.
+    ///
+    /// SOLO para una conexión humana: contra una de agente el daemon
+    /// responde `PolicyDenied`, que es lo que hay que enseñar — un journal
+    /// vedado no se puede leer como uno vacío.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon.
+    pub async fn journal_list(
+        &self,
+        before_seq: Option<i64>,
+        limit: u32,
+        actor_kind: Option<&str>,
+    ) -> Result<methods::JournalListResult, Error> {
+        // `call_maybe_unknown` y no `call_timed`: un daemon que no conozca el
+        // método contesta `METHOD_NOT_FOUND`, y eso es «este daemon no
+        // guarda línea de tiempo», que se dice, no un fallo genérico. El
+        // handshake debería hacerlo inalcanzable —un cliente 0.76 no llega a
+        // hablar con un daemon 0.74—, pero el patrón es el que ya usa
+        // `undo_report` doce líneas más abajo, y es gratis.
+        self.call_maybe_unknown(
+            methods::JOURNAL_LIST,
+            &methods::JournalListParams {
+                before_seq,
+                limit,
+                actor_kind: actor_kind.map(ToOwned::to_owned),
+            },
+        )
+        .await
+    }
+
+    /// `journal.undo_after` (0.76.0, fase 7): deshace lo del humano
+    /// posterior a `seq`. La entrada señalada se queda.
+    ///
+    /// Corre como Task de undo, con el mismo progreso, la misma cancelación
+    /// y el mismo informe (`policy.undo_report`) que deshacer una sesión
+    /// entera: es el mismo undo con otro criterio de selección.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon.
+    pub async fn undo_after(&self, seq: i64) -> Result<RemoteTask, Error> {
+        let result: methods::PolicyUndoSessionResult = self
+            .call_maybe_unknown(
+                methods::JOURNAL_UNDO_AFTER,
+                &methods::JournalUndoAfterParams { seq },
+            )
+            .await?;
+        Ok(self.own_task(result.task_id, TaskKind::Undo))
+    }
+
     /// `policy.undo_report` (#71): informe de la Task de undo. Un daemon
     /// N-1 sin el método responde `METHOD_NOT_FOUND` → `Unsupported`, para
     /// que el caller lo distinga de un fallo REAL (el informe es la única

@@ -1285,6 +1285,157 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
     frame.render_widget(Paragraph::new(pintadas), inner);
 }
 
+/// El color de una fila de la línea de tiempo según QUIÉN la hizo (fase 7).
+///
+/// Lo que separa es «yo» de «algo en mi nombre», que es la distinción que un
+/// humano necesita para leer su propio historial: lo suyo lo puede deshacer
+/// desde aquí; lo de un agente o un plugin, no — eso va por
+/// `policy.undo_session`, que es otra pantalla y otra pregunta.
+#[must_use]
+pub(crate) fn rol_de_actor(actor_kind: &str) -> Role {
+    match actor_kind {
+        norte_frontend::timeline::ACTOR_HUMANO => Role::Regular,
+        "agent" => Role::Warning,
+        _ => Role::Info,
+    }
+}
+
+/// Una fila de la línea de tiempo, ya pintable.
+///
+/// `hora · punto · verbo · nombre`, y detrás lo que la distingue: cuántas
+/// entradas trae si es un lote, y si no tiene vuelta. El punto es lo que
+/// lleva el color del actor — el texto se queda legible y la clase se lee de
+/// un vistazo por la columna, que es para lo que sirve una línea de tiempo.
+fn linea_de_timeline<'a>(
+    fila: &norte_frontend::timeline::TimelineRow,
+    theme: &TuiTheme,
+    ancho: usize,
+) -> Line<'a> {
+    use std::fmt::Write as _;
+
+    let mut spans = vec![
+        Span::styled(
+            format!("{} ", norte_frontend::format::hora_utc(fila.ts_ms)),
+            theme.role(Role::BorderUnfocused),
+        ),
+        Span::styled("● ", theme.role(rol_de_actor(&fila.actor_kind))),
+    ];
+    // La insignia, DELANTE y en su propio span, como en toda superficie donde
+    // se decide algo: el servidor ya enmascaró el texto, y esto es lo que
+    // impide leerlo como fiel.
+    if fila.hostile {
+        spans.push(Span::styled(
+            format!("{HOSTILE_BADGE} "),
+            theme.role(Role::HostileBadge),
+        ));
+    }
+    let mut cola = String::new();
+    if fila.members > 1 {
+        let _ = write!(
+            cola,
+            " · {}",
+            ta("timeline-batch", &[("n", &fila.members.to_string())])
+        );
+    }
+    if !fila.reversible {
+        let _ = write!(cola, " · {}", t("timeline-irreversible"));
+    }
+    let usado = spans.iter().map(Span::width).sum::<usize>() + super::text::cells(&cola);
+    let verbo = format!("{} ", fila.op);
+    let sitio = ancho
+        .saturating_sub(usado + super::text::cells(&verbo))
+        .max(1);
+    spans.push(Span::raw(verbo));
+    spans.push(Span::raw(norte_frontend::display::middle_ellipsis(
+        &fila.path, sitio,
+    )));
+    if !cola.is_empty() {
+        spans.push(Span::styled(cola, theme.role(Role::BorderUnfocused)));
+    }
+    Line::from(spans)
+}
+
+/// La línea de tiempo del journal (fase 7): una fila por mutación —o por
+/// lote—, de la más nueva a la más vieja, con el cursor sobre la que sería
+/// el punto de vuelta.
+pub(crate) fn draw_timeline(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    timeline: &norte_frontend::timeline::Timeline,
+    app: &App,
+    con_teclado: bool,
+) {
+    let theme = &app.theme;
+    let border = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("timeline-title")))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(border));
+    // El pie dice lo que se va a llevar un Intro AQUÍ, no en general: es el
+    // único número que importa antes de pulsar, y tenerlo delante mientras se
+    // mueve el cursor es lo que convierte la lista en una decisión.
+    if con_teclado && !timeline.is_empty() {
+        let c = timeline.resumen();
+        let texto = if c.no_hace_nada() {
+            t("timeline-undo-nothing")
+        } else {
+            ta("timeline-undo-count", &[("n", &c.a_deshacer.to_string())])
+        };
+        block = block.title_bottom(Line::styled(format!(" {texto} "), theme.role(Role::Info)));
+    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    if timeline.is_empty() {
+        // «Todavía no se ha hecho nada» sólo se dice cuando SE HA MIRADO. Un
+        // panel heredado de una disposición guardada aún no ha preguntado, y
+        // afirmar ahí que el journal está vacío es la peor equivocación
+        // posible en una pantalla de historial.
+        let texto = if timeline.cargada() {
+            t("timeline-empty")
+        } else {
+            t("timeline-loading")
+        };
+        frame.render_widget(
+            Paragraph::new(Line::styled(texto, theme.role(Role::Title))),
+            inner,
+        );
+        return;
+    }
+    let alto = usize::from(inner.height);
+    // La misma ventana que cualquier lista larga de este binario: se pinta lo
+    // que cabe y no el historial entero (`draw_pane`, y el porqué medido).
+    let ventana = super::pane::filas_pintadas(
+        timeline.cursor().saturating_sub(alto.saturating_sub(1) / 2),
+        timeline.len(),
+        alto,
+    );
+    let ancho = usize::from(inner.width);
+    let items: Vec<ListItem<'_>> = timeline
+        .rows()
+        .iter()
+        .skip(ventana.start)
+        .take(ventana.len())
+        .map(|f| ListItem::new(linea_de_timeline(f, theme, ancho)))
+        .collect();
+    let list = List::new(items).highlight_style(theme.role(if con_teclado {
+        Role::Selection
+    } else {
+        Role::SelectionUnfocused
+    }));
+    let mut state = ListState::default();
+    state.select(timeline.cursor().checked_sub(ventana.start));
+    *state.offset_mut() = 0;
+    frame.render_stateful_widget(list, inner, &mut state);
+}
+
 #[cfg(test)]
 mod draw_log_tests {
     use super::*;

@@ -44,6 +44,17 @@ use backend_falso::arbol_de_prueba;
 /// también al revés, si uno de éstos resulta que sí cambia al mover el cursor.
 /// El motivo importa porque «no sigue» y «sigue y se quedó congelado» se ven
 /// igual en pantalla el día que alguien lo rompa.
+/// Kinds cuyo botón SÍ está en la barra —viene del registro compartido— pero
+/// que esta ventana todavía no pinta, con la issue que lo cierra.
+///
+/// Estar aquí NO es una exención permanente: el gate de paridad
+/// (`paridad.rs`, `APLAZADOS`) lleva la misma issue, así que implementarlo
+/// obliga a quitarlo de los dos sitios. Se salta este barrido porque su
+/// premisa —pulsar el botón abre un hueco— sólo vale para lo que la ventana
+/// sabe pintar; contra un kind que no tiene, el host contesta «no
+/// implementado», que es la respuesta correcta y no un fallo.
+const SIN_VENTANA: &[(&str, u32)] = &[("timeline", 359)];
+
 const NO_SIGUEN: &[(&str, &str)] = &[
     (
         "places",
@@ -292,6 +303,9 @@ async fn cada_hueco_que_sigue_al_cursor_tiene_sonda() {
     assert!(!kinds.is_empty(), "la barra de paneles no ofrece nada");
 
     for kind in &kinds {
+        if SIN_VENTANA.iter().any(|(k, _)| k == kind) {
+            continue;
+        }
         let o = observa(kind).await;
         if o.cambia {
             assert!(
@@ -318,6 +332,9 @@ async fn la_lista_de_los_que_no_siguen_esta_al_dia() {
     drop(host);
 
     for kind in &kinds {
+        if SIN_VENTANA.iter().any(|(k, _)| k == kind) {
+            continue;
+        }
         let declarado = NO_SIGUEN.iter().find(|(k, _)| k == kind);
         let o = observa(kind).await;
         match declarado {

@@ -41,6 +41,7 @@ commands = [
     "layout.metadata",
     "layout.log",
     "layout.disk-map",
+    "layout.timeline",
     "layout.pick",
 
     "profile.pick",
@@ -393,6 +394,33 @@ quedan siempre en avisos y errores, que es lo que explica un fallo, y ninguna
 tecla de este panel puede subirlos. El fichero al que apunta `norte paths` lleva
 las de todos a ese nivel, y la misma cota vale al otro lado: el anillo del
 daemon la aplica en el proceso que lo tiene, que es donde tiene que estar.
+
+{{cmd:layout.timeline}} abre la línea de tiempo: qué se ha hecho en esta
+máquina, de lo más reciente hacia atrás, con la hora, quién lo hizo —tú, un
+agente o una extensión, y lo dice el color del punto—, el verbo y sobre qué. Un
+lote sale como **una** fila y dice cuántas entradas trae, porque se deshace
+entero o no se toca. Llegar al final pide más historia; no se carga entera al
+abrir.
+
+Señalar una fila e {{cmd:dialog.confirm}} pregunta si deshacer **lo tuyo
+posterior a ella**. La fila que señalas se queda: es el estado al que quieres
+volver, no la primera víctima. La pregunta lleva la cuenta antes de que
+respondas, y en tres números que no se suman: lo que se va a deshacer, lo que se
+va a saltar —lo que no tiene vuelta, lo que ya deshiciste— y lo que no es tuyo,
+que este deshacer no toca (lo de un agente se deshace desde su propia pantalla).
+Si por encima de esa fila no hay nada tuyo que deshacer, no se abre ningún
+diálogo y se dice: preguntar por algo que no va a pasar enseña a decir que sí
+sin leer.
+
+Deshacer corre como una tarea, con su progreso y su cancelación, y va en orden
+inverso parando en cuanto algo no cuadre —si un fichero ya no está donde estaba,
+para ahí y te lo dice, en vez de seguir adivinando—. Lo que no tiene vuelta no
+se inventa: se cuenta y se salta.
+
+No tiene atajo de teclado en ningún preset, y es a propósito: los `alt+letra`
+de paneles están ocupados y no queda ninguno libre en los siete, así que atarlo
+en unos sí y en otros no sería una función que la mitad de los lectores no
+tendría. Está en la barra de paneles —que los lleva todos— y en el menú Ver.
 
 {{cmd:layout.metadata}} abre a la derecha un panel de detalles que también
 sigue al cursor: nombre, clase, tamaño, cuándo se modificó y lo que el provider

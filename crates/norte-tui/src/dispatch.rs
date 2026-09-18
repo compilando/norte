@@ -173,6 +173,24 @@ pub async fn dispatch(
         Command::LayoutProcesses => app.toggle_processes(),
         Command::LayoutLog => app.toggle_log(),
         Command::LayoutDiskMap => app.toggle_disk_map(),
+        // La línea de tiempo (fase 7): abrir es colocar el hueco, y leer el
+        // journal se hace AQUÍ, que es donde hay backend — como el selector de
+        // conexiones lee su fichero en su brazo.
+        //
+        // Un daemon sin journal contesta `Unsupported` y se DICE: un panel
+        // vacío y un panel que no puede existir no se leen igual. Y se abre
+        // igual, porque el hueco es lo que da dónde decirlo.
+        Command::LayoutTimeline => {
+            app.toggle_timeline();
+            // Se relee SIEMPRE que la tecla deja el panel abierto, no sólo al
+            // crearlo: entre que se cerró y se volvió a abrir ha podido pasar
+            // cualquier cosa —de hecho es lo normal, porque lo que se hace se
+            // hace con el panel cerrado—, y un historial que enseña el de
+            // hace un rato es peor que uno vacío: el vacío se nota.
+            if app.timeline_slot().is_some() {
+                cargar_timeline(app, backend, None).await;
+            }
+        }
         // #136: el árbol se abre, se enfoca y se cierra como el sidebar. Su
         // contenido lo pide el run loop, una rama por vuelta.
         Command::PaneTree => app.toggle_tree(),
@@ -928,4 +946,38 @@ pub async fn dispatch(
           // sin brazo es un error de COMPILACIÓN, no un pánico de runtime.
     }
     cd_outcome
+}
+
+/// Trae una página de la línea de tiempo y la mete en su hueco (fase 7).
+///
+/// `desde` es el cursor: `None` para la primera —la más nueva— y el
+/// `next_before_seq` de la anterior para seguir hacia atrás.
+///
+/// Un fallo se DICE en la barra y deja el panel como estaba. Los dos que se
+/// esperan de verdad son un daemon sin journal (`Unsupported`) y uno que no
+/// conoce el método, y los dos significan lo mismo para el lector: aquí no
+/// hay historial que enseñar. Un panel vacío sin explicación se lee como «no
+/// has hecho nada», que es otra cosa.
+pub async fn cargar_timeline(app: &mut App, backend: &Backend, desde: Option<i64>) {
+    let Some(id) = app.timeline_slot() else {
+        return;
+    };
+    match backend
+        .journal_list(desde, crate::timeline::POR_PAGINA, None)
+        .await
+    {
+        Ok(page) => {
+            if let Some(t) = app.panes.timeline_mut(id) {
+                if desde.is_none() {
+                    *t = norte_frontend::timeline::Timeline::new(&page.rows, page.next_before_seq);
+                } else {
+                    t.extend(&page.rows, page.next_before_seq);
+                }
+            }
+        }
+        Err(norte_proto::Error::Unsupported) => {
+            app.message = Some(t("timeline-unavailable"));
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
 }

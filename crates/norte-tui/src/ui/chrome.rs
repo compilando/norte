@@ -316,6 +316,7 @@ fn kind_con_teclado(app: &App) -> Option<&str> {
         crate::app::KeyOwner::Tree => Some(crate::tree::KIND),
         crate::app::KeyOwner::Log => Some(crate::logview::KIND),
         crate::app::KeyOwner::DiskMap => Some(crate::diskmap::KIND),
+        crate::app::KeyOwner::Timeline => Some(crate::timeline::KIND),
         // Cuál es lo dice el reparto, no el enum: hay como mucho uno visible.
         crate::app::KeyOwner::Panel => app.panel_kind(),
     }

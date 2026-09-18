@@ -70,7 +70,7 @@ use overlays::{
 use pane::draw_pane;
 use panels::{
     draw_disk_map, draw_log, draw_metadata, draw_places, draw_plugin_panel, draw_preview,
-    draw_processes, draw_tasks, draw_tree, draw_viewer,
+    draw_processes, draw_tasks, draw_timeline, draw_tree, draw_viewer,
 };
 use pickers::{
     draw_columns_picker, draw_connections_picker, draw_layout_picker, draw_profile_picker,
@@ -300,6 +300,17 @@ fn draw_laterales(
             m,
             app,
             app.key_owner() == crate::app::KeyOwner::DiskMap,
+        );
+    }
+    if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::timeline::KIND)
+        && let Some(tl) = app.panes.timeline(id)
+    {
+        draw_timeline(
+            frame,
+            rect,
+            tl,
+            app,
+            app.key_owner() == crate::app::KeyOwner::Timeline,
         );
     }
     if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::tree::KIND)

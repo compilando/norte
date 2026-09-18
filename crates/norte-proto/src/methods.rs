@@ -1206,7 +1206,7 @@ use crate::{
 /// La otra dirección NO cuenta: un cliente 0.75 contra un daemon 0.74 no llega
 /// a pedir nada, porque [`version_compatible`] rechaza a un cliente con minor
 /// mayor que el del servidor y muere en el `initialize`.
-pub const PROTOCOL_VERSION: &str = "0.75.0";
+pub const PROTOCOL_VERSION: &str = "0.76.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2153,6 +2153,64 @@ pub const POLICY_UNDO_SESSION: &str = "policy.undo_session";
 /// mejor esfuerzo): un `task_id` desconocido o expulsado es `INVALID_PARAMS`.
 /// SOLO conexiones User (misma barrera que el undo que lo genera).
 pub const POLICY_UNDO_REPORT: &str = "policy.undo_report";
+/// `journal.list` — las entradas del journal, de la más nueva hacia atrás
+/// (0.76.0, fase 7 del programa WOW).
+///
+/// Es el contenido de la línea de tiempo: qué se ha hecho, quién lo hizo y
+/// si tiene vuelta. No devuelve el hash de cada entrada ni la cadena —para
+/// eso está la verificación, que es otra pregunta y otra superficie
+/// (`norte doctor`)—; devuelve lo que un humano lee antes de decidir hasta
+/// dónde deshacer.
+///
+/// # Quién puede llamarlo
+///
+/// SOLO una conexión humana, con el mismo criterio y el mismo error que
+/// [`LOG_TAIL`]: `Error::PolicyDenied` con `rule: "not-approved"`, que en el
+/// cable es [`codes::APP_ERROR`](crate::wire::codes::APP_ERROR) (`-32000`) y
+/// NO `INVALID_REQUEST`. El motivo es más fuerte todavía que el del registro:
+/// el journal es la lista completa de lo que se ha tocado en esta máquina,
+/// con rutas de origen y destino, así que para una sesión de agente con un
+/// scope acotado es un oráculo de existencia sobre TODO lo que hay fuera de
+/// su recinto, y además le enseña lo que han hecho las demás sesiones. Un
+/// journal vacío y un journal vedado no pueden leerse igual.
+///
+/// # Paginación
+///
+/// Hacia ATRÁS y por `seq`, que es monótono y no se reutiliza: se pide lo
+/// anterior a [`JournalListParams::before_seq`] y se recibe hasta
+/// [`JournalListParams::limit`], recortado por
+/// [`JOURNAL_LIST_MAX_PAGE`]. No hay suscripción ni estado por cliente, por
+/// lo mismo que [`LOG_TAIL`] se tira y no se empuja.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::JOURNAL_LIST, "journal.list");
+/// ```
+pub const JOURNAL_LIST: &str = "journal.list";
+/// `journal.undo_after` — deshace, en LIFO, lo que el HUMANO hizo después de
+/// `seq` (0.76.0, fase 7 del programa WOW).
+///
+/// Devuelve una Task, como [`POLICY_UNDO_SESSION`], y su informe se lee por
+/// [`POLICY_UNDO_REPORT`] — es el mismo informe porque es el mismo undo: las
+/// mismas unidades (un lote se revierte entero o nada), el mismo gate de
+/// policy unidad a unidad, el mismo LIFO estricto que para en el primer
+/// bloqueo, y los mismos contadores de irreversibles saltados.
+///
+/// Lo ÚNICO que cambia respecto a deshacer una sesión entera es qué entradas
+/// entran: las del actor humano con `seq` mayor que el dado. No es «volver al
+/// estado de ese momento» —eso no existe: lo irreversible no vuelve, y el
+/// informe lo cuenta— sino «deshaz lo mío de aquí para acá, y para en cuanto
+/// algo no cuadre».
+///
+/// # Quién puede llamarlo
+///
+/// SOLO una conexión humana, como [`POLICY_UNDO_SESSION`]: esto revierte
+/// trabajo, y decidir hasta dónde es del humano. Una sesión de agente que lo
+/// pidiera podría borrar la huella de lo que hizo.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::JOURNAL_UNDO_AFTER, "journal.undo_after");
+/// ```
+pub const JOURNAL_UNDO_AFTER: &str = "journal.undo_after";
 /// `plugin.list` — enumera los plugins DESCUBIERTOS más los errores de carga
 /// (M4-P3). Solo lectura y ABIERTO (cualquier conexión lo consulta): un
 /// frontend pinta el catálogo y el estado (aprobado/activo) sin mutar nada.
@@ -7499,6 +7557,177 @@ pub struct RpcCancelParams {
     pub id: crate::wire::RequestId,
 }
 
+/// Tope de filas que [`JOURNAL_LIST`] devuelve en una respuesta.
+///
+/// El mismo papel que [`FS_LIST_MAX_PAGE`]: el cliente pide y el daemon
+/// recorta. Existe porque un journal de una máquina que lleva meses
+/// trabajando tiene cientos de miles de entradas, y una respuesta sin tope
+/// es la memoria del cliente contra el disco del servidor.
+pub const JOURNAL_LIST_MAX_PAGE: u32 = 200;
+
+/// Params de [`JOURNAL_LIST`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalListParams {
+    /// Devuelve entradas ESTRICTAMENTE anteriores a este `seq`.
+    ///
+    /// `null` (o ausente) es «desde la más nueva», que es lo que manda una
+    /// línea de tiempo al abrirse. No es lo mismo que un número grande: el
+    /// cliente no tiene por qué saber cuál es el último `seq`, y obligarle a
+    /// inventarse una cota superior sería pedirle que adivine el estado del
+    /// servidor.
+    ///
+    /// Se pagina por `seq` y no por desplazamiento porque `seq` es monótono
+    /// y no se reutiliza: una entrada nueva escrita entre dos páginas no
+    /// puede desplazar a las que ya se leyeron ni esconder una.
+    #[serde(default)]
+    pub before_seq: Option<i64>,
+    /// Cuántas filas COMO MUCHO. Petición, no contrato: el daemon recorta a
+    /// [`JOURNAL_LIST_MAX_PAGE`], y pedir de más no es un error.
+    pub limit: u32,
+    /// Filtra por clase de actor: `"user"`, `"agent"`, `"plugin"`… `null` es
+    /// todas.
+    ///
+    /// Es la clase, no la identidad: «qué hizo la sesión 7» ya se pregunta
+    /// por otro lado, y lo que una línea de tiempo necesita separar es lo que
+    /// hice yo de lo que hizo algo en mi nombre.
+    #[serde(default)]
+    pub actor_kind: Option<String>,
+}
+
+/// Una entrada del journal, tal y como la lee una línea de tiempo
+/// ([`JOURNAL_LIST`]).
+///
+/// No lleva el hash de la entrada ni el de la cadena: verificar es otra
+/// pregunta, con su propia superficie, y meter aquí un hash invitaría a un
+/// cliente a creer que enseñar la lista es haberla verificado.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalRow {
+    /// Número de secuencia, monótono y nunca reutilizado. Es la identidad de
+    /// la entrada y lo que [`JOURNAL_UNDO_AFTER`] recibe.
+    pub seq: i64,
+    /// Cuándo, en milisegundos desde el epoch.
+    pub ts_ms: i64,
+    /// Quién: `"user"`, `"agent"`, `"plugin"`…
+    pub actor_kind: String,
+    /// Cuál, dentro de esa clase (la sesión de un agente). `null` para el
+    /// humano, que no tiene sesiones que distinguir.
+    #[serde(default)]
+    pub actor_id: Option<String>,
+    /// Qué operación (`fs.copy`, `fs.move`…).
+    pub op: String,
+    /// Sobre qué, YA SANEADO para pintar.
+    ///
+    /// Es el wire de un [`crate::VPath`] tal y como se guardó, con los
+    /// caracteres peligrosos para un terminal enmascarados por el servidor
+    /// (`norte_encoding::mask_terminal_hazards`, el mismo trato que las
+    /// líneas de `fs.search`). Un nombre de fichero lo elige quien crea el
+    /// fichero —incluido un agente dentro de su recinto—, y esta es la
+    /// pantalla donde un humano decide qué revertir: un override bidi o una
+    /// secuencia de escape aquí repinta la decisión.
+    ///
+    /// Va como texto y no como `VPath` para que UNA entrada ilegible —un
+    /// journal manipulado— no tumbe la página entera: una línea de tiempo a
+    /// la que le falta una fila es peor que una con una fila rara, porque
+    /// una mutación que no se ve es indistinguible de una que no ocurrió.
+    ///
+    /// **No lo parsees para actuar.** Está enmascarado, así que puede NO ser
+    /// el path real; es texto para enseñar. Lo que identifica la entrada es
+    /// [`Self::seq`], que es lo que [`JOURNAL_UNDO_AFTER`] consume.
+    pub path: String,
+    /// El destino, cuando la operación tiene dos lados (mover, renombrar).
+    /// Saneado igual que [`Self::path`].
+    #[serde(default)]
+    pub path_to: Option<String>,
+    /// El texto de [`Self::path`] (o el de [`Self::path_to`]) se pinta
+    /// DISTINTO de lo que dicen los bytes guardados: hubo que enmascarar
+    /// algo, o los bytes no eran texto.
+    ///
+    /// Viaja con la fila porque un texto ya saneado se lee como fiel, y
+    /// perder esa distinción justo aquí es perderla en la pantalla donde se
+    /// decide qué se revierte.
+    #[serde(default)]
+    pub hostile: bool,
+    /// Si esta entrada TIENE vuelta (no es `Irreversible`).
+    ///
+    /// Es lo que la entrada declaró cuando se escribió, no una promesa de
+    /// que deshacerla vaya a funcionar ahora: entre medias el árbol ha
+    /// podido moverse, y de eso se entera el undo cuando lo intenta.
+    ///
+    /// Un token de `reversal` que este daemon no reconoce cuenta como
+    /// `false`: en un journal manipulado, afirmar que algo tiene vuelta es
+    /// la mentira cara.
+    pub reversible: bool,
+    /// Si esta entrada es la COMPENSACIÓN de otra — el `seq` que deshizo.
+    ///
+    /// Una compensación es una mutación que ocurrió y por eso sale en la
+    /// lista, pero [`JOURNAL_UNDO_AFTER`] no la vuelve a deshacer: se
+    /// escribe con el actor del humano que ejecutó el undo y con una
+    /// reversa de verdad, así que sin este campo un cliente la contaría
+    /// como deshacible y prometería el doble de lo que va a pasar.
+    #[serde(default)]
+    pub undoes_seq: Option<i64>,
+    /// Si esta entrada YA está deshecha: existe una compensación suya que
+    /// sigue viva.
+    ///
+    /// Lo calcula el servidor con la MISMA condición que usa el undo para
+    /// elegir —«compensada viva», no «compensada alguna vez», que no es lo
+    /// mismo cuando el undo de un lote se desanda a sí mismo—. Un cliente no
+    /// puede deducirlo de la página que tiene: la compensación puede estar
+    /// fuera de ella.
+    #[serde(default)]
+    pub undone: bool,
+    /// El lote al que pertenece, si va en uno. Las entradas con el mismo
+    /// `batch_id` se deshacen JUNTAS o no se tocan, así que una línea de
+    /// tiempo que las pintara sueltas ofrecería un corte que no existe.
+    #[serde(default)]
+    pub batch_id: Option<i64>,
+}
+
+/// Result de [`JOURNAL_LIST`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalListResult {
+    /// Las filas, de la más nueva a la más vieja.
+    pub rows: Vec<JournalRow>,
+    /// Qué mandar como [`JournalListParams::before_seq`] para seguir hacia
+    /// atrás, o `null` cuando ya no queda nada más viejo.
+    ///
+    /// Lo calcula el servidor y no el cliente restando uno al último `seq`:
+    /// los `seq` no son densos —una entrada puede faltar— y esa resta es
+    /// exactamente el tipo de aritmética que se rompe el día que dejan de
+    /// serlo.
+    ///
+    /// **El final de la lista es este campo a `null`, y NO «vinieron menos
+    /// filas de las que pedí»**: el servidor recorta `limit` y no dice a
+    /// cuánto, así que contar filas no distingue «se acabó» de «te di lo que
+    /// tu petición permitía». Una página que venga justo llena al agotar el
+    /// journal ofrece cursor y la vuelta siguiente contesta vacía: es una
+    /// vuelta de más, y es correcta — el servidor no puede saber que no
+    /// queda nada sin mirar.
+    ///
+    /// Al seguir hacia atrás, [`JournalListParams::actor_kind`] tiene que ser
+    /// EL MISMO de la vuelta anterior. Cambiarlo a mitad no es un error y no
+    /// se detecta: el cursor es un `seq`, no una consulta, así que lo que se
+    /// recibe son las filas del otro filtro desde ese punto, y las que el
+    /// filtro nuevo habría traído por encima no vuelven.
+    #[serde(default)]
+    pub next_before_seq: Option<i64>,
+}
+
+/// Params de [`JOURNAL_UNDO_AFTER`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalUndoAfterParams {
+    /// Se deshace lo del humano con `seq` ESTRICTAMENTE mayor que éste.
+    ///
+    /// O sea: la entrada que se señala se queda. Es lo que un humano espera
+    /// de «vuelve hasta aquí» señalando una fila — la fila señalada es el
+    /// estado al que se quiere volver, no la primera víctima.
+    pub seq: i64,
+}
+
 /// Params de [`POLICY_UNDO_SESSION`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -7508,8 +7737,16 @@ pub struct PolicyUndoSessionParams {
     pub session: String,
 }
 
-/// Result de [`POLICY_UNDO_SESSION`]: el undo corre como Task (progreso por
-/// `task.progress`, cancelable con `task.cancel`).
+/// Result de [`POLICY_UNDO_SESSION`] **y de [`JOURNAL_UNDO_AFTER`]**: el undo
+/// corre como Task (progreso por `task.progress`, cancelable con
+/// `task.cancel`).
+///
+/// Un tipo para dos métodos porque los dos contestan lo mismo —«aquí tienes
+/// el id de tu Task»— y son el MISMO undo con otro criterio de selección: el
+/// mismo `TaskKind`, el mismo informe por [`POLICY_UNDO_REPORT`]. Inventar un
+/// segundo tipo idéntico sólo habría dado dos sitios donde equivocarse. Lo
+/// que esto obliga a recordar: un campo que se le añada algún día tiene que
+/// tener sentido para los dos, o no tiene sitio aquí.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyUndoSessionResult {

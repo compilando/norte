@@ -53,6 +53,7 @@ pub mod subshell;
 pub mod suspend;
 pub mod tasks;
 pub mod theme;
+pub mod timeline;
 pub mod trail;
 pub mod wizard;
 /// El panel de árbol vive en `norte-frontend` desde que la ventana también lo
