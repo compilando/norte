@@ -74,6 +74,8 @@ OPCIONES:
     --preset <NOMBRE>    Preset de teclado (por defecto, el de la config)
     --no-splash          Sin pantalla de inicio en este arranque
     --profile <NOMBRE>   Perfil de configuración (por defecto, ninguno)
+    --attach             Recoge la pantalla que la terminal acaba de entregar
+                         (`app.handoff`), marcas incluidas
     -h, --help           Esta ayuda
     -V, --version        La versión
 ";
@@ -218,6 +220,11 @@ pub enum StartupError {
 
 /// Los argumentos ya resueltos.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "cada bool es un flag INDEPENDIENTE de la línea de órdenes; un enum \
+              de dos variantes por flag sería el mismo dato con más ruido"
+)]
 pub struct Cli {
     /// Directorio de arranque, crudo (regla 1: no tiene por qué ser UTF-8).
     pub dir: Option<PathBuf>,
@@ -240,6 +247,12 @@ pub struct Cli {
     /// Sin pantalla de arranque en ESTE arranque, diga lo que diga `[ui]
     /// splash`. Para pilotos y capturas, igual que en el terminal.
     pub no_splash: bool,
+    /// Esta ventana es el otro extremo de un RELEVO (`--attach`, fase 9): además
+    /// de la pantalla, reclama lo MARCADO que la terminal dejó en la sesión.
+    ///
+    /// Sin él un arranque es un arranque, y unas marcas de un relevo que se
+    /// quedó a medias no resucitan al día siguiente.
+    pub attach: bool,
     /// Se pidió la ayuda.
     pub help: bool,
     /// Se pidió la versión.
@@ -258,7 +271,7 @@ where
 {
     let crudo = norte_frontend::cli::parse(
         args,
-        &["--no-splash"],
+        &["--no-splash", norte_frontend::handoff::ATTACH],
         &["--socket", "--layout", "--preset", "--profile"],
     );
     if let Some(flag) = crudo.unknown {
@@ -271,6 +284,7 @@ where
         preset: crudo.os_text("--preset").map(std::ffi::OsString::from),
         profile: crudo.os_text("--profile").map(std::ffi::OsString::from),
         no_splash: crudo.has("--no-splash"),
+        attach: crudo.has(norte_frontend::handoff::ATTACH),
         help: crudo.help,
         version: crudo.version,
     })
@@ -831,6 +845,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         // Lo escribió un humano, así que gana a la sesión en el panel activo
         // — la misma regla que el terminal cerró en `eb237c61`.
         initial_dir_pedido: cli.dir.is_some(),
+        attach: cli.attach,
         locale: match lang {
             Lang::Es => "es".to_owned(),
             Lang::En => "en".to_owned(),
@@ -1288,6 +1303,22 @@ mod tests {
             matches!(&e, StartupError::UnknownFlag(f) if f == "--socketo"),
             "{e}"
         );
+    }
+
+    /// La ventana ACEPTA lo que la terminal le pasa en un relevo (fase 9).
+    ///
+    /// El test que faltaba, y el bug que lo pidió: la terminal lanzaba
+    /// `ntc-gui --attach --daemon`, este parser no conocía ninguno de los dos,
+    /// y la ventana salía con código 2 — sin decir nada, porque el relevo le
+    /// cierra `stderr`. Se construye con la MISMA función que usa la terminal,
+    /// así que un flag nuevo en un lado sin el otro pone esto en rojo.
+    #[test]
+    fn la_ventana_acepta_el_argv_del_relevo() {
+        let cli = parse(norte_frontend::handoff::window_args())
+            .expect("la ventana tiene que aceptar lo que el relevo le pasa");
+        assert!(cli.attach, "y entender que viene de un relevo");
+        // Un arranque cualquiera NO es un relevo.
+        assert!(!parse(Vec::<String>::new()).expect("sin flags").attach);
     }
 
     /// Dos nombres de disposición con bytes DISTINTOS no pueden acabar

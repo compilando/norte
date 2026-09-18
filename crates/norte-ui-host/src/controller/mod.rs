@@ -342,6 +342,14 @@ pub struct UiHostOptions {
     /// pantalla de memoria que nadie pidió tirar. Es la misma regla que
     /// `App::pin_start_dir` en el terminal.
     pub initial_dir_pedido: bool,
+    /// Esta ventana es el otro extremo de un RELEVO (`--attach`, fase 9), así
+    /// que además de la pantalla reclama lo MARCADO que el otro frontend dejó.
+    ///
+    /// La misma naturaleza que [`Self::initial_dir_pedido`] —cómo se lanzó el
+    /// proceso—, y por eso vive a su lado. Sin él, un arranque es un arranque:
+    /// unas marcas de un relevo que se quedó a medias no resucitan al día
+    /// siguiente.
+    pub attach: bool,
     /// Idioma ya negociado, para que el renderer pida su catálogo.
     pub locale: String,
     /// El keymap EFECTIVO de la pantalla de listado, ya fusionado
@@ -1939,6 +1947,15 @@ struct Hueco {
     /// Vacío siempre que lo que vuela es una navegación: ahí las filas son de
     /// otro directorio y una marca no significa nada. Se consume al aterrizar.
     marcas_a_restaurar: Vec<VPath>,
+    /// La fila que la SESIÓN dejó bajo el cursor, hasta que llegue su listado.
+    ///
+    /// Espera por lo mismo que las marcas: sobre un pane vacío, poner el
+    /// cursor en la fila 12 es ponerlo en la 0. Se consume en el primer
+    /// aterrizaje —bueno o malo—, así que nunca cae sobre un listado posterior
+    /// de otro sitio. Es un ÍNDICE, el mismo que guarda y restaura la
+    /// terminal: un relevo tiene que caer en la misma fila en los dos
+    /// sentidos.
+    cursor_a_restaurar: Option<usize>,
     /// Hay filas mezcladas que no se han publicado todavía.
     ///
     /// El relleno se calla cuando el lote que mezcla no cambia la ventana
@@ -3211,6 +3228,14 @@ struct Estado {
     /// estuvieras ayer. Lo consume [`Self::leer_sesion`] y no vuelve a hacer
     /// falta — una intención de arranque vale una vez.
     dir_pedido: Option<VPath>,
+    /// Viene de un RELEVO (`--attach`, fase 9): las marcas de la sesión se
+    /// reclaman. Sin él se ignoran — un arranque no es un relevo.
+    attach: bool,
+    /// Esta ventana ha entregado la pantalla y espera a saber si la terminal
+    /// se abrió (fase 9). Es lo único que autoriza un `HandoffFailed`: la
+    /// acción la puede mandar cualquiera, y sin un relevo en curso no hay
+    /// nada que recuperar ni que decir.
+    relevo_en_curso: bool,
     status: StatusView,
     conexion: ConnectionView,
     /// Las sesiones de provider que viajan sin cifrar (#44), acotadas por el
@@ -3358,6 +3383,7 @@ impl Hueco {
             en_vuelo: None,
             dir_pedido: None,
             marcas_a_restaurar: Vec::new(),
+            cursor_a_restaurar: None,
             filas_por_publicar: false,
             drenando: None,
             sondeando: false,
@@ -3458,6 +3484,7 @@ impl Estado {
             backend,
             initial_dir,
             initial_dir_pedido,
+            attach,
             locale,
             keymap,
             keymap_viewer: keymap_visor,
@@ -3598,6 +3625,8 @@ impl Estado {
                 sembrados: std::collections::BTreeSet::new(),
             },
             dir_pedido: initial_dir_pedido.then(|| initial_dir.clone()),
+            attach,
+            relevo_en_curso: false,
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
             degradadas: norte_frontend::banners::DegradedSet::default(),
@@ -3905,6 +3934,12 @@ impl Estado {
                 // operación se llevó no se vuelve a marcar.
                 let marcas = std::mem::take(&mut hueco.marcas_a_restaurar);
                 hueco.pane.restore_marks(&marcas);
+                // Y el cursor que dejó la sesión, también TRAS `set_listing`:
+                // antes no hay filas y la fila 12 sería la 0. `set_cursor` lo
+                // acota si el directorio tiene hoy menos entradas que entonces.
+                if let Some(fila) = hueco.cursor_a_restaurar.take() {
+                    hueco.pane.set_cursor(fila);
+                }
                 // TRAS `set_listing`, que la limpia: es un dato de ESTE
                 // listado y arrastrar el del anterior sería decir que faltan
                 // entradas de un directorio en el que faltaban de otro.
@@ -3918,6 +3953,10 @@ impl Estado {
                 hueco.drenando = None;
                 hueco.pane.set_listing(dir, Vec::new());
                 hueco.marcas_a_restaurar.clear();
+                // Un listado fallido CONSUME el cursor guardado: si quedara
+                // pendiente, caería sobre el siguiente listado que llegue, que
+                // puede ser de otro sitio.
+                hueco.cursor_a_restaurar = None;
                 hueco.estado = SlotState::Error {
                     reason_key: norte_frontend::error::error_key(&e).to_owned(),
                     // CUÁL pide la contraseña. Sin esto, un arranque con dos
@@ -4086,6 +4125,7 @@ impl Estado {
                 self.decidir_revision_organizar(*approve, backend, buzon)
             }
             UiAction::OrganizeScroll { down } => self.recorrer_organizar(*down),
+            UiAction::HandoffFailed { no_terminal } => self.relevo_fallido(*no_terminal),
             UiAction::Resync => self.responde_con_foto(),
             UiAction::RequestQuit => self.pedir_salir(),
             UiAction::MenuOpen { menu } => self.desplegar_menu(*menu),

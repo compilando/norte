@@ -602,6 +602,23 @@ pub enum UiAction {
         /// `true` = aplicar. `false` = descartar.
         approve: bool,
     },
+    /// El relevo a la terminal NO llegó a abrirla (fase 9): quien hospeda no
+    /// encontró emulador, o el que encontró no arrancó.
+    ///
+    /// Lo manda el hilo de los efectos nativos, como [`Self::DirectoryPicked`]:
+    /// es quien sabe si la terminal se abrió. Sin esto la ventana se quedaba
+    /// diciendo «entregando la pantalla…» con la sesión ya soltada, y el lector
+    /// no sabía que tenía que seguir aquí.
+    ///
+    /// Sin texto libre a propósito: cualquiera que hable con el host puede
+    /// mandar una acción, y un motivo escrito por el que la manda sería un
+    /// mensaje que el host pintaría sin haberlo escrito. Lo que cabe decir son
+    /// dos cosas, y un bool las distingue.
+    HandoffFailed {
+        /// `true` = no hay ningún emulador de terminal en el PATH; `false` =
+        /// había uno y no arrancó.
+        no_terminal: bool,
+    },
     /// Recorre el árbol de organizar sin decidir nada (fase 8): es una
     /// pantalla con scroll, y aprobar exige haber llegado al final — sin un
     /// gesto para recorrerla, un lector con el ratón no podía aprobar nunca.

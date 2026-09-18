@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 72;
+export const BRIDGE_VERSION = 73;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -1523,6 +1523,10 @@ export type UiAction =
   | { action: "ai_rename_decide"; approve: boolean }
   | { action: "organize_decide"; approve: boolean }
   | { action: "organize_scroll"; down: boolean }
+  /** La terminal de un relevo no se abrió (puente 73). La manda quien
+   *  hospeda, no este renderer; está aquí para que el tipo cubra el puente
+   *  entero. */
+  | { action: "handoff_failed"; no_terminal: boolean }
   | { action: "menu_open"; menu: number }
   | { action: "menu_point_row"; row: number }
   | { action: "menu_activate_row"; row: number }

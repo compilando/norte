@@ -391,15 +391,28 @@ pub async fn run(
             // ventana con `--attach` y este proceso se va. `--attach` es lo
             // que hace que las marcas vuelvan; sin él, la ventana abriría
             // donde estabas pero sin lo que tenías señalado.
-            match crate::handoff::spawn_window(&crate::handoff::window_argv(app.backend_daemon)) {
-                Ok(()) => app.quit = true,
-                // No se lanzó, y la sesión ya está suelta: quedarse es lo
-                // correcto —la pantalla sigue en el core y este proceso sigue
-                // enseñándola—, pero hay que DECIRLO, porque a partir de aquí
-                // deja de guardarse.
+            //
+            // Y sólo se va si la ventana SIGUE VIVA pasado un momento. `spawn`
+            // correcto sólo dice que el proceso empezó: la ventana que no
+            // conocía `--attach` salía con código 2 y esta terminal ya se
+            // había ido, dejando al lector sin ninguna de las dos. Si muere,
+            // quedarse es lo correcto —la pantalla sigue en el core y este
+            // proceso sigue enseñándola— y se RECLAMA la sesión, que se había
+            // soltado para la ventana que no llegó.
+            let resultado = match crate::handoff::spawn_window(&crate::handoff::window_argv()) {
+                Ok(hijo) => crate::handoff::esperar_arranque(hijo, crate::handoff::GRACIA)
+                    .await
+                    .map_err(|codigo| codigo.map_or_else(|| "?".to_owned(), |c| c.to_string())),
                 Err(e) => {
-                    tracing::warn!(error = %e, "el relevo no pudo abrir la ventana");
-                    app.message = Some(t("msg-handoff-no-window"));
+                    tracing::warn!(error = %e, "el relevo no pudo lanzar la ventana");
+                    Err(e.to_string())
+                }
+            };
+            match resultado {
+                Ok(()) => app.quit = true,
+                Err(motivo) => {
+                    app.message = Some(ta("msg-handoff-window-died", &[("reason", &motivo)]));
+                    crate::session_push::reclaim_soon(&mut session_push);
                 }
             }
         }

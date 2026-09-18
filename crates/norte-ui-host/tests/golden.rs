@@ -212,6 +212,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::AiRenameDecide { .. } => "ai_rename_decide",
         UiAction::OrganizeDecide { .. } => "organize_decide",
         UiAction::OrganizeScroll { .. } => "organize_scroll",
+        UiAction::HandoffFailed { .. } => "handoff_failed",
         UiAction::MenuOpen { .. } => "menu_open",
         UiAction::MenuPointRow { .. } => "menu_point_row",
         UiAction::MenuActivateRow { .. } => "menu_activate_row",
@@ -624,6 +625,10 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             UiAction::OrganizeDecide { approve: true },
         ),
         ("organize_scroll", UiAction::OrganizeScroll { down: true }),
+        (
+            "handoff_failed",
+            UiAction::HandoffFailed { no_terminal: true },
+        ),
         ("resync", UiAction::Resync),
         ("request_quit", UiAction::RequestQuit),
         (

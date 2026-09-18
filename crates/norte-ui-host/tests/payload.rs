@@ -47,6 +47,7 @@ async fn host_de(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
         backend,
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
         initial_dir_pedido: false,
+        attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),

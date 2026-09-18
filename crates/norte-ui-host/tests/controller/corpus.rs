@@ -79,6 +79,7 @@ pub(super) async fn ninguna_superficie_enmascara_en_silencio() {
             backend: Arc::new(f),
             initial_dir: dir(),
             initial_dir_pedido: false,
+            attach: false,
             locale: "es".to_owned(),
             keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
             keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),

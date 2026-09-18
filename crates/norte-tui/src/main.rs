@@ -862,6 +862,27 @@ async fn make_backend(
 mod tests {
     use super::{BOOL_FLAGS, USAGE, VALUE_FLAGS};
 
+    /// `ntc` ACEPTA lo que la ventana le pasa en un relevo (fase 9).
+    ///
+    /// La otra mitad del test que vive en la ventana, y por el mismo bug: el
+    /// `argv` del relevo se construía en un binario y se parseaba en el otro
+    /// sin nada que los atara, y la ventana moría en silencio con un flag que
+    /// no conocía. Los dos sacan ahora los flags de
+    /// `norte_frontend::handoff`, y cada uno prueba con SU parser lo que el
+    /// otro construye.
+    #[test]
+    fn ntc_acepta_el_argv_del_relevo() {
+        for daemon in [true, false] {
+            let parsed = norte_frontend::cli::parse(
+                norte_frontend::handoff::terminal_args(daemon),
+                BOOL_FLAGS,
+                VALUE_FLAGS,
+            );
+            assert_eq!(parsed.unknown, None, "daemon={daemon}");
+            assert!(parsed.has(norte_frontend::handoff::ATTACH));
+        }
+    }
+
     /// Cada flag que este binario LEE está registrado, y sale en `--help`.
     ///
     /// Las tres listas son una sola cosa escrita tres veces —la tabla del

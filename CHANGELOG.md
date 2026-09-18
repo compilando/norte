@@ -258,6 +258,26 @@ independently through `PROTOCOL_VERSION`.
   adds mc's `Alt+Y` and `Alt+Shift+H`, vim adds `H`/`L`, and every preset
   says in its header why it binds what it does not.
 
+### Fixed
+
+- **The window puts the cursor back where the session left it.** It saved
+  the cursor row in the UI session and never read it back — place, sort
+  order, hidden files and history came back, the cursor always landed on
+  `..`. It now returns to the saved row once the listing arrives, the same
+  index the terminal restores, so a handover lands on the same row in both
+  directions. A directory typed on the command line voids the saved cursor,
+  which was a row of another directory, as the terminal already did.
+- **Handing the screen over works in both directions** (ADR 0123 amendment).
+  Tested for the first time with a person watching, it failed in ways the
+  suite could not see: the window rejected the arguments the terminal
+  launched it with and died silently; it never restored the marks; the
+  terminal quit before knowing whether the window lived; and the window,
+  handing back to the terminal, neither closed itself nor noticed when the
+  terminal did not open. The handover's flags now live in one shared place
+  with a test in each binary that parses what the other builds; the arriving
+  side restores marks and cursor; and each side leaves only once the other
+  is up, staying — and reclaiming the screen — when it is not.
+
 ## [0.3.0-alpha.4] - 2026-09-15
 
 ### Added

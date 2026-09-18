@@ -54,6 +54,31 @@ pub async fn bombear(
             // —`[ui] confirm_quit` decide si preguntar, y quién contesta es
             // el lector—, así que aquí solo se obedece.
             Ok(NativeEffect::CloseWindow) => cerrar(),
+            // El RELEVO a la terminal (fase 9): se abre el emulador y, SÓLO si
+            // arrancó, se cierra esta ventana. La primera versión lo lanzaba
+            // y se olvidaba —ni cerraba ni miraba—, así que la ventana se
+            // quedaba detrás sin la sesión, diciendo «entregando…» para
+            // siempre. Si no arranca, se le dice al host, que se queda,
+            // recupera la sesión y lo cuenta: la decisión 4 de la ADR 0123.
+            //
+            // Esperado aquí y no suelto: lanzar un emulador es un `spawn`,
+            // cuestión de milisegundos, y el orden importa — cerrar antes de
+            // saber si abrió es el fallo que la terminal ya tuvo.
+            Ok(NativeEffect::HandoffToTerminal { daemon }) => {
+                let resultado = tokio::task::spawn_blocking(move || relevo(daemon))
+                    .await
+                    .unwrap_or(Resultado::Fallo);
+                match resultado {
+                    Resultado::Hecho => cerrar(),
+                    otro => {
+                        let _ = host
+                            .dispatch(norte_ui_host::UiAction::HandoffFailed {
+                                no_terminal: matches!(otro, Resultado::SinPrograma),
+                            })
+                            .await;
+                    }
+                }
+            }
             // El TEMA no se «ejecuta»: se vuelve a resolver aquí, porque los
             // colores cruzan a la webview convertidos en variables CSS y esa
             // conversión es de este proceso.
@@ -132,11 +157,9 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
         NativeEffect::CopyBytes { bytes, .. } => copiar(bytes),
         NativeEffect::OpenPath { path } => abrir(path),
         NativeEffect::OpenTerminal { dir } => terminal(dir),
-        // Fase 9: la pantalla ya está escrita y suelta; aquí sólo se abre la
-        // terminal con `ntc --attach` dentro. Cerrar ESTA ventana no se hace
-        // aquí —este hilo no la tiene— sino en quien bombea, y sólo si la
-        // terminal arrancó: si no, la sesión está suelta pero la pantalla
-        // sigue en pantalla, que es el fallo barato.
+        // Fase 9: lo atiende `bombear`, que es quien puede cerrar la ventana
+        // y avisar al host según salga. Aquí sólo llega si alguien llama a
+        // `ejecutar` a mano, y entonces se abre la terminal sin más.
         NativeEffect::HandoffToTerminal { daemon } => relevo(*daemon),
         NativeEffect::Notify { titulo, cuerpo } => avisar(titulo, cuerpo),
         // Suelto: el comparador abre su ventana y esta no espera. El argv
@@ -330,10 +353,11 @@ fn relevo(daemon: bool) -> Resultado {
     let Some(ntc) = norte_frontend::openers::resolve_program(std::ffi::OsStr::new("ntc")) else {
         return Resultado::SinPrograma;
     };
-    let mut orden = vec![ntc.to_string_lossy().into_owned(), "--attach".to_owned()];
-    if daemon {
-        orden.push("--daemon".to_owned());
-    }
+    // Los flags del MISMO sitio del que la terminal saca su test de que los
+    // acepta (`norte_frontend::handoff`): escritos a mano en dos binarios, un
+    // lado cambió sin el otro y el relevo moría en silencio.
+    let mut orden = vec![ntc.to_string_lossy().into_owned()];
+    orden.extend(norte_frontend::handoff::terminal_args(daemon));
     for argv in norte_frontend::shell::terminal_command_candidates(&orden) {
         let Some(programa) = argv.first() else {
             continue;

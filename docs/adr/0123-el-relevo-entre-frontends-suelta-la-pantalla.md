@@ -107,6 +107,60 @@ double, not by a human watching a terminal appear. `just gui-smoke` is what
 checks the packaged window starts at all, and it is the next thing to run for
 this.
 
+## Amendment — the first human test (2026-09-18)
+
+The half this ADR flagged as unverified failed the first time a person tried
+it, in three ways, and each one is worth recording because none was visible to
+the suite.
+
+**The window rejected the handover's `argv`.** The terminal launched
+`ntc-gui --attach --daemon`, and the window's parser knew neither flag. It
+refuses unknown flags — rightly: an ignored typo is an option the user
+believes they set — so it exited with code 2. And because the handover closes
+the child's `stderr` so it cannot scribble over the prompt, it died silently.
+The controller tests checked that the terminal BUILT that `argv`; nothing
+checked that the window ACCEPTED it. The flags now live in one place
+(`norte_frontend::handoff`), the window loses `--daemon` (it is always
+daemon-backed), and each binary has a test that parses what the OTHER one
+builds with its own real parser.
+
+**The window never restored the marks.** It wrote them into the session and
+never read them back. A first fix seeded them in `aterrizar_listado`, and it
+stayed red: the start-up listing does not go through there, it goes through
+`listar_inicial`. The code already carried two comments about exactly that
+trap. They now travel through `marcas_a_restaurar`, the mechanism a refresh
+already uses to keep a selection across `set_listing` — which every landing
+passes through, and which also routes through the `..` funnel.
+
+**The terminal broke decision 4.** It treated `spawn` returning `Ok` as a
+successful handover, but that only means the process STARTED. With the window
+dying at once, the terminal had already quit and the reader was left with
+neither — the one outcome decision 4 promises cannot happen. The terminal now
+waits a short grace period (`GRACIA`, 1.5 s, polled with `try_wait` so the
+event loop never blocks) and, if the window dies inside it, stays, reclaims the
+session it had released, and says with which exit code the window died.
+
+**The window never closed itself on handing back.** The window → terminal
+direction launched the emulator and forgot about it: it neither closed when
+the terminal opened — its own `HandoffToTerminal` contract said it would —
+nor noticed when it did not, and sat saying "handing the screen over…" with
+the session already released. The native pump now waits for the launch, and
+closes the window only if the emulator started; otherwise it tells the host
+with `handoff_failed { no_terminal }` (bridge 73), and the host stays,
+reclaims the session and says which of the two failures it was. That action
+is honoured only while a handover is actually in flight, since anyone who can
+talk to the host can send it.
+
+**The window never restored the cursor** either — a pre-existing gap the
+first test made visible, since the terminal did. It now does, through the
+same door as the marks.
+
+After these fixes a person ran the handover in both directions on a desktop,
+and both kept the place, the marks and the cursor. What stays unverifiable by
+the process itself: in the window → terminal direction the emulator lives on
+even if the `ntc` inside it dies, so that side can only check that the
+emulator started.
+
 ## Alternatives considered
 
 **Keep releasing only on disconnect and have `app.handoff` quit.** This is what

@@ -145,9 +145,13 @@ msg-organize-too-many = este directorio tiene demasiadas entradas para que las o
 msg-handoff-needs-daemon = el relevo necesita el daemon: sin él no hay sesión que compartir (arranca con --daemon)
 msg-handoff-needs-desktop = el relevo necesita un escritorio: aquí no hay dónde abrir una ventana
 msg-handoff-failed = no se pudo entregar la pantalla; sigues donde estabas
-msg-handoff-no-window = la pantalla se entregó pero la ventana no abrió: ábrela a mano con `ntc-gui --attach --daemon`
+# La ventana del relevo no llegó a vivir (salió enseguida, o no se pudo
+# lanzar). La terminal se queda y recupera la pantalla: el motivo es el código
+# de salida o el error del sistema, que es lo que permite averiguar por qué.
+msg-handoff-window-died = la ventana no arrancó ({ $reason }); sigues aquí, con tu pantalla
 msg-handoff-running = entregando la pantalla…
-msg-handoff-no-terminal = la pantalla se entregó pero la terminal no abrió: ábrela a mano con `ntc --attach --daemon`
+msg-handoff-no-terminal = no hay ningún emulador de terminal donde abrir `ntc`; sigues aquí, con tu pantalla
+msg-handoff-terminal-failed = el emulador de terminal no arrancó; sigues aquí, con tu pantalla
 host-handoff-not-owner = esta ventana no tiene la pantalla: la lleva otra, y sólo su dueña la puede entregar
 modal-ai-rename = Renombrado IA — instrucción
 modal-ai-rename-hint = Enter: pedir plan · Esc: cancelar
