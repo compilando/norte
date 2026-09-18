@@ -26,9 +26,12 @@ pub enum Efectos {
 
 /// Los comandos que el host ejecuta en cada modo.
 ///
-/// La lista de solo lectura es la de siempre MENOS lo que muta; se deriva de
-/// una sola fuente para que añadir un comando destructivo no se olvide de
-/// quitarlo aquí.
+/// La lista de solo lectura es la de siempre MENOS lo que no es inerte: lo
+/// que escribe, borra, lanza un programa ajeno, lee contenido entero o manda
+/// datos fuera del proceso. Ese juicio NO se hace aquí: es el `effect` que el
+/// catálogo declara en cada fila, sin valor por defecto (ADR 0126). Antes era
+/// una lista propia, `MUTAN`, y olvidarse de ella al añadir un comando que
+/// escribe dejaba a la ventana de «solo mirar» ejecutándolo.
 #[must_use]
 pub fn implementados(efectos: Efectos) -> Vec<&'static str> {
     match efectos {
@@ -36,63 +39,17 @@ pub fn implementados(efectos: Efectos) -> Vec<&'static str> {
         Efectos::SoloLectura => IMPLEMENTADOS
             .iter()
             .copied()
-            .filter(|c| !MUTAN.contains(c))
+            .filter(|c| inerte(c))
             .collect(),
     }
 }
 
-/// Los comandos de [`IMPLEMENTADOS`] que ESCRIBEN **o que sacan datos del
-/// proceso**.
-///
-/// Las dos cosas en la misma lista porque solo lectura las quita a las dos, y
-/// por el mismo motivo: una ventana que se declara «solo mirar» tampoco
-/// manda el contenido de un directorio ni una consulta a un proveedor de IA.
-/// La alternativa —dos listas— sería un sitio donde olvidarse de una.
-pub const MUTAN: &[&str] = &[
-    "pane.mkdir",
-    "pane.edit-new",
-    "pane.delete",
-    "pane.delete-permanent",
-    "pane.copy",
-    "pane.move",
-    "pane.rename",
-    // #314: cambiar permisos MUTA, con journal y reversa.
-    "pane.chmod",
-    // #311: no escriben, pero LEEN CONTENIDO y lo enseñan — una ventana de
-    // solo mirar tampoco calcula la huella de unos ficheros ajenos.
-    "pane.checksum",
-    "pane.checksum-verify",
-    "pane.ai-rename",
-    "pane.organize",
-    "pane.rename-batch",
-    "pane.semantic-search",
-    "pane.sync-dirs",
-    // Abrir con la aplicación del escritorio y abrir un terminal LANZAN
-    // procesos que no pasan por norte: lo que hagan con los ficheros no lo
-    // decide esta ventana. Una que se declara «solo mirar» no arranca un
-    // editor ni un shell sentado en el directorio.
-    //
-    // Copiar la ruta NO está aquí: pone texto en el portapapeles y no toca
-    // nada, que es tan de solo lectura como leer un nombre.
-    "pane.open",
-    "pane.compare-files",
-    // Editar es abrir con la aplicación del escritorio, así que lanza un
-    // proceso igual que `pane.open`.
-    "pane.edit",
-    "app.terminal",
-    // Fase 9: el relevo ESCRIBE la sesión y la suelta. No toca un fichero,
-    // pero entrega la pantalla y cierra esta ventana, que es más que lo que
-    // una ventana de solo mirar puede hacer.
-    "app.handoff",
-    // Empaquetar ESCRIBE un fichero; desempaquetar es una copia con otro
-    // nombre. Comprobar no está aquí: lee el archivo entero y contesta, que es
-    // tan de solo lectura como comparar.
-    "pane.pack",
-    "pane.unpack",
-    // Partir y juntar fabrican ficheros nuevos.
-    "pane.split-file",
-    "pane.combine-files",
-];
+/// Si el catálogo declara `command` inerte. Un nombre que el catálogo no
+/// conoce NO lo es: no saber qué hace no autoriza a ejecutarlo.
+fn inerte(command: &str) -> bool {
+    norte_frontend::keymap::catalogue::effect(command)
+        .is_some_and(norte_frontend::keymap::Effect::is_inert)
+}
 
 /// Los comandos que el host ejecuta HOY.
 ///
@@ -206,8 +163,8 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.compare-dirs",
     "pane.sync-dirs",
     // #290 fase A: los gestos de panel que el TUI tenía y la ventana no.
-    // Ninguno escribe ni saca datos del proceso, así que ninguno va en
-    // `MUTAN`: re-listar es lo mismo que ya hace navegar.
+    // Ninguno escribe ni saca datos del proceso, así que el catálogo los
+    // declara inertes: re-listar es lo mismo que ya hace navegar.
     "pane.sort-name",
     "pane.sort-ext",
     "pane.sort-size",
@@ -546,7 +503,7 @@ pub enum Efecto {
     Terminal,
     /// Entrega la pantalla a la TERMINAL y cierra esta ventana (fase 9).
     ///
-    /// Está en [`MUTAN`] y no escribe un fichero: lo que escribe es la
+    /// No es inerte (ADR 0126) y no escribe un fichero: lo que escribe es la
     /// SESIÓN, y además la suelta y cierra la ventana. Una ventana de solo
     /// mirar no hace ninguna de las tres.
     Relevo,
@@ -580,7 +537,7 @@ pub enum Efecto {
     BuscarRapido,
     /// Pide el PLAN de sincronizar el panel activo sobre el destino.
     ///
-    /// El plan NO escribe: dice qué haría. Aun así está en [`MUTAN`], porque
+    /// El plan NO escribe: dice qué haría. Aun así no es inerte, porque
     /// es la puerta de una escritura y una ventana que se declara de solo
     /// mirar no la abre.
     Sincronizar,
@@ -591,7 +548,7 @@ pub enum Efecto {
     Comparar,
     /// Empaqueta lo MARCADO en un contenedor nuevo (#132).
     ///
-    /// Está en [`MUTAN`]: escribe un fichero. El nombre se teclea, y de él
+    /// No es inerte (ADR 0126): escribe un fichero. El nombre se teclea, y de él
     /// sale el FORMATO — un nombre sin extensión conocida se rehúsa en vez de
     /// empaquetar en algo que nadie pidió.
     Empaquetar,
@@ -605,33 +562,33 @@ pub enum Efecto {
     Desempaquetar,
     /// Comprueba el contenedor bajo el cursor (#132).
     ///
-    /// NO está en [`MUTAN`]: lee el archivo entero y contesta si está sano,
+    /// Es inerte (ADR 0126): lee el archivo entero y contesta si está sano,
     /// sin escribir nada. Es la misma categoría que comparar.
     ComprobarArchivo,
     /// El selector de conexiones configuradas (#264).
     ///
-    /// NO está en [`MUTAN`]: listar no abre nada. Elegir una NAVEGA, y navegar
+    /// Es inerte (ADR 0126): listar no abre nada. Elegir una NAVEGA, y navegar
     /// es lo que establece la sesión — con el mismo gate que cualquier otro
     /// listado, y su TOFU si hace falta.
     Conexiones,
     /// Cierra la sesión del panel activo y lo saca de ahí (#140).
     ///
-    /// NO está en [`MUTAN`]: soltar una sesión no escribe un byte en ningún
+    /// Es inerte (ADR 0126): soltar una sesión no escribe un byte en ningún
     /// sitio. Lo que sí hace es dejar el panel mirando algo que ya no se puede
     /// leer, y por eso navega a continuación.
     Desconectar,
     /// Parte el fichero bajo el cursor en trozos del tamaño que se teclee
-    /// (#132). Está en [`MUTAN`]: escribe los trozos.
+    /// (#132). No es inerte (ADR 0126): escribe los trozos.
     ///
     /// `PartirFichero` y no `Partir` a secas: [`Efecto::Partir`] es partir un
     /// HUECO de la disposición, que no tiene nada que ver.
     PartirFichero,
     /// Junta los trozos a partir del `.001` bajo el cursor (#132). También
-    /// escribe, así que también está en [`MUTAN`].
+    /// escribe, así que tampoco es inerte.
     Juntar,
     /// Cuenta lo que ocupa lo MARCADO —o lo que hay bajo el cursor— (#139).
     ///
-    /// No está en [`MUTAN`] por lo mismo que [`Efecto::Comparar`]: camina un
+    /// Es inerte por lo mismo que [`Efecto::Comparar`]: camina un
     /// árbol y contesta, sin escribir ni sacar nada del proceso que listar no
     /// sacara ya. Es larga y cancelable, y el tablero la enseña como
     /// `dir-size`.
@@ -639,7 +596,7 @@ pub enum Efecto {
     /// Pide una búsqueda SEMÁNTICA contra el índice: abre el prompt de la
     /// consulta.
     ///
-    /// Está en [`MUTAN`] y no escribe un byte: la consulta SALE del proceso
+    /// No es inerte (ADR 0126) y no escribe un byte: la consulta SALE del proceso
     /// hacia el proveedor de IA configurado, igual que el contenido de un
     /// directorio en [`Efecto::RenameIa`].
     BuscarSemantica,
@@ -649,7 +606,7 @@ pub enum Efecto {
     CrearDirectorio,
     /// Abre el prompt de crear un fichero VACÍO y editarlo (#290).
     ///
-    /// Está en [`MUTAN`]: crea un nodo en el disco, con su entrada de journal
+    /// No es inerte (ADR 0126): crea un nodo en el disco, con su entrada de journal
     /// y su deshacer, exactamente como crear un directorio.
     CrearFichero,
     /// Pide borrar lo marcado (o lo que haya bajo el cursor). NO borra: abre
@@ -1013,22 +970,71 @@ mod tests {
         }
     }
 
-    /// Lo que muta está DENTRO de lo implementado: una lista de mutaciones
-    /// con un comando que el host no ejecuta sería un filtro que no filtra.
+    /// Solo lectura quita EXACTAMENTE lo que el catálogo no llama inerte, y
+    /// son los veinticuatro que la lista `MUTAN` enumeraba a mano antes de
+    /// ADR 0126: derivarlos no podía cambiar qué hace la ventana.
     #[test]
-    fn lo_que_muta_es_un_subconjunto_de_lo_implementado() {
-        for c in MUTAN {
-            assert!(IMPLEMENTADOS.contains(c), "{c} no está implementado");
-        }
+    fn solo_lectura_quita_lo_que_no_es_inerte() {
         let solo_lectura = implementados(Efectos::SoloLectura);
-        for c in MUTAN {
-            assert!(!solo_lectura.contains(c), "{c} sobrevive a solo lectura");
-        }
+        let mut quitados: Vec<&str> = IMPLEMENTADOS
+            .iter()
+            .copied()
+            .filter(|c| !solo_lectura.contains(c))
+            .collect();
+        quitados.sort_unstable();
         assert_eq!(
-            solo_lectura.len() + MUTAN.len(),
-            IMPLEMENTADOS.len(),
-            "solo lectura quita EXACTAMENTE lo que muta"
+            quitados,
+            [
+                "app.handoff",
+                "app.terminal",
+                "pane.ai-rename",
+                "pane.checksum",
+                "pane.checksum-verify",
+                "pane.chmod",
+                "pane.combine-files",
+                "pane.compare-files",
+                "pane.copy",
+                "pane.delete",
+                "pane.delete-permanent",
+                "pane.edit",
+                "pane.edit-new",
+                "pane.mkdir",
+                "pane.move",
+                "pane.open",
+                "pane.organize",
+                "pane.pack",
+                "pane.rename",
+                "pane.rename-batch",
+                "pane.semantic-search",
+                "pane.split-file",
+                "pane.sync-dirs",
+                "pane.unpack",
+            ]
         );
+        for c in &solo_lectura {
+            assert!(inerte(c), "{c} sobrevive a solo lectura sin ser inerte");
+        }
+    }
+
+    /// El visor y los diálogos no se filtran en solo lectura: sus listas se
+    /// sirven enteras. Eso sólo es correcto mientras TODO lo que tienen sea
+    /// inerte, y este test lo exige — un `viewer.edit` que lanzara un editor
+    /// se colaría, si no, en la ventana que prometió sólo mirar (ADR 0126).
+    #[test]
+    fn el_visor_y_los_dialogos_solo_tienen_comandos_inertes() {
+        for c in IMPLEMENTADOS_VISOR.iter().chain(IMPLEMENTADOS_DIALOGO) {
+            assert!(
+                inerte(c),
+                "{c} no es inerte y su lista no se filtra en solo lectura"
+            );
+        }
+    }
+
+    /// Un nombre que el catálogo no conoce no es inerte.
+    #[test]
+    fn lo_desconocido_no_es_inerte() {
+        assert!(!inerte("pane.no-existe-jamas"));
+        assert!(inerte("cursor.down"));
     }
 
     /// El contador multiplica lo que se puede repetir.

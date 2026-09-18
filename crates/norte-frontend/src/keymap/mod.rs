@@ -20,7 +20,7 @@ pub mod presets;
 mod rebind;
 mod resolve;
 
-pub use catalogue::{CATALOGUE, CommandDef, Status};
+pub use catalogue::{CATALOGUE, CommandDef, Effect, Status};
 pub use chord::{
     Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_mod_key, unpaint_chord,
 };

@@ -36,6 +36,9 @@ delete and delete-permanently, painted in the error colour except under the
 cursor, and `ai` for AI rename and semantic search, which carry `✦`. It is a
 presentation list in the shared crate, not a catalogue field, and both
 painters read it.
+*Superseded by ADR 0126:* the role is now derived from the catalogue's
+`effect` (`Destroys` → destructive, `SendsOut` → ai). The painters are
+unchanged.
 
 **4. No key, no mark.** An entry without a binding leaves the chord column
 empty.
