@@ -366,6 +366,61 @@ fn el_cursor_espera_a_su_listado() {
     assert_eq!(app.panes[0].cursor(), 2);
 }
 
+/// Las MARCAS de un relevo esperan a su listado, como el cursor — y sólo
+/// vuelven con `--attach` (fase 9).
+///
+/// Las dos mitades salieron de pilotarlo, y la primera es un bug que un test
+/// verde no habría visto: sembrarlas al aplicar la sesión parecía funcionar
+/// —el conjunto de marcas es de rutas, no de índices— pero `begin_listing`
+/// las limpia cuando el listado llega, que es lo correcto para un cd y mortal
+/// para una siembra hecha demasiado pronto. El relevo devolvía la pantalla
+/// sin lo señalado, en silencio.
+#[test]
+fn las_marcas_de_un_relevo_esperan_a_su_listado_y_solo_con_attach() {
+    fn listado(app: &mut norte_tui::app::App) {
+        let entradas: Vec<norte_proto::Entry> = ["a", "b", "c"]
+            .iter()
+            .map(|n| norte_proto::Entry {
+                path: vp(&format!("file:///izq/{n}")),
+                kind: norte_proto::EntryKind::File,
+                size: Some(0),
+                mtime_ms: None,
+                attrs: std::collections::BTreeMap::new(),
+            })
+            .collect();
+        app.panes[0].begin_listing(vp("file:///izq"), entradas, false, None);
+    }
+
+    // SIN `--attach`: un arranque cualquiera no es un relevo, y una selección
+    // de ayer no se resucita.
+    let mut app = app_basica();
+    let slot = app.panes.slot_of(0);
+    let mut body = app.session_body();
+    body.slots.get_mut(&slot.0).expect("hueco").path = vp("file:///izq");
+    body.slots.get_mut(&slot.0).expect("hueco").marks = vec![vp("file:///izq/a")];
+    app.apply_session(&body);
+    listado(&mut app);
+    app.restore_cursor(slot);
+    assert_eq!(
+        app.panes[0].marks_len(),
+        0,
+        "sin --attach un arranque no devuelve lo marcado"
+    );
+
+    // CON `--attach`: vuelven, y después del listado.
+    let mut app = app_basica();
+    app.session.attach = true;
+    app.apply_session(&body);
+    assert_eq!(
+        app.panes[0].marks_len(),
+        0,
+        "todavía no: el pane está vacío y el listado las borraría"
+    );
+    listado(&mut app);
+    app.restore_cursor(slot);
+    assert_eq!(app.panes[0].marks_len(), 1, "y ahora sí, con su listado");
+}
+
 /// Un hueco cuyo layout SÍ existe recupera su directorio y su orden.
 #[test]
 fn el_directorio_y_el_orden_vuelven() {

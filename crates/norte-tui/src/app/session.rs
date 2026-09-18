@@ -206,14 +206,14 @@ impl App {
             // siguiente una selección que nadie hizo, que es exactamente lo
             // que `session_body` se niega a guardar.
             //
-            // Se siembran ANTES de que llegue el listado a propósito: las
-            // marcas son un conjunto de rutas, no de índices, así que la fila
-            // aparece marcada cuando se drene.
-            if self.session.attach
-                && !estado.marks.is_empty()
-                && let Some(pane) = self.panes.browser_mut(id)
-            {
-                pane.seed_marks(estado.marks.iter().cloned());
+            // Se GUARDAN aquí y se aplican cuando el listado llegue, por el
+            // mismo sitio que el cursor. Sembrarlas ahora no funciona, y el
+            // piloto lo destapó: el pane nace vacío, el listado se drena
+            // después, y `set_listing` limpia las marcas —que es lo correcto,
+            // un cd no conserva lo marcado—, así que la siembra temprana se
+            // borraba sola y el relevo devolvía la pantalla sin lo señalado.
+            if self.session.attach && !estado.marks.is_empty() {
+                self.session.marks.insert(*raw, estado.marks.clone());
             }
             let history = self.history.for_slot_mut(id);
             history.seed(estado.back.clone(), estado.forward.clone());
@@ -292,6 +292,16 @@ impl App {
     /// —un directorio con menos entradas que ayer no deja el cursor fuera— y
     /// eso lo hace [`Pane::set_cursor`].
     pub fn restore_cursor(&mut self, id: norte_frontend::layout::SlotId) {
+        // Las marcas de un relevo van por la MISMA puerta que el cursor
+        // (fase 9), y por la misma razón: el pane nace vacío y el listado
+        // llega después. Sembrarlas antes las borraba `set_listing`, que
+        // limpia lo marcado en cada cd — correcto para un cd, y mortal para
+        // una siembra hecha demasiado pronto.
+        if let Some(marcas) = self.session.marks.remove(&id.0)
+            && let Some(pane) = self.panes.browser_mut(id)
+        {
+            pane.seed_marks(marcas);
+        }
         let Some(row) = self.session.cursors.remove(&id.0) else {
             return;
         };

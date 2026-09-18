@@ -451,6 +451,15 @@ pub struct SessionUi {
     /// colocar: sobre un pane vacío, poner el cursor en la fila 12 es ponerlo
     /// en la 0.
     cursors: std::collections::HashMap<u32, u64>,
+    /// Lo MARCADO que traía un relevo (fase 9), hasta que llegue el listado.
+    ///
+    /// Mismo trato y mismo momento que [`Self::cursors`], y por una razón que
+    /// el piloto destapó: el pane nace vacío y `set_listing` limpia las marcas
+    /// cuando el listado llega —lo correcto para un cd—, así que sembrarlas
+    /// antes las borraba y el relevo devolvía la pantalla sin lo señalado.
+    ///
+    /// Solo se llena con `--attach`: un arranque cualquiera no es un relevo.
+    marks: std::collections::HashMap<u32, Vec<norte_proto::VPath>>,
     /// De qué huecos SABÍA la sesión guardada, tal y como se leyó del disco.
     ///
     /// La necesita `[profile.start]`, que solo siembra el hueco del que la
