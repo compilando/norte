@@ -1187,6 +1187,52 @@ pub(crate) fn draw_wizard(
 /// buffer de edición SÍ es entrada del usuario vía terminal (paste incluido)
 /// — se enmascara igual que la query, mismo contrato que `NavPopup::
 /// name_input`.
+/// Una línea de la lista de ajustes: una cabecera de sección o una fila.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsLine {
+    /// La cabecera de una sección, por su clave Fluent.
+    Header(&'static str),
+    /// Una fila, por su posición entre las VISIBLES.
+    Row(usize),
+}
+
+/// Las líneas que pinta la lista de ajustes, en orden: cabeceras y filas.
+///
+/// Existe aparte por la ventana: el cursor cuenta FILAS y la pantalla LÍNEAS,
+/// y las cabeceras de sección caen entre medias. Quien concilia la ventana
+/// (`geometry`) y quien pinta tienen que contar igual, así que cuentan con
+/// esto — una segunda copia de «dónde van las cabeceras» es una ventana que
+/// se desincroniza del dibujo en cuanto alguien añada una sección.
+pub(crate) fn settings_line_plan(settings: &crate::app::Settings) -> Vec<SettingsLine> {
+    let mut plan = Vec::new();
+    let mut general_header = false;
+    let mut plugins_header = false;
+    for (pos, &real) in settings.visible().iter().enumerate() {
+        if settings.rows()[real].is_plugins_note() {
+            if !plugins_header {
+                plan.push(SettingsLine::Header("settings-section-plugins"));
+                plugins_header = true;
+            }
+        } else if !general_header {
+            plan.push(SettingsLine::Header("settings-section-general"));
+            general_header = true;
+        }
+        plan.push(SettingsLine::Row(pos));
+    }
+    plan
+}
+
+/// Cuántas líneas caben en la lista de ajustes con la pantalla de `alto`
+/// filas: la caja (`alto - 4`, mínimo 6) menos sus dos bordes y la línea de
+/// descripción reservada abajo.
+///
+/// Compartida por quien pinta y quien concilia la ventana, por lo mismo que
+/// [`settings_line_plan`]: un alto adivinado rompe el scroll en silencio.
+pub(crate) fn settings_list_rows(alto: u16) -> usize {
+    let caja = alto.saturating_sub(4).max(6);
+    usize::from(caja.saturating_sub(2).saturating_sub(1))
+}
+
 pub(crate) fn draw_settings(
     frame: &mut Frame<'_>,
     settings: &crate::app::Settings,
@@ -1228,40 +1274,41 @@ pub(crate) fn draw_settings(
     if settings.visible().is_empty() {
         lines.push(Line::raw(" —"));
     } else {
-        let mut general_header = false;
-        let mut plugins_header = false;
-        for (pos, &real) in settings.visible().iter().enumerate() {
-            let row = &settings.rows()[real];
-            if row.is_plugins_note() {
-                if !plugins_header {
-                    lines.push(Line::styled(
-                        t("settings-section-plugins"),
-                        theme.role(Role::Title),
-                    ));
-                    plugins_header = true;
+        for item in settings_line_plan(settings) {
+            match item {
+                SettingsLine::Header(clave) => {
+                    lines.push(Line::styled(t(clave), theme.role(Role::Title)));
                 }
-            } else if !general_header {
-                lines.push(Line::styled(
-                    t("settings-section-general"),
-                    theme.role(Role::Title),
-                ));
-                general_header = true;
+                SettingsLine::Row(pos) => {
+                    let row = &settings.rows()[settings.visible()[pos]];
+                    let selected = pos == settings.cursor();
+                    let cursor = if selected { ">" } else { " " };
+                    let text = if row.is_plugins_note() {
+                        format!("{cursor} {}", row.name)
+                    } else {
+                        format!("{cursor} {:<28} {}", row.name, row.value)
+                    };
+                    let mut line = Line::raw(middle_ellipsis(&text, inner_w));
+                    if selected {
+                        line = line.style(theme.role(Role::Selection));
+                    }
+                    lines.push(line);
+                }
             }
-            let selected = pos == settings.cursor();
-            let cursor = if selected { ">" } else { " " };
-            let text = if row.is_plugins_note() {
-                format!("{cursor} {}", row.name)
-            } else {
-                format!("{cursor} {:<28} {}", row.name, row.value)
-            };
-            let mut line = Line::raw(middle_ellipsis(&text, inner_w));
-            if selected {
-                line = line.style(theme.role(Role::Selection));
-            }
-            lines.push(line);
         }
     }
-    frame.render_widget(Paragraph::new(lines), split[0]);
+    // La VENTANA que concilió `geometry` antes de este frame. Sin ella la
+    // lista se pintaba desde arriba siempre, y el cursor se salía por abajo
+    // en cuanto los ajustes dejaron de caber en una pantalla. El `min` es el
+    // cinturón: una ventana que no se concilió nunca no puede dejar la lista
+    // en blanco.
+    let desde = settings
+        .viewport_offset()
+        .min(lines.len().saturating_sub(1));
+    frame.render_widget(
+        Paragraph::new(lines).scroll((u16::try_from(desde).unwrap_or(u16::MAX), 0)),
+        split[0],
+    );
 
     let desc = settings.selected_desc().unwrap_or_default();
     let desc_line = Line::raw(format!(

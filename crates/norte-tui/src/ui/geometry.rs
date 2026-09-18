@@ -116,6 +116,20 @@ pub fn before_frame(app: &mut App, area: Rect) {
         let inner = block_inner(rect);
         app.log_panel.set_viewport_rows(usize::from(inner.height));
     }
+    // Los AJUSTES, con el mismo remedio. Se pintaban siempre desde arriba
+    // porque cabían en una pantalla; con ~30 dejaron de caber, y bajar con el
+    // cursor pasado el borde lo sacaba de la caja. Se concilia en LÍNEAS —las
+    // cabeceras de sección caen entre las filas— con el mismo plan y el mismo
+    // alto que usa el dibujo, para que no puedan contar distinto.
+    if let Some(settings) = &mut app.settings {
+        let plan = super::overlays::settings_line_plan(settings);
+        let cursor_line = plan
+            .iter()
+            .position(|l| *l == super::overlays::SettingsLine::Row(settings.cursor()))
+            .unwrap_or(0);
+        let rows = super::overlays::settings_list_rows(area.height);
+        settings.reconcile_viewport(cursor_line, plan.len(), rows);
+    }
 }
 
 /// El reparto de ESTE frame, con los `Auto` ya sustituidos.

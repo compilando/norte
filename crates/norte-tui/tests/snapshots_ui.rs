@@ -2413,6 +2413,39 @@ fn snapshot_settings_abierta() {
     insta::assert_snapshot!(render_80x24(&app));
 }
 
+/// La lista de ajustes SIGUE al cursor cuando no cabe.
+///
+/// Se pintaba siempre desde arriba porque «ajustes cabe en una pantalla» — lo
+/// decía el editor de atajos, y fue verdad con nueve ajustes. Con ~30 dejó de
+/// serlo: bajar pasado el borde sacaba el cursor de la caja y la lista no se
+/// movía. Se vio en una terminal de verdad, no aquí: el snapshot de arriba se
+/// hace con el cursor en la primera fila, que es justo donde no falla.
+///
+/// Pasa por `before_frame`, como el bucle: es quien concilia la ventana, y un
+/// test que pintara sin él comprobaría una pantalla que nadie ve.
+#[test]
+fn la_lista_de_ajustes_sigue_al_cursor() {
+    let mut app = app_base();
+    let mut settings =
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
+    let ultima = settings.visible().len() - 1;
+    settings.set_cursor(ultima);
+    let nombre = settings.rows()[settings.visible()[ultima]].name.clone();
+    app.settings = Some(settings);
+    ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
+    let pantalla = render_80x24(&app);
+    assert!(
+        pantalla.lines().any(|l| l.contains(&format!("> {nombre}"))),
+        "la fila del cursor («{nombre}») tiene que verse, con su marca:\n{pantalla}"
+    );
+    // Y la ventana se ha movido: la primera fila ya no cabe.
+    assert!(
+        !pantalla.contains("Theme                        default")
+            && !pantalla.contains("Tema                         default"),
+        "con el cursor al final, la primera fila sale por arriba:\n{pantalla}"
+    );
+}
+
 /// Revisión S, M3: con el overlay de ajustes Y un modal AMBOS abiertos (el
 /// enrutado de teclas ya trata al modal como AUTORITATIVO en este caso,
 /// `modal_preempts_settings`), el modal debe pintarse ENCIMA — antes se
