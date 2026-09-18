@@ -68,7 +68,7 @@ impl Estado {
             if let Some(h) = self.huecos.get(&slot) {
                 changes.push(ViewChange::Columns {
                     slot_id: slot,
-                    columns: self.cabeceras(h),
+                    columns: self.cabeceras(slot, h),
                 });
             }
             changes.push(self.cambio_de_filas_de(slot));
@@ -83,11 +83,11 @@ impl Estado {
     /// Solo la ventana visible viaja: un directorio de cien mil entradas no
     /// cruza el bridge para pintar cuarenta filas.
     pub(super) fn filas_visibles(&self) -> Vec<RowView> {
-        self.filas_de(self.hueco())
+        self.filas_de(self.activo(), self.hueco())
     }
 
     /// Las filas visibles de un hueco cualquiera.
-    pub(super) fn filas_de(&self, hueco: &Hueco) -> Vec<RowView> {
+    pub(super) fn filas_de(&self, slot: u32, hueco: &Hueco) -> Vec<RowView> {
         let primera = usize::try_from(hueco.primera_visible).unwrap_or(0);
         let cuantas = usize::try_from(hueco.visibles).unwrap_or(0);
         // UNA vez por lote, no una por fila: recorre el mapa de tasks entero y
@@ -97,7 +97,7 @@ impl Estado {
         let operandos = self.operandos_vivos();
         // Y el ajuste de columnas, por lo mismo: la cabecera y todas las
         // filas del lote tienen que salir del MISMO.
-        let columnas = self.ajuste_de(hueco);
+        let columnas = self.ajuste_de(slot, hueco);
         hueco
             .pane
             .entries()
@@ -335,7 +335,7 @@ impl Estado {
         let antes = self
             .huecos
             .get(&slot)
-            .map(|h| self.filas_de(h))
+            .map(|h| self.filas_de(slot, h))
             .unwrap_or_default();
         if !batch.is_empty()
             && let Some(hueco) = self.huecos.get_mut(&slot)
@@ -345,7 +345,7 @@ impl Estado {
         let despues = self
             .huecos
             .get(&slot)
-            .map(|h| self.filas_de(h))
+            .map(|h| self.filas_de(slot, h))
             .unwrap_or_default();
         // Callar un parche no es gratis: `extend` sube la ÉPOCA del listado y
         // el renderer nombra cada fila con la época en la que la vio, así que
@@ -419,7 +419,7 @@ impl Estado {
             Some(h) => (
                 h.pane.listing_epoch(),
                 h.primera_visible,
-                self.filas_de(h),
+                self.filas_de(slot, h),
                 Some(h.pane.entries().len() as u64),
                 h.pane.any_icon(),
             ),
@@ -444,7 +444,7 @@ impl Estado {
         let ahora: Vec<(u32, Vec<norte_frontend::columns::Fitted>)> = self
             .huecos
             .iter()
-            .map(|(id, h)| (*id, self.ajuste_de(h)))
+            .map(|(id, h)| (*id, self.ajuste_de(*id, h)))
             .collect();
         let mut movidos = Vec::new();
         for (id, ajuste) in ahora {

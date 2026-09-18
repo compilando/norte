@@ -292,8 +292,9 @@ impl Estado {
         if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         }
-        // Las del ESQUEMA de este hueco: es lo que se pintó, y por tanto lo
-        // que el renderer pudo nombrar.
+        // Las del ESQUEMA de este hueco, no solo las pintadas: el ajuste
+        // (ADR 0124) puede haber cedido una, y ordenar por ella sigue
+        // teniendo sentido — es lo mismo que el menú de orden ofrece.
         let configuradas = self
             .huecos
             .get(&slot_id)
@@ -345,7 +346,10 @@ impl Estado {
         // segundo, el listado se repintaba en el orden nuevo y el `▲` seguía
         // describiendo el anterior.
         let filas = self.parche_filas_de(slot_id);
-        let cabeceras = self.huecos.get(&slot_id).map(|h| self.cabeceras(h));
+        let cabeceras = self
+            .huecos
+            .get(&slot_id)
+            .map(|h| self.cabeceras(slot_id, h));
         let mut salidas = vec![filas];
         if let Some(columns) = cabeceras {
             let cambio = ViewChange::Columns { slot_id, columns };
@@ -391,20 +395,19 @@ impl Estado {
     /// si los hay, los iconos. Un hueco que el reparto no coloca pinta todas
     /// sus columnas: no hay ancho con el que decidir, y ceder sin saber es
     /// quitar por quitar.
-    pub(super) fn ajuste_de(&self, hueco: &Hueco) -> Vec<norte_frontend::columns::Fitted> {
+    pub(super) fn ajuste_de(
+        &self,
+        slot: u32,
+        hueco: &Hueco,
+    ) -> Vec<norte_frontend::columns::Fitted> {
         use norte_frontend::columns::fitted_columns;
         let esquema = hueco.pane.dir().scheme();
         let ancho = self
-            .huecos
+            .reparto
+            .placements
             .iter()
-            .find(|(_, h)| std::ptr::eq(*h, hueco))
-            .and_then(|(id, _)| {
-                self.reparto
-                    .placements
-                    .iter()
-                    .find(|(s, _)| s.0 == *id)
-                    .map(|(_, r)| r.width)
-            });
+            .find(|(s, _)| s.0 == slot)
+            .map(|(_, r)| r.width);
         match ancho {
             Some(ancho) => {
                 let delante: u16 = 2 + if hueco.pane.any_icon() { 3 } else { 0 };
@@ -415,7 +418,7 @@ impl Estado {
         }
     }
 
-    pub(super) fn cabeceras(&self, hueco: &Hueco) -> Vec<ColumnHeader> {
+    pub(super) fn cabeceras(&self, slot: u32, hueco: &Hueco) -> Vec<ColumnHeader> {
         use norte_frontend::columns::{header_label_in, sort_column_id};
         let spec = hueco.pane.sort();
         let catalogo = self.catalogo_de(hueco.pane.dir());
@@ -424,7 +427,7 @@ impl Estado {
         // la fija viaja (puente 64); `auto` y `flex` se pintan a lo que
         // midan, que es lo que esta ventana hacía con todas.
         let politicas = self.columnas.layout_items_for(&esquema);
-        self.ajuste_de(hueco)
+        self.ajuste_de(slot, hueco)
             .iter()
             .map(|f| {
                 let id = &f.id;
@@ -500,13 +503,17 @@ impl Estado {
         if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         }
+        // Contra el AJUSTE, no contra lo configurado (ADR 0124): un arrastre
+        // que llega después de que la columna cediera fijaría su ancho, y un
+        // ancho fijo la saca de la escalera para siempre — el nombre volvería
+        // a cortarse por un evento viejo.
         let pintada = self
             .huecos
             .get(&slot_id)
-            .map(|h| self.columnas_de(h.pane.dir()))
+            .map(|h| self.ajuste_de(slot_id, h))
             .unwrap_or_default()
             .iter()
-            .any(|c| identidad_de_columna(c) == column);
+            .any(|f| identidad_de_columna(&f.id) == column);
         if !pintada {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         }
@@ -517,7 +524,7 @@ impl Estado {
             .iter()
             .map(|(id, h)| ViewChange::Columns {
                 slot_id: *id,
-                columns: self.cabeceras(h),
+                columns: self.cabeceras(*id, h),
             })
             .collect();
         (self.aplicada(), vec![self.parche(cambios)])
@@ -720,7 +727,7 @@ impl Estado {
             path_hostile,
             total_rows: Some(hueco.pane.entries().len() as u64),
             first_visible: hueco.primera_visible,
-            rows: self.filas_de(hueco),
+            rows: self.filas_de(id, hueco),
             icon_column: hueco.pane.any_icon(),
             cursor: (!hueco.pane.entries().is_empty())
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
@@ -734,7 +741,7 @@ impl Estado {
             footer,
             path_segments,
             used_ratio,
-            columns: self.cabeceras(hueco),
+            columns: self.cabeceras(id, hueco),
             state: hueco.estado.clone(),
             quick: hueco.pane.quick().map(|q| crate::dto::QuickView {
                 query: clamp_display(q.query_display()),

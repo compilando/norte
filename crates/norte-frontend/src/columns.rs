@@ -745,7 +745,16 @@ fn short_local(mtime_ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
         jiff::Timestamp::from_millisecond(mtime_ms),
         jiff::Timestamp::from_millisecond(now_ms),
     ) else {
-        return iso_utc_minutes(mtime_ms).chars().take(4).collect();
+        // El AÑO del ISO, con su signo: `iso_utc_minutes` pone el signo
+        // fuera del ancho, y cortar a cuatro caracteres dejaba `-000` para
+        // cualquier año negativo.
+        let iso = iso_utc_minutes(mtime_ms);
+        let fin = iso
+            .char_indices()
+            .skip(1)
+            .find(|(_, c)| *c == '-')
+            .map_or(iso.len(), |(i, _)| i);
+        return iso[..fin].to_owned();
     };
     let z = ts.to_zoned(tz.clone());
     let n = now.to_zoned(tz.clone());

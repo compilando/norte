@@ -318,7 +318,7 @@ impl Estado {
             .iter()
             .map(|(id, h)| ViewChange::Columns {
                 slot_id: *id,
-                columns: self.cabeceras(h),
+                columns: self.cabeceras(*id, h),
             })
             .collect()
     }
