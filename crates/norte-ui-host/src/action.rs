@@ -596,6 +596,19 @@ pub enum UiAction {
         /// `true` = aplicar. `false` = descartar.
         approve: bool,
     },
+    /// Contesta a la revisión de un plan de ORGANIZAR (fase 8), por lo mismo
+    /// y con el mismo contrato que su gemelo de arriba.
+    OrganizeDecide {
+        /// `true` = aplicar. `false` = descartar.
+        approve: bool,
+    },
+    /// Recorre el árbol de organizar sin decidir nada (fase 8): es una
+    /// pantalla con scroll, y aprobar exige haber llegado al final — sin un
+    /// gesto para recorrerla, un lector con el ratón no podía aprobar nunca.
+    OrganizeScroll {
+        /// `true` = hacia abajo.
+        down: bool,
+    },
     /// Despliega un menú de la barra por su índice, o cierra el que hubiera
     /// si ya era ese (un click en el título abierto lo pliega).
     MenuOpen {

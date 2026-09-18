@@ -236,6 +236,13 @@ pub trait HostBackend: Send + Sync + 'static {
         body: serde_json::Value,
     ) -> BoxFuture<'static, Result<u64, Error>>;
 
+    /// Suelta la propiedad de la sesión (fase 9): devuelve si ERA la dueña.
+    ///
+    /// `false` no es un error sino un hecho —«no eras tú»— y quien releva lo
+    /// necesita: sin él lanzaría la terminal a reclamar una sesión que sigue
+    /// ocupada, y el lector se quedaría mirando un listado que no es el suyo.
+    fn session_release(&self) -> BoxFuture<'static, Result<bool, Error>>;
+
     /// El canal de eventos de conexión (perdida y restaurada), si esta
     /// conexión lo tiene y nadie lo ha tomado ya.
     fn take_conn_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>>;
@@ -420,6 +427,41 @@ pub trait HostBackend: Send + Sync + 'static {
         dir: VPath,
         names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>>;
+
+    /// El plan de ORGANIZAR que propone un modelo (fase 8): el mismo trato
+    /// que renombrar con una libertad más —el destino puede llevar
+    /// carpetas—, y por eso su token viaja CON el plan: no hay un segundo
+    /// viaje que comprobar.
+    fn ai_organize_plan(
+        &self,
+        dir: VPath,
+        instruction: String,
+        names: Vec<String>,
+    ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>>;
+
+    /// El mismo plan, propuesto por un plugin del kind `organizer` (fase 8).
+    /// Mismo reparto que el `renamer`: el plugin propone y el core ejecuta.
+    ///
+    /// **`names` es el operando, y vacío significa vacío**, no «todo»: un
+    /// plugin no lista directorios (regla 9), así que lo que no le den no
+    /// existe para él y contesta que no mueve nada.
+    fn plugin_organize_plan(
+        &self,
+        plugin_id: String,
+        organizer_id: String,
+        dir: VPath,
+        names: Vec<String>,
+    ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>>;
+
+    /// Aplica un plan de organizar ya revisado (fase 8): crea las carpetas
+    /// que falten y mueve, TODO bajo un solo `batch_id`, así que se deshace
+    /// como una unidad.
+    fn organize(
+        &self,
+        dir: VPath,
+        moves: Vec<methods::OrganizeMove>,
+        plan_hash: methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
     /// El plan REVISABLE de un lote de renombrados dentro de `dir`.
     ///
@@ -935,6 +977,11 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move { backend.session_put(version, revision, body).await })
     }
 
+    fn session_release(&self) -> BoxFuture<'static, Result<bool, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.session_release().await })
+    }
+
     fn log_tail(
         &self,
         cursor: Option<u64>,
@@ -1386,6 +1433,50 @@ impl HostBackend for norte_client::RemoteBackend {
             backend
                 .plugin_rename_plan(&plugin_id, &renamer_id, &dir, &names)
                 .await
+        })
+    }
+
+    fn ai_organize_plan(
+        &self,
+        dir: VPath,
+        instruction: String,
+        names: Vec<String>,
+    ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.ai_organize_plan(&dir, &instruction, &names).await })
+    }
+
+    fn plugin_organize_plan(
+        &self,
+        plugin_id: String,
+        organizer_id: String,
+        dir: VPath,
+        names: Vec<String>,
+    ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            backend
+                .plugin_organize_plan(&plugin_id, &organizer_id, &dir, &names)
+                .await
+        })
+    }
+
+    fn organize(
+        &self,
+        dir: VPath,
+        moves: Vec<methods::OrganizeMove>,
+        plan_hash: methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.organize(&dir, &moves, &plan_hash).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
         })
     }
 

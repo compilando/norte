@@ -132,6 +132,12 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
         NativeEffect::CopyBytes { bytes, .. } => copiar(bytes),
         NativeEffect::OpenPath { path } => abrir(path),
         NativeEffect::OpenTerminal { dir } => terminal(dir),
+        // Fase 9: la pantalla ya está escrita y suelta; aquí sólo se abre la
+        // terminal con `ntc --attach` dentro. Cerrar ESTA ventana no se hace
+        // aquí —este hilo no la tiene— sino en quien bombea, y sólo si la
+        // terminal arrancó: si no, la sesión está suelta pero la pantalla
+        // sigue en pantalla, que es el fallo barato.
+        NativeEffect::HandoffToTerminal { daemon } => relevo(*daemon),
         NativeEffect::Notify { titulo, cuerpo } => avisar(titulo, cuerpo),
         // Suelto: el comparador abre su ventana y esta no espera. El argv
         // viene resuelto e interpolado del host; aquí solo se lanza.
@@ -305,6 +311,37 @@ fn terminal(dir: &norte_proto::VPath) -> Resultado {
         // y hereda el directorio, que es justo el caso que la lista
         // compartida documenta.
         return lanzar(&ruta, &argv[1..], Some(&nativa));
+    }
+    Resultado::SinPrograma
+}
+
+/// El RELEVO a la terminal (fase 9): abre un emulador con `ntc --attach`
+/// dentro.
+///
+/// Reusa `terminal_candidates`, que es la lista compartida de emuladores y su
+/// bandera de comando, y le pone `ntc` como programa a correr: así el relevo
+/// abre el mismo emulador que `app.terminal`, y un escritorio donde aquél
+/// funciona no necesita configurar nada más para éste.
+///
+/// `--daemon` viaja si esta ventana lo lleva, y tiene que viajar: la sesión
+/// que se acaba de soltar es la del daemon, y un `ntc` contra su core
+/// embebido no encontraría nada.
+fn relevo(daemon: bool) -> Resultado {
+    let Some(ntc) = norte_frontend::openers::resolve_program(std::ffi::OsStr::new("ntc")) else {
+        return Resultado::SinPrograma;
+    };
+    let mut orden = vec![ntc.to_string_lossy().into_owned(), "--attach".to_owned()];
+    if daemon {
+        orden.push("--daemon".to_owned());
+    }
+    for argv in norte_frontend::shell::terminal_command_candidates(&orden) {
+        let Some(programa) = argv.first() else {
+            continue;
+        };
+        let Some(ruta) = norte_frontend::openers::resolve_program(programa) else {
+            continue;
+        };
+        return lanzar(&ruta, &argv[1..], None);
     }
     Resultado::SinPrograma
 }

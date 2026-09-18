@@ -747,6 +747,44 @@
         "Paneles"
       ]
     },
+    "organize": {
+      "dir": {
+        "hostile": false,
+        "text": "⟨file⟩/home/oscar/descargas"
+      },
+      "first_visible": 0,
+      "hidden_hostile": true,
+      "lines": [
+        {
+          "depth": 0,
+          "kind": "existing_dir",
+          "text": {
+            "hostile": false,
+            "text": "facturas"
+          }
+        },
+        {
+          "depth": 1,
+          "kind": "new_dir",
+          "text": {
+            "hostile": false,
+            "text": "2026"
+          }
+        },
+        {
+          "depth": 2,
+          "kind": "moved",
+          "text": {
+            "hostile": true,
+            "text": "caf�.pdf"
+          }
+        }
+      ],
+      "more_note": "… 3/5 (desplazar: ↓/↑)",
+      "seen_all": false,
+      "summary": "crea 1 carpetas y mueve 2 ficheros",
+      "total": 5
+    },
     "palette": {
       "cursor": 0,
       "query": "orde",

@@ -217,6 +217,13 @@ pub fn modal_scroll(app: &mut App, cmd: &str) -> bool {
             app.ai_plan_scroll(down);
             true
         }
+        // Fase 8: el árbol de organizar tiene la misma ventana, y sin scroll
+        // un plan de más de diez líneas no se podría aprobar nunca — el gate
+        // pide haber llegado al final.
+        Some(Modal::OrganizePlan { .. }) => {
+            app.organize_plan_scroll(down);
+            true
+        }
         Some(Modal::SemanticHits { .. }) => {
             app.semantic_cursor(down);
             true

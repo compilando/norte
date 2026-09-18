@@ -456,6 +456,15 @@ fn modal_title_body_raw(
             },
         );
     }
+    // Fase 8: el árbol de organizar necesita papeles —una carpeta NUEVA no
+    // es una línea más de la lista— y por eso entra por esta puerta y no por
+    // la tabla de texto.
+    if let Modal::OrganizePlan {
+        dir, lines, offset, ..
+    } = modal
+    {
+        return organize_plan_modal(dir, lines, *offset, hints);
+    }
     let (titulo, cuerpo) = modal_title_text(modal, reinterpret, hints);
     (titulo, plain_body(&cuerpo))
 }
@@ -755,10 +764,10 @@ fn modal_title_text(
         // se pinta— y esa red no se pierde por migrar uno.
         //
         // El cuerpo vacío es inalcanzable por el único llamante, que
-        // desvía estas dos variantes antes. Un `unreachable!` sería un panic
+        // desvía estas variantes antes. Un `unreachable!` sería un panic
         // en release (regla 6); el `debug_assert` lo pone rojo en los tests si
         // alguien añade un segundo llamante y se salta el desvío.
-        Modal::TransferName { .. } | Modal::ConfirmTransfer { .. } => {
+        Modal::TransferName { .. } | Modal::ConfirmTransfer { .. } | Modal::OrganizePlan { .. } => {
             debug_assert!(
                 false,
                 "modal con papeles pedido a la tabla de texto: se atiende en \
@@ -1421,6 +1430,125 @@ pub(crate) fn ai_rename_plan_modal_text(
         t("modal-rename-batch-plan-hint-blocked")
     });
     (t("modal-ai-rename-plan"), lines.join("\n"))
+}
+
+/// El marcador de una carpeta que el plan CREA.
+const ORGANIZE_NUEVA: &str = "+ ";
+/// El de una carpeta que ya estaba.
+const ORGANIZE_EXISTENTE: &str = "· ";
+/// El de un fichero que se mueve.
+const ORGANIZE_FICHERO: &str = "→ ";
+
+/// Título y cuerpo de `Modal::OrganizePlan` (fase 8), con papeles.
+///
+/// **Por qué un árbol y no parejas.** Un plan de renombrar se revisa como
+/// `from → to` porque eso es lo que es. Uno de organizar cambia la FORMA del
+/// directorio, y cuarenta filas `a.pdf → facturas/2026/a.pdf` no dejan ver
+/// esa forma: ni cuántas carpetas nuevas aparecen, ni cuáles, ni qué acaba
+/// dentro de cada una. El árbol lo calcula
+/// [`norte_frontend::organize::tree_lines`], compartido con la ventana — qué
+/// carpeta es nueva no puede decidirse dos veces, porque de eso depende lo
+/// que el humano cree que va a pasar.
+///
+/// **El resumen va ANTES del árbol**, pegado al dir: «crea 3 carpetas y mueve
+/// 12 ficheros» es lo que se necesita para decidir sin contar líneas, y un
+/// modal más alto que el terminal lo recorta `centered` por abajo.
+///
+/// **Los marcadores van siempre, y por eso son legibles.** Cada línea lleva
+/// uno (`+`/`·`/`→`) detrás de su sangrado; un nombre que empiece por `→`
+/// —legítimo, no es peligro de terminal, no se enmascara— se pinta detrás del
+/// nuestro (`→ → a.pdf`) en vez de sustituirlo. El PAPEL (nueva en `Strong`,
+/// existente en `Dim`) dice lo mismo en color, para quien no quiera contar
+/// glifos; el marcador está porque el color no sobrevive a un tema mono.
+///
+/// Enmascarado defensivo SIEMPRE, como los demás planes revisables: los
+/// nombres los propone un productor (modelo o plugin) y el engine los valida,
+/// pero un daemon N+1 o comprometido puede mandar cualquier cosa.
+pub(crate) fn organize_plan_modal(
+    dir: &norte_proto::VPath,
+    lineas: &[norte_frontend::organize::TreeLine],
+    offset: usize,
+    dialog_hints: &crate::hints::DialogHints,
+) -> (String, ModalBody) {
+    use norte_frontend::organize::{ORGANIZE_LINE_LIMIT, TreeKind};
+    // Cinturón de render: el clamp vive en `App::organize_plan_scroll`, pero
+    // un offset fuera de rango jamás debe pintar una ventana vacía.
+    let offset = offset.min(lineas.len().saturating_sub(ORGANIZE_LINE_LIMIT));
+    let last = (offset + ORGANIZE_LINE_LIMIT).min(lineas.len());
+    let (dir_txt, dir_hostile) = norte_frontend::path_display(dir);
+    let (carpetas, ficheros) = norte_frontend::organize::resumen(lineas);
+    let mut body: ModalBody = vec![
+        ModalLine::new(
+            ta(
+                "modal-ai-rename-dir",
+                &[("dir", &middle_ellipsis(&dir_txt, 46))],
+            ),
+            LineKind::Dim,
+        )
+        .hostile(dir_hostile),
+        ModalLine::new(
+            ta(
+                "modal-organize-summary",
+                &[
+                    ("dirs", &carpetas.to_string()),
+                    ("files", &ficheros.to_string()),
+                ],
+            ),
+            LineKind::Strong,
+        ),
+    ];
+    for l in lineas.iter().take(last).skip(offset) {
+        let (texto, hostil) = display_name(l.text.as_bytes());
+        // El sangrado se acota: la profundidad la valida el proto
+        // (`ORGANIZE_MAX_DEPTH`), pero un cuerpo pintado no depende de que
+        // el otro extremo haya validado nada.
+        let sangrado = "  ".repeat(l.depth.min(norte_proto::methods::ORGANIZE_MAX_DEPTH));
+        let (marca, papel) = match l.kind {
+            TreeKind::NewDir => (ORGANIZE_NUEVA, LineKind::Strong),
+            TreeKind::ExistingDir => (ORGANIZE_EXISTENTE, LineKind::Dim),
+            TreeKind::Moved => (ORGANIZE_FICHERO, LineKind::Plain),
+        };
+        let ancho = 44usize.saturating_sub(sangrado.width()).max(8);
+        body.push(
+            ModalLine::new(
+                format!("{sangrado}{marca}{}", middle_ellipsis(&texto, ancho)),
+                papel,
+            )
+            .hostile(hostil),
+        );
+    }
+    if lineas.len() > ORGANIZE_LINE_LIMIT {
+        // Lo escondido no se cuela limpio: si alguna línea FUERA de la
+        // ventana se pinta distinta de sus bytes, el indicador lo dice.
+        let oculto_hostil = lineas
+            .iter()
+            .enumerate()
+            .any(|(i, l)| (i < offset || i >= last) && display_name(l.text.as_bytes()).1);
+        body.push(
+            ModalLine::new(
+                ta(
+                    "modal-ai-rename-more",
+                    &[
+                        ("shown", &last.to_string()),
+                        ("total", &lineas.len().to_string()),
+                    ],
+                ),
+                LineKind::Dim,
+            )
+            .hostile(oculto_hostil),
+        );
+    }
+    // H3c: con la ayuda encima las teclas del modal no responden, y el pie
+    // deja de ofrecerlas — misma doctrina que el plan de renombrar.
+    body.push(ModalLine::new(
+        if dialog_hints.modals_inert {
+            t("modal-hint-help-open")
+        } else {
+            dialog_hints.approval.clone()
+        },
+        LineKind::Dim,
+    ));
+    (t("modal-organize-plan"), body)
 }
 
 /// Título+cuerpo de `Modal::SemanticHits` (M4-IA-2, doctrina
@@ -3042,5 +3170,75 @@ mod approval_modal_tests {
         let (_, clean) = approval_modal_text(&req(rutas(limit + 2)), "PIE");
         let clean_summary = clean.lines().nth(limit + 2).expect("resumen");
         assert!(!clean_summary.starts_with(HOSTILE_BADGE), "{clean:?}");
+    }
+
+    /// Fase 8: el árbol de organizar se pinta con el RECUENTO delante y con
+    /// una marca por línea, y una carpeta que ya existía no se pinta como
+    /// nueva. Lo primero es lo que se lee para decidir; lo segundo es la
+    /// mentira cómoda —un plan más espectacular de lo que es— y el papel
+    /// `Strong` solo no la evita en un terminal monocromo.
+    #[test]
+    fn el_arbol_de_organizar_lleva_recuento_y_marca_por_linea() {
+        use super::{LineKind, ORGANIZE_EXISTENTE, ORGANIZE_FICHERO, ORGANIZE_NUEVA};
+        use crate::app::Modal;
+        use norte_proto::VPath;
+        use norte_proto::methods::{OrganizeMove, PlanHash};
+
+        let dir = VPath::parse("mem:///descargas").unwrap();
+        let moves = vec![
+            OrganizeMove {
+                current: "a.pdf".to_owned(),
+                proposed_rel: "facturas/a.pdf".to_owned(),
+            },
+            OrganizeMove {
+                current: "b.txt".to_owned(),
+                proposed_rel: "nueva/b.txt".to_owned(),
+            },
+        ];
+        let lines = norte_frontend::organize::tree_lines(&moves, &["facturas".to_owned()]);
+        let modal = Modal::OrganizePlan {
+            dir,
+            moves,
+            lines,
+            plan_hash: PlanHash::parse(&"ab".repeat(32)).expect("hex"),
+            offset: 0,
+            seen: 0,
+        };
+        let (_, body) =
+            super::modal_title_body(&modal, None, &crate::hints::DialogHints::default());
+        // [0] el dir, [1] el recuento, y a partir de ahí el árbol.
+        assert!(
+            body[1].text.contains('1') && body[1].kind == LineKind::Strong,
+            "el recuento va delante del árbol y destacado: {:?}",
+            body[1]
+        );
+        let facturas = body
+            .iter()
+            .find(|l| l.text.contains("facturas"))
+            .expect("está");
+        assert_eq!(
+            facturas.kind,
+            LineKind::Dim,
+            "la carpeta que YA estaba no se pinta como nueva: {facturas:?}"
+        );
+        assert!(
+            facturas.text.starts_with(ORGANIZE_EXISTENTE),
+            "{facturas:?}"
+        );
+        let nueva = body
+            .iter()
+            .find(|l| l.text.contains("nueva"))
+            .expect("está");
+        assert_eq!(nueva.kind, LineKind::Strong, "{nueva:?}");
+        assert!(nueva.text.starts_with(ORGANIZE_NUEVA), "{nueva:?}");
+        // Y un fichero va sangrado bajo su carpeta, con SU marca.
+        let fichero = body
+            .iter()
+            .find(|l| l.text.contains("a.pdf"))
+            .expect("está");
+        assert!(
+            fichero.text.starts_with(&format!("  {ORGANIZE_FICHERO}")),
+            "{fichero:?}"
+        );
     }
 }

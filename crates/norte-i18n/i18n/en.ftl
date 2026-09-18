@@ -124,6 +124,30 @@ msg-rename-pattern-empty = the template is empty
 msg-rename-pattern-bad-result = that template would leave a name empty or with a `/` in it
 msg-rename-batch-nothing = nothing to rename
 msg-rename-batch-no-changes = the template leaves every name unchanged
+# Organize a directory (phase 8). The summary goes BEFORE the tree: it is what
+# you need to decide without counting lines.
+modal-organize-plan = Organize — review the tree
+modal-organize-summary = creates { $dirs } folders and moves { $files } files
+msg-organize-running = asking for a plan to organize…
+msg-organize-empty = the plan moves nothing
+msg-organize-failed = could not ask for the plan: { $error }
+# A plan that cannot be approved is not shown: without a token there is
+# nothing to redeem, and opening the tree would promise a button that cannot
+# do anything.
+msg-organize-invalid-plan = the plan is not applicable and was discarded whole
+msg-organize-hidden = the tree is ready: close this dialog and ask again
+# An extension does not list directories: we hand it the names, and that list
+# has a cap. The AI has no such limit, because the core lists for it.
+msg-organize-too-many = this directory has too many entries for an extension to organize
+# Handing the screen over between frontends (phase 9). Each refusal says WHICH
+# of the two things is missing, because they are fixed differently.
+msg-handoff-needs-daemon = handing over needs the daemon: without it there is no session to share (start with --daemon)
+msg-handoff-needs-desktop = handing over needs a desktop: there is nowhere here to open a window
+msg-handoff-failed = the screen could not be handed over; you are still where you were
+msg-handoff-no-window = the screen was handed over but the window did not open: start it yourself with `ntc-gui --attach --daemon`
+msg-handoff-running = handing the screen over…
+msg-handoff-no-terminal = the screen was handed over but the terminal did not open: start it yourself with `ntc --attach --daemon`
+host-handoff-not-owner = this window does not hold the screen: another one does, and only its owner can hand it over
 modal-ai-rename = AI rename — instruction
 modal-ai-rename-hint = Enter: request plan · Esc: cancel
 modal-ai-rename-empty-instruction = type an instruction first
@@ -640,6 +664,7 @@ msg-subshell-bad-cwd = the shell reported a directory norte cannot open; the pan
 msg-terminal-none = $TERMINAL is { $configured } and no terminal emulator was found; norte also tried its own list ({ $tried })
 msg-terminal-none-unset = $TERMINAL is not set and no terminal emulator was found; norte tried { $tried }
 help-cmd-app-terminal = open a shell in the active pane's directory
+help-cmd-app-handoff = hand the screen to the other frontend and carry on there (daemon only)
 help-cmd-app-toggle-panels = hide the panels and show the terminal
 help-cmd-pane-command-line = run a command in the active pane's directory
 cli-ls-skipped = warning: { $n } container entries omitted from the index (hostile names/limits)
@@ -793,6 +818,7 @@ palette-plugin-prefix = extension
 # A RENAMER row (C3, ADR 0095): proposes a rename plan that is reviewed like
 # the AI's. A different label because it does a different thing.
 palette-renamer-prefix = rename
+palette-organizer-prefix = organize
 theme-picker-title = Theme
 columns-picker-title = Columns — { $target }
 columns-picker-target-default = all schemes
@@ -1144,6 +1170,7 @@ menu-tools = Tools
 menu-item-pane-copy-path = Copy the path
 menu-item-pane-rename-batch = Rename in batch
 menu-item-pane-ai-rename = Rename with AI
+menu-item-pane-organize = Organize…
 menu-item-pane-chmod = Permissions
 menu-item-pane-pack = Pack
 menu-item-pane-unpack = Unpack
@@ -1172,6 +1199,7 @@ menu-item-pane-select-drive = Volumes
 menu-item-pane-refresh = Refresh
 menu-item-pane-command-line = Command line
 menu-item-app-terminal = Terminal here
+menu-item-app-handoff = Carry on in the other frontend
 menu-item-layout-focus-next = Next panel
 menu-item-layout-focus-prev = Previous panel
 menu-item-pane-mirror-target = Send what is under the cursor
@@ -1447,6 +1475,7 @@ msg-dir-size-partial = at least { $size } in { $count } entries ({ $skipped } un
 help-cmd-pane-mkdir = create a directory (F7)
 help-cmd-pane-rename-batch = rename in batch with a template (reviewable plan)
 help-cmd-pane-ai-rename = AI rename of the current directory (reviewable plan)
+help-cmd-pane-organize = organize the directory into folders (reviewable plan)
 help-cmd-pane-semantic-search = Semantic search over the index (AI)
 help-cmd-pane-rename = rename in place (Shift+F6)
 help-cmd-pane-refresh = reload both panes (Ctrl+R)
@@ -1726,6 +1755,7 @@ err-overlapping-roots-same = source and destination are the same directory
 err-overlapping-roots-source-inside = the source is inside the destination
 err-overlapping-roots-dest-inside = the destination is inside the source
 reason-needs-daemon = needs the daemon (--daemon)
+reason-needs-desktop = needs a desktop: there is nowhere here to open a window
 
 on-yes = on
 on-no = off

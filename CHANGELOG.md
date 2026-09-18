@@ -9,6 +9,77 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Carrying on in the other frontend** (ADR 0123, protocol 0.78.0), phase 9 of
+  the WOW programme and its last. `app.handoff` — in the palette, the Go menu
+  and the help in both locales — hands the screen to the other frontend: the
+  terminal passes it to the window, and the window to the terminal. What
+  travels is what you were looking at (tabs, directories, cursor, history) and
+  also what you had **marked**, which is the one part a `cd` does not rebuild.
+  Marks travel by PATH and never by index: a list that reorders itself or loses
+  a neighbour above would otherwise hand back a selection nobody made, under a
+  cursor about to press delete.
+
+  The sequence is write → release → launch, and each step gates the next: the
+  screen is written first (releasing first would leave the other one reading
+  the screen from a second ago), it is released only if the write landed, and
+  the other frontend is launched only if the release came back `true`. That
+  last answer is a new wire method, `session.release`, which gives up ownership
+  of the UI session WITHOUT disconnecting — until now that only happened on
+  disconnect, so the one leaving had to die before the one arriving could
+  claim, and if the arrival failed the screen went with it. Releasing what is
+  not yours does nothing and says so, because a `true` there would turn a
+  refused handover into a window opening onto nobody's screen. When any step
+  fails, nothing happens and the process stays where it was, which is the
+  cheapest failure available.
+
+  It only works against the daemon — the daemon is what holds the screen — and
+  needs a desktop to open a window on. Both impediments are announced through
+  the availability table with their own reason, separately, because they are
+  fixed differently: start norte against the daemon, or sit at the machine.
+  Over SSH the command is dimmed rather than offered, which is what stops it
+  releasing a screen and launching a window nobody would see. The arriving side
+  is `--attach`, new on both binaries; without it a start is a start, and marks
+  from an interrupted handover are not resurrected the next day.
+
+- **Organizing a directory** (ADR 0122, protocol 0.77.0, bridge 72), phase 8 of
+  the WOW programme. `pane.organize` — in the palette, the File menu and the
+  help in both locales — asks for a plan that puts the files of the current
+  directory INTO FOLDERS, and comes back with a tree you review before anything
+  moves. A tree and not a list of pairs, because what changes is the shape of
+  the directory: forty rows of `a.pdf → facturas/2026/a.pdf` do not let you see
+  how many folders appear, which ones, or what ends up inside each. Above the
+  tree goes the count — "creates 3 folders and moves 12 files" — which is what
+  you read to decide without counting lines, and which survives a box taller
+  than the terminal, since those are cropped from the bottom. A folder that
+  ALREADY existed is not painted as new: that is the difference between "this
+  creates three folders" and "this puts things into folders you already had".
+  Each line says what it is twice, with a role or a CSS class AND a marker
+  glyph, because a colour does not survive a monochrome theme or a screen
+  reader; the marker is never part of the name and the indentation is never
+  spaces in the text, so a file called `+ facturas` cannot disguise itself as a
+  new folder. Approving requires having reached the end of the tree, with
+  scroll in both frontends and a mouse gesture in the window — otherwise that
+  requirement made the screen unapprovable without a keyboard.
+
+  Applying it is ONE batch: `fs.organize` creates the missing folders and moves
+  everything under a single `batch_id`, so undoing it puts the files back and
+  takes away the folders nobody else filled, in one step. `fs.create` plus
+  `fs.move` from a client would have left a batch nobody owns. A destination
+  that escapes the directory — an absolute path, a `..`, a segment that is not
+  legal, a duplicated origin or destination — rejects the plan WHOLE, never
+  halfway: a plan is an intention approved in one go.
+
+  Plans come from a model (`ai.organize_plan`, through the same AI gate as
+  renaming) or from an extension of the new kind `organizer`
+  (`plugin.organize_plan`, WIT package `norte:organizer@0.1.0`) — the plugin
+  proposes and the core executes, exactly as ADR 0095 set out for renamers, and
+  the two plans are indistinguishable downstream because what makes the
+  operation safe is not where the names came from. An organizer appears in the
+  palette with its own label, as `PluginCommandKind::Organizer`. The plan's
+  token travels WITH the plan rather than in a second call, which keeps the
+  digest in one place and removes the window where a human stares at a plan
+  that cannot yet be approved.
+
 - **The journal timeline, and undoing back to a point** (ADR 0121, protocol
   0.76.0), phase 7 of the WOW programme. A new `timeline` panel — in the panel
   bar for every preset, and in the View menu — lists what has been done on this

@@ -1312,6 +1312,68 @@ impl Backend {
         }
     }
 
+    /// Plan de ORGANIZAR por IA (0.77.0, fase 8): revisable, no muta nada.
+    ///
+    /// # Errors
+    /// `Unsupported` sin proveedor; el gate de IA con su motivo; la taxonomía
+    /// del protocolo. `ProviderUnavailable` al agotar el timeout, como su
+    /// hermano.
+    pub async fn ai_organize_plan(
+        &self,
+        dir: &VPath,
+        instruction: &str,
+        names: &[String],
+    ) -> Result<norte_proto::methods::AiOrganizePlanResult, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let plan = tokio::time::timeout(
+                    AI_CALL_TIMEOUT,
+                    engine.ai_organize_plan_for(dir, instruction, names),
+                )
+                .await
+                .map_err(|_| Error::ProviderUnavailable { retryable: true })??;
+                // El token viaja CON el plan (ver `organize::plan_hash`): sin
+                // él el modal abriría sobre algo que no se puede aprobar.
+                let plan_hash = if plan.moves.is_empty() {
+                    None
+                } else {
+                    Some(crate::organize::plan_hash(dir, &plan.moves)?)
+                };
+                Ok(norte_proto::methods::AiOrganizePlanResult {
+                    moves: plan.moves,
+                    refused: None,
+                    plan_hash,
+                })
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.ai_organize_plan(dir, instruction, names).await,
+        }
+    }
+
+    /// Aplica un plan de organizar (0.77.0, fase 8): crea las carpetas y
+    /// mueve, como UN lote deshacible.
+    ///
+    /// # Errors
+    /// `PlanStale` si el token no es el del plan revisado; `InvalidPath` si
+    /// algún destino se sale del directorio; la taxonomía del protocolo.
+    pub async fn organize(
+        &self,
+        dir: &VPath,
+        moves: &[norte_proto::methods::OrganizeMove],
+        plan_hash: &norte_proto::methods::PlanHash,
+    ) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let handle = engine
+                    .organize(dir, moves, plan_hash, crate::journal::Actor::User)
+                    .await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.organize(dir, moves, plan_hash).await.map(TaskRef::from),
+        }
+    }
+
     /// GC de staging `.norte-partial` huérfano bajo `dir` (#11, ADR 0012):
     /// operación PUNTUAL, no una Task ni una mutación del journal. Devuelve
     /// cuántos barrió.
@@ -1403,6 +1465,24 @@ impl Backend {
             Self::Embedded(_) => crate::embedded::session_put(version, revision, body).await,
             #[cfg(unix)]
             Self::Remote(r) => r.session_put(version, revision, body).await,
+        }
+    }
+
+    /// Suelta la propiedad de la sesión de UI (0.78.0, fase 9). Devuelve si
+    /// esta conexión ERA la dueña.
+    ///
+    /// **En EMBEBIDO no hay a quién soltársela**: el proceso es el único que
+    /// toca esa sesión, así que contesta `false` sin tocar nada. No es una
+    /// degradación silenciosa — es la razón por la que `app.handoff` se
+    /// declara no disponible fuera del modo daemon, con su motivo.
+    ///
+    /// # Errors
+    /// Lo que dé el transporte. Un daemon 0.77 contesta `Unsupported`.
+    pub async fn session_release(&self) -> Result<bool, Error> {
+        match self {
+            Self::Embedded(_) => Ok(false),
+            #[cfg(unix)]
+            Self::Remote(r) => r.session_release().await,
         }
     }
 
@@ -3054,6 +3134,95 @@ impl Backend {
             #[cfg(unix)]
             Self::Remote(r) => {
                 r.plugin_rename_plan(plugin_id, renamer_id, dir, names)
+                    .await
+            }
+        }
+    }
+
+    /// El plan de ORGANIZAR que propone un plugin `organizer` (fase 8) para
+    /// `dir`: el mismo resultado que [`Self::ai_organize_plan`], y por la
+    /// misma razón que su gemelo de renombrar — un plan de plugin y uno de
+    /// modelo se revisan y se aplican por el camino que los frontends ya
+    /// tienen.
+    ///
+    /// El token del plan sale de aquí también, atado a `dir`: es lo único que
+    /// [`Self::organize`] acepta, y calcularlo en el frontend pondría el
+    /// digest en dos sitios.
+    ///
+    /// **`names` es el operando, y aquí vacío significa vacío** — no «todo»,
+    /// que es lo que significa en [`Self::ai_organize_plan`]. La asimetría no
+    /// es un descuido: el modelo recibe el listado porque el ENGINE lista el
+    /// directorio por él, y un plugin no puede listar nada (regla 9), así que
+    /// lo que no le den no existe para él. Un organizer llamado con la lista
+    /// vacía contesta, correctamente, que no mueve nada.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si ese plugin/organizer no está consentido;
+    /// [`Error::InvalidPath`] si el plugin propone un destino que se sale del
+    /// directorio —lo que tumba el plan ENTERO, no el movimiento—;
+    /// [`Error::Io`] si el guest no corre. En `Remote`, lo que conteste el
+    /// daemon.
+    pub async fn plugin_organize_plan(
+        &self,
+        plugin_id: &str,
+        organizer_id: &str,
+        dir: &VPath,
+        names: &[String],
+    ) -> Result<norte_proto::methods::AiOrganizePlanResult, Error> {
+        match self {
+            Self::Embedded(_) => {
+                let cfg = crate::connect::config_dir();
+                let (plugin_id, organizer_id) = (plugin_id.to_owned(), organizer_id.to_owned());
+                let (dir, names) = (dir.clone(), names.to_vec());
+                tokio::task::spawn_blocking(move || {
+                    let reg = crate::PluginRegistry::discover(&cfg)
+                        .map_err(|_| Error::Io { retryable: false })?;
+                    let Some(resolved) = reg.resolve_organizer(&plugin_id, &organizer_id) else {
+                        return Err(Error::NotFound);
+                    };
+                    let (runtime, _) = columnas_de_proceso()?;
+                    match crate::plugins::run_organize_plan(
+                        runtime,
+                        resolved,
+                        &organizer_id,
+                        Some(&dir),
+                        true,
+                        &names,
+                    ) {
+                        crate::plugins::OrganizePlanOutcome::Plan(moves) => {
+                            let plan_hash = if moves.is_empty() {
+                                None
+                            } else {
+                                Some(crate::organize::plan_hash(&dir, &moves)?)
+                            };
+                            Ok(norte_proto::methods::AiOrganizePlanResult {
+                                moves,
+                                refused: None,
+                                plan_hash,
+                            })
+                        }
+                        crate::plugins::OrganizePlanOutcome::Refused(frase) => {
+                            tracing::info!(plugin = %plugin_id, motivo = %frase, "organizer: rehusó");
+                            Ok(norte_proto::methods::AiOrganizePlanResult {
+                                moves: Vec::new(),
+                                refused: Some(crate::plugins::guest_reason(&frase)),
+                                plan_hash: None,
+                            })
+                        }
+                        // Proponer una escritura fuera del directorio no es un
+                        // fallo de E/S: es exactamente `InvalidPath`.
+                        crate::plugins::OrganizePlanOutcome::Escapes => Err(Error::InvalidPath),
+                        crate::plugins::OrganizePlanOutcome::Failed => {
+                            Err(Error::Io { retryable: false })
+                        }
+                    }
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })?
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => {
+                r.plugin_organize_plan(plugin_id, organizer_id, dir, names)
                     .await
             }
         }

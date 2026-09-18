@@ -410,6 +410,15 @@ pub struct SessionUi {
     /// También se pone suelta la ventana que encuentra un cuerpo de una
     /// versión más nueva: no se lee, y sobre todo no se pisa.
     pub detached: bool,
+    /// Este proceso viene de un RELEVO (`--attach`, fase 9), así que además de
+    /// la pantalla reclama lo MARCADO que el otro frontend dejó.
+    ///
+    /// Sin este interruptor no se puede distinguir un relevo de un arranque
+    /// cualquiera, y son la misma lectura con dos respuestas correctas
+    /// distintas: en un relevo pasan segundos y devolver lo señalado es
+    /// devolver el trabajo que se estaba haciendo; en un arranque han pasado
+    /// horas, y sería poner un `F8` sobre lo que uno marcó ayer.
+    pub attach: bool,
     /// La revisión que este proceso tiene por vigente, SOLO para arrancar el
     /// escritor de la sesión.
     ///
@@ -442,6 +451,15 @@ pub struct SessionUi {
     /// colocar: sobre un pane vacío, poner el cursor en la fila 12 es ponerlo
     /// en la 0.
     cursors: std::collections::HashMap<u32, u64>,
+    /// Lo MARCADO que traía un relevo (fase 9), hasta que llegue el listado.
+    ///
+    /// Mismo trato y mismo momento que [`Self::cursors`], y por una razón que
+    /// el piloto destapó: el pane nace vacío y `set_listing` limpia las marcas
+    /// cuando el listado llega —lo correcto para un cd—, así que sembrarlas
+    /// antes las borraba y el relevo devolvía la pantalla sin lo señalado.
+    ///
+    /// Solo se llena con `--attach`: un arranque cualquiera no es un relevo.
+    marks: std::collections::HashMap<u32, Vec<norte_proto::VPath>>,
     /// De qué huecos SABÍA la sesión guardada, tal y como se leyó del disco.
     ///
     /// La necesita `[profile.start]`, que solo siembra el hueco del que la
@@ -935,6 +953,15 @@ pub struct App {
     /// (#311). Mismo reparto que [`Self::pending_compare`]: leer el fichero de
     /// sumas y esperar el informe es I/O, y eso es del run loop.
     pub pending_checksum: Option<ChecksumRequest>,
+    /// `true` cuando el despacho pidió un plan de ORGANIZAR al modelo (fase
+    /// 8) y el run loop aún no lo ha lanzado. Mismo reparto que
+    /// [`Self::pending_checksum`]: el despacho decide QUÉ, el run loop —dueño
+    /// de las peticiones en vuelo— lo pide.
+    ///
+    /// Un booleano y no unos params porque no hay nada que elegir: el
+    /// operando es el directorio con foco, entero. El camino del PLUGIN no
+    /// pasa por aquí — la paleta ya despacha con `work` en la mano.
+    pub pending_organize: bool,
     /// Panel de sincronización abierto (`Ctrl+Y`, o `s`/`m` dentro del panel
     /// de diferencias): `None` = cerrado. Se pinta POR ENCIMA del de
     /// diferencias, que sigue vivo detrás con sus marcas.
@@ -983,6 +1010,32 @@ pub struct App {
     /// referencia ofrecería `Ctrl+Y` y el core lo rechazaría en cerrado —una
     /// tecla muerta documentada, que es lo que #159 acaba de costar una vez.
     pub backend_journalled: bool,
+    /// Este proceso habla con el DAEMON (fase 9). Mismo trato y mismo motivo
+    /// que [`Self::backend_journalled`]: se fija al arrancar porque el brazo
+    /// del backend no cambia en vida del proceso.
+    ///
+    /// Es otra pregunta que `backend_journalled`, aunque hoy casi coincidan:
+    /// aquélla dice si las mutaciones se apuntan, ésta si hay un daemon con
+    /// quien COMPARTIR la sesión, que es lo que un relevo necesita.
+    pub backend_daemon: bool,
+    /// Hay un escritorio donde abrir una ventana (fase 9). `false` por SSH.
+    ///
+    /// Se mira una vez al arrancar: un escritorio no aparece a mitad de
+    /// sesión, y consultarlo en cada dibujo sería preguntar al entorno por
+    /// algo que no se mueve.
+    pub has_desktop: bool,
+    /// El RELEVO está hecho: la pantalla está escrita y la sesión, soltada
+    /// (fase 9). El bucle lanza la ventana y se va.
+    ///
+    /// Una bandera y no una acción directa porque quien se entera es el
+    /// drenaje de avisos del escritor de sesión, y lanzar un proceso y salir
+    /// no es cosa suya: el mismo reparto que `pending_open` o
+    /// `pending_shell` — uno decide QUÉ, el bucle lo hace.
+    pub handoff_ready: bool,
+    /// El despacho pidió un RELEVO y el run loop aún no lo ha lanzado (fase
+    /// 9). Mismo reparto que [`Self::pending_organize`]: el despacho decide
+    /// QUÉ, el bucle —dueño del escritor de sesión— lo pide.
+    pub pending_handoff: bool,
     /// Los listados tienen que OLVIDAR lo que los plugins dijeron y volver a
     /// pedirlo: lo levanta cualquier cambio de gobierno o de ajustes de una
     /// extensión (apagar el decorador de iconos dejaba los iconos hasta el
@@ -1290,6 +1343,7 @@ impl App {
             compare_generation: 0,
             pending_compare: None,
             pending_checksum: None,
+            pending_organize: false,
             pending_dest_check: None,
             sync: None,
             pending_sync: None,
@@ -1301,6 +1355,10 @@ impl App {
             // sincronizar por defecto convertiría cada test en un permiso.
             // `main` lo enciende cuando el backend es remoto.
             backend_journalled: false,
+            backend_daemon: false,
+            has_desktop: false,
+            handoff_ready: false,
+            pending_handoff: false,
             redecorate: false,
             openers: norte_frontend::openers::OpenersConfig::empty(),
             editor: None,

@@ -258,6 +258,12 @@ impl Estado {
         if self.revision_ia.is_some() {
             return Some(self.tecla_en_revision_ia(k, backend, buzon));
         }
+        // Fase 8: el árbol de organizar se queda las teclas por lo mismo que
+        // la revisión de al lado — es una pantalla entera y se aprueba con
+        // ellas.
+        if self.revision_organizar.is_some() {
+            return Some(self.tecla_en_revision_organizar(k, backend, buzon));
+        }
         if self.busqueda.is_some() {
             return Some(self.tecla_en_busqueda(k, backend, buzon));
         }
@@ -596,6 +602,18 @@ impl Estado {
                         // mete en la MISMA revisión que el de la IA.
                         None if cmd.starts_with("renamer:") => {
                             self.ejecutar_de_renamer(&cmd, backend, buzon)
+                        }
+                        // Una fila de ORGANIZER (fase 8): el mismo reparto,
+                        // otro método, y el plan aterriza en el mismo árbol
+                        // revisable que el del modelo.
+                        None if cmd.starts_with("organizer:") => {
+                            match norte_frontend::palette::parse_organizer_key(&cmd) {
+                                Some((id, org)) => {
+                                    let (id, org) = (id.to_owned(), org.to_owned());
+                                    self.pedir_plan_de_organizar(Some((id, org)), backend, buzon)
+                                }
+                                None => self.no_implementado(&cmd),
+                            }
                         }
                         None => self.no_implementado(&cmd),
                     };

@@ -187,6 +187,79 @@ impl Estado {
         });
     }
 
+    /// Pide el RELEVO a la terminal (fase 9): vuelca la pantalla CON las
+    /// marcas y suelta la sesión.
+    ///
+    /// Las dos cosas van spawneadas y en ese orden: soltar antes de escribir
+    /// dejaría a la terminal leyendo la pantalla de hace un segundo, y
+    /// escribir sin soltar la dejaría sin poder escribir la suya. El
+    /// desenlace vuelve por el buzón ([`Mensaje::Relevado`]), que es donde se
+    /// decide si se lanza la terminal o si esto se queda como estaba.
+    ///
+    /// **Sólo la DUEÑA releva.** Una ventana suelta no tiene la pantalla que
+    /// entregar, y soltar lo ajeno no hace nada: ofrecerlo igualmente sería
+    /// prometer un relevo que se queda a medias, con la terminal abierta
+    /// sobre el listado de otro.
+    pub(super) fn pedir_relevo(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !self.sesion.owner {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-handoff-not-owner".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        let body = self.capturar_sesion_para_relevo();
+        let Ok(json) = serde_json::to_value(&body) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-handoff-failed".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let revision = self.sesion.revision;
+        let b = Arc::clone(backend);
+        let buz = buzon.clone();
+        tokio::spawn(async move {
+            // Sólo se suelta si la pantalla ENTRÓ: soltarla tras un `put` que
+            // falló dejaría a la terminal reclamando un cuerpo viejo, que es
+            // peor que no relevar.
+            let escrito = b
+                .session_put(norte_frontend::session::SCHEMA_VERSION, revision, json)
+                .await
+                .is_ok();
+            let soltada = if escrito {
+                b.session_release().await.unwrap_or(false)
+            } else {
+                false
+            };
+            let _ = buz.send(Mensaje::Relevado { soltada }).await;
+        });
+        (self.aplicada(), self.decir("msg-handoff-running"))
+    }
+
+    /// El relevo contestó: se entrega la pantalla o no ha pasado nada.
+    pub(super) fn relevo_terminado(&mut self, soltada: bool) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if !soltada {
+            return self.decir("msg-handoff-failed");
+        }
+        // Ya no somos dueños: dejar de escribir es lo honesto, y el indicador
+        // de la barra lo dice solo.
+        self.sesion.owner = false;
+        // Lanzar la terminal y cerrarse es de quien hospeda. Si no puede, lo
+        // dice y NO se cierra: la sesión está suelta pero la pantalla sigue
+        // aquí, que es el fallo barato.
+        if !self.nativo(crate::dto::NativeEffect::HandoffToTerminal { daemon: true }) {
+            return self.decir("msg-handoff-no-terminal");
+        }
+        self.decir("msg-handoff-running")
+    }
+
     /// El `session.put` del tic contestó.
     ///
     /// Cuatro respuestas, y cada una dice algo distinto: entró, y lo mandado
@@ -378,6 +451,21 @@ impl Estado {
     /// estabas, y restaurarlas haría que una ventana nueva abriese con media
     /// docena de ficheros elegidos que nadie eligió.
     pub(super) fn capturar_sesion(&self) -> norte_frontend::session::SessionBody {
+        self.capturar_sesion_con_marcas(false)
+    }
+
+    /// La misma pantalla CON lo marcado (fase 9): lo que se vuelca para un
+    /// relevo entre frontends.
+    ///
+    /// La diferencia con su hermana es la única que importa: en un relevo
+    /// pasan segundos entre soltar y reclamar, así que devolver lo señalado es
+    /// devolver el trabajo que se estaba haciendo. En un arranque cualquiera
+    /// han pasado horas, y el razonamiento de arriba sigue en pie.
+    pub(super) fn capturar_sesion_para_relevo(&self) -> norte_frontend::session::SessionBody {
+        self.capturar_sesion_con_marcas(true)
+    }
+
+    fn capturar_sesion_con_marcas(&self, marcas: bool) -> norte_frontend::session::SessionBody {
         // Se parte de lo LEÍDO y se pisa solo lo propio: los huecos de otro
         // frontend y las disposiciones de los OTROS perfiles siguen ahí.
         //
@@ -413,6 +501,20 @@ impl Estado {
                     // hueco nunca sellado va a cero y lo sella la primera
                     // escritura, que es lo que hace el terminal.
                     touched_ms: self.sesion.touched.get(id).copied().unwrap_or(0),
+                    // Por RUTA, que es la identidad de la fila: un índice
+                    // restaurado sobre un listado que cambió señala otro
+                    // fichero. El tope es del modelo.
+                    marks: if marcas {
+                        hueco
+                            .pane
+                            .marked_entries()
+                            .iter()
+                            .take(norte_frontend::session::MARKS_CAP)
+                            .map(|e| e.path.clone())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
                 },
             );
         }

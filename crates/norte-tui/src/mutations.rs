@@ -172,6 +172,18 @@ pub async fn confirm_modal(
             Ok(_task) => app.message = Some(t("msg-timeline-undo-running")),
             Err(e) => app.message = Some(error_message(&e)),
         },
+        // El humano leyó el árbol ENTERO y dijo que sí (fase 8). Se aplica
+        // con el token del plan que leyó: si el directorio derivó, el core
+        // contesta `PlanStale` y no se toca nada.
+        Modal::OrganizePlan {
+            dir,
+            moves,
+            plan_hash,
+            ..
+        } => match backend.organize(&dir, &moves, &plan_hash).await {
+            Ok(_task) => app.message = Some(t("msg-organize-running")),
+            Err(e) => app.message = Some(error_message(&e)),
+        },
         Modal::ConfirmTransfer {
             kind, items, to, ..
         } => {

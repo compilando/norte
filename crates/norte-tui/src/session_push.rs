@@ -230,6 +230,15 @@ enum SessionOrder {
     /// ¿Ya puedo escribir? La hace una ventana suelta cada [`OWNER_RETRY_TICKS`]
     /// ticks.
     Ask,
+    /// RELEVO (fase 9): escribe este cuerpo —que lleva las marcas— y después
+    /// SUELTA la sesión, para que el otro frontend pueda reclamarla.
+    ///
+    /// Las dos cosas van en una sola orden y en este orden a propósito: soltar
+    /// antes de escribir dejaría al otro leyendo la pantalla de hace un
+    /// segundo, y escribir sin soltar lo dejaría sin poder escribir la suya.
+    /// El escritor contesta con [`SessionNotice::HandedOff`], que es lo que
+    /// decide si se lanza al otro o si esto se queda como estaba.
+    Handoff(Arc<norte_frontend::session::SessionBody>),
 }
 
 /// Lo que el escritor le cuenta a la pantalla.
@@ -266,6 +275,18 @@ enum SessionNotice {
     /// tras un relevo de daemon la ventana dejaba de guardar para el resto de
     /// su vida, creyéndose la dueña y sin decir una palabra.
     Released,
+    /// El RELEVO (fase 9) terminó: la pantalla está escrita y se ha soltado —o
+    /// no se ha podido—.
+    ///
+    /// **`false` NO se ignora**: significa que la sesión sigue teniendo dueño,
+    /// y lanzar al otro frontend entonces abriría una ventana en blanco sobre
+    /// una pantalla que nadie soltó. Con `false` el relevo no ocurre y se
+    /// dice; el proceso se queda donde estaba, que es lo peor que puede pasar
+    /// y no es malo.
+    HandedOff {
+        /// Esta conexión era la dueña y ha dejado de serlo.
+        released: bool,
+    },
 }
 
 /// El lado de la PANTALLA del escritor de sesión (L2).
@@ -378,39 +399,41 @@ async fn write_session(
     // Lo último que se mandó a escribir, para saber qué de un documento ajeno
     // no teníamos.
     let mut last: Option<SessionBody> = None;
+    // Fase 9: la orden actual es un RELEVO, así que tras escribirla hay que
+    // soltar la sesión. Se recuerda aquí y no se hace en el brazo del `match`
+    // porque escribir es lo que sigue, y soltar antes dejaría al otro
+    // frontend leyendo la pantalla de hace un segundo.
     while let Some(order) = ordenes.recv().await {
+        let relevando = matches!(order, SessionOrder::Handoff(_));
         let mut body = match order {
             SessionOrder::Ask => {
-                if let Ok((sesion, duena)) = backend.session_get().await
-                    && duena
-                {
-                    revision = sesion.revision;
+                if let Some(rev) = preguntar_si_ya_es_mia(&backend, last.as_ref(), &avisos).await {
+                    revision = rev;
                     stopped = false;
-                    // El documento que había: lo que guardó quien tenía la
-                    // sesión y esta pantalla no conoce viaja de vuelta, o el
-                    // primer volcado del relevo se lo lleva por delante.
-                    let orphans = SessionBody::from_value(sesion.version, &sesion.body)
-                        .map(|remote| {
-                            foreign_orphans(
-                                last.as_ref().unwrap_or(&SessionBody::default()),
-                                &remote,
-                            )
-                        })
-                        .unwrap_or_default();
-                    let _ = avisos
-                        .send(SessionNotice::Owner { revision, orphans })
-                        .await;
                 }
                 continue;
             }
-            SessionOrder::Write(body) => (*body).clone(),
+            SessionOrder::Write(body) | SessionOrder::Handoff(body) => (*body).clone(),
         };
         if stopped {
+            // Con la escritura parada no hay pantalla que entregar, y soltar
+            // igualmente dejaría la sesión sin dueño con un cuerpo viejo
+            // dentro. Se contesta que no se pudo, que es la verdad.
+            if relevando {
+                let _ = avisos
+                    .send(SessionNotice::HandedOff { released: false })
+                    .await;
+            }
             continue;
         }
         if truncating {
             body.degrade_for_size();
         }
+        // Fase 9: si esto es un relevo, sólo se suelta la sesión cuando la
+        // pantalla ESTÁ escrita. Soltarla tras un `put` que falló dejaría al
+        // otro frontend reclamando un cuerpo viejo, que es peor que no
+        // relevar.
+        let mut escrito = false;
         match backend
             .session_put(SCHEMA_VERSION, revision, body.to_value())
             .await
@@ -418,6 +441,7 @@ async fn write_session(
             Ok(rev) => {
                 revision = rev;
                 last = Some(body);
+                escrito = true;
             }
             // Otra ventana escribió entre nuestro último `get` y este `put`.
             // Se re-lee para saber contra qué, y lo que ella guardaba y esta
@@ -444,6 +468,7 @@ async fn write_session(
                     {
                         revision = rev;
                         last = Some(body);
+                        escrito = true;
                     }
                 }
                 let _ = avisos.send(SessionNotice::Retry { orphans }).await;
@@ -463,7 +488,10 @@ async fn write_session(
                         .session_put(SCHEMA_VERSION, revision, body.to_value())
                         .await
                     {
-                        Ok(rev) => revision = rev,
+                        Ok(rev) => {
+                            revision = rev;
+                            escrito = true;
+                        }
                         Err(_) => stopped = true,
                     }
                 }
@@ -490,7 +518,60 @@ async fn write_session(
                     .await;
             }
         }
+        // Y el relevo, DESPUÉS de escribir.
+        if relevando {
+            stopped |= soltar_para_relevo(&backend, escrito, &avisos).await;
+        }
     }
+}
+
+/// `SessionOrder::Ask`: ¿ya es de esta ventana? Devuelve la revisión vigente
+/// si lo es, y avisa a la pantalla.
+///
+/// El documento que había viaja de vuelta con el aviso: lo que guardó quien
+/// tenía la sesión y esta pantalla no conoce se perdería en el primer volcado
+/// del relevo, y ese hueco era el historial de un panel al que su dueña iba a
+/// volver (#231).
+async fn preguntar_si_ya_es_mia(
+    backend: &Backend,
+    last: Option<&norte_frontend::session::SessionBody>,
+    avisos: &tokio::sync::mpsc::Sender<SessionNotice>,
+) -> Option<u64> {
+    use norte_frontend::session::SessionBody;
+
+    let (sesion, duena) = backend.session_get().await.ok()?;
+    if !duena {
+        return None;
+    }
+    let revision = sesion.revision;
+    let orphans = SessionBody::from_value(sesion.version, &sesion.body)
+        .map(|remote| foreign_orphans(last.unwrap_or(&SessionBody::default()), &remote))
+        .unwrap_or_default();
+    let _ = avisos
+        .send(SessionNotice::Owner { revision, orphans })
+        .await;
+    Some(revision)
+}
+
+/// La segunda mitad de un relevo: soltar la sesión y contarlo. Devuelve si
+/// hay que dejar de escribir.
+///
+/// Va DESPUÉS de escribir porque la pantalla tiene que estar donde el otro
+/// frontend la va a leer antes de dejarle el sitio. Y sólo se suelta si el
+/// `put` entró: soltarla tras un fallo dejaría al otro reclamando un cuerpo
+/// viejo, que es peor que no relevar. Un `release` que conteste `false` —no
+/// éramos los dueños— deja el relevo sin hacer, y quien lo pidió se entera:
+/// lanzar la otra mitad entonces abriría una ventana en blanco.
+async fn soltar_para_relevo(
+    backend: &Backend,
+    escrito: bool,
+    avisos: &tokio::sync::mpsc::Sender<SessionNotice>,
+) -> bool {
+    let released = escrito && backend.session_release().await.unwrap_or(false);
+    let _ = avisos.send(SessionNotice::HandedOff { released }).await;
+    // Ya no somos dueños: dejar de escribir es lo honesto, y la pantalla se
+    // pone suelta al recibir el aviso.
+    released
 }
 
 /// Los huecos que `remote` guarda y `local` no tiene.
@@ -553,6 +634,27 @@ pub fn push_session(app: &mut App, st: &mut SessionPush) {
     }
 }
 
+/// Pide el RELEVO (fase 9): vuelca la pantalla CON las marcas y suelta la
+/// sesión.
+///
+/// Devuelve `false` si el escritor no pudo ni recibir la orden, que es el
+/// único fallo que se ve desde aquí: el resto llega por el aviso
+/// `HandedOff`, porque escribir y soltar son dos viajes al core y el bucle de
+/// eventos no espera ninguno (#230).
+///
+/// `send` bloqueante NO: este es el bucle de eventos. Con el escritor ocupado
+/// se dice que no en vez de congelar la pantalla, y el lector vuelve a
+/// pulsarlo — que es lo correcto para un gesto que el humano acaba de pedir y
+/// puede repetir.
+pub fn request_handoff(app: &mut App, st: &mut SessionPush) -> bool {
+    let body = Arc::new(app.session_body_for_handoff());
+    if st.ordenes.try_send(SessionOrder::Handoff(body)).is_err() {
+        app.message = Some(t("msg-handoff-failed"));
+        return false;
+    }
+    true
+}
+
 /// Lo que el escritor contó desde la última vuelta.
 pub fn drain_notices(app: &mut App, st: &mut SessionPush) {
     while let Ok(notice) = st.avisos.try_recv() {
@@ -570,6 +672,18 @@ pub fn drain_notices(app: &mut App, st: &mut SessionPush) {
                 app.session.detached = false;
                 app.session.revision = revision;
                 app.adopt_session_orphans(orphans);
+            }
+            // Fase 9: el relevo terminó. Con `released` la pantalla ya es de
+            // otro y este proceso se va; sin él, no ha pasado nada y se DICE
+            // — quedarse callado dejaría al lector esperando una ventana que
+            // no va a abrir.
+            SessionNotice::HandedOff { released } => {
+                if released {
+                    app.session.detached = true;
+                    app.handoff_ready = true;
+                } else {
+                    app.message = Some(t("msg-handoff-failed"));
+                }
             }
             SessionNotice::Released => {
                 app.session.detached = true;
@@ -634,6 +748,7 @@ mod session_push_tests {
             columns: Vec::new(),
             show_hidden: false,
             touched_ms: 7,
+            marks: Vec::new(),
         }
     }
 

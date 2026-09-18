@@ -1390,6 +1390,133 @@ impl Engine {
         plan.map_err(|e| ai_to_proto_error(&e))
     }
 
+    /// Plan de ORGANIZAR por IA (fase 8, `ai.organize_plan`).
+    ///
+    /// El gemelo de [`Self::ai_rename_plan_for`], con el mismo gate, el mismo
+    /// filtrado de prefijos denegados, el mismo tope de respuesta y el mismo
+    /// cinturón de validación — lo único que cambia es que el destino puede
+    /// llevar subdirectorios, y esa diferencia la comprueba
+    /// [`crate::ai::validate_organize_reply`] con la MISMA función que usa el
+    /// core al ejecutar.
+    ///
+    /// **No muta nada.** El plan es el producto; aplicarlo es
+    /// [`Self::organize`].
+    ///
+    /// # Errors
+    /// Las de [`Self::ai_rename_plan_for`]: sin proveedor,
+    /// [`Error::Unsupported`]; el gate de IA; lo que conteste el proveedor; y
+    /// [`Error::InvalidPath`] si `only` pasa del tope.
+    ///
+    /// # Panics
+    /// No: los `expect` son sobre locks propios.
+    pub async fn ai_organize_plan_for(
+        &self,
+        dir: &VPath,
+        instruction: &str,
+        only: &[String],
+    ) -> Result<crate::ai::OrganizePlanReply, Error> {
+        use futures::StreamExt;
+
+        /// El mismo tope de respuesta acumulada que el plan de renombrado, y
+        /// por el mismo motivo: un endpoint comprometido puede stremear sin
+        /// fin y el tope por línea no acota el acumulado.
+        const MAX_REPLY_BYTES: usize = 512 * 1024;
+
+        if only.len() > norte_proto::methods::AI_RENAME_NAMES_MAX {
+            return Err(Error::InvalidPath);
+        }
+        let provider = self
+            .ai_provider
+            .read()
+            .expect("ai_provider lock sano")
+            .clone()
+            .ok_or(Error::Unsupported)?;
+        // Gate PRE-contenido: nada sale hasta que pasa. Organizar se evalúa
+        // como `Rename` porque es lo que es —proponer nombres nuevos para
+        // ficheros de este directorio—, y darle un `AiOp` propio obligaría a
+        // cada configuración existente a permitirlo otra vez para algo que ya
+        // había decidido.
+        {
+            let config = self.ai_config.read().expect("ai_config lock sano").clone();
+            crate::ai::AiGate::new(&config)
+                .check(crate::ai::AiOp::Rename, provider.is_local(), &[dir])
+                .map_err(|reason| ai_denied_to_error(&reason))?;
+        }
+        let denied = {
+            let config = self.ai_config.read().expect("ai_config lock sano");
+            config.denied_prefixes.clone()
+        };
+        let solo: std::collections::HashSet<&[u8]> =
+            only.iter().map(std::string::String::as_bytes).collect();
+        let mut stream = self.list(dir).await?;
+        let mut names = Vec::new();
+        while let Some(item) = stream.next().await {
+            let entry = item?;
+            if denied
+                .iter()
+                .any(|prefix| crate::policy::is_under(prefix, &entry.path))
+            {
+                continue;
+            }
+            if let Some(name) = entry.path.file_name() {
+                if !solo.is_empty() && !solo.contains(name.as_bytes()) {
+                    continue;
+                }
+                names.push(name.clone());
+            }
+        }
+        if names.is_empty() && !only.is_empty() {
+            return Ok(crate::ai::OrganizePlanReply::default());
+        }
+        let req = crate::ai::build_organize_prompt(&names, instruction)
+            .map_err(|e| ai_to_proto_error(&e))?;
+        let estructurada = provider
+            .capabilities()
+            .contains(norte_ai::AiCaps::JSON_OUTPUT);
+        let proveedor = provider.id();
+        let empezo = std::time::Instant::now();
+        let mut chat = match provider.chat(req).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::info!(
+                    proveedor,
+                    estructurada,
+                    entradas = names.len(),
+                    ms = empezo.elapsed().as_millis(),
+                    resultado = categoria_de_ai(&e),
+                    "plan de organizar por IA"
+                );
+                return Err(ai_to_proto_error(&e));
+            }
+        };
+        let mut reply = String::new();
+        while let Some(delta) = chat.next().await {
+            let delta = delta.map_err(|e| ai_to_proto_error(&e))?;
+            if reply.len() + delta.len() > MAX_REPLY_BYTES {
+                tracing::warn!(
+                    max = MAX_REPLY_BYTES,
+                    "respuesta del proveedor de IA sobre el tope; abortando"
+                );
+                return Err(Error::Internal { panic: false });
+            }
+            reply.push_str(&delta);
+        }
+        let plan = crate::ai::validate_organize_reply(&reply, &names);
+        let categoria = plan.as_ref().map_or_else(|e| categoria_de_ai(e), |_| "ok");
+        // Nunca la instrucción, nunca los nombres, nunca la respuesta: son
+        // datos del usuario y el log no es sitio para ellos (regla 10).
+        tracing::info!(
+            proveedor,
+            estructurada,
+            entradas = names.len(),
+            bytes = reply.len(),
+            ms = empezo.elapsed().as_millis(),
+            resultado = categoria,
+            "plan de organizar por IA"
+        );
+        plan.map_err(|e| ai_to_proto_error(&e))
+    }
+
     /// Total de entradas omitidas del índice del contenedor de `p` (#93),
     /// `None` si el provider lista todo lo que existe (ver
     /// [`norte_vfs::Provider::list_skipped`]).
@@ -3525,6 +3652,143 @@ impl Engine {
             evict_batch_reports(&mut ring);
         }
         Ok((handle, report))
+    }
+
+    /// Aplica un plan de ORGANIZAR (fase 8, `fs.organize`): crea las carpetas
+    /// que falten y mueve, TODO bajo un solo lote.
+    ///
+    /// Es un método y no N llamadas del cliente por una razón concreta: los
+    /// `fs.create` y los `fs.move` tienen que compartir `batch_id`. Sueltos,
+    /// deshacer el lote devolvería los ficheros y se olvidaría las carpetas —
+    /// y el humano se quedaría con un árbol de directorios vacíos que él no
+    /// hizo.
+    ///
+    /// Los movimientos se journalizan con [`crate::OP_ORGANIZED`] y no
+    /// con `renamed`, y eso también es correctitud: un lote de `renamed` lo
+    /// deshace el ejecutor de renombrados, que supone UN directorio común y
+    /// construye la cadena inversa a partir de él. Aquí no hay directorio
+    /// común — mover a subdirectorios es justo lo que esto hace.
+    ///
+    /// # Errors
+    /// [`Error::PlanStale`] si el `plan_hash` no es el del plan que se
+    /// revisó; [`Error::InvalidPath`] si algún destino no pasa la validación
+    /// (un `..`, una ruta absoluta, un plan que se contradice);
+    /// [`Error::PolicyDenied`] si la policy deniega cualquiera de las rutas
+    /// que toca — el lote se deniega ENTERO, jamás a medias; las de
+    /// [`Self::mkdir_as`] y las del provider.
+    ///
+    /// # Panics
+    /// No: los `expect` son sobre locks propios.
+    pub async fn organize(
+        &self,
+        dir: &VPath,
+        moves: &[norte_proto::methods::OrganizeMove],
+        plan_hash: &PlanHash,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        let plan = crate::organize::OrganizePlan::bind(dir, moves)?;
+        // La DERIVA primero, igual que en el lote de renombrados y por el
+        // mismo motivo: lo que se aplica tiene que ser lo que un humano leyó.
+        if plan.hash() != plan_hash {
+            return Err(Error::PlanStale);
+        }
+        let provider = self.provider_for(dir).await?;
+        let carpetas = plan.carpetas(dir);
+        let pasos: Vec<(VPath, VPath)> = plan
+            .pasos()
+            .iter()
+            .map(|p| (dir.clone().join(p.current.clone()), p.destino(dir)))
+            .collect();
+
+        // UN gate para todo lo que toca —las carpetas que va a crear y los dos
+        // lados de cada movimiento—, antes de reservar el lote. La policy
+        // resuelve el slice a lo más restrictivo, así que un plan que roza un
+        // nombre denegado se deniega entero.
+        let mut gate: Vec<&VPath> = Vec::with_capacity(carpetas.len() + pasos.len() * 2);
+        gate.extend(carpetas.iter());
+        for (de, a) in &pasos {
+            gate.push(de);
+            gate.push(a);
+        }
+        self.gate(&actor, crate::policy::PolicyOp::Move, &gate)
+            .await?;
+        drop(gate);
+
+        let journal = self.journal().await;
+        let batch_id = match &journal {
+            Some(j) => Some(j.journal().alloc_batch().await.map_err(Error::from)?),
+            // Sin journal no hay lote que agrupar ni undo que servir, y se
+            // dice así: honesto, como en el lote de renombrados.
+            None => None,
+        };
+        let key = dir.scheme().to_owned();
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::RenameBatch,
+            Priority::Normal,
+            actor.clone(),
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    let total = (carpetas.len() + pasos.len()) as u64;
+                    ctx.progress.update(|p| p.entries_total = Some(total));
+                    // Primero las carpetas, de la más alta a la más honda: un
+                    // provider no inventa padres, y el core tiene que saber
+                    // cuáles creó para poder borrarlas al deshacer.
+                    for c in &carpetas {
+                        if ctx.cancel.is_cancelled() {
+                            return Err(Error::Cancelled);
+                        }
+                        // Una carpeta que YA existe no es un fallo ni se
+                        // journaliza: no la creó este lote, así que deshacerlo
+                        // no puede borrarla.
+                        if provider.stat(c).await.is_ok() {
+                            continue;
+                        }
+                        provider.mkdir(c).await?;
+                        if let (Some(j), Some(b)) = (journal.as_ref(), batch_id) {
+                            j.journal()
+                                .record_entry(&crate::journal::NewEntry {
+                                    op: "created",
+                                    path: c.to_wire().as_bytes(),
+                                    path_to: None,
+                                    reversal: crate::journal::Reversal::Delete,
+                                    reversal_ref: None,
+                                    actor: &actor,
+                                    undoes_seq: None,
+                                    batch_id: Some(b),
+                                })
+                                .await
+                                .map_err(Error::from)?;
+                        }
+                        ctx.progress.update(|p| p.entries_done += 1);
+                    }
+                    for (de, a) in &pasos {
+                        if ctx.cancel.is_cancelled() {
+                            return Err(Error::Cancelled);
+                        }
+                        provider.rename(de, a).await?;
+                        if let (Some(j), Some(b)) = (journal.as_ref(), batch_id) {
+                            j.journal()
+                                .record_entry(&crate::journal::NewEntry {
+                                    op: crate::undo::OP_ORGANIZED,
+                                    path: a.to_wire().as_bytes(),
+                                    path_to: Some(de.to_wire().as_bytes()),
+                                    reversal: crate::journal::Reversal::RenameBack,
+                                    reversal_ref: None,
+                                    actor: &actor,
+                                    undoes_seq: None,
+                                    batch_id: Some(b),
+                                })
+                                .await
+                                .map_err(Error::from)?;
+                        }
+                        ctx.progress.update(|p| p.entries_done += 1);
+                    }
+                    Ok(())
+                })
+            }),
+        );
+        Ok(handle)
     }
 
     /// Informe de un lote ya lanzado, por `task_id`, más el ACTOR que lo pidió

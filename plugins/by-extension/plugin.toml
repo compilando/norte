@@ -1,0 +1,20 @@
+[plugin]
+id = "org.norte.by-extension"
+name = "By extension"
+publisher = "norte"
+version = "0.1.0"
+category = "organizer"
+description = "Files each marked name into a folder named after its extension."
+
+# One organizer. Choosing it asks this plugin where each marked file should
+# go, and the plan is reviewed before anything moves — the same review as the
+# AI plan, and the same apply: the folders and the moves go as ONE undoable
+# batch.
+[[contributions.organizer]]
+id = "by-extension"
+title = "Into folders by extension"
+
+# No capabilities: the answer is in the name. That is the point of this one —
+# it is the smallest end-to-end exercise of the organizer ABI, so a failure is
+# the ABI and not the plugin.
+[capabilities]

@@ -1034,6 +1034,39 @@ fn is_sync_unit(unit: &[JournalEntry]) -> bool {
         })
 }
 
+/// El `op` con el que se journaliza un movimiento de ORGANIZAR (fase 8).
+///
+/// No es `renamed`, y la diferencia es de correctitud, no de cosmética: un
+/// lote de `renamed` vive en UN directorio y lo deshace `revert_batch`, que
+/// construye la cadena inversa a partir del padre de la primera entrada. Un
+/// lote de organizar mueve a SUBDIRECTORIOS —no hay padre común— y además
+/// trae los `created` de las carpetas que hizo. Con el mismo `op`, ese lote
+/// caería en el ejecutor de renombrados y se desharía contra un directorio
+/// que no es el suyo.
+///
+/// Se pinta tal cual en la línea de tiempo y en la auditoría, que es lo
+/// honesto: organizar es lo que pasó.
+pub const OP_ORGANIZED: &str = "organized";
+
+/// ¿Es esta unidad un lote de ORGANIZAR (fase 8)?
+///
+/// Basta con que UNA entrada lleve [`OP_ORGANIZED`]: ese `op` no lo escribe
+/// nadie más. Se comprueba además que todo el lote tenga la forma esperada
+/// —mover o crear, con sus reversas— para que un `batch_id` manipulado no
+/// arrastre una entrada de otra clase por este camino.
+fn is_organize_unit(unit: &[JournalEntry]) -> bool {
+    !unit.is_empty()
+        && unit.iter().any(|e| e.op == OP_ORGANIZED)
+        && unit.iter().all(|e| {
+            e.batch_id.is_some()
+                && matches!(e.op.as_str(), OP_ORGANIZED | "created")
+                && matches!(
+                    e.reversal.as_str(),
+                    "rename_back" | "delete" | "irreversible"
+                )
+        })
+}
+
 /// ¿Es esta unidad un lote de PERMISOS (#315)?
 ///
 /// Un `fs.set_mode` recursivo agrupa sus n nodos bajo un lote para que una
@@ -1158,6 +1191,19 @@ pub(crate) async fn revert_unit(
     report: &Mutex<UndoReport>,
 ) -> Result<Reverted, Error> {
     if is_sync_unit(unit) {
+        return revert_sync_batch(provider, journal, unit, actor, cancel, task_id, report).await;
+    }
+    // Un lote de ORGANIZAR (fase 8) tiene la forma del de sincronización y no
+    // la del de renombrados: sus entradas no comparten directorio —ése es el
+    // punto de organizar— y van mezcladas con los `created` de las carpetas
+    // nuevas. Así que lo deshace el MISMO ejecutor, que ya sabe hacer eso:
+    // comprueba que todo sea de un provider, ordena en LIFO estricto por
+    // `seq` y compensa cada entrada por su reversa.
+    //
+    // El orden sale gratis y es el que hace falta: las carpetas se crean
+    // ANTES de mover (seq menor), así que en LIFO los ficheros vuelven
+    // primero y las carpetas se borran después, ya vacías.
+    if is_organize_unit(unit) {
         return revert_sync_batch(provider, journal, unit, actor, cancel, task_id, report).await;
     }
     if is_mode_unit(unit) {

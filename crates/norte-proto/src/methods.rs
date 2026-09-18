@@ -1206,7 +1206,54 @@ use crate::{
 /// La otra dirección NO cuenta: un cliente 0.75 contra un daemon 0.74 no llega
 /// a pedir nada, porque [`version_compatible`] rechaza a un cliente con minor
 /// mayor que el del servidor y muere en el `initialize`.
-pub const PROTOCOL_VERSION: &str = "0.76.0";
+/// # 0.76.0 — la línea de tiempo del journal (fase 7 del programa 2026-09-15)
+///
+/// Dos métodos nuevos: [`JOURNAL_LIST`], que pagina el journal hacia atrás, y
+/// [`JOURNAL_UNDO_AFTER`], que deshace lo del HUMANO posterior a un `seq` y
+/// devuelve una Task con el informe de `policy.undo_report`. Aditivo: ningún
+/// mensaje que existía cambia de forma.
+///
+/// Los dos se rehúsan a una conexión de AGENTE antes de parsear sus params: el
+/// journal nombra todo lo que se ha tocado en esta máquina, que para un agente
+/// acotado es un oráculo de existencia, y deshacer el trabajo del humano no es
+/// decisión suya.
+///
+/// Un **cliente 0.76 contra un daemon 0.75** recibe `MethodNotFound` en los
+/// dos y se queda sin panel de línea de tiempo — la pantalla que tenía. Un
+/// cliente 0.75 contra un daemon 0.76 no los pide.
+/// # 0.77.0 — organizar un directorio (fase 8, ADR 0122)
+///
+/// Tres métodos nuevos: [`AI_ORGANIZE_PLAN`] y [`PLUGIN_ORGANIZE_PLAN`], que
+/// PROPONEN un plan revisable con destinos que pueden llevar carpetas, y
+/// [`FS_ORGANIZE`], que lo aplica como UN lote deshacible. Más
+/// [`PluginCommandKind::Organizer`], para que un frontend se entere de que un
+/// plugin trae un organizer.
+///
+/// La variante del enum es la única parte que no es puramente aditiva, y es la
+/// misma exposición que aceptó 0.67.0 con `renamer`: el campo `kind` se omite
+/// cuando vale `command`, así que un peer viejo solo lo ve si el plugin
+/// declara de verdad un organizer, y entonces falla al deserializar ESE
+/// `PluginInfo`.
+///
+/// Un **cliente 0.77 contra un daemon 0.76** recibe `MethodNotFound` y se
+/// queda sin organizar, que es lo que había. Un cliente 0.76 contra un daemon
+/// 0.77 no lo pide.
+/// # 0.78.0 — soltar la sesión de UI (fase 9 del programa 2026-09-15)
+///
+/// Un método nuevo, [`SESSION_RELEASE`]: la conexión DUEÑA de la sesión de UI
+/// renuncia a serlo sin desconectarse. Es lo que hace posible el relevo entre
+/// frontends (`app.handoff`) — volcar la pantalla, soltarla, y que el otro la
+/// reclame en su `session.get`—, y hasta ahora solo pasaba al desconectar.
+///
+/// Aditivo: ningún mensaje que existía cambia de forma. Soltar lo AJENO no
+/// hace nada y se dice ([`SessionReleaseResult::released`]), en vez de fingir
+/// que se hizo: una conexión no desaloja a otra.
+///
+/// Un **cliente 0.78 contra un daemon 0.77** recibe `MethodNotFound`, y el
+/// relevo se degrada a lo honesto: no se suelta nada, así que no se lanza al
+/// otro frontend a reclamar algo que no va a poder tener. Un cliente 0.77
+/// contra un daemon 0.78 no lo pide.
+pub const PROTOCOL_VERSION: &str = "0.78.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2211,6 +2258,52 @@ pub const JOURNAL_LIST: &str = "journal.list";
 /// assert_eq!(norte_proto::methods::JOURNAL_UNDO_AFTER, "journal.undo_after");
 /// ```
 pub const JOURNAL_UNDO_AFTER: &str = "journal.undo_after";
+/// `ai.organize_plan` — un plan REVISABLE de reorganizar un directorio
+/// (0.77.0, fase 8 del programa WOW).
+///
+/// Es [`AI_RENAME_PLAN`] con una libertad más: el destino de cada fichero
+/// puede llevar SUBDIRECTORIOS, así que el plan además crea carpetas. Eso lo
+/// convierte en otra operación y no en un campo más — otra reversa, otro
+/// diálogo, otra forma de salir mal.
+///
+/// **No muta nada**, como su hermano: el plan es el producto, y aplicarlo es
+/// [`FS_ORGANIZE`]. Pasa por el mismo gate de IA, que es lo que acota qué
+/// nombres salen de la máquina.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::AI_ORGANIZE_PLAN, "ai.organize_plan");
+/// ```
+pub const AI_ORGANIZE_PLAN: &str = "ai.organize_plan";
+/// `plugin.organize_plan` — el mismo plan, propuesto por un plugin del kind
+/// `organizer` (`norte:organizer@0.1.0`, 0.77.0).
+///
+/// Mismo reparto que `renamer` (ADR 0095): el plugin PROPONE y el core
+/// ejecuta. Lo que hace segura la operación no es de dónde salieron los
+/// nombres, así que el plan de un plugin y el de un modelo aterrizan en la
+/// MISMA revisión y se aplican por el MISMO camino.
+///
+/// ```
+/// assert_eq!(
+///     norte_proto::methods::PLUGIN_ORGANIZE_PLAN,
+///     "plugin.organize_plan"
+/// );
+/// ```
+pub const PLUGIN_ORGANIZE_PLAN: &str = "plugin.organize_plan";
+/// `fs.organize` — aplica un plan de organizar (0.77.0, fase 8).
+///
+/// **Es una mutación**, con todo lo que arrastra (regla 4): crea los
+/// directorios que falten y mueve, TODO bajo un solo `batch_id`, así que se
+/// deshace como una unidad. Ésa es la razón de que sea un método y no N
+/// llamadas del cliente: `fs.create` y `fs.move` sueltos dejarían un lote que
+/// al deshacerse devuelve los ficheros y se olvida las carpetas.
+///
+/// Lleva el `plan_hash` del plan que se revisó, como [`FS_RENAME_BATCH`]: lo
+/// que se aplica tiene que ser lo que un humano leyó.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::FS_ORGANIZE, "fs.organize");
+/// ```
+pub const FS_ORGANIZE: &str = "fs.organize";
 /// `plugin.list` — enumera los plugins DESCUBIERTOS más los errores de carga
 /// (M4-P3). Solo lectura y ABIERTO (cualquier conexión lo consulta): un
 /// frontend pinta el catálogo y el estado (aprobado/activo) sin mutar nada.
@@ -2925,6 +3018,160 @@ pub struct AiRenamePlanResult {
     /// movió; un cliente 0.67 lo ignora y ve un plan vacío.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+}
+
+/// Params de [`AI_ORGANIZE_PLAN`] (0.77.0, fase 8 del programa WOW).
+///
+/// Los mismos tres campos que [`AiRenamePlanParams`] y por la misma razón:
+/// organizar es renombrar con permiso para mover a un subdirectorio, así que
+/// lo que se le pide al proveedor —un directorio, una instrucción y los
+/// nombres sobre los que actuar— no cambia.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiOrganizePlanParams {
+    /// Directorio cuyos basenames se envían al proveedor (tras el gate de IA).
+    pub dir: VPath,
+    /// Instrucción del usuario.
+    pub instruction: String,
+    /// Los basenames sobre los que se pide el plan, dentro de [`Self::dir`].
+    /// Vacío es el directorio entero. Mismo tope que el plan de renombrado
+    /// ([`AI_RENAME_NAMES_MAX`]), porque mide lo mismo: cuántas cosas señala
+    /// un humano de una vez.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+}
+
+/// Un movimiento del plan de organizar: qué hay y a dónde va.
+///
+/// La diferencia con [`AiRenameEntry`] —y la razón de que esto sea otra
+/// familia y no un campo más— es [`Self::proposed_rel`]: un destino que puede
+/// llevar subdirectorios. Eso convierte el plan en algo que además CREA
+/// directorios, y por tanto en otra operación, con otra reversa y otro
+/// diálogo de revisión.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrganizeMove {
+    /// Nombre BASE existente en el directorio del plan.
+    pub current: String,
+    /// A dónde va, RELATIVO a ese mismo directorio, con `/` de separador.
+    ///
+    /// Puede llevar subdirectorios (`facturas/2026/marzo.pdf`), y ahí está
+    /// todo el valor de esta fase — y todo su riesgo. Lo que NO puede ser:
+    /// absoluto, vacío, con un segmento `.` o `..`, con NUL, ni terminar en
+    /// `/`. Cada segmento tiene que ser un [`crate::Segment`] válido, y eso
+    /// lo comprueba el CORE antes de crear nada
+    /// ([`validar_proposed_rel`]): un plan lo produce un tercero —un modelo o
+    /// un plugin— y un `..` aquí es una escritura fuera del directorio que el
+    /// humano estaba mirando.
+    pub proposed_rel: String,
+}
+
+/// Cuántos segmentos puede tener un [`OrganizeMove::proposed_rel`].
+///
+/// Un tope, y no «los que quiera»: cada segmento intermedio es un directorio
+/// que hay que crear, y una propuesta de mil niveles es mil `fs.create` que
+/// nadie pidió. Ocho es más hondo que cualquier organización que un humano
+/// revise de un vistazo, que es la operación que esto sirve.
+pub const ORGANIZE_MAX_DEPTH: usize = 8;
+
+/// Por qué un `proposed_rel` no vale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum OrganizeRelError {
+    /// Vacío, o sólo separadores.
+    #[error("el destino relativo está vacío")]
+    Empty,
+    /// Empieza por `/`: es una ruta absoluta disfrazada.
+    #[error("el destino relativo no puede ser absoluto")]
+    Absolute,
+    /// Más de [`ORGANIZE_MAX_DEPTH`] segmentos.
+    #[error("el destino relativo tiene más de {ORGANIZE_MAX_DEPTH} niveles")]
+    TooDeep,
+    /// Un segmento que no es válido (`.`, `..`, vacío, con NUL…).
+    #[error("el destino relativo tiene un segmento que no vale")]
+    BadSegment,
+}
+
+/// Valida un [`OrganizeMove::proposed_rel`] y devuelve sus segmentos.
+///
+/// Vive en el protocolo, y no en el core, porque las dos puntas la necesitan
+/// con la MISMA respuesta: el core antes de crear un solo directorio, y un
+/// frontend para no pintar como revisable un plan que el core va a rechazar.
+/// Dos validaciones para la misma regla divergen, y la que se relaja es
+/// siempre la que no borra ficheros.
+///
+/// Lo que garantiza: ningún segmento es `.` ni `..`, ninguno lleva NUL ni
+/// `/`, no hay vacíos (o sea: ni empieza ni termina en `/`, ni lleva `//`), y
+/// no pasa de [`ORGANIZE_MAX_DEPTH`].
+///
+/// # Errors
+/// [`OrganizeRelError`].
+///
+/// ```
+/// use norte_proto::methods::validar_proposed_rel;
+/// assert!(validar_proposed_rel("facturas/2026/marzo.pdf").is_ok());
+/// assert!(validar_proposed_rel("../fuera.txt").is_err());
+/// assert!(validar_proposed_rel("/etc/passwd").is_err());
+/// assert!(validar_proposed_rel("a//b").is_err());
+/// ```
+pub fn validar_proposed_rel(rel: &str) -> Result<Vec<crate::Segment>, OrganizeRelError> {
+    if rel.is_empty() {
+        return Err(OrganizeRelError::Empty);
+    }
+    if rel.starts_with('/') {
+        return Err(OrganizeRelError::Absolute);
+    }
+    let trozos: Vec<&str> = rel.split('/').collect();
+    if trozos.len() > ORGANIZE_MAX_DEPTH {
+        return Err(OrganizeRelError::TooDeep);
+    }
+    trozos
+        .into_iter()
+        .map(|s| crate::Segment::new(s.as_bytes()).map_err(|_| OrganizeRelError::BadSegment))
+        .collect()
+}
+
+/// Resultado de [`AI_ORGANIZE_PLAN`]: el plan REVISABLE. Vacío = el productor
+/// no propuso nada.
+///
+/// El plan es el producto; aplicarlo es [`FS_ORGANIZE`], que es quien muta.
+/// Este método jamás toca un byte.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiOrganizePlanResult {
+    /// Los movimientos propuestos. Sólo los que cambian algo.
+    pub moves: Vec<OrganizeMove>,
+    /// Por qué el productor NO propuso nada, con el mismo contrato que
+    /// [`AiRenamePlanResult::refused`]: texto de un TERCERO, ya enmascarado y
+    /// acotado por el daemon, y si hay motivo `moves` no cuenta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+    /// El token que hay que devolver en [`FsOrganizeParams::plan_hash`] para
+    /// aplicar EXACTAMENTE estos movimientos. `None` cuando no hay plan que
+    /// aplicar (rehusado, o sin movimientos).
+    ///
+    /// **Viaja con el plan, y no en un segundo método**, que es la diferencia
+    /// con el renombrado por lotes: allí el hash lo da `fs.rename_batch_plan`
+    /// porque ese método además comprueba colisiones y decide si el lote es
+    /// aplicable. Aquí no hay nada que comprobar aparte de la forma del plan
+    /// —y eso el core ya lo hizo para poder proponerlo—, así que un segundo
+    /// viaje sólo añadiría una ventana en la que el humano mira un plan que
+    /// todavía no se puede aprobar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_hash: Option<PlanHash>,
+}
+
+/// Params de [`FS_ORGANIZE`] (0.77.0, fase 8): aplicar un plan de organizar.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsOrganizeParams {
+    /// El directorio en el que viven TODOS los movimientos.
+    pub dir: VPath,
+    /// Lo que se va a mover, la MISMA intención que produjo `plan_hash`.
+    pub moves: Vec<OrganizeMove>,
+    /// El hash del plan que el humano aprobó. Que case es lo que comprueba el
+    /// core; no casar es [`Error::PlanStale`](crate::Error::PlanStale).
+    pub plan_hash: PlanHash,
 }
 
 /// Por qué una cadena no es un [`PlanHash`].
@@ -7889,6 +8136,18 @@ pub enum PluginCommandKind {
     /// Propone un plan de renombrado por [`PLUGIN_RENAME_PLAN`], que se
     /// revisa y se ejecuta como el de la IA.
     Renamer,
+    /// Propone un plan de ORGANIZAR por [`PLUGIN_ORGANIZE_PLAN`] (0.77.0,
+    /// fase 8): el mismo reparto que el renamer —propone, no muta— con una
+    /// libertad más, que el destino lleve carpetas.
+    ///
+    /// Es un `kind` y no un campo nuevo de [`PluginInfo`] por lo mismo que lo
+    /// fue `renamer`: un organizer se OFRECE donde se ofrece un comando (la
+    /// paleta), y separarlo en otra lista habría dado dos sitios donde mirar
+    /// para la misma pregunta —«qué me ofrece este plugin»—. La exposición al
+    /// wire es idéntica a la que aceptó 0.67.0: el campo se omite cuando es
+    /// `command`, así que un peer viejo solo ve este valor si el plugin
+    /// declara de verdad un organizer.
+    Organizer,
 }
 
 impl PluginCommandKind {
@@ -8834,6 +9093,25 @@ pub struct PluginRenamePlanParams {
     pub names: Vec<String>,
 }
 
+/// Params de [`PLUGIN_ORGANIZE_PLAN`] (0.77.0, fase 8).
+///
+/// Los mismos cuatro campos que [`PluginRenamePlanParams`], con el id del
+/// ORGANIZER en vez del renamer: un plugin puede declarar varios de cada
+/// clase, y se pide uno concreto.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginOrganizePlanParams {
+    /// Qué plugin, por id reverse-DNS: ESE o ninguno.
+    pub plugin_id: String,
+    /// Qué organizer de los que declara.
+    pub organizer_id: String,
+    /// El directorio de los nombres, contra el que se comprueba el plan.
+    pub dir: VPath,
+    /// Los nombres sobre los que actúa, como texto y por lo mismo que en el
+    /// renamer: lo que no sea UTF-8 se aparta antes.
+    pub names: Vec<String>,
+}
+
 /// Params de [`PLUGIN_COLUMN_VALUES`]: el id de columna declarado por el
 /// plugin `columns` en su manifiesto, más las rutas visibles a valorar.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -9084,6 +9362,34 @@ pub const SESSION_GET: &str = "session.get";
 /// ```
 pub const SESSION_PUT: &str = "session.put";
 
+/// `session.release` — la conexión DUEÑA renuncia a la sesión de UI (0.78.0,
+/// fase 9 del programa WOW).
+///
+/// **Para qué existe.** El relevo entre frontends (`app.handoff`) es volcar la
+/// pantalla, soltarla y lanzar al otro, que la reclama en su `session.get`.
+/// Sin este método, «soltar» solo pasaba al DESCONECTAR, así que el que se va
+/// tenía que morirse antes de que el que llega pudiera reclamar — y si el que
+/// llega no arranca, no queda nadie y la pantalla se ha ido con el que murió.
+///
+/// **Soltar lo ajeno no hace nada**, y se DICE
+/// ([`SessionReleaseResult::released`]) en vez de contestar que sí: una
+/// conexión no desaloja a otra, y un `true` mentiroso dejaría a quien llama
+/// creyendo que puede reclamar algo que sigue teniendo dueño.
+///
+/// **No borra el cuerpo.** Lo que se suelta es la PROPIEDAD, no el contenido:
+/// el documento sigue donde estaba y con su revisión, que es exactamente lo
+/// que el otro frontend va a leer. Si nadie lo reclama, la sesión se queda sin
+/// dueño y el primer humano que pregunte se la lleva — el mismo camino de
+/// siempre.
+///
+/// SOLO conexiones humanas, como sus dos hermanos: un agente no tiene pantalla
+/// que soltar, y recibe `INVALID_REQUEST`.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::SESSION_RELEASE, "session.release");
+/// ```
+pub const SESSION_RELEASE: &str = "session.release";
+
 /// Tope del `body` de una sesión, en bytes serializados: 1 MiB.
 ///
 /// Lo comprueba el core, que es lo ÚNICO que puede comprobar honestamente de
@@ -9202,6 +9508,29 @@ pub struct SessionPutParams {
 pub struct SessionPutResult {
     /// Revisión resultante; el cliente la guarda para su siguiente `put`.
     pub revision: u64,
+}
+
+/// Result de [`SESSION_RELEASE`] (0.78.0).
+///
+/// ```
+/// use norte_proto::methods::SessionReleaseResult;
+/// let r = SessionReleaseResult { released: true };
+/// let j = serde_json::to_value(&r).expect("json");
+/// assert_eq!(j["released"], serde_json::json!(true));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+// Campos con default, como el resto del wire: a un par que omita uno le
+// falta un campo, no le sobra un error.
+#[serde(default)]
+pub struct SessionReleaseResult {
+    /// `true` si esta conexión ERA la dueña y ha dejado de serlo.
+    ///
+    /// `false` es «no eras tú», y hay que distinguirlo: quien releva necesita
+    /// saber si la sesión quedó libre antes de lanzar al otro frontend a
+    /// reclamarla. Contestar que sí siempre convertiría un relevo imposible en
+    /// una ventana que abre y no encuentra nada.
+    pub released: bool,
 }
 
 /// El vocabulario CERRADO de niveles de registro que viaja por el wire, del

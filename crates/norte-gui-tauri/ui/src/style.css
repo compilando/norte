@@ -1370,6 +1370,94 @@ body {
   color: var(--muted, var(--title-fg));
 }
 
+/* La revisión de un plan de ORGANIZAR (fase 8). Misma caja que la de
+   renombrar; lo que cambia es el cuerpo, que es un árbol. */
+.organize {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 420px;
+  max-width: 80vw;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  padding: 12px;
+}
+
+#organize[data-open="false"] {
+  display: none;
+}
+
+.organize h2 {
+  margin: 0 0 8px;
+  font-size: 1em;
+  color: var(--title-fg);
+}
+
+.organize p {
+  margin: 2px 0;
+  unicode-bidi: isolate;
+}
+
+/* El recuento, destacado: es lo que se lee para decidir. */
+.organize-summary {
+  color: var(--title-fg);
+}
+
+.organize-tree {
+  margin: 8px 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+/* El sangrado sale de `--depth`, que lo pone el pintor con el dato del host.
+   Escrito con espacios dentro del texto, un nombre que empezara por espacios
+   podría fingir estar más adentro de donde va a caer. */
+.organize-line {
+  display: flex;
+  gap: 0.4em;
+  unicode-bidi: isolate;
+  padding-left: calc(var(--depth, 0) * 1.5em);
+}
+
+/* Un nombre largo se PARTE, no se corta, por lo mismo que en la revisión de
+   renombrar: dos nombres con un prefijo largo no pueden pintarse idénticos en
+   la pantalla donde se decide. */
+.organize-name {
+  unicode-bidi: isolate;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* El marcador va en su propio elemento y con ancho fijo: así el árbol se lee
+   en columna, y ningún nombre puede ocupar su sitio. */
+.organize-mark {
+  flex: 0 0 1em;
+  color: var(--muted, var(--title-fg));
+}
+
+/* Una carpeta que se va a CREAR es la línea que más importa. */
+.organize-new-dir > .organize-name,
+.organize-new-dir > .organize-mark {
+  color: var(--title-fg);
+  font-weight: 600;
+}
+
+/* Una que ya estaba acompaña: se atenúa para que no compita. */
+.organize-existing-dir > .organize-name,
+.organize-existing-dir > .organize-mark {
+  color: var(--muted, var(--title-fg));
+}
+
+.organize-hidden-hostile {
+  color: var(--hostile-fg);
+}
+
+.organize-more,
+.organize-hint {
+  color: var(--muted, var(--title-fg));
+}
+
 .dialog-destination {
   display: flex;
   gap: 6px;

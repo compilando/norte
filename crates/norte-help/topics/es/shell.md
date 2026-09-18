@@ -3,7 +3,7 @@ id = "shell"
 title = "Salir a un shell"
 tags = ["doing"]
 see_also = ["panes", "settings"]
-commands = ["app.terminal", "app.toggle-panels", "pane.command-line", "pane.copy-path"]
+commands = ["app.terminal", "app.toggle-panels", "pane.command-line", "pane.copy-path", "app.handoff"]
 context = ["dialog.command-line"]
 +++
 Un gestor de ficheros del que no puedes salir es un gestor de ficheros que
@@ -106,6 +106,23 @@ La versión gráfica no siempre puede prometerlo. Una ventana de terminal
 servida por una instancia que ya estaba corriendo —GNOME Terminal y Konsole lo
 hacen, y macOS también— la arranca en realidad ese servidor, no norte, así que
 hereda el entorno del servidor y no el nuestro.
+
+## Seguir en la otra ventana
+
+{{cmd:app.handoff}} entrega la pantalla al OTRO frontend: la terminal se la
+pasa a la ventana, y la ventana a la terminal. Lo que viaja es lo que estabas
+mirando —las pestañas, los directorios, el cursor, por dónde has pasado— y
+además lo que tenías **marcado**, que es lo único que no se rehace con un
+`cd`.
+
+Sólo funciona **con el daemon**, y por una razón que se puede decir en una
+frase: la pantalla la guarda él. Sin daemon no hay nada que entregar, y por
+SSH no hay ventana donde ponerla; en los dos casos el comando se anuncia no
+disponible con ese motivo en vez de fallar después.
+
+Cuando lo pides, el que se va escribe la pantalla, la **suelta** y lanza al
+otro. Si el otro no arranca, no pasa nada grave: la pantalla está guardada y
+el que se iba sigue donde estaba. Lo peor que puede ocurrir es que te lo diga.
 
 ## Copiar la ruta
 

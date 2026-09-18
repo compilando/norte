@@ -1,0 +1,69 @@
+// `norte:organizer` (fase 8 del programa WOW): un plugin PROPONE a dónde
+// mover cada fichero —con subdirectorios— y el core lo ejecuta como un lote:
+// crea las carpetas que falten y mueve, todo bajo un `batch_id`, con
+// revisión delante del humano, `plan_hash`, journal y un solo deshacer.
+//
+// Es el hermano de `norte:renamer` y la diferencia cabe en una frase: allí
+// el destino es un NOMBRE y aquí es una RUTA RELATIVA. Eso es lo que
+// convierte un renombrado en una reorganización, y también lo que obliga a
+// validar: un `..` en ese destino es una escritura fuera del directorio que
+// el humano estaba mirando, así que el host lo comprueba ANTES de crear
+// nada. Un guest no puede saltárselo — su propuesta es texto, y el core la
+// pasa por la misma puerta que la de un modelo de IA.
+//
+// Paquete propio y no una interfaz más de `norte:renamer`, por lo mismo que
+// aquél lo es de `norte:plugin` (ADR 0041 decisión 4, ADR 0094): la versión
+// viaja dentro del nombre de cada interfaz, y un cambio aquí no puede
+// invalidar a los renamers de terceros. Empieza en 0.1.0 y sube por su
+// cuenta.
+package norte:organizer@0.1.0;
+
+/// Un proponente de ORGANIZACIÓN. Recibe los nombres sobre los que actúa el
+/// lote —lo marcado, o lo señalado— y devuelve a dónde va cada uno. Solo
+/// esos: un nombre que no aparece se queda donde está.
+interface organizer {
+    /// La ubicación que el host abrió para esta llamada (el directorio de
+    /// los nombres), para un guest al que se le aprobó la capacidad
+    /// `location`: el token opaco con el que se lee (`norte:location`) y el
+    /// `prefix` relativo a la raíz abierta. `none` = no se le aprobó, o el
+    /// host no pudo abrirlo. Un guest que reciba `none` tiene que seguir
+    /// contestando —con lo que sepa del nombre solo— en vez de fallar.
+    record location-ref {
+        token: string,
+        prefix: list<u8>,
+    }
+
+    /// Un movimiento: el nombre que hay y a dónde va.
+    ///
+    /// `proposed-rel` es RELATIVO al directorio del lote, con `/` de
+    /// separador, y termina en el nombre nuevo del fichero:
+    /// `facturas/2026/marzo.pdf`. Lo que el host RECHAZA, y con ello el plan
+    /// entero: que sea absoluto, que lleve un segmento `.` o `..`, que esté
+    /// vacío, que tenga segmentos vacíos (`a//b`, o terminar en `/`), o que
+    /// pase del tope de profundidad. No es una recomendación: se comprueba.
+    ///
+    /// Texto y no bytes, como en el renamer: un movimiento del plan viaja
+    /// UTF-8 por protocolo, así que un nombre que no lo sea no puede formar
+    /// parte de un lote — el host lo aparta ANTES de llamar.
+    record proposal {
+        current: string,
+        proposed-rel: string,
+    }
+
+    /// `id` es el organizer del manifiesto que se pidió (un plugin puede
+    /// aportar varios: «por año», «por tipo»). Un `err` es una frase para el
+    /// lector: el plan no se abre y se dice por qué.
+    plan: func(id: string, location: option<location-ref>,
+               names: list<string>) -> result<list<proposal>, string>;
+}
+
+/// El world de un plugin `organizer`: importa lo mismo que `norte-renamer` y
+/// exporta `organizer`.
+world norte-organizer {
+    import norte:host/host-log@0.1.0;
+    import norte:host/host-config@0.1.0;
+    // Importado SIEMPRE, como en `norte-renamer`: el linker lo ofrece a todo
+    // guest y lo que decide si SIRVE algo es la capacidad aprobada.
+    import norte:location/location@0.2.0;
+    export organizer;
+}

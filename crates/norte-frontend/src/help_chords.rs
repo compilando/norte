@@ -46,6 +46,8 @@ const NO_IMPEDIMENT: Facts = Facts {
     dest_read_only: false,
     degraded: false,
     journalled: true,
+    daemon: true,
+    windowed: true,
 };
 
 /// A frontend's answer to the three questions `norte-help` asks (H3b): the

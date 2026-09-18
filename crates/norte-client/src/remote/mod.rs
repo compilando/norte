@@ -1198,6 +1198,55 @@ impl RemoteBackend {
         .await
     }
 
+    /// `ai.organize_plan` (0.77.0, fase 8): un plan REVISABLE de reorganizar
+    /// un directorio. No muta nada.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon: sin proveedor, `Unsupported`; el gate de IA
+    /// deniega con su motivo.
+    pub async fn ai_organize_plan(
+        &self,
+        dir: &VPath,
+        instruction: &str,
+        names: &[String],
+    ) -> Result<methods::AiOrganizePlanResult, Error> {
+        self.call_timed_guarded_with(
+            AI_CALL_TIMEOUT,
+            methods::AI_ORGANIZE_PLAN,
+            &methods::AiOrganizePlanParams {
+                dir: dir.clone(),
+                instruction: instruction.to_string(),
+                names: names.to_vec(),
+            },
+        )
+        .await
+    }
+
+    /// `fs.organize` (0.77.0, fase 8): aplica el plan que el humano aprobó —
+    /// crea las carpetas y mueve, todo como UN lote deshacible.
+    ///
+    /// # Errors
+    /// `PlanStale` si el token no es el del plan revisado; lo que responda el
+    /// daemon al encolar.
+    pub async fn organize(
+        &self,
+        dir: &VPath,
+        moves: &[methods::OrganizeMove],
+        plan_hash: &methods::PlanHash,
+    ) -> Result<RemoteTask, Error> {
+        let result: FsTaskResult = self
+            .call_timed_guarded(
+                methods::FS_ORGANIZE,
+                &methods::FsOrganizeParams {
+                    dir: dir.clone(),
+                    moves: moves.to_vec(),
+                    plan_hash: plan_hash.clone(),
+                },
+            )
+            .await?;
+        Ok(self.own_task(result.task_id, TaskKind::RenameBatch))
+    }
+
     /// `fs.delete` de un lote: papelera o permanente según `mode`.
     ///
     /// # Errors
@@ -2047,6 +2096,25 @@ impl RemoteBackend {
         Ok(r.revision)
     }
 
+    /// `session.release` contra el daemon (0.78.0, fase 9): esta conexión
+    /// renuncia a ser la dueña de la sesión de UI.
+    ///
+    /// Devuelve si ERA la dueña. `false` no es un error: es «no eras tú», y
+    /// quien releva lo necesita para no lanzar al otro frontend a reclamar una
+    /// sesión que sigue ocupada.
+    ///
+    /// Un daemon 0.77 contesta `Unsupported` —`MethodNotFound` traducido—, y
+    /// ahí la degradación honesta es no soltar nada.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon.
+    pub async fn session_release(&self) -> Result<bool, Error> {
+        let r: methods::SessionReleaseResult = self
+            .call_no_method_is_unsupported(methods::SESSION_RELEASE, &serde_json::json!({}))
+            .await?;
+        Ok(r.released)
+    }
+
     /// `log.tail` contra el daemon (L2): lo que su anillo de registro tiene
     /// después de `cursor` (0.65.0, #328, ADR 0092).
     ///
@@ -2408,6 +2476,34 @@ impl RemoteBackend {
             &methods::PluginRenamePlanParams {
                 plugin_id: plugin_id.to_owned(),
                 renamer_id: renamer_id.to_owned(),
+                dir: dir.clone(),
+                names: names.to_vec(),
+            },
+        )
+        .await
+    }
+
+    /// `plugin.organize_plan` (0.77.0, fase 8): el plan de un plugin del
+    /// kind `organizer`. Mismo contrato que el del renamer — propone, no
+    /// muta— y el mismo tipo de respuesta que `ai.organize_plan`, porque lo
+    /// que hace segura la operación no es de dónde salieron los nombres.
+    ///
+    /// # Errors
+    /// `NotFound` si ese plugin no declara ese organizer, no está aprobado o
+    /// está apagado; `InvalidPath` si propuso escribir fuera del directorio.
+    pub async fn plugin_organize_plan(
+        &self,
+        plugin_id: &str,
+        organizer_id: &str,
+        dir: &VPath,
+        names: &[String],
+    ) -> Result<methods::AiOrganizePlanResult, Error> {
+        self.call_timed_guarded_with(
+            AI_CALL_TIMEOUT,
+            methods::PLUGIN_ORGANIZE_PLAN,
+            &methods::PluginOrganizePlanParams {
+                plugin_id: plugin_id.to_owned(),
+                organizer_id: organizer_id.to_owned(),
                 dir: dir.clone(),
                 names: names.to_vec(),
             },

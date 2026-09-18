@@ -63,6 +63,7 @@ pub const MUTAN: &[&str] = &[
     "pane.checksum",
     "pane.checksum-verify",
     "pane.ai-rename",
+    "pane.organize",
     "pane.rename-batch",
     "pane.semantic-search",
     "pane.sync-dirs",
@@ -79,6 +80,10 @@ pub const MUTAN: &[&str] = &[
     // proceso igual que `pane.open`.
     "pane.edit",
     "app.terminal",
+    // Fase 9: el relevo ESCRIBE la sesión y la suelta. No toca un fichero,
+    // pero entrega la pantalla y cierra esta ventana, que es más que lo que
+    // una ventana de solo mirar puede hacer.
+    "app.handoff",
     // Empaquetar ESCRIBE un fichero; desempaquetar es una copia con otro
     // nombre. Comprobar no está aquí: lee el archivo entero y contesta, que es
     // tan de solo lectura como comparar.
@@ -163,6 +168,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "app.extensions",
     "app.agents",
     "app.terminal",
+    "app.handoff",
     "pane.open",
     "pane.compare-files",
     "pane.edit",
@@ -194,6 +200,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.checksum",
     "pane.checksum-verify",
     "pane.ai-rename",
+    "pane.organize",
     "pane.rename-batch",
     "pane.semantic-search",
     "pane.compare-dirs",
@@ -537,6 +544,12 @@ pub enum Efecto {
     CompararFicheros,
     /// Abre un terminal sentado en el directorio del panel activo.
     Terminal,
+    /// Entrega la pantalla a la TERMINAL y cierra esta ventana (fase 9).
+    ///
+    /// Está en [`MUTAN`] y no escribe un fichero: lo que escribe es la
+    /// SESIÓN, y además la suelta y cierra la ventana. Una ventana de solo
+    /// mirar no hace ninguna de las tres.
+    Relevo,
     /// Enseña el tema activo por dentro.
     Tema,
     /// Despliega la barra de menús. Ni añade capacidades ni las quita:
@@ -660,6 +673,10 @@ pub enum Efecto {
     /// Pide un plan de renombrado para el directorio ENTERO. Abre el prompt
     /// de la instrucción; el plan llega después y se revisa antes de nada.
     RenameIa,
+    /// Pide un plan de ORGANIZAR para el directorio entero (fase 8). No abre
+    /// prompt: lo que se pide es «mira este directorio y propón una forma»,
+    /// así que el plan llega solo y se revisa como un árbol antes de nada.
+    Organizar,
     /// Renombrar en lote por PLANTILLA (#310): abre el prompt de la
     /// plantilla, y el plan —determinista, sin modelo— entra por la MISMA
     /// revisión que el de la IA.
@@ -866,6 +883,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.edit" => Efecto::EditarExterno,
         "pane.compare-files" => Efecto::CompararFicheros,
         "app.terminal" => Efecto::Terminal,
+        "app.handoff" => Efecto::Relevo,
         "app.theme" => Efecto::Tema,
         "app.menu" => Efecto::Menu,
         "profile.pick" => Efecto::PerfilElegir,
@@ -889,6 +907,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.checksum" => Efecto::Sumas { verificar: false },
         "pane.checksum-verify" => Efecto::Sumas { verificar: true },
         "pane.ai-rename" => Efecto::RenameIa,
+        "pane.organize" => Efecto::Organizar,
         "pane.rename-batch" => Efecto::RenameLote,
         "pane.semantic-search" => Efecto::BuscarSemantica,
         "pane.compare-dirs" => Efecto::Comparar,

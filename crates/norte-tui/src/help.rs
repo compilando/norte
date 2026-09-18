@@ -556,6 +556,8 @@ mod tests {
             dest_read_only: false,
             degraded: false,
             journalled: true,
+            daemon: true,
+            windowed: true,
         }
     }
 

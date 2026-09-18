@@ -687,6 +687,30 @@ impl PluginRuntime {
         })
     }
 
+    /// Instancia un guest ORGANIZER (world `norte-organizer`, fase 8) con el
+    /// MISMO sandbox, límites y resolutor de ubicación que
+    /// [`Self::instantiate_renamer_with_location`].
+    ///
+    /// # Errors
+    /// Igual que [`Self::instantiate`].
+    pub fn instantiate_organizer_with_location(
+        &self,
+        wasm_path: &Path,
+        caps: Capabilities,
+        location: Option<Arc<dyn LocationHost>>,
+    ) -> Result<OrganizerInstance, RuntimeError> {
+        use crate::bindings::organizer_world::NorteOrganizer;
+        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        store.data_mut().location = location;
+        let bindings = NorteOrganizer::instantiate(&mut store, &component, &linker)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        Ok(OrganizerInstance {
+            store,
+            bindings,
+            epoch_deadline: self.epoch_deadline,
+        })
+    }
+
     /// Instancia un guest HOOK (world `norte-hook`, ADR 0100) con el MISMO
     /// sandbox y límites que [`Self::instantiate_renamer_with_location`], y
     /// el mismo resolutor de ubicación. Devuelve una [`HookInstance`].
@@ -1379,6 +1403,79 @@ impl RenamerInstance {
             .sum();
         cap_total_bytes(total)?;
         Ok(Ok(pares))
+    }
+}
+
+/// Los tipos que la interfaz `organizer` (paquete `norte:organizer`, fase 8)
+/// pone en el cable: [`organizer_iface::LocationRef`] y
+/// [`organizer_iface::Proposal`].
+pub use crate::bindings::organizer_world::exports::norte::organizer::organizer as organizer_iface;
+
+/// Un guest ORGANIZER instanciado (world `norte-organizer`, fase 8).
+pub struct OrganizerInstance {
+    store: Store<HostState>,
+    bindings: crate::bindings::organizer_world::NorteOrganizer,
+    /// Los ticks de época de CADA llamada. Ver [`PluginInstance::rearm`].
+    epoch_deadline: u64,
+}
+
+impl std::fmt::Debug for OrganizerInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrganizerInstance").finish_non_exhaustive()
+    }
+}
+
+impl OrganizerInstance {
+    fn rearm(&mut self) {
+        self.store.set_epoch_deadline(self.epoch_deadline);
+    }
+
+    /// Los valores VALIDADOS de `[config]` que el guest verá. Llamar ANTES
+    /// de `plan`.
+    pub fn set_settings(&mut self, settings: BTreeMap<String, String>) {
+        self.store.data_mut().settings = settings;
+    }
+
+    /// Le pide al guest a dónde mover `names`. `Ok(Err(frase))` es el guest
+    /// rehusando con una frase para el lector; los topes se aplican
+    /// POST-retorno y rechazan entero, como en el renamer.
+    ///
+    /// Lo que este método NO hace es validar los destinos: eso es del core,
+    /// con la misma función que valida el plan de un modelo
+    /// (`validar_proposed_rel`). Aquí sólo se acota el tamaño — quien decide
+    /// si una ruta se sale del directorio es quien va a crear las carpetas.
+    ///
+    /// # Errors
+    /// - [`RuntimeError::Trap`] si el guest atrapa.
+    /// - [`RuntimeError::ReturnTooLarge`] si devuelve más movimientos que
+    ///   [`MAX_RENAME_PROPOSALS`] o más bytes que el tope de retorno.
+    pub fn plan(
+        &mut self,
+        id: &str,
+        location: Option<&organizer_iface::LocationRef>,
+        names: &[String],
+    ) -> Result<Result<Vec<organizer_iface::Proposal>, String>, RuntimeError> {
+        self.rearm();
+        let out = self
+            .bindings
+            .norte_organizer_organizer()
+            .call_plan(&mut self.store, id, location, names)
+            .map_err(|e| map_call_error(&e))?;
+        let Ok(movs) = out else {
+            return Ok(out);
+        };
+        if movs.len() > MAX_RENAME_PROPOSALS {
+            return Err(RuntimeError::ReturnTooLarge {
+                len: movs.len(),
+                cap: MAX_RENAME_PROPOSALS,
+            });
+        }
+        let total: usize = movs
+            .iter()
+            .map(|p| p.current.len() + p.proposed_rel.len())
+            .sum();
+        cap_total_bytes(total)?;
+        Ok(Ok(movs))
     }
 }
 

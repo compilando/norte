@@ -79,6 +79,11 @@ pub async fn drain_pending(
     if let Some(req) = app.pending_checksum.take() {
         crate::mutations::checksum_start(app, backend, work, req).await;
     }
+    // Fase 8: el despacho pidió un plan de organizar; la petición vive en
+    // `work`, que es del run loop. Mismo reparto.
+    if std::mem::take(&mut app.pending_organize) {
+        crate::jobs::spawn_organize_plan(app, backend, work, None);
+    }
     // #149 y #164: ¿cabe en el destino, y sabe el destino sujetar lo que se
     // escriba en él? Las dos son I/O, así que el modal se abre SIN los
     // avisos y esta vuelta los rellena. El reparto es el de

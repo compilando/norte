@@ -231,6 +231,16 @@ pub enum Reason {
     /// hard rule 4 requires a journal entry and an undo path, and the
     /// in-process engine the TUI builds without `--daemon` has neither.
     NeedsDaemon,
+    /// The command needs a desktop to open a window on, and this session has
+    /// none — a terminal over SSH is the case.
+    ///
+    /// Distinct from [`Reason::NeedsDaemon`], and both can be true at once:
+    /// the daemon is about who holds the screen, this is about whether there
+    /// is anywhere to put the other frontend. `app.handoff` answers it, and
+    /// saying which of the two is missing matters because they are fixed
+    /// differently — one by starting norte against the daemon, the other by
+    /// sitting at the machine.
+    NeedsDesktop,
 }
 
 /// Availability of a command row in the CURRENT context.

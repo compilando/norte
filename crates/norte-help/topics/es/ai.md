@@ -3,7 +3,7 @@ id = "ai"
 title = "Renombrado con IA y búsqueda semántica"
 tags = ["doing"]
 see_also = ["finding", "agents", "settings"]
-commands = ["pane.ai-rename", "pane.semantic-search"]
+commands = ["pane.ai-rename", "pane.organize", "pane.semantic-search"]
 context = ["dialog.ai-rename", "dialog.semantic-search"]
 +++
 Las dos están APAGADAS hasta que las enciendes, y las dos van en dos pasos:
@@ -29,6 +29,25 @@ tengas que interpretar.
 El plan se valida antes de que lo veas: los nombres que propone son segmentos
 sueltos, no rutas, así que un plan no puede salirse del directorio por el que
 se preguntó — y el que lo intenta se rechaza entero, jamás a medias.
+
+# Organizar un directorio
+
+{{cmd:pane.organize}} es el mismo trato con una libertad más: el destino puede
+llevar **carpetas**. El plan vuelve como un árbol —lo que se va a crear, lo que
+ya estaba, y qué acaba dentro de cada cosa— porque lo que cambia aquí es la
+forma del directorio, y una lista de cuarenta movimientos no deja verla.
+
+Encima del árbol va el recuento: cuántas carpetas crea y cuántos ficheros
+mueve. Y no se puede aprobar sin haber llegado al final: si el árbol no cabe,
+hay que recorrerlo.
+
+Aplicarlo es **un solo lote**: se crean las carpetas que falten y se mueve todo
+bajo el mismo identificador, así que deshacerlo devuelve los ficheros y se
+lleva las carpetas que nadie más llenó — en un paso, no en cuarenta.
+
+Un plan también lo puede proponer una extensión del tipo `organizer`, y aparece
+en la paleta con su rótulo. Se revisa y se aplica exactamente igual: lo que
+hace segura la operación no es de dónde salieron los nombres.
 
 # Buscar por significado
 

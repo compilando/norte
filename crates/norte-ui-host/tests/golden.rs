@@ -210,6 +210,8 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::LayoutActivateRow { .. } => "layout_activate_row",
         UiAction::SearchActivateRow { .. } => "search_activate_row",
         UiAction::AiRenameDecide { .. } => "ai_rename_decide",
+        UiAction::OrganizeDecide { .. } => "organize_decide",
+        UiAction::OrganizeScroll { .. } => "organize_scroll",
         UiAction::MenuOpen { .. } => "menu_open",
         UiAction::MenuPointRow { .. } => "menu_point_row",
         UiAction::MenuActivateRow { .. } => "menu_activate_row",
@@ -617,6 +619,11 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             "ai_rename_decide",
             UiAction::AiRenameDecide { approve: true },
         ),
+        (
+            "organize_decide",
+            UiAction::OrganizeDecide { approve: true },
+        ),
+        ("organize_scroll", UiAction::OrganizeScroll { down: true }),
         ("resync", UiAction::Resync),
         ("request_quit", UiAction::RequestQuit),
         (
@@ -760,6 +767,54 @@ fn plan_ia_de_referencia() -> norte_ui_host::dto::AiRenameView {
         hidden_hostile: true,
         confirmable: true,
         real_steps_note: "se renombrarán 2 de verdad".to_owned(),
+        seen_all: false,
+    }
+}
+
+/// El árbol de organizar que clavan las fixtures (fase 8).
+///
+/// Con una carpeta NUEVA, una que ya estaba y un fichero dentro: las tres
+/// clases de línea en la misma foto, que es lo que hace que un renderer no
+/// pueda colapsarlas sin que esto se entere. Y con un nombre alterado, porque
+/// la marca es lo que separa «lo que se lee» de «lo que hay».
+fn arbol_de_organizar_de_referencia() -> norte_ui_host::dto::OrganizeView {
+    use norte_ui_host::dto::{DialogLine, OrganizeLineKind, OrganizeLineView, OrganizeView};
+    OrganizeView {
+        dir: DialogLine {
+            text: "⟨file⟩/home/oscar/descargas".to_owned(),
+            hostile: false,
+        },
+        lines: vec![
+            OrganizeLineView {
+                depth: 0,
+                text: DialogLine {
+                    text: "facturas".to_owned(),
+                    hostile: false,
+                },
+                kind: OrganizeLineKind::ExistingDir,
+            },
+            OrganizeLineView {
+                depth: 1,
+                text: DialogLine {
+                    text: "2026".to_owned(),
+                    hostile: false,
+                },
+                kind: OrganizeLineKind::NewDir,
+            },
+            OrganizeLineView {
+                depth: 2,
+                text: DialogLine {
+                    text: "caf\u{FFFD}.pdf".to_owned(),
+                    hostile: true,
+                },
+                kind: OrganizeLineKind::Moved,
+            },
+        ],
+        first_visible: 0,
+        total: 5,
+        more_note: "… 3/5 (desplazar: ↓/↑)".to_owned(),
+        hidden_hostile: true,
+        summary: "crea 1 carpetas y mueve 2 ficheros".to_owned(),
         seen_all: false,
     }
 }
@@ -1434,6 +1489,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         // Con plan, como el resto de overlays de esta foto: si va a `None`,
         // el sitio del campo dentro del snapshot no lo clava nadie.
         ai_rename: Some(plan_ia_de_referencia()),
+        organize: Some(arbol_de_organizar_de_referencia()),
         locale: "es".to_owned(),
     }
 }
@@ -2450,6 +2506,12 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
+            "organize",
+            ViewChange::Organize {
+                organize: Some(arbol_de_organizar_de_referencia()),
+            },
+        ),
+        (
             "tasks",
             ViewChange::Tasks {
                 tasks: vec![task_de_referencia()],
@@ -2555,7 +2617,7 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // Puente 70: el panel que pinta un PLUGIN (`SlotView::Panel` con sus
     // `lines`/`hits`) y el clic sobre una de sus zonas (`UiAction::PanelClick`,
     // que manda la CELDA y no un comando; fase 3).
-    const FORMA: u64 = 4_341_186_948_902_806_012;
+    const FORMA: u64 = 15_479_893_442_482_284_036;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

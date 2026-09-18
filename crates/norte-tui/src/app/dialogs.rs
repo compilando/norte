@@ -494,6 +494,25 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // (cancelar sigue vivo), y el pie del modal deja de ofrecerla
         // (`modal-rename-batch-plan-hint-blocked`). La decisión de si un plan
         // se puede ejecutar es del core: aquí solo se lee `executable`.
+        // El plan de ORGANIZAR (fase 8) con la MISMA disciplina: confirmar
+        // está mudo hasta que el lector ha llegado al final del árbol. La
+        // regla es del crate compartido por lo que dice su propio comentario
+        // —dos criterios de aprobación según la superficie es la peor
+        // divergencia— y aquí pesa más: este plan además crea carpetas.
+        Modal::OrganizePlan { seen, lines, .. } => {
+            if !ALLOW_CONFIRM.contains(&cmd) {
+                return None;
+            }
+            let confirms = matches!(cmd, "dialog.approve" | "dialog.confirm");
+            if confirms && !norte_frontend::approval_ready(true, *seen, lines.len()) {
+                return None;
+            }
+            Some(if confirms {
+                DialogOutcome::Confirmed
+            } else {
+                DialogOutcome::Cancelled
+            })
+        }
         Modal::AiRenamePlan {
             plan,
             seen,

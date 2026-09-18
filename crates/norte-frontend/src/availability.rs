@@ -122,6 +122,21 @@ pub struct Facts {
     /// (`sync.apply` needs the journal to open a batch), so this is the field
     /// that says so before the reader presses the key.
     pub journalled: bool,
+    /// Este proceso habla con el DAEMON, y no con su core embebido (fase 9).
+    ///
+    /// Lo lee `app.handoff`, y es otra pregunta que `journalled`: aquélla dice
+    /// si las mutaciones se apuntan, ésta si hay un daemon con quien compartir
+    /// la sesión. Un relevo sin daemon no es que se vea mal: es que no hay a
+    /// quién soltarle la pantalla, así que el otro frontend abriría en blanco
+    /// — y eso hay que DECIRLO antes de la tecla, no después.
+    pub daemon: bool,
+    /// Hay un escritorio al que pedirle una ventana.
+    ///
+    /// `false` por SSH, que es el caso que importa: ahí el relevo no tiene a
+    /// dónde ir, y ofrecerlo sería ofrecer una ventana que nadie va a ver. Lo
+    /// decide el llamante porque la respuesta es del entorno del proceso
+    /// (`DISPLAY`, `WAYLAND_DISPLAY`) y no de nada que esta tabla pueda mirar.
+    pub windowed: bool,
 }
 
 /// Fluent id for a reason, WITHOUT a frontend prefix: both frontends read
@@ -143,6 +158,7 @@ pub fn reason_key(reason: Reason) -> &'static str {
         Reason::ConnectionDegraded => "reason-connection-degraded",
         Reason::WrongTarget => "reason-wrong-target",
         Reason::NeedsDaemon => "reason-needs-daemon",
+        Reason::NeedsDesktop => "reason-needs-desktop",
         Reason::AnsweredByTheOverlay => "reason-answered-by-overlay",
         _ => "reason-unavailable",
     }
@@ -264,6 +280,8 @@ fn first_failure(checks: &[(bool, Reason)]) -> Availability {
 ///     dest_read_only: false,
 ///     degraded: false,
 ///     journalled: true,
+///     daemon: true,
+///     windowed: true,
 /// };
 /// // Se lee DESDE el zip: copiar vale.
 /// assert!(verdict("pane.copy", &en_un_zip).is_available());
@@ -321,9 +339,13 @@ pub fn verdict(command: &str, facts: &Facts) -> Availability {
         // mismo veto y por la misma razón. Sin brazo caía en el fail-OPEN y el
         // lector llegaba a teclear el nombre en el modal antes de que el
         // despacho fallara.
-        "pane.ai-rename" | "pane.delete" | "pane.delete-permanent" | "pane.mkdir" => {
-            gated(!facts.source_read_only, Reason::ReadOnlyBackend)
-        }
+        // Organizar (fase 8) CREA carpetas y mueve ficheros dentro del pane
+        // con foco: mismo veto que renombrar, y por la misma razón.
+        "pane.ai-rename"
+        | "pane.organize"
+        | "pane.delete"
+        | "pane.delete-permanent"
+        | "pane.mkdir" => gated(!facts.source_read_only, Reason::ReadOnlyBackend),
         // Sincronizar (spec 2 del ítem 1): escribe en el DESTINO —como copiar—
         // y además borra y sobrescribe allí, así que el core exige journal
         // (`sync.apply` abre un lote deshacible; regla dura 4) y se niega sin
@@ -335,6 +357,20 @@ pub fn verdict(command: &str, facts: &Facts) -> Availability {
         "pane.sync-dirs" => first_failure(&[
             (!facts.journalled, Reason::NeedsDaemon),
             (facts.dest_read_only, Reason::ReadOnlyBackend),
+        ]),
+        // El RELEVO entre frontends (fase 9). Dos impedimentos distintos, y
+        // el orden dice cuál se enseña: sin daemon no hay a quién soltarle la
+        // pantalla —el otro frontend abriría en blanco—, y sin escritorio no
+        // hay dónde ponerla. Los dos se arreglan de formas distintas (arrancar
+        // contra el daemon; sentarse en la máquina), así que se distinguen en
+        // vez de decir «no disponible».
+        //
+        // Sin este brazo caía en el fail-OPEN, y la paleta ofrecía por SSH un
+        // comando que suelta la sesión y lanza una ventana que nadie ve —el
+        // peor de los dos fallos, porque deja la pantalla sin dueño.
+        "app.handoff" => first_failure(&[
+            (!facts.daemon, Reason::NeedsDaemon),
+            (!facts.windowed, Reason::NeedsDesktop),
         ]),
         // Aquí caen dos cosas distintas, y conviene no confundirlas al leer:
         // los comandos que NO tienen impedimento posible (`pane.copy-path` no
@@ -427,6 +463,8 @@ pub fn plugin_of_command(command: &str) -> Option<&str> {
 ///     dest_read_only: false,
 ///     degraded: false,
 ///     journalled: true,
+///     daemon: true,
+///     windowed: true,
 /// };
 /// let activos: BTreeSet<String> = ["acme.ftp".to_owned()].into_iter().collect();
 ///
@@ -465,6 +503,8 @@ mod tests {
             dest_read_only: false,
             degraded: false,
             journalled: true,
+            daemon: true,
+            windowed: true,
         }
     }
 
@@ -556,12 +596,66 @@ mod tests {
         assert!(verdict("no.such.command", &one_file()).is_available());
     }
 
+    /// El RELEVO (fase 9) dice CUÁL de las dos cosas falta, y en ese orden.
+    ///
+    /// Sin este brazo caía en el fail-OPEN, y la paleta ofrecía por SSH un
+    /// comando que suelta la pantalla y lanza una ventana que nadie ve. Los
+    /// dos motivos se distinguen porque se arreglan de formas distintas:
+    /// arrancar contra el daemon, o sentarse en la máquina.
+    #[test]
+    fn el_relevo_dice_si_falta_el_daemon_o_el_escritorio() {
+        let completo = Facts {
+            daemon: true,
+            windowed: true,
+            ..one_file()
+        };
+        assert!(verdict("app.handoff", &completo).is_available());
+
+        let sin_daemon = Facts {
+            daemon: false,
+            ..completo
+        };
+        assert_eq!(
+            verdict("app.handoff", &sin_daemon),
+            Availability::Unavailable {
+                reason: Reason::NeedsDaemon
+            }
+        );
+
+        let sin_escritorio = Facts {
+            windowed: false,
+            ..completo
+        };
+        assert_eq!(
+            verdict("app.handoff", &sin_escritorio),
+            Availability::Unavailable {
+                reason: Reason::NeedsDesktop
+            }
+        );
+
+        // Faltando las dos, manda el daemon: es lo primero que hay que
+        // arreglar, y decir «necesitas un escritorio» a quien además no tiene
+        // daemon le hace arreglar lo que no era.
+        let sin_nada = Facts {
+            daemon: false,
+            windowed: false,
+            ..completo
+        };
+        assert_eq!(
+            verdict("app.handoff", &sin_nada),
+            Availability::Unavailable {
+                reason: Reason::NeedsDaemon
+            }
+        );
+    }
+
     #[test]
     fn cada_razon_tiene_clave_fluent_y_ninguna_se_solapa() {
         use std::collections::BTreeSet;
         let mut vistas = BTreeSet::new();
         for r in [
             Reason::ReadOnlyBackend,
+            Reason::NeedsDesktop,
             Reason::Unsupported,
             Reason::PluginInactive,
             Reason::PolicyDenied,

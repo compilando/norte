@@ -125,6 +125,30 @@ msg-rename-pattern-empty = la plantilla está vacía
 msg-rename-pattern-bad-result = esa plantilla dejaría un nombre vacío o con `/` dentro
 msg-rename-batch-nothing = no hay nada que renombrar
 msg-rename-batch-no-changes = la plantilla deja todos los nombres igual
+# Organizar un directorio (fase 8). El resumen va ANTES del árbol: es lo que
+# se necesita para decidir sin contar líneas.
+modal-organize-plan = Organizar — revisa el árbol
+modal-organize-summary = crea { $dirs } carpetas y mueve { $files } ficheros
+msg-organize-running = pidiendo un plan para organizar…
+msg-organize-empty = el plan no mueve nada
+msg-organize-failed = no se pudo pedir el plan: { $error }
+# Un plan que no se puede aprobar no se enseña: sin token no hay nada que
+# canjear, y abrir el árbol prometería un botón que no puede hacer nada.
+msg-organize-invalid-plan = el plan no es aplicable y se ha descartado entero
+msg-organize-hidden = el árbol está listo: cierra este diálogo y vuelve a pedirlo
+# Una extensión no lista directorios: los nombres se los damos nosotros, y hay
+# un tope para esa lista. La IA no tiene este límite porque el core lista por
+# ella.
+msg-organize-too-many = este directorio tiene demasiadas entradas para que las organice una extensión
+# El relevo entre frontends (fase 9). Cada negativa dice CUÁL de las dos cosas
+# falta, porque se arreglan de formas distintas.
+msg-handoff-needs-daemon = el relevo necesita el daemon: sin él no hay sesión que compartir (arranca con --daemon)
+msg-handoff-needs-desktop = el relevo necesita un escritorio: aquí no hay dónde abrir una ventana
+msg-handoff-failed = no se pudo entregar la pantalla; sigues donde estabas
+msg-handoff-no-window = la pantalla se entregó pero la ventana no abrió: ábrela a mano con `ntc-gui --attach --daemon`
+msg-handoff-running = entregando la pantalla…
+msg-handoff-no-terminal = la pantalla se entregó pero la terminal no abrió: ábrela a mano con `ntc --attach --daemon`
+host-handoff-not-owner = esta ventana no tiene la pantalla: la lleva otra, y sólo su dueña la puede entregar
 modal-ai-rename = Renombrado IA — instrucción
 modal-ai-rename-hint = Enter: pedir plan · Esc: cancelar
 modal-ai-rename-empty-instruction = escribe una instrucción primero
@@ -643,6 +667,7 @@ msg-subshell-bad-cwd = el shell dice estar en un directorio que norte no puede a
 msg-terminal-none = $TERMINAL es { $configured } y no se encontró ningún emulador de terminal; norte probó además su propia lista ({ $tried })
 msg-terminal-none-unset = $TERMINAL no está definido y no se encontró ningún emulador de terminal; norte probó { $tried }
 help-cmd-app-terminal = abrir un shell en el directorio del pane activo
+help-cmd-app-handoff = entregar la pantalla al otro frontend y seguir allí (solo con daemon)
 help-cmd-app-toggle-panels = ocultar los paneles y enseñar la terminal
 help-cmd-pane-command-line = ejecutar un comando en el directorio del pane activo
 cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nombres hostiles/límites)
@@ -802,6 +827,7 @@ palette-plugin-prefix = extensión
 # Una fila de RENAMER (C3, ADR 0095): propone un plan de renombrado que se
 # revisa como el de la IA. Otro rótulo porque hace otra cosa.
 palette-renamer-prefix = renombrar
+palette-organizer-prefix = organizar
 theme-picker-title = Tema
 columns-picker-title = Columnas — { $target }
 columns-picker-target-default = todos los schemes
@@ -1092,6 +1118,7 @@ menu-tools = Herramientas
 menu-item-pane-copy-path = Copiar la ruta
 menu-item-pane-rename-batch = Renombrar en lote
 menu-item-pane-ai-rename = Renombrar con IA
+menu-item-pane-organize = Organizar…
 menu-item-pane-chmod = Permisos
 menu-item-pane-pack = Empaquetar
 menu-item-pane-unpack = Desempaquetar
@@ -1120,6 +1147,7 @@ menu-item-pane-select-drive = Volúmenes
 menu-item-pane-refresh = Refrescar
 menu-item-pane-command-line = Línea de comandos
 menu-item-app-terminal = Terminal aquí
+menu-item-app-handoff = Seguir en la otra ventana
 menu-item-layout-focus-next = Panel siguiente
 menu-item-layout-focus-prev = Panel anterior
 menu-item-pane-mirror-target = Llevar lo del cursor al otro
@@ -1398,6 +1426,7 @@ msg-dir-size-partial = al menos { $size } en { $count } entradas ({ $skipped } s
 help-cmd-pane-mkdir = crear un directorio (F7)
 help-cmd-pane-rename-batch = renombrar en lote con una plantilla (plan revisable)
 help-cmd-pane-ai-rename = renombrado IA del directorio actual (plan revisable)
+help-cmd-pane-organize = organizar el directorio en carpetas (plan revisable)
 help-cmd-pane-semantic-search = búsqueda semántica sobre el índice (IA)
 help-cmd-pane-rename = renombrar in situ (Shift+F6)
 help-cmd-pane-refresh = recargar ambos panes (Ctrl+R)
@@ -1679,6 +1708,7 @@ err-overlapping-roots-same = el origen y el destino son el mismo directorio
 err-overlapping-roots-source-inside = el origen está dentro del destino
 err-overlapping-roots-dest-inside = el destino está dentro del origen
 reason-needs-daemon = necesita el daemon (--daemon)
+reason-needs-desktop = necesita un escritorio: aquí no hay dónde abrir una ventana
 
 on-yes = sí
 on-no = no

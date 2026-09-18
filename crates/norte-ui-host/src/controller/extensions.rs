@@ -58,6 +58,9 @@ impl Estado {
             Fondo::PerfilCargado(nombre, res) => self.aplicar_perfil(&nombre, *res, backend, buzon),
             Fondo::AjusteEscrito(hecho) => self.ajuste_escrito(*hecho, backend, buzon),
             Fondo::PlanIa(epoca, res) => self.aplicar_plan_ia(epoca, *res, backend, buzon),
+            // Fase 8: el árbol de organizar no necesita un segundo viaje, así
+            // que no lleva ni `backend` ni `buzon`.
+            Fondo::PlanOrganizar(epoca, res) => self.aplicar_plan_de_organizar(epoca, *res),
             // #311: las dos mitades de comprobar unas sumas — el fichero que
             // se lee antes de lanzar nada, y el informe que llega después.
             Fondo::FicheroDeSumas(sums, bytes) => {

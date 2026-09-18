@@ -236,6 +236,13 @@ rpc_catalogo! {
     JOURNAL_LIST, Request, Direct, methods::JournalListParams, methods::JournalListResult;
     JOURNAL_UNDO_AFTER, Request, Task, methods::JournalUndoAfterParams, methods::PolicyUndoSessionResult;
 
+    // Organizar (fase 8): el plan lo propone un modelo o un plugin, y el
+    // MISMO plan lo aplica `fs.organize` — crear los directorios y mover, bajo
+    // un solo `batch_id`, para que se deshaga como una unidad.
+    AI_ORGANIZE_PLAN, Request, Direct, methods::AiOrganizePlanParams, methods::AiOrganizePlanResult;
+    PLUGIN_ORGANIZE_PLAN, Request, Direct, methods::PluginOrganizePlanParams, methods::AiOrganizePlanResult;
+    FS_ORGANIZE, Request, Task, methods::FsOrganizeParams, methods::FsTaskResult;
+
     // Extensiones.
     PLUGIN_LIST, Request, Direct, methods::PluginListParams, methods::PluginListResult;
     PLUGIN_SET_APPROVAL, Request, Direct, methods::PluginSetApprovalParams, methods::PluginSetApprovalResult;
@@ -257,6 +264,7 @@ rpc_catalogo! {
     // Sesión de la ventana.
     SESSION_GET, Request, Direct, (), methods::SessionGetResult;
     SESSION_PUT, Request, Direct, methods::SessionPutParams, methods::SessionPutResult;
+    SESSION_RELEASE, Request, Direct, (), methods::SessionReleaseResult;
 
     // El registro del daemon, que un frontend con proceso aparte no puede ver
     // de otra forma. `Direct` y no `Stream`: se TIRA con un cursor, así que no

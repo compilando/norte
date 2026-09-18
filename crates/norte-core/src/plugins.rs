@@ -601,153 +601,168 @@ impl PluginRegistry {
         }
     }
 
+    /// Lo que un plugin OFRECE, en el orden del manifiesto: primero los
+    /// comandos, después los renamers (0.67.0, ADR 0095) y después los
+    /// organizers (0.77.0, fase 8), cada uno con su `kind`.
+    ///
+    /// Las tres clases viajan en la MISMA lista porque contestan la misma
+    /// pregunta —«qué me ofrece este plugin»—, y la paleta las pinta juntas
+    /// con un rótulo que dice de cuál se trata. Lo que cambia entre ellas es
+    /// a qué método despacha cada fila, y eso es exactamente lo que el `kind`
+    /// lleva.
+    ///
+    /// Es DESCUBRIMIENTO: no se gatea por aprobado ni habilitado, igual que
+    /// las columnas y los paneles — qué ofrece un plugin es justo lo que un
+    /// humano mira ANTES de aprobarlo.
+    #[must_use]
+    fn comandos_de(c: &norte_plugin_host::Contributions) -> Vec<PluginCommandInfo> {
+        c.command
+            .iter()
+            .map(|c| PluginCommandInfo {
+                id: c.id.clone(),
+                title: c.title.clone(),
+                kind: norte_proto::methods::PluginCommandKind::Command,
+            })
+            .chain(c.renamer.iter().map(|r| PluginCommandInfo {
+                id: r.id.clone(),
+                title: r.title.clone(),
+                kind: norte_proto::methods::PluginCommandKind::Renamer,
+            }))
+            .chain(c.organizer.iter().map(|o| PluginCommandInfo {
+                id: o.id.clone(),
+                title: o.title.clone(),
+                kind: norte_proto::methods::PluginCommandKind::Organizer,
+            }))
+            .collect()
+    }
+
     /// El catálogo descubierto fusionado con el estado persistido, en la forma
     /// del protocolo.
     #[must_use]
     pub fn list(&self) -> PluginListResult {
-        let plugins =
-            self.catalog
-                .plugins
-                .iter()
-                .map(|e| {
-                    let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
-                    PluginInfo {
-                        id: e.manifest.id.clone(),
-                        name: e.manifest.name.clone(),
-                        publisher: e.manifest.publisher.clone(),
-                        version: e.manifest.version.clone(),
-                        category: e.manifest.category.as_str().to_string(),
-                        // Las insignias del manifiesto MÁS el scheme que un
-                        // provider reclama (`provider:webdav`): es lo que aprobar
-                        // concede —ponerse delante de `webdav://`— y hasta aquí
-                        // el humano aprobaba un provider sin ver para qué scheme.
-                        capabilities: e
-                            .manifest
-                            .capabilities
-                            .badges()
-                            .into_iter()
-                            .chain(
-                                e.manifest
-                                    .contributions
-                                    .provider
-                                    .iter()
-                                    .map(|c| format!("provider:{}", c.scheme))
-                                    // Y los eventos de un hook (ADR 0100), por
-                                    // lo mismo: lo que el plugin va a RECIBIR
-                                    // —la ruta de cada mutación de esa clase—
-                                    // es lo que el humano aprueba, y un hook
-                                    // sin capabilities no puede aprobarse
-                                    // sobre una lista vacía.
-                                    .chain(
-                                        e.manifest
-                                            .contributions
-                                            .hook
-                                            .iter()
-                                            .map(|h| format!("hook:{}", h.on)),
-                                    ),
-                            )
-                            .collect(),
-                        // Aprobación EFECTIVA (issue #69): `approved` en el fichero
-                        // pero con el digest de capabilities CASANDO el del manifiesto
-                        // actual. Si las capabilities cambiaron en disco tras aprobar,
-                        // la UI ve `approved = false` y vuelve a pedir consentimiento.
-                        approved: Self::approval_is_current(&st, e),
-                        enabled: st.enabled,
-                        // (P1) manifest `description` is cosmetic/untrusted, same
-                        // as `name`; `commands` mirrors `Contributions.command` in
-                        // MANIFEST ORDER (not sorted — matches how the digest
-                        // treats contribution order as significant, spec §6).
-                        description: e.manifest.description.clone(),
-                        commands: e
-                            .manifest
-                            .contributions
-                            .command
-                            .iter()
-                            .map(|c| PluginCommandInfo {
-                                id: c.id.clone(),
-                                title: c.title.clone(),
-                                kind: norte_proto::methods::PluginCommandKind::Command,
-                            })
-                            // Y los renamers DETRÁS (0.67.0, ADR 0095), con su
-                            // `kind`: la paleta los lista junto a los comandos y
-                            // los despacha a `plugin.rename_plan`.
-                            .chain(e.manifest.contributions.renamer.iter().map(|r| {
-                                PluginCommandInfo {
-                                    id: r.id.clone(),
-                                    title: r.title.clone(),
-                                    kind: norte_proto::methods::PluginCommandKind::Renamer,
-                                }
-                            }))
-                            .collect(),
-                        // (G3c, 0.28.0) columns mirrors `Contributions.columns`
-                        // the SAME way `commands` mirrors `Contributions.command`
-                        // above: manifest order, discovery-only (NOT gated on
-                        // approved/enabled — a plugin's contributed columns are
-                        // metadata a human inspects BEFORE approving, same as
-                        // `commands`/`capabilities` already are).
-                        columns: e
-                            .manifest
-                            .contributions
-                            .columns
-                            .iter()
-                            .map(|c| PluginColumnInfo {
-                                id: c.id.clone(),
-                                header: c.header.clone(),
-                            })
-                            .collect(),
-                        // Y los paneles (0.74.0, fase 3), con el MISMO criterio
-                        // que las columnas: orden del manifiesto y puro
-                        // descubrimiento, sin gatear por aprobado ni
-                        // habilitado. Qué huecos pide un plugin es justo lo
-                        // que un humano mira ANTES de aprobarlo.
-                        panels: e
-                            .manifest
-                            .contributions
-                            .panel
-                            .iter()
-                            .map(|p| norte_proto::methods::PluginPanelInfo {
-                                kind: p.kind.clone(),
-                                title: p.title.clone(),
-                                min_cols: p.min_cols,
-                                min_rows: p.min_rows,
-                            })
-                            .collect(),
-                        // El ancla que el humano está MIRANDO (#282): es lo que
-                        // devuelve al confirmar, y lo que el daemon compara con la
-                        // suya antes de conceder. Cubre `category` y
-                        // `contributions` —cuándo y cómo se dispara— además de las
-                        // capabilities, o sea justo lo que la lista pintada NO
-                        // dice.
-                        manifest_digest: Some(norte_plugin_host::PluginEntry::approval_anchor(e)),
-                        // (H3e, 0.34.0) NO gateado por approved/enabled — la
-                        // documentación de un plugin es justo lo que un humano lee
-                        // ANTES de aprobarlo, mismo criterio que
-                        // `capabilities`/`commands`/`columns`.
-                        //
-                        // La bandera del WIRE es la ESTRICTA de las dos: el
-                        // `is_present` del catálogo es un `is_file` que SIGUE
-                        // enlaces (presencia, no permiso — así lo dice su propio
-                        // comentario), mientras que `is_servable` ya pasó la
-                        // MISMA guarda que aplicará el lector. Si divergen, el par
-                        // (`has_help: true`, `markdown: ""`) es exactamente el
-                        // oráculo "esa ruta existe y es un fichero regular", y las
-                        // dos mitades las lee un agente por `plugin.list` +
-                        // `plugin.help`, ninguno de los dos gateado por policy. Y
-                        // aun sin el agente, la barra lateral pintaría un nodo que
-                        // se abre en blanco.
-                        //
-                        // Se LEE, no se calcula: `list()` corre en el reactor async
-                        // y bajo el lock global de plugins (`handle_plugin_list` lo
-                        // llama síncrono desde `dispatch`), así que aplicar la
-                        // guarda aquí serían tres syscalls por plugin bloqueando a
-                        // todas las demás conexiones sobre un directorio que puede
-                        // estar en autofs o NFS — y `plugin.list` está ABIERTO a un
-                        // agente. El veredicto se calcula al DESCUBRIR, donde la
-                        // I/O ya vive fuera del reactor.
-                        has_help: e.help.is_servable(),
-                    }
-                })
-                .collect();
+        let plugins = self
+            .catalog
+            .plugins
+            .iter()
+            .map(|e| {
+                let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+                PluginInfo {
+                    id: e.manifest.id.clone(),
+                    name: e.manifest.name.clone(),
+                    publisher: e.manifest.publisher.clone(),
+                    version: e.manifest.version.clone(),
+                    category: e.manifest.category.as_str().to_string(),
+                    // Las insignias del manifiesto MÁS el scheme que un
+                    // provider reclama (`provider:webdav`): es lo que aprobar
+                    // concede —ponerse delante de `webdav://`— y hasta aquí
+                    // el humano aprobaba un provider sin ver para qué scheme.
+                    capabilities: e
+                        .manifest
+                        .capabilities
+                        .badges()
+                        .into_iter()
+                        .chain(
+                            e.manifest
+                                .contributions
+                                .provider
+                                .iter()
+                                .map(|c| format!("provider:{}", c.scheme))
+                                // Y los eventos de un hook (ADR 0100), por
+                                // lo mismo: lo que el plugin va a RECIBIR
+                                // —la ruta de cada mutación de esa clase—
+                                // es lo que el humano aprueba, y un hook
+                                // sin capabilities no puede aprobarse
+                                // sobre una lista vacía.
+                                .chain(
+                                    e.manifest
+                                        .contributions
+                                        .hook
+                                        .iter()
+                                        .map(|h| format!("hook:{}", h.on)),
+                                ),
+                        )
+                        .collect(),
+                    // Aprobación EFECTIVA (issue #69): `approved` en el fichero
+                    // pero con el digest de capabilities CASANDO el del manifiesto
+                    // actual. Si las capabilities cambiaron en disco tras aprobar,
+                    // la UI ve `approved = false` y vuelve a pedir consentimiento.
+                    approved: Self::approval_is_current(&st, e),
+                    enabled: st.enabled,
+                    // (P1) manifest `description` is cosmetic/untrusted, same
+                    // as `name`; `commands` mirrors `Contributions.command` in
+                    // MANIFEST ORDER (not sorted — matches how the digest
+                    // treats contribution order as significant, spec §6).
+                    description: e.manifest.description.clone(),
+                    commands: Self::comandos_de(&e.manifest.contributions),
+                    // (G3c, 0.28.0) columns mirrors `Contributions.columns`
+                    // the SAME way `commands` mirrors `Contributions.command`
+                    // above: manifest order, discovery-only (NOT gated on
+                    // approved/enabled — a plugin's contributed columns are
+                    // metadata a human inspects BEFORE approving, same as
+                    // `commands`/`capabilities` already are).
+                    columns: e
+                        .manifest
+                        .contributions
+                        .columns
+                        .iter()
+                        .map(|c| PluginColumnInfo {
+                            id: c.id.clone(),
+                            header: c.header.clone(),
+                        })
+                        .collect(),
+                    // Y los paneles (0.74.0, fase 3), con el MISMO criterio
+                    // que las columnas: orden del manifiesto y puro
+                    // descubrimiento, sin gatear por aprobado ni
+                    // habilitado. Qué huecos pide un plugin es justo lo
+                    // que un humano mira ANTES de aprobarlo.
+                    panels: e
+                        .manifest
+                        .contributions
+                        .panel
+                        .iter()
+                        .map(|p| norte_proto::methods::PluginPanelInfo {
+                            kind: p.kind.clone(),
+                            title: p.title.clone(),
+                            min_cols: p.min_cols,
+                            min_rows: p.min_rows,
+                        })
+                        .collect(),
+                    // El ancla que el humano está MIRANDO (#282): es lo que
+                    // devuelve al confirmar, y lo que el daemon compara con la
+                    // suya antes de conceder. Cubre `category` y
+                    // `contributions` —cuándo y cómo se dispara— además de las
+                    // capabilities, o sea justo lo que la lista pintada NO
+                    // dice.
+                    manifest_digest: Some(norte_plugin_host::PluginEntry::approval_anchor(e)),
+                    // (H3e, 0.34.0) NO gateado por approved/enabled — la
+                    // documentación de un plugin es justo lo que un humano lee
+                    // ANTES de aprobarlo, mismo criterio que
+                    // `capabilities`/`commands`/`columns`.
+                    //
+                    // La bandera del WIRE es la ESTRICTA de las dos: el
+                    // `is_present` del catálogo es un `is_file` que SIGUE
+                    // enlaces (presencia, no permiso — así lo dice su propio
+                    // comentario), mientras que `is_servable` ya pasó la
+                    // MISMA guarda que aplicará el lector. Si divergen, el par
+                    // (`has_help: true`, `markdown: ""`) es exactamente el
+                    // oráculo "esa ruta existe y es un fichero regular", y las
+                    // dos mitades las lee un agente por `plugin.list` +
+                    // `plugin.help`, ninguno de los dos gateado por policy. Y
+                    // aun sin el agente, la barra lateral pintaría un nodo que
+                    // se abre en blanco.
+                    //
+                    // Se LEE, no se calcula: `list()` corre en el reactor async
+                    // y bajo el lock global de plugins (`handle_plugin_list` lo
+                    // llama síncrono desde `dispatch`), así que aplicar la
+                    // guarda aquí serían tres syscalls por plugin bloqueando a
+                    // todas las demás conexiones sobre un directorio que puede
+                    // estar en autofs o NFS — y `plugin.list` está ABIERTO a un
+                    // agente. El veredicto se calcula al DESCUBRIR, donde la
+                    // I/O ya vive fuera del reactor.
+                    has_help: e.help.is_servable(),
+                }
+            })
+            .collect();
         let errors = self
             .catalog
             .errors
@@ -1438,6 +1453,48 @@ impl PluginRegistry {
                 .renamer
                 .iter()
                 .any(|r| r.id == renamer_id)
+            {
+                return None;
+            }
+            let wasm = Self::verified_wasm(&e.dir)?;
+            Some((
+                e.manifest.id.clone(),
+                e.manifest.name.clone(),
+                wasm,
+                e.manifest.capabilities.clone(),
+                self.settings_of(&e.manifest.id)
+                    .cloned()
+                    .unwrap_or_default(),
+            ))
+        })
+    }
+
+    /// El plugin `organizer` consentido `plugin_id` que declara
+    /// `organizer_id` (fase 8): ESE o ninguno, aprobado y encendido, con su
+    /// `.wasm` verificado contra el digest aprobado. Misma forma exacta que
+    /// [`Self::resolve_renamer`], con su categoría.
+    #[must_use]
+    pub fn resolve_organizer(
+        &self,
+        plugin_id: &str,
+        organizer_id: &str,
+    ) -> Option<ResolvedDecorator> {
+        self.catalog.plugins.iter().find_map(|e| {
+            if e.manifest.category != norte_plugin_host::Category::Organizer
+                || e.manifest.id != plugin_id
+            {
+                return None;
+            }
+            let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+            if !Self::approval_is_current(&st, e) || !st.enabled {
+                return None;
+            }
+            if !e
+                .manifest
+                .contributions
+                .organizer
+                .iter()
+                .any(|r| r.id == organizer_id)
             {
                 return None;
             }
@@ -4428,6 +4485,106 @@ pub fn run_rename_plan(
             })
             .collect(),
     )
+}
+
+/// Lo que devuelve [`run_organize_plan`] (fase 8): el plan, o por qué no lo
+/// hay.
+#[derive(Debug)]
+pub enum OrganizePlanOutcome {
+    /// Los movimientos que el plugin propone, ya limpios y VALIDADOS.
+    Plan(Vec<norte_proto::methods::OrganizeMove>),
+    /// El guest rehusó con una frase para el lector. Texto de un tercero.
+    Refused(String),
+    /// El guest no instanció, atrapó, o se pasó de los topes.
+    Failed,
+    /// El guest propuso un destino que se sale del directorio (un `..`, una
+    /// ruta absoluta, un segmento vacío…).
+    ///
+    /// Es un caso APARTE de [`Self::Failed`] a propósito: un plugin que
+    /// atrapa está roto, y uno que propone escribir fuera del directorio
+    /// está haciendo otra cosa. El lector merece saber cuál de las dos, y el
+    /// operador tiene la traza con el id del plugin.
+    Escapes,
+}
+
+/// Le pide a un plugin `organizer` (fase 8) su plan para `names` en
+/// `location_dir`, con la misma sesión de ubicación que un renamer.
+///
+/// **Aquí sí se valida el destino, y es lo que distingue este camino del del
+/// renamer.** Un renamer propone un nombre, que `Segment` ya acota; un
+/// organizer propone una RUTA, y un `..` ahí es una escritura fuera del
+/// directorio que el humano está mirando. Se comprueba con
+/// [`norte_proto::methods::validar_proposed_rel`] — la MISMA función que
+/// aplica el core al ejecutar y la misma que valida el plan de un modelo —
+/// y un solo destino malo tumba el plan entero: aplicar «lo que se pudo» de
+/// una propuesta que traía eso sería quedarse con la mitad de algo que nadie
+/// revisó.
+pub fn run_organize_plan(
+    runtime: &norte_plugin_host::PluginRuntime,
+    resolved: ResolvedDecorator,
+    organizer_id: &str,
+    location_dir: Option<&norte_proto::VPath>,
+    climb: bool,
+    names: &[String],
+) -> OrganizePlanOutcome {
+    let (id, _name, wasm, caps, settings) = resolved;
+    let sesion = if caps.location.granted() {
+        let mint = LocationMint::new(norte_vfs_local::Bounds::default());
+        location_dir.and_then(|dir| mint.mint_for(dir, caps.location_root_marker.as_deref(), climb))
+    } else {
+        None
+    };
+    let host: Option<std::sync::Arc<dyn norte_plugin_host::LocationHost>> =
+        sesion.as_ref().map(|s| {
+            std::sync::Arc::clone(&s.mint) as std::sync::Arc<dyn norte_plugin_host::LocationHost>
+        });
+    let Ok(mut inst) = runtime.instantiate_organizer_with_location(&wasm, caps, host) else {
+        tracing::warn!(plugin = %id, "organizer: fallo al instanciar");
+        return OrganizePlanOutcome::Failed;
+    };
+    inst.set_settings(settings);
+    let refe = sesion.as_ref().map(LocationSession::as_ref).map(|r| {
+        norte_plugin_host::organizer_iface::LocationRef {
+            token: r.token,
+            prefix: r.prefix,
+        }
+    });
+    let movs = match inst.plan(organizer_id, refe.as_ref(), names) {
+        Ok(Ok(p)) => p,
+        Ok(Err(frase)) => return OrganizePlanOutcome::Refused(frase),
+        Err(e) => {
+            tracing::warn!(plugin = %id, error = %e, "organizer: fallo al ejecutar");
+            return OrganizePlanOutcome::Failed;
+        }
+    };
+    let pedidos: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+    let mut out = Vec::with_capacity(movs.len());
+    for m in movs {
+        // Un `current` que no se pidió es un plan sobre otro directorio: se
+        // descarta en silencio, como hace el renamer.
+        if !pedidos.contains(m.current.as_str()) {
+            continue;
+        }
+        // Un destino que se sale NO se descarta en silencio: tumba el plan y
+        // se dice. Descartarlo dejaría al lector revisando una propuesta a la
+        // que le faltan filas sin saber por qué.
+        if norte_proto::methods::validar_proposed_rel(&m.proposed_rel).is_err() {
+            tracing::warn!(
+                plugin = %id,
+                "organizer: propuso un destino fuera del directorio; se rechaza el plan entero"
+            );
+            return OrganizePlanOutcome::Escapes;
+        }
+        // Un movimiento a donde ya está no es un movimiento.
+        if m.proposed_rel == m.current {
+            continue;
+        }
+        out.push(norte_proto::methods::OrganizeMove {
+            current: m.current,
+            proposed_rel: m.proposed_rel,
+        });
+    }
+    OrganizePlanOutcome::Plan(out)
 }
 
 pub(crate) fn run_column_values(

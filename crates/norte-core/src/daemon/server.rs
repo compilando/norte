@@ -2664,6 +2664,9 @@ async fn dispatch(
             let p: methods::SessionPutParams = parse_params(req.params)?;
             handle_session_put(&conn.actor, conn_id, p, shared)
         }
+        // Sin params, como `session.get`: quién suelta lo dice la CONEXIÓN, y
+        // un id que viajara sería un id que puede mandar cualquiera.
+        methods::SESSION_RELEASE => handle_session_release(&conn.actor, conn_id, shared),
         // fs.list vive AQUÍ (no en dispatch_fs_task): necesita el ConnState
         // para retener el stream paginado entre páginas (ADR 0017).
         methods::FS_LIST => {
@@ -2846,6 +2849,12 @@ async fn dispatch(
         // abierto con el gate de lectura sobre `dir`, como `column_values`.
         methods::PLUGIN_RENAME_PLAN => {
             handle_plugin_rename_plan(req.params, &conn.actor, shared).await
+        }
+        // El mismo reparto para el organizer (fase 8): abierto como su
+        // hermano —proponer no muta nada— y con el gate de lectura del
+        // directorio dentro del handler.
+        methods::PLUGIN_ORGANIZE_PLAN => {
+            handle_plugin_organize_plan(req.params, &conn.actor, shared).await
         }
         // plugin.get_config (G3c): ABIERTO, mismo criterio que plugin.list.
         // plugin.set_config (G3c): SOLO humanos, mismo criterio que
@@ -3074,6 +3083,42 @@ fn handle_session_get(
     to_value(&methods::SessionGetResult {
         session: shared.ui_session.get(),
         owner,
+    })
+}
+
+/// `session.release` (0.78.0, fase 9) — la conexión dueña renuncia a la
+/// sesión de UI sin desconectarse.
+///
+/// Es lo que hace posible el relevo entre frontends: volcar la pantalla,
+/// soltarla, y que el otro la reclame en su `session.get`. Hasta 0.78 soltar
+/// solo pasaba al DESCONECTAR, así que el que se iba tenía que morirse antes
+/// de que el que llegaba pudiera reclamar — y si el que llegaba no arrancaba,
+/// la pantalla se iba con el muerto.
+///
+/// **Soltar lo ajeno no hace nada y se DICE.** `released: false` es «no eras
+/// tú», y quien releva lo necesita: sin esa distinción lanzaría el otro
+/// frontend a reclamar una sesión que sigue teniendo dueño, y la ventana
+/// abriría vacía sin que nadie pudiera explicar por qué.
+///
+/// El cuerpo NO se toca: lo que se suelta es la propiedad. El documento sigue
+/// donde estaba con su revisión, que es justo lo que el otro va a leer.
+fn handle_session_release(
+    actor: &Actor,
+    conn_id: u64,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection has a UI session",
+        ));
+    }
+    let era_dueña = shared.ui_session.owner() == Some(conn_id);
+    if era_dueña {
+        shared.ui_session.release(conn_id);
+    }
+    to_value(&methods::SessionReleaseResult {
+        released: era_dueña,
     })
 }
 
@@ -4375,6 +4420,82 @@ async fn handle_plugin_rename_plan(
             })
         }
         crate::plugins::RenamePlanOutcome::Failed => {
+            Err(RpcError::from(norte_proto::Error::Io { retryable: false }))
+        }
+    }
+}
+
+/// `plugin.organize_plan` (0.77.0, fase 8): el plan de un plugin del kind
+/// `organizer`. Mismas puertas que el del renamer, y una respuesta más.
+async fn handle_plugin_organize_plan(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginOrganizePlanParams = parse_params(params)?;
+    read_gate(actor, &p.dir, shared)?;
+    if p.names.len() > methods::AI_RENAME_NAMES_MAX {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            format!("names supera {}", methods::AI_RENAME_NAMES_MAX),
+        ));
+    }
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_organizer(&p.plugin_id, &p.organizer_id)
+    };
+    let Some(resolved) = resolved else {
+        return Err(RpcError::from(norte_proto::Error::NotFound));
+    };
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let climb = matches!(actor, Actor::User);
+    let (plugin_id, organizer_id, dir, names) = (p.plugin_id, p.organizer_id, p.dir, p.names);
+    // El plan se ata a ESTE directorio, y el spawn se lleva el suyo: el token
+    // tiene que salir del mismo dir que se le pasó al plugin.
+    let del_plan = dir.clone();
+    let salida = tokio::task::spawn_blocking(move || {
+        crate::plugins::run_organize_plan(
+            &runtime,
+            resolved,
+            &organizer_id,
+            Some(&dir),
+            climb,
+            &names,
+        )
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "organize plan task panicked"))?;
+    match salida {
+        crate::plugins::OrganizePlanOutcome::Plan(moves) => {
+            // El token viaja CON el plan, igual que en `ai.organize_plan`: el
+            // plan de un plugin y el de un modelo se aprueban por el mismo
+            // camino, y eso incluye cómo se canjean.
+            let plan_hash = if moves.is_empty() {
+                None
+            } else {
+                Some(crate::organize::plan_hash(&del_plan, &moves).map_err(RpcError::from)?)
+            };
+            to_value(&methods::AiOrganizePlanResult {
+                moves,
+                refused: None,
+                plan_hash,
+            })
+        }
+        crate::plugins::OrganizePlanOutcome::Refused(frase) => {
+            tracing::info!(plugin = %plugin_id, motivo = %frase, "organizer: rehusó");
+            to_value(&methods::AiOrganizePlanResult {
+                moves: Vec::new(),
+                refused: Some(crate::plugins::guest_reason(&frase)),
+                plan_hash: None,
+            })
+        }
+        // Proponer una escritura fuera del directorio no es un fallo de E/S y
+        // no se cuenta como uno: es `InvalidPath`, que es exactamente lo que
+        // pasó, y el operador tiene el id del plugin en la traza.
+        crate::plugins::OrganizePlanOutcome::Escapes => {
+            Err(RpcError::from(norte_proto::Error::InvalidPath))
+        }
+        crate::plugins::OrganizePlanOutcome::Failed => {
             Err(RpcError::from(norte_proto::Error::Io { retryable: false }))
         }
     }
@@ -5812,6 +5933,56 @@ async fn dispatch_fs_task(
             // Mapeo core→proto compartido con `Backend::Embedded`
             // (`ai_plan_to_proto`): lossy-identidad por invariante del engine.
             to_value(&crate::ai::ai_plan_to_proto(plan))
+        }
+        // `ai.organize_plan` (0.77.0, fase 8): el gemelo del de arriba, con
+        // las MISMAS puertas y en el mismo orden — humano primero, luego el
+        // parseo, los dos topes, y el gate de lectura del directorio. Que sea
+        // «como el otro» no basta: cada una de esas cuatro está por un motivo
+        // distinto, y saltarse la primera convierte el método en un oráculo.
+        methods::AI_ORGANIZE_PLAN => {
+            human_only(&actor)?;
+            let p: methods::AiOrganizePlanParams = parse_params(req.params)?;
+            if p.instruction.len() > MAX_AI_INSTRUCTION_BYTES {
+                return Err(RpcError::protocol(
+                    codes::INVALID_PARAMS,
+                    format!("instruction supera {MAX_AI_INSTRUCTION_BYTES} bytes"),
+                ));
+            }
+            if p.names.len() > methods::AI_RENAME_NAMES_MAX {
+                return Err(RpcError::protocol(
+                    codes::INVALID_PARAMS,
+                    format!("names supera {}", methods::AI_RENAME_NAMES_MAX),
+                ));
+            }
+            read_gate(&actor, &p.dir, shared)?;
+            let plan = shared
+                .engine
+                .ai_organize_plan_for(&p.dir, &p.instruction, &p.names)
+                .await
+                .map_err(RpcError::from)?;
+            let plan_hash = if plan.moves.is_empty() {
+                None
+            } else {
+                Some(crate::organize::plan_hash(&p.dir, &plan.moves).map_err(RpcError::from)?)
+            };
+            to_value(&methods::AiOrganizePlanResult {
+                moves: plan.moves,
+                refused: None,
+                plan_hash,
+            })
+        }
+        // `fs.organize` (0.77.0, fase 8): aplicar el plan. MUTA, así que va
+        // por el actor de la conexión y lo gatea el engine —un solo gate para
+        // todas las rutas que toca, carpetas incluidas—. Devuelve Task.
+        methods::FS_ORGANIZE => {
+            let p: methods::FsOrganizeParams = parse_params(req.params)?;
+            let handle = shared
+                .engine
+                .organize(&p.dir, &p.moves, &p.plan_hash, actor.clone())
+                .await
+                .map_err(RpcError::from)?;
+            let task_id = register_task_id(shared, handle, actor.clone())?;
+            to_value(&methods::FsTaskResult { task_id })
         }
         // index.build (0.25.0, M4): Task. El resultado (indexed/removed) NO se
         // reenvía por wire aún (task completa = hecho); un fetch de report es

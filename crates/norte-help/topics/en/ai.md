@@ -3,7 +3,7 @@ id = "ai"
 title = "AI rename and semantic search"
 tags = ["doing"]
 see_also = ["finding", "agents", "settings"]
-commands = ["pane.ai-rename", "pane.semantic-search"]
+commands = ["pane.ai-rename", "pane.organize", "pane.semantic-search"]
 context = ["dialog.ai-rename", "dialog.semantic-search"]
 +++
 Both of these are OFF until you turn them on, and both are two-step: you ask,
@@ -28,6 +28,26 @@ to interpret.
 The plan is validated before you ever see it: the names it proposes are single
 segments, not paths, so a plan cannot walk out of the directory it was asked
 about, and one that tries is rejected whole rather than partly applied.
+
+# Organizing a directory
+
+{{cmd:pane.organize}} is the same deal with one more freedom: the destination
+may carry **folders**. The plan comes back as a tree — what will be created,
+what was already there, and what ends up inside each thing — because what
+changes here is the shape of the directory, and a list of forty moves does not
+let you see it.
+
+Above the tree is the count: how many folders it creates and how many files it
+moves. And it cannot be approved without reaching the end: if the tree does not
+fit, you have to walk it.
+
+Applying it is **one single batch**: the missing folders are created and
+everything moves under the same identifier, so undoing it puts the files back
+and takes the folders nobody else filled — in one step, not forty.
+
+A plan can also come from an extension of kind `organizer`, which appears in the
+palette with its own label. It is reviewed and applied in exactly the same way:
+what makes the operation safe is not where the names came from.
 
 # Searching by meaning
 
