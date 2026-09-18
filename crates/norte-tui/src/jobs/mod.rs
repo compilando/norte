@@ -32,7 +32,8 @@ mod search;
 mod sync;
 
 pub use ai::{
-    harvest_ai_rename, harvest_checksum, harvest_rename_batch, harvest_semantic, spawn_renamer_plan,
+    harvest_ai_rename, harvest_checksum, harvest_organize, harvest_rename_batch, harvest_semantic,
+    spawn_organize_plan, spawn_renamer_plan,
 };
 pub use compare::{
     COMPARE_PAGE_STEP, CompareKey, CompareRun, compare_key, drain_compare, launch_compare,
@@ -41,8 +42,8 @@ pub use compare::{
 pub use diskmap::{harvest as harvest_disk_map, lanzar as lanzar_disk_map};
 pub use goto::harvest_goto_index;
 pub use inflight::{
-    AiRenameRun, ChecksumRun, DiskMapRun, GotoIndexRun, InFlight, PendingAiPlan, Publicado,
-    RenameBatchRun, SemanticRun,
+    AiRenameRun, ChecksumRun, DiskMapRun, GotoIndexRun, InFlight, OrganizeRun, PendingAiPlan,
+    Publicado, RenameBatchRun, SemanticRun,
 };
 pub use search::{
     SEARCH_MAX_HITS, SearchRun, drain_search, finalize_search_state, launch_search,

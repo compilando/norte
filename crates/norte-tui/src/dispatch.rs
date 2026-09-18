@@ -555,6 +555,18 @@ pub async fn dispatch(
                 app.open_ai_rename();
             }
         }
+        // Fase 8: organizar el directorio con foco. SIN prompt de
+        // instrucción, a diferencia de renombrar — lo que se pide es «mira
+        // este directorio y propón una forma», y una caja de texto vacía
+        // delante sugeriría que hay algo que teclear. El plan llega al mismo
+        // sitio que el de un plugin `organizer`, y se revisa igual.
+        Command::PaneOrganize => {
+            if app.focused().virtual_search {
+                app.message = Some(t("msg-ai-rename-in-search"));
+            } else {
+                app.pending_organize = true;
+            }
+        }
         // M4-IA-2: búsqueda semántica sobre el índice (todos los roots). En
         // el pane VIRTUAL de búsqueda el prompt colisionaría con la
         // semántica Esc/Enter propia del modo (mismo criterio que

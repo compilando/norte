@@ -122,6 +122,34 @@ pub enum Modal {
         /// El nombre difiere del real y hay que marcarlo.
         name_hostile: bool,
     },
+    /// Revisión de un plan de ORGANIZAR (fase 8, `ai.organize_plan` /
+    /// `plugin.organize_plan`).
+    ///
+    /// Se revisa como un ÁRBOL y no como una lista de parejas, que es la
+    /// diferencia con [`Self::AiRenamePlan`]: lo que cambia es la forma del
+    /// directorio, y cuarenta filas `a.pdf → facturas/2026/a.pdf` no dejan
+    /// ver ni cuántas carpetas aparecen ni qué acaba en cada una.
+    ///
+    /// Lleva la MISMA disciplina de aprobación que el plan de renombrar:
+    /// hasta que el lector no ha llegado al final, confirmar está mudo. Un
+    /// plan de doscientos movimientos aprobado habiendo visto diez no es un
+    /// plan revisado.
+    OrganizePlan {
+        /// Directorio sobre el que se aplica.
+        dir: VPath,
+        /// Los movimientos, tal cual los propuso el productor.
+        moves: Vec<norte_proto::methods::OrganizeMove>,
+        /// El árbol ya calculado, que es lo que se pinta.
+        lines: Vec<norte_frontend::organize::TreeLine>,
+        /// El token del plan que se revisó: lo único que `fs.organize`
+        /// acepta.
+        plan_hash: norte_proto::methods::PlanHash,
+        /// Primera línea visible de la ventana.
+        offset: usize,
+        /// Hasta dónde ha llegado el lector alguna vez. Marca de agua ALTA y
+        /// no la posición actual: volver arriba no deshace haber leído.
+        seen: usize,
+    },
     /// Confirmación de DESHACER hasta un punto de la línea de tiempo (fase
     /// 7, `journal.undo_after`).
     ///

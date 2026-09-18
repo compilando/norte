@@ -1332,9 +1332,17 @@ impl Backend {
                 )
                 .await
                 .map_err(|_| Error::ProviderUnavailable { retryable: true })??;
+                // El token viaja CON el plan (ver `organize::plan_hash`): sin
+                // él el modal abriría sobre algo que no se puede aprobar.
+                let plan_hash = if plan.moves.is_empty() {
+                    None
+                } else {
+                    Some(crate::organize::plan_hash(dir, &plan.moves)?)
+                };
                 Ok(norte_proto::methods::AiOrganizePlanResult {
                     moves: plan.moves,
                     refused: None,
+                    plan_hash,
                 })
             }
             #[cfg(unix)]
@@ -3108,6 +3116,90 @@ impl Backend {
             #[cfg(unix)]
             Self::Remote(r) => {
                 r.plugin_rename_plan(plugin_id, renamer_id, dir, names)
+                    .await
+            }
+        }
+    }
+
+    /// El plan de ORGANIZAR que propone un plugin `organizer` (fase 8) para
+    /// `dir`: el mismo resultado que [`Self::ai_organize_plan`], y por la
+    /// misma razón que su gemelo de renombrar — un plan de plugin y uno de
+    /// modelo se revisan y se aplican por el camino que los frontends ya
+    /// tienen.
+    ///
+    /// El token del plan sale de aquí también, atado a `dir`: es lo único que
+    /// [`Self::organize`] acepta, y calcularlo en el frontend pondría el
+    /// digest en dos sitios.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si ese plugin/organizer no está consentido;
+    /// [`Error::InvalidPath`] si el plugin propone un destino que se sale del
+    /// directorio —lo que tumba el plan ENTERO, no el movimiento—;
+    /// [`Error::Io`] si el guest no corre. En `Remote`, lo que conteste el
+    /// daemon.
+    pub async fn plugin_organize_plan(
+        &self,
+        plugin_id: &str,
+        organizer_id: &str,
+        dir: &VPath,
+    ) -> Result<norte_proto::methods::AiOrganizePlanResult, Error> {
+        match self {
+            Self::Embedded(_) => {
+                let cfg = crate::connect::config_dir();
+                let (plugin_id, organizer_id) = (plugin_id.to_owned(), organizer_id.to_owned());
+                let dir = dir.clone();
+                tokio::task::spawn_blocking(move || {
+                    let reg = crate::PluginRegistry::discover(&cfg)
+                        .map_err(|_| Error::Io { retryable: false })?;
+                    let Some(resolved) = reg.resolve_organizer(&plugin_id, &organizer_id) else {
+                        return Err(Error::NotFound);
+                    };
+                    let (runtime, _) = columnas_de_proceso()?;
+                    match crate::plugins::run_organize_plan(
+                        runtime,
+                        resolved,
+                        &organizer_id,
+                        Some(&dir),
+                        true,
+                        &[],
+                    ) {
+                        crate::plugins::OrganizePlanOutcome::Plan(moves) => {
+                            let plan_hash = if moves.is_empty() {
+                                None
+                            } else {
+                                Some(crate::organize::plan_hash(&dir, &moves)?)
+                            };
+                            Ok(norte_proto::methods::AiOrganizePlanResult {
+                                moves,
+                                refused: None,
+                                plan_hash,
+                            })
+                        }
+                        crate::plugins::OrganizePlanOutcome::Refused(frase) => {
+                            tracing::info!(plugin = %plugin_id, motivo = %frase, "organizer: rehusó");
+                            Ok(norte_proto::methods::AiOrganizePlanResult {
+                                moves: Vec::new(),
+                                refused: Some(crate::plugins::guest_reason(&frase)),
+                                plan_hash: None,
+                            })
+                        }
+                        // Proponer una escritura fuera del directorio no es un
+                        // fallo de E/S: es exactamente `InvalidPath`.
+                        crate::plugins::OrganizePlanOutcome::Escapes => Err(Error::InvalidPath),
+                        crate::plugins::OrganizePlanOutcome::Failed => {
+                            Err(Error::Io { retryable: false })
+                        }
+                    }
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })?
+            }
+            #[cfg(unix)]
+            // `names` vacío es «todo el directorio», el mismo convenio que el
+            // plan de renombrado: organizar es una decisión sobre la forma
+            // del directorio entero.
+            Self::Remote(r) => {
+                r.plugin_organize_plan(plugin_id, organizer_id, dir, &[])
                     .await
             }
         }

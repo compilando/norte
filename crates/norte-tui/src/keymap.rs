@@ -212,6 +212,7 @@ commands! {
     "app.toggle-panels" => AppTogglePanels,
     "pane.command-line" => PaneCommandLine,
     "pane.ai-rename" => PaneAiRename,
+    "pane.organize" => PaneOrganize,
     "pane.semantic-search" => PaneSemanticSearch,
     "pane.copy" => PaneCopy,
     "pane.move" => PaneMove,

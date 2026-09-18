@@ -540,6 +540,19 @@ pub async fn on_key(
                         crate::jobs::spawn_renamer_plan(app, backend, work, &id, &renamer);
                         return;
                     }
+                    // Una fila de ORGANIZER (fase 8): el mismo reparto, otro
+                    // método — y el plan aterriza en el mismo árbol revisable
+                    // que el del modelo.
+                    if let Some((id, org)) = norte_frontend::palette::parse_organizer_key(&cmd) {
+                        let (id, org) = (id.to_owned(), org.to_owned());
+                        crate::jobs::spawn_organize_plan(
+                            app,
+                            backend,
+                            work,
+                            Some((id.as_str(), org.as_str())),
+                        );
+                        return;
+                    }
                     // MISMA función de despacho que el
                     // resolver del keymap invoca (#dispatch):
                     // un comando elegido en la palette corre

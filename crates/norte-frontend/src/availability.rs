@@ -321,9 +321,13 @@ pub fn verdict(command: &str, facts: &Facts) -> Availability {
         // mismo veto y por la misma razón. Sin brazo caía en el fail-OPEN y el
         // lector llegaba a teclear el nombre en el modal antes de que el
         // despacho fallara.
-        "pane.ai-rename" | "pane.delete" | "pane.delete-permanent" | "pane.mkdir" => {
-            gated(!facts.source_read_only, Reason::ReadOnlyBackend)
-        }
+        // Organizar (fase 8) CREA carpetas y mueve ficheros dentro del pane
+        // con foco: mismo veto que renombrar, y por la misma razón.
+        "pane.ai-rename"
+        | "pane.organize"
+        | "pane.delete"
+        | "pane.delete-permanent"
+        | "pane.mkdir" => gated(!facts.source_read_only, Reason::ReadOnlyBackend),
         // Sincronizar (spec 2 del ítem 1): escribe en el DESTINO —como copiar—
         // y además borra y sobrescribe allí, así que el core exige journal
         // (`sync.apply` abre un lote deshacible; regla dura 4) y se niega sin

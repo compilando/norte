@@ -935,6 +935,15 @@ pub struct App {
     /// (#311). Mismo reparto que [`Self::pending_compare`]: leer el fichero de
     /// sumas y esperar el informe es I/O, y eso es del run loop.
     pub pending_checksum: Option<ChecksumRequest>,
+    /// `true` cuando el despacho pidió un plan de ORGANIZAR al modelo (fase
+    /// 8) y el run loop aún no lo ha lanzado. Mismo reparto que
+    /// [`Self::pending_checksum`]: el despacho decide QUÉ, el run loop —dueño
+    /// de las peticiones en vuelo— lo pide.
+    ///
+    /// Un booleano y no unos params porque no hay nada que elegir: el
+    /// operando es el directorio con foco, entero. El camino del PLUGIN no
+    /// pasa por aquí — la paleta ya despacha con `work` en la mano.
+    pub pending_organize: bool,
     /// Panel de sincronización abierto (`Ctrl+Y`, o `s`/`m` dentro del panel
     /// de diferencias): `None` = cerrado. Se pinta POR ENCIMA del de
     /// diferencias, que sigue vivo detrás con sus marcas.
@@ -1290,6 +1299,7 @@ impl App {
             compare_generation: 0,
             pending_compare: None,
             pending_checksum: None,
+            pending_organize: false,
             pending_dest_check: None,
             sync: None,
             pending_sync: None,

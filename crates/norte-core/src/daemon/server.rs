@@ -4411,6 +4411,9 @@ async fn handle_plugin_organize_plan(
     let runtime = Arc::clone(&shared.plugin_runtime);
     let climb = matches!(actor, Actor::User);
     let (plugin_id, organizer_id, dir, names) = (p.plugin_id, p.organizer_id, p.dir, p.names);
+    // El plan se ata a ESTE directorio, y el spawn se lleva el suyo: el token
+    // tiene que salir del mismo dir que se le pasó al plugin.
+    let del_plan = dir.clone();
     let salida = tokio::task::spawn_blocking(move || {
         crate::plugins::run_organize_plan(
             &runtime,
@@ -4425,9 +4428,18 @@ async fn handle_plugin_organize_plan(
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "organize plan task panicked"))?;
     match salida {
         crate::plugins::OrganizePlanOutcome::Plan(moves) => {
+            // El token viaja CON el plan, igual que en `ai.organize_plan`: el
+            // plan de un plugin y el de un modelo se aprueban por el mismo
+            // camino, y eso incluye cómo se canjean.
+            let plan_hash = if moves.is_empty() {
+                None
+            } else {
+                Some(crate::organize::plan_hash(&del_plan, &moves).map_err(RpcError::from)?)
+            };
             to_value(&methods::AiOrganizePlanResult {
                 moves,
                 refused: None,
+                plan_hash,
             })
         }
         crate::plugins::OrganizePlanOutcome::Refused(frase) => {
@@ -4435,6 +4447,7 @@ async fn handle_plugin_organize_plan(
             to_value(&methods::AiOrganizePlanResult {
                 moves: Vec::new(),
                 refused: Some(crate::plugins::guest_reason(&frase)),
+                plan_hash: None,
             })
         }
         // Proponer una escritura fuera del directorio no es un fallo de E/S y
@@ -5908,9 +5921,15 @@ async fn dispatch_fs_task(
                 .ai_organize_plan_for(&p.dir, &p.instruction, &p.names)
                 .await
                 .map_err(RpcError::from)?;
+            let plan_hash = if plan.moves.is_empty() {
+                None
+            } else {
+                Some(crate::organize::plan_hash(&p.dir, &plan.moves).map_err(RpcError::from)?)
+            };
             to_value(&methods::AiOrganizePlanResult {
                 moves: plan.moves,
                 refused: None,
+                plan_hash,
             })
         }
         // `fs.organize` (0.77.0, fase 8): aplicar el plan. MUTA, así que va

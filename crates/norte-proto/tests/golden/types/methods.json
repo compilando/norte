@@ -12,7 +12,8 @@
         "current": "factura.pdf",
         "proposed_rel": "facturas/2026/marzo.pdf"
       }
-    ]
+    ],
+    "plan_hash": "abababababababababababababababababababababababababababababababab"
   },
   "ai_organize_plan_result_refused": {
     "moves": [],

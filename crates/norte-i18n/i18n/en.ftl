@@ -124,6 +124,13 @@ msg-rename-pattern-empty = the template is empty
 msg-rename-pattern-bad-result = that template would leave a name empty or with a `/` in it
 msg-rename-batch-nothing = nothing to rename
 msg-rename-batch-no-changes = the template leaves every name unchanged
+# Organize a directory (phase 8). The summary goes BEFORE the tree: it is what
+# you need to decide without counting lines.
+modal-organize-plan = Organize — review the tree
+modal-organize-summary = creates { $dirs } folders and moves { $files } files
+msg-organize-running = organizing…
+msg-organize-empty = the plan moves nothing
+msg-organize-no-producer = nothing can propose a plan: configure the AI or install an organizer extension
 modal-ai-rename = AI rename — instruction
 modal-ai-rename-hint = Enter: request plan · Esc: cancel
 modal-ai-rename-empty-instruction = type an instruction first
@@ -793,6 +800,7 @@ palette-plugin-prefix = extension
 # A RENAMER row (C3, ADR 0095): proposes a rename plan that is reviewed like
 # the AI's. A different label because it does a different thing.
 palette-renamer-prefix = rename
+palette-organizer-prefix = organize
 theme-picker-title = Theme
 columns-picker-title = Columns — { $target }
 columns-picker-target-default = all schemes
@@ -1144,6 +1152,7 @@ menu-tools = Tools
 menu-item-pane-copy-path = Copy the path
 menu-item-pane-rename-batch = Rename in batch
 menu-item-pane-ai-rename = Rename with AI
+menu-item-pane-organize = Organize…
 menu-item-pane-chmod = Permissions
 menu-item-pane-pack = Pack
 menu-item-pane-unpack = Unpack
@@ -1447,6 +1456,7 @@ msg-dir-size-partial = at least { $size } in { $count } entries ({ $skipped } un
 help-cmd-pane-mkdir = create a directory (F7)
 help-cmd-pane-rename-batch = rename in batch with a template (reviewable plan)
 help-cmd-pane-ai-rename = AI rename of the current directory (reviewable plan)
+help-cmd-pane-organize = organize the directory into folders (reviewable plan)
 help-cmd-pane-semantic-search = Semantic search over the index (AI)
 help-cmd-pane-rename = rename in place (Shift+F6)
 help-cmd-pane-refresh = reload both panes (Ctrl+R)

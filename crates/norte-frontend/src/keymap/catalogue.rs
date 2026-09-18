@@ -245,6 +245,7 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("pane.toggle-hidden", false),
     live("pane.columns", false),
     live("pane.ai-rename", false),
+    live("pane.organize", false),
     live("pane.semantic-search", false),
     live("pane.copy-path", false),
     // --- cursor (the count-aware family) ---

@@ -1000,6 +1000,17 @@ pub async fn run(
                 harvest_ai_rename(app, backend, &mut work, res);
             }
             res = async {
+                // ai.organize_plan / plugin.organize_plan en vuelo (fase 8):
+                // el mismo molde, y una sola casilla porque las dos producen
+                // el mismo plan y el mismo modal.
+                match &mut work.organize {
+                    Some(r) => (&mut r.handle).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                crate::jobs::harvest_organize(app, &mut work, res);
+            }
+            res = async {
                 // fs.rename_batch_plan en vuelo (§17): cosecha sin bloquear,
                 // molde del brazo de `work.ai_rename`.
                 match &mut work.rename_batch {

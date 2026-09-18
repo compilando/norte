@@ -35,6 +35,17 @@
           },
           "type": "array"
         },
+        "plan_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanHash"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "El token que hay que devolver en [`FsOrganizeParams::plan_hash`] para\naplicar EXACTAMENTE estos movimientos. `None` cuando no hay plan que\naplicar (rehusado, o sin movimientos).\n\n**Viaja con el plan, y no en un segundo método**, que es la diferencia\ncon el renombrado por lotes: allí el hash lo da `fs.rename_batch_plan`\nporque ese método además comprueba colisiones y decide si el lote es\naplicable. Aquí no hay nada que comprobar aparte de la forma del plan\n—y eso el core ya lo hizo para poder proponerlo—, así que un segundo\nviaje sólo añadiría una ventana en la que el humano mira un plan que\ntodavía no se puede aprobar."
+        },
         "refused": {
           "description": "Por qué el productor NO propuso nada, con el mismo contrato que\n[`AiRenamePlanResult::refused`]: texto de un TERCERO, ya enmascarado y\nacotado por el daemon, y si hay motivo `moves` no cuenta.",
           "type": [
@@ -3689,6 +3700,11 @@
         {
           "const": "renamer",
           "description": "Propone un plan de renombrado por [`PLUGIN_RENAME_PLAN`], que se\nrevisa y se ejecuta como el de la IA.",
+          "type": "string"
+        },
+        {
+          "const": "organizer",
+          "description": "Propone un plan de ORGANIZAR por [`PLUGIN_ORGANIZE_PLAN`] (0.77.0,\nfase 8): el mismo reparto que el renamer —propone, no muta— con una\nlibertad más, que el destino lleve carpetas.\n\nEs un `kind` y no un campo nuevo de [`PluginInfo`] por lo mismo que lo\nfue `renamer`: un organizer se OFRECE donde se ofrece un comando (la\npaleta), y separarlo en otra lista habría dado dos sitios donde mirar\npara la misma pregunta —«qué me ofrece este plugin»—. La exposición al\nwire es idéntica a la que aceptó 0.67.0: el campo se omite cuando es\n`command`, así que un peer viejo solo ve este valor si el plugin\ndeclara de verdad un organizer.",
           "type": "string"
         }
       ]

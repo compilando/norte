@@ -42,6 +42,25 @@ pub struct AiRenameRun {
     pub names: Vec<Vec<u8>>,
 }
 
+/// Petición de plan de ORGANIZAR en vuelo (fase 8), venga del modelo
+/// (`ai.organize_plan`) o de un plugin `organizer` (`plugin.organize_plan`).
+///
+/// Uno solo, y a propósito: las dos peticiones producen el MISMO plan y el
+/// mismo modal, así que quien las distinguiera aquí tendría que volver a
+/// juntarlas al cosechar. Misma disciplina de cancelación que
+/// [`AiRenameRun`].
+pub struct OrganizeRun {
+    /// La petición, spawneada.
+    pub handle: tokio::task::JoinHandle<Result<norte_proto::methods::AiOrganizePlanResult, Error>>,
+    /// Dir del pane al LANZAR: el plan se aplica AHÍ aunque el lector navegue
+    /// mientras el productor piensa.
+    pub dir: VPath,
+    /// Los nombres que había en ese dir al lanzar, para saber qué carpeta del
+    /// árbol ya existía. Preguntárselo al pane al cosechar pintaría el árbol
+    /// contra un directorio que no es el suyo.
+    pub existentes: Vec<String>,
+}
+
 /// Un plan IA YA cosechado que espera a que se cierre el modal de turno
 /// (M4-IA). Lleva el estado del plan del LOTE (§17), que se pide en cuanto
 /// llega el plan IA: sin él, el modal abriría sin hash aprobado y confirmar
@@ -184,6 +203,10 @@ pub struct InFlight {
     /// Petición `ai.rename_plan` en vuelo (M4-IA): a lo sumo una — relanzar
     /// aborta la anterior; Esc (BROWSE) la cancela.
     pub ai_rename: Option<AiRenameRun>,
+    /// Petición de plan de ORGANIZAR en vuelo (fase 8): a lo sumo una, por lo
+    /// mismo que [`Self::ai_rename`] — el modal de revisión es uno, y aprobar
+    /// un árbol mientras otro se propone sería aprobar a ciegas.
+    pub organize: Option<OrganizeRun>,
     /// Plan IA listo llegado con OTRO modal abierto: se RETIENE aquí (la cola
     /// de `App` es específica de aprobaciones) y se abre en cuanto no haya
     /// modal — jamás pisar (disciplina `open_next_pending`).

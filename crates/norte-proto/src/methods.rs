@@ -3099,6 +3099,19 @@ pub struct AiOrganizePlanResult {
     /// acotado por el daemon, y si hay motivo `moves` no cuenta.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+    /// El token que hay que devolver en [`FsOrganizeParams::plan_hash`] para
+    /// aplicar EXACTAMENTE estos movimientos. `None` cuando no hay plan que
+    /// aplicar (rehusado, o sin movimientos).
+    ///
+    /// **Viaja con el plan, y no en un segundo método**, que es la diferencia
+    /// con el renombrado por lotes: allí el hash lo da `fs.rename_batch_plan`
+    /// porque ese método además comprueba colisiones y decide si el lote es
+    /// aplicable. Aquí no hay nada que comprobar aparte de la forma del plan
+    /// —y eso el core ya lo hizo para poder proponerlo—, así que un segundo
+    /// viaje sólo añadiría una ventana en la que el humano mira un plan que
+    /// todavía no se puede aprobar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_hash: Option<PlanHash>,
 }
 
 /// Params de [`FS_ORGANIZE`] (0.77.0, fase 8): aplicar un plan de organizar.
@@ -8076,6 +8089,18 @@ pub enum PluginCommandKind {
     /// Propone un plan de renombrado por [`PLUGIN_RENAME_PLAN`], que se
     /// revisa y se ejecuta como el de la IA.
     Renamer,
+    /// Propone un plan de ORGANIZAR por [`PLUGIN_ORGANIZE_PLAN`] (0.77.0,
+    /// fase 8): el mismo reparto que el renamer —propone, no muta— con una
+    /// libertad más, que el destino lleve carpetas.
+    ///
+    /// Es un `kind` y no un campo nuevo de [`PluginInfo`] por lo mismo que lo
+    /// fue `renamer`: un organizer se OFRECE donde se ofrece un comando (la
+    /// paleta), y separarlo en otra lista habría dado dos sitios donde mirar
+    /// para la misma pregunta —«qué me ofrece este plugin»—. La exposición al
+    /// wire es idéntica a la que aceptó 0.67.0: el campo se omite cuando es
+    /// `command`, así que un peer viejo solo ve este valor si el plugin
+    /// declara de verdad un organizer.
+    Organizer,
 }
 
 impl PluginCommandKind {

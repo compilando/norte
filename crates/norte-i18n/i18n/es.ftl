@@ -125,6 +125,13 @@ msg-rename-pattern-empty = la plantilla está vacía
 msg-rename-pattern-bad-result = esa plantilla dejaría un nombre vacío o con `/` dentro
 msg-rename-batch-nothing = no hay nada que renombrar
 msg-rename-batch-no-changes = la plantilla deja todos los nombres igual
+# Organizar un directorio (fase 8). El resumen va ANTES del árbol: es lo que
+# se necesita para decidir sin contar líneas.
+modal-organize-plan = Organizar — revisa el árbol
+modal-organize-summary = crea { $dirs } carpetas y mueve { $files } ficheros
+msg-organize-running = organizando…
+msg-organize-empty = el plan no mueve nada
+msg-organize-no-producer = no hay quien proponga un plan: configura la IA o instala una extensión de organizar
 modal-ai-rename = Renombrado IA — instrucción
 modal-ai-rename-hint = Enter: pedir plan · Esc: cancelar
 modal-ai-rename-empty-instruction = escribe una instrucción primero
@@ -802,6 +809,7 @@ palette-plugin-prefix = extensión
 # Una fila de RENAMER (C3, ADR 0095): propone un plan de renombrado que se
 # revisa como el de la IA. Otro rótulo porque hace otra cosa.
 palette-renamer-prefix = renombrar
+palette-organizer-prefix = organizar
 theme-picker-title = Tema
 columns-picker-title = Columnas — { $target }
 columns-picker-target-default = todos los schemes
@@ -1092,6 +1100,7 @@ menu-tools = Herramientas
 menu-item-pane-copy-path = Copiar la ruta
 menu-item-pane-rename-batch = Renombrar en lote
 menu-item-pane-ai-rename = Renombrar con IA
+menu-item-pane-organize = Organizar…
 menu-item-pane-chmod = Permisos
 menu-item-pane-pack = Empaquetar
 menu-item-pane-unpack = Desempaquetar
@@ -1398,6 +1407,7 @@ msg-dir-size-partial = al menos { $size } en { $count } entradas ({ $skipped } s
 help-cmd-pane-mkdir = crear un directorio (F7)
 help-cmd-pane-rename-batch = renombrar en lote con una plantilla (plan revisable)
 help-cmd-pane-ai-rename = renombrado IA del directorio actual (plan revisable)
+help-cmd-pane-organize = organizar el directorio en carpetas (plan revisable)
 help-cmd-pane-semantic-search = búsqueda semántica sobre el índice (IA)
 help-cmd-pane-rename = renombrar in situ (Shift+F6)
 help-cmd-pane-refresh = recargar ambos panes (Ctrl+R)

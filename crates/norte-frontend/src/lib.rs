@@ -65,6 +65,7 @@ pub mod mouse;
 pub mod nav;
 pub mod notes;
 pub mod openers;
+pub mod organize;
 pub mod palette;
 pub mod palette_state;
 mod pane;

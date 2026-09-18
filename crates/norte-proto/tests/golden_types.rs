@@ -1310,6 +1310,11 @@ fn check_methods_organize(fixtures: &BTreeMap<String, Value>) {
                 proposed_rel: "facturas/2026/marzo.pdf".to_owned(),
             }],
             refused: None,
+            // El token viaja CON el plan, y esta fixtura lo congela: sin él,
+            // un plan revisado no se podría canjear por nada.
+            plan_hash: Some(
+                norte_proto::methods::PlanHash::parse(&"ab".repeat(32)).expect("64 hex"),
+            ),
         },
     );
     // Un rechazo: `refused` puesto y `moves` vacío. La regla del RECEPTOR es
@@ -1321,6 +1326,9 @@ fn check_methods_organize(fixtures: &BTreeMap<String, Value>) {
         &AiOrganizePlanResult {
             moves: Vec::new(),
             refused: Some("aprueba mi capacidad `location`".to_owned()),
+            // Sin plan no hay token, y el campo se omite entero: un rechazo
+            // produce los MISMOS bytes que antes de que el token existiera.
+            plan_hash: None,
         },
     );
     check_one(

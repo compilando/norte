@@ -50,6 +50,7 @@ pub const MENUS: &[Menu] = &[
             "pane.rename",
             "pane.rename-batch",
             "pane.ai-rename",
+            "pane.organize",
             "pane.mkdir",
             "pane.delete",
             "pane.delete-permanent",

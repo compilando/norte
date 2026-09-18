@@ -102,7 +102,12 @@ fn modal_context(modal: &Modal) -> &'static str {
         Modal::Mkdir { .. } | Modal::EditNew { .. } | Modal::ProfileSaveAs { .. } => "dialog.mkdir",
         Modal::TransferDest { .. } => "dialog.transfer-dest",
         Modal::CommandLine { .. } => "dialog.command-line",
-        Modal::AiRenameInstruction { .. } | Modal::AiRenamePlan { .. } => "dialog.ai-rename",
+        // Organizar comparte página con el plan de renombrar por IA: es el
+        // mismo trato —un plan que se revisa entero antes de aplicarse— con
+        // una libertad más, y separar la prosa obligaría a repetirla.
+        Modal::AiRenameInstruction { .. }
+        | Modal::AiRenamePlan { .. }
+        | Modal::OrganizePlan { .. } => "dialog.ai-rename",
         // La plantilla del lote comparte página con renombrar, que es donde
         // se cuenta qué es un plan revisable y qué se puede deshacer.
         Modal::RenameBatchPattern { .. } => "dialog.rename",
@@ -182,6 +187,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmPluginUninstall { .. }
         | Modal::ConfirmUndoAfter { .. }
+        | Modal::OrganizePlan { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit
         | Modal::Collision { .. }

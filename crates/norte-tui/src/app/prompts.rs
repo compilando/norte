@@ -1016,6 +1016,31 @@ impl App {
         }
     }
 
+    /// Desplaza la ventana del árbol de organizar (fase 8), con el mismo
+    /// clamp y la misma marca de agua alta que el plan IA: aprobar depende de
+    /// hasta dónde se haya LLEGADO, no de dónde te hayas quedado. No-op sin
+    /// su modal.
+    pub fn organize_plan_scroll(&mut self, down: bool) {
+        if let Some(Modal::OrganizePlan {
+            lines,
+            offset,
+            seen,
+            ..
+        }) = &mut self.modal
+        {
+            let max = lines
+                .len()
+                .saturating_sub(norte_frontend::organize::ORGANIZE_LINE_LIMIT);
+            *offset = if down {
+                (*offset + 1).min(max)
+            } else {
+                offset.saturating_sub(1)
+            };
+            *seen = (*seen)
+                .max((*offset + norte_frontend::organize::ORGANIZE_LINE_LIMIT).min(lines.len()));
+        }
+    }
+
     /// Desplaza la ventana del modal de sumas (#311), con el mismo clamp que
     /// el del plan IA y por la misma razón: la lista se recorre ENTERA, y el
     /// veredicto que importa —el que no cuadra— puede estar en cualquier

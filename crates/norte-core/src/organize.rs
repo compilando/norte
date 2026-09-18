@@ -150,6 +150,21 @@ impl OrganizePlan {
     }
 }
 
+/// El token de un plan recién propuesto, listo para viajar CON él.
+///
+/// Existe porque quien propone y quien aplica están separados por el wire: un
+/// plan sin token no se puede aprobar, y calcularlo en el cliente pondría el
+/// algoritmo del digest en dos sitios —que es exactamente la forma de que un
+/// día dejen de coincidir y `fs.organize` conteste `PlanStale` a un plan que
+/// nadie tocó—.
+///
+/// # Errors
+/// Lo que rechace [`OrganizePlan::bind`]: un plan con un destino inválido o
+/// que se contradice no tiene token, porque no se va a poder aplicar.
+pub fn plan_hash(dir: &VPath, moves: &[OrganizeMove]) -> Result<PlanHash, Error> {
+    OrganizePlan::bind(dir, moves).map(|p| p.hash)
+}
+
 /// El hash de un plan, atado a su directorio.
 ///
 /// Mismo criterio que `DirPlan::bind` del renombrado —un dominio propio para

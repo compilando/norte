@@ -117,6 +117,13 @@ pub fn plugin_rows_in(
                     norte_proto::methods::PluginCommandKind::Renamer => {
                         ("renamer", norte_i18n::t_in(lang, "palette-renamer-prefix"))
                     }
+                    // Fase 8: otra clase todavía, por lo mismo — despacha a
+                    // `plugin.organize_plan`, y su rótulo dice que esto crea
+                    // carpetas y no solo cambia nombres.
+                    norte_proto::methods::PluginCommandKind::Organizer => (
+                        "organizer",
+                        norte_i18n::t_in(lang, "palette-organizer-prefix"),
+                    ),
                 };
                 Row {
                     key: format!("{prefijo}:{plugin_id}:{}", c.id),
@@ -169,6 +176,28 @@ pub fn parse_plugin_key(cmd: &str) -> Option<(&str, &str)> {
 pub fn parse_renamer_key(cmd: &str) -> Option<(&str, &str)> {
     let (id, renamer) = cmd.strip_prefix("renamer:")?.split_once(':')?;
     (!id.is_empty() && !renamer.is_empty()).then_some((id, renamer))
+}
+
+/// El `(id de plugin, id de organizer)` de una clave `organizer:{id}:{org}`
+/// (fase 8), o `None` para cualquier otra cosa — un renamer incluido: los dos
+/// proponen un plan revisable, pero por métodos distintos y con destinos de
+/// distinta forma.
+///
+/// ```
+/// use norte_frontend::palette::{parse_organizer_key, parse_renamer_key};
+///
+/// assert_eq!(
+///     parse_organizer_key("organizer:org.norte.demo:por-extension"),
+///     Some(("org.norte.demo", "por-extension"))
+/// );
+/// // Un renamer NO es uno de éstos, en ninguna de las dos direcciones.
+/// assert_eq!(parse_organizer_key("renamer:org.norte.demo:limpiar"), None);
+/// assert_eq!(parse_renamer_key("organizer:org.norte.demo:por-extension"), None);
+/// ```
+#[must_use]
+pub fn parse_organizer_key(cmd: &str) -> Option<(&str, &str)> {
+    let (id, organizer) = cmd.strip_prefix("organizer:")?.split_once(':')?;
+    (!id.is_empty() && !organizer.is_empty()).then_some((id, organizer))
 }
 
 /// The FIRST chord (in `eff.bindings()`'s precedence order) that resolves
