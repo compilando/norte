@@ -37,6 +37,7 @@ import type { Send, SlotDom } from "./render/dom";
 import * as dialogs from "./render/dialogs";
 import * as sync from "./render/sync";
 import * as ai from "./render/ai";
+import * as organize from "./render/organize";
 import * as extensions from "./render/extensions";
 import * as settings from "./render/settings";
 import * as viewer from "./render/viewer";
@@ -148,6 +149,7 @@ export class Screen {
     readonly viewerRoot: HTMLElement,
     readonly dialogsRoot: HTMLElement,
     readonly aiRenameRoot: HTMLElement,
+    readonly organizeRoot: HTMLElement,
     readonly splashRoot: HTMLElement,
     readonly catalog: HostCatalog,
     readonly send: Send,
@@ -273,6 +275,7 @@ export class Screen {
     this.paintSync(view.sync);
     this.paintViewer(view.viewer);
     this.paintAiRename(view.ai_rename);
+    this.paintOrganize(view.organize);
     this.paintDialogs(view.dialogs);
     // LA ÚLTIMA: la pantalla de arranque se pone delante de todo lo demás, y
     // en esta hoja el apilado es el orden del documento.
@@ -1188,6 +1191,9 @@ export class Screen {
 
   /** En `render/ai.ts`. */
   readonly paintAiRename = ai.paintAiRename;
+
+  /** En `render/organize.ts`. */
+  readonly paintOrganize = organize.paintOrganize;
 
   /** En `render/dialogs.ts`. */
   readonly campoDeDialogo = dialogs.campoDeDialogo;

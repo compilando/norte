@@ -52,6 +52,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const viewerEl = doc.getElementById("viewer");
   const dialogsEl = doc.getElementById("dialogs");
   const aiRenameEl = doc.getElementById("ai-rename");
+  const organizeEl = doc.getElementById("organize");
   const splashEl = doc.getElementById("splash");
   const fatalEl = doc.getElementById("fatal");
   if (
@@ -77,6 +78,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     viewerEl === null ||
     dialogsEl === null ||
     aiRenameEl === null ||
+    organizeEl === null ||
     splashEl === null ||
     fatalEl === null
   ) {
@@ -157,6 +159,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     viewerEl,
     dialogsEl,
     aiRenameEl,
+    organizeEl,
     splashEl,
     catalog,
     send,

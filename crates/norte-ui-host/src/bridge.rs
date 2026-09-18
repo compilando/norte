@@ -368,7 +368,27 @@ use serde::{Deserialize, Serialize};
 ///
 ///   `measuring` dice si la medida sigue en marcha: un mapa a medias sin
 ///   decirlo se lee como un directorio pequeño.
-pub const BRIDGE_VERSION: u32 = 71;
+/// - **72**: la revisión de ORGANIZAR (fase 8, proto 0.77.0). Llega
+///   `OrganizeView`, gemela de `AiRenameView` con dos diferencias que vienen
+///   de lo mismo — aquí lo que cambia es la FORMA del directorio:
+///
+///   El cuerpo es un ÁRBOL (`OrganizeLineView`: `depth`, el nombre saneado
+///   con su marca, y un `kind` de tres valores) y no una lista de parejas.
+///   Cuarenta filas `a.pdf → facturas/2026/a.pdf` no dejan ver cuántas
+///   carpetas aparecen ni qué acaba dentro de cada una, que es exactamente lo
+///   que se está aprobando. El `kind` viaja como DATO y no resuelto a un
+///   color: un tema monocromo necesita poder marcar de otra forma una carpeta
+///   que se va a crear.
+///
+///   Y no hay veredicto que esperar. El token del plan viaja CON el plan
+///   (`AiOrganizePlanResult::plan_hash`), así que esta pantalla nace
+///   aprobable en vez de abrir en `Pending` — lo que se pierde a cambio es el
+///   campo `status`, que aquí no diría nada.
+///
+///   `organize_scroll { down }` existe aparte de las teclas porque aprobar
+///   exige haber llegado al final: sin un gesto para recorrer, la pantalla
+///   era una que un lector con el ratón no podía aprobar nunca.
+pub const BRIDGE_VERSION: u32 = 72;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

@@ -135,6 +135,9 @@ impl Estado {
             | Efecto::Transferir { .. }
             | Efecto::Renombrar
             | Efecto::RenameIa
+            // Fase 8: organizar crea carpetas y mueve, así que una ventana de
+            // solo lectura tampoco lo pide.
+            | Efecto::Organizar
             | Efecto::RenameLote
             // #314: cambiar permisos escribe, así que una ventana de solo
             // lectura tampoco lo hace.
@@ -198,6 +201,9 @@ impl Estado {
             | Efecto::Transferir { .. }
             | Efecto::Renombrar
             | Efecto::RenameIa
+            // Fase 8: organizar crea carpetas y mueve, así que una ventana de
+            // solo lectura tampoco lo pide.
+            | Efecto::Organizar
             | Efecto::RenameLote
             | Efecto::Permisos
             | Efecto::BuscarSemantica => self.efecto_que_muta(efecto, backend, buzon),
@@ -752,6 +758,7 @@ impl Estado {
             Efecto::Transferir { mover } => self.pedir_transferencia(mover, backend, buzon),
             Efecto::Renombrar => self.pedir_rename(),
             Efecto::RenameIa => self.pedir_instruccion_ia(),
+            Efecto::Organizar => self.pedir_plan_de_organizar(None, backend, buzon),
             Efecto::RenameLote => self.pedir_plantilla_de_lote(None),
             Efecto::Permisos => self.pedir_permisos(),
             Efecto::BuscarSemantica => self.pedir_consulta_semantica(),

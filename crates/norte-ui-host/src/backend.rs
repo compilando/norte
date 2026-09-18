@@ -421,6 +421,36 @@ pub trait HostBackend: Send + Sync + 'static {
         names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>>;
 
+    /// El plan de ORGANIZAR que propone un modelo (fase 8): el mismo trato
+    /// que renombrar con una libertad más —el destino puede llevar
+    /// carpetas—, y por eso su token viaja CON el plan: no hay un segundo
+    /// viaje que comprobar.
+    fn ai_organize_plan(
+        &self,
+        dir: VPath,
+        instruction: String,
+        names: Vec<String>,
+    ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>>;
+
+    /// El mismo plan, propuesto por un plugin del kind `organizer` (fase 8).
+    /// Mismo reparto que el `renamer`: el plugin propone y el core ejecuta.
+    fn plugin_organize_plan(
+        &self,
+        plugin_id: String,
+        organizer_id: String,
+        dir: VPath,
+    ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>>;
+
+    /// Aplica un plan de organizar ya revisado (fase 8): crea las carpetas
+    /// que falten y mueve, TODO bajo un solo `batch_id`, así que se deshace
+    /// como una unidad.
+    fn organize(
+        &self,
+        dir: VPath,
+        moves: Vec<methods::OrganizeMove>,
+        plan_hash: methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
     /// El plan REVISABLE de un lote de renombrados dentro de `dir`.
     ///
     /// Tampoco muta: lo que se manda es INTENCIÓN —parejas de nombres base—
@@ -1386,6 +1416,51 @@ impl HostBackend for norte_client::RemoteBackend {
             backend
                 .plugin_rename_plan(&plugin_id, &renamer_id, &dir, &names)
                 .await
+        })
+    }
+
+    fn ai_organize_plan(
+        &self,
+        dir: VPath,
+        instruction: String,
+        names: Vec<String>,
+    ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.ai_organize_plan(&dir, &instruction, &names).await })
+    }
+
+    fn plugin_organize_plan(
+        &self,
+        plugin_id: String,
+        organizer_id: String,
+        dir: VPath,
+    ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            // `names` vacío es «todo el directorio»: organizar es una
+            // decisión sobre la forma del directorio entero.
+            backend
+                .plugin_organize_plan(&plugin_id, &organizer_id, &dir, &[])
+                .await
+        })
+    }
+
+    fn organize(
+        &self,
+        dir: VPath,
+        moves: Vec<methods::OrganizeMove>,
+        plan_hash: methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.organize(&dir, &moves, &plan_hash).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
         })
     }
 

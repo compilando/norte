@@ -116,6 +116,10 @@ pub struct ViewSnapshot {
     /// El plan de renombrado en revisión, si lo hay. Se abre encima del
     /// listado y las teclas son suyas hasta que se apruebe o se descarte.
     pub ai_rename: Option<AiRenameView>,
+    /// El plan de ORGANIZAR en revisión (fase 8), si lo hay. Misma forma de
+    /// pantalla que el de renombrar y por la misma razón — un documento que
+    /// se lee antes de aprobarlo—, con otro contenido: un ÁRBOL.
+    pub organize: Option<OrganizeView>,
     /// Idioma negociado, para que el renderer pida el catálogo correcto.
     pub locale: String,
 }
@@ -2852,6 +2856,67 @@ pub struct AiRenameView {
     pub seen_all: bool,
 }
 
+/// El plan de ORGANIZAR en revisión (fase 8).
+///
+/// Es el gemelo de [`AiRenameView`] con dos diferencias, y las dos vienen de
+/// lo mismo: aquí lo que cambia es la FORMA del directorio.
+///
+/// - El cuerpo es un ÁRBOL, no una lista de parejas. Una lista de cuarenta
+///   `a.pdf → facturas/2026/a.pdf` no deja ver cuántas carpetas aparecen ni
+///   qué acaba dentro de cada una, que es justo lo que se está aprobando.
+/// - No hay veredicto que esperar. El token del plan viaja CON él, así que
+///   esta pantalla nace aprobable y no pasa por un `Pending`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrganizeView {
+    /// El directorio sobre el que se planeó.
+    pub dir: DialogLine,
+    /// La ventana de líneas del árbol que viaja, NO el árbol entero.
+    pub lines: Vec<OrganizeLineView>,
+    /// La primera línea de `lines` dentro del árbol.
+    pub first_visible: u64,
+    /// Cuántas líneas tiene el árbol.
+    pub total: u64,
+    /// Cuánto se ve de cuánto hay, ya traducido. Vacío = se ve todo.
+    pub more_note: String,
+    /// FUERA de la ventana hay algún nombre que se pinta distinto de lo que
+    /// es. Sin esto, la marca solo existe para lo que se ve.
+    pub hidden_hostile: bool,
+    /// «Crea N carpetas y mueve M ficheros», ya traducido: lo que se lee para
+    /// decidir sin contar líneas. Va ANTES del árbol.
+    pub summary: String,
+    /// El lector ha recorrido el árbol ENTERO. Aprobar lo exige.
+    pub seen_all: bool,
+}
+
+/// Una línea del árbol de organizar (fase 8).
+///
+/// El `kind` viaja como DATO y no resuelto a un color: el renderer decide
+/// cómo se ve una carpeta nueva, y un tema monocromo necesita poder marcarla
+/// de otra forma. Que sea nueva o no lo decide
+/// [`norte_frontend::organize::tree_lines`], compartido con el terminal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrganizeLineView {
+    /// Cuánto se sangra: 0 es hijo directo del directorio del plan.
+    pub depth: u32,
+    /// El nombre, enmascarado y acotado, con su marca si difiere.
+    pub text: DialogLine,
+    /// Qué es: una carpeta que se CREA, una que ya estaba, o un fichero que
+    /// se mueve.
+    pub kind: OrganizeLineKind,
+}
+
+/// Qué representa una línea del árbol de organizar (fase 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrganizeLineKind {
+    /// Una carpeta que el plan va a CREAR.
+    NewDir,
+    /// Una carpeta que YA existe y a la que el plan mete algo.
+    ExistingDir,
+    /// Un fichero que se mueve hasta ahí.
+    Moved,
+}
+
 /// Una pareja del plan: de qué nombre a qué nombre.
 ///
 /// Los dos nombres van ENTEROS y por separado, jamás concatenados con una
@@ -3292,6 +3357,13 @@ pub enum ViewChange {
     AiRename {
         /// El plan, o `None` si se cerró.
         ai_rename: Option<AiRenameView>,
+    },
+    /// El plan de ORGANIZAR en revisión cambió (fase 8): se abrió, se
+    /// recorrió, o se cerró. No tiene el tercer caso del de renombrar —«llegó
+    /// el veredicto»— porque su token viaja con el plan.
+    Organize {
+        /// El plan, o `None` si se cerró.
+        organize: Option<OrganizeView>,
     },
 }
 

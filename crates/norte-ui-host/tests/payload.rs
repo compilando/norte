@@ -22,7 +22,18 @@ const TOPE_CURSOR: usize = 16 * 1024;
 /// Entradas del directorio grande.
 const GRANDE: usize = 100_000;
 
-async fn host_grande() -> (UiHost, norte_ui_host::ViewSnapshot) {
+/// El host del directorio grande, con su future en el MONTÓN.
+///
+/// `Estado` es grande —es el estado entero de la ventana— y el future que lo
+/// monta lo lleva dentro, así que en cuanto crece un campo más el future pasa
+/// del tope de `clippy::large_futures` y el gate se pone rojo en un fichero
+/// que nadie tocó. Boxeándolo una vez, aquí, los tres llamantes dejan de
+/// tener que saberlo.
+fn host_grande() -> std::pin::Pin<Box<dyn Future<Output = (UiHost, norte_ui_host::ViewSnapshot)>>> {
+    Box::pin(host_grande_inner())
+}
+
+async fn host_grande_inner() -> (UiHost, norte_ui_host::ViewSnapshot) {
     let mut f = Falso::default();
     let nombres: Vec<(Vec<u8>, bool)> = (0..GRANDE)
         .map(|i| (format!("fichero-{i:06}.txt").into_bytes(), false))

@@ -196,6 +196,9 @@ export class Session {
       case "ai_rename":
         s.ai_rename = c.ai_rename;
         return true;
+      case "organize":
+        s.organize = c.organize;
+        return true;
       case "viewer":
         s.viewer = c.viewer;
         return true;

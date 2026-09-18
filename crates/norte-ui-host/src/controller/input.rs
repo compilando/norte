@@ -258,6 +258,12 @@ impl Estado {
         if self.revision_ia.is_some() {
             return Some(self.tecla_en_revision_ia(k, backend, buzon));
         }
+        // Fase 8: el árbol de organizar se queda las teclas por lo mismo que
+        // la revisión de al lado — es una pantalla entera y se aprueba con
+        // ellas.
+        if self.revision_organizar.is_some() {
+            return Some(self.tecla_en_revision_organizar(k, backend, buzon));
+        }
         if self.busqueda.is_some() {
             return Some(self.tecla_en_busqueda(k, backend, buzon));
         }

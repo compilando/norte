@@ -55,6 +55,7 @@ mod listing;
 mod logpanel;
 mod menu;
 mod nav;
+mod organize;
 mod palette;
 mod panel;
 mod panelplugin;
@@ -1032,6 +1033,13 @@ enum Fondo {
     PlanIa(
         u64,
         Box<Result<norte_proto::methods::AiRenamePlanResult, Error>>,
+    ),
+    /// El plan de ORGANIZAR que propuso un productor (fase 8), con la época
+    /// de la petición que lo pidió. Uno solo para el modelo y para un plugin:
+    /// los dos producen el mismo plan y la misma revisión.
+    PlanOrganizar(
+        u64,
+        Box<Result<norte_proto::methods::AiOrganizePlanResult, Error>>,
     ),
     /// El veredicto del core sobre ese plan, con la MISMA época: entre pedir
     /// el uno y el otro el lector puede haber descartado la revisión, y un
@@ -2422,6 +2430,32 @@ struct RevisionIa {
     epoca: u64,
 }
 
+/// El plan de ORGANIZAR en revisión (fase 8).
+///
+/// El gemelo de [`RevisionIa`] sin su campo más caro: no hay veredicto que
+/// esperar, porque el token del plan vino CON el plan. Lo demás es idéntico,
+/// y a propósito — es la misma clase de pantalla y la misma defensa.
+struct RevisionOrganizar {
+    /// El directorio sobre el que se planeó.
+    dir: VPath,
+    /// Los movimientos, tal cual los propuso el productor. Es lo que se manda
+    /// a ejecutar, y lo que el `plan_hash` ata.
+    moves: Vec<norte_proto::methods::OrganizeMove>,
+    /// El árbol ya calculado, que es lo que se revisa.
+    lineas: Vec<norte_frontend::organize::TreeLine>,
+    /// El token que hay que devolver para aplicarlo.
+    plan_hash: norte_proto::methods::PlanHash,
+    /// Primera línea visible: la revisión es de todo el árbol, por scroll.
+    primera: usize,
+    /// Hasta dónde ha LLEGADO el lector. Aprobar lo exige.
+    visto_hasta: usize,
+    /// Ya se ha enseñado al menos una vez, así que la siguiente tecla es una
+    /// respuesta y no una tecla que iba a otro sitio.
+    reconocida: bool,
+    /// La época que la pidió.
+    epoca: u64,
+}
+
 /// El informe de una Task terminada, por clase.
 ///
 /// Dos clases lo tienen —un lote de renombrado y un undo— y las dos por el
@@ -3139,6 +3173,18 @@ struct Estado {
     /// plan de `series/` abierto diciendo `descargas/` estaría prometiendo
     /// renombrar lo que se ve, y renombraría otra cosa.
     ia_en_vuelo: Option<(u64, VPath, Vec<Vec<u8>>)>,
+    /// El plan de ORGANIZAR en revisión (fase 8), si lo hay.
+    revision_organizar: Option<RevisionOrganizar>,
+    /// Su época: sube en cada petición, y una respuesta con otra llegó tarde.
+    epoca_organizar: u64,
+    /// La petición de plan de organizar EN VUELO: época, directorio y los
+    /// nombres que había en él al pedir.
+    ///
+    /// Los nombres viajan aquí por lo mismo que el directorio: entre pedir el
+    /// plan y que llegue, el lector puede haber navegado, y preguntarle al
+    /// hueco entonces pintaría el árbol contra un directorio que no es el
+    /// suyo — diciendo «nueva» de una carpeta que sí existía, o al revés.
+    organizar_en_vuelo: Option<(u64, VPath, Vec<String>)>,
     /// El tablero: lo que está en marcha, por id de task.
     tasks: std::collections::BTreeMap<u64, TaskViva>,
     /// El lote de transferencias en curso, si lo hay (#271).
@@ -3520,6 +3566,9 @@ impl Estado {
             revision_ia: None,
             epoca_ia: 0,
             ia_en_vuelo: None,
+            revision_organizar: None,
+            epoca_organizar: 0,
+            organizar_en_vuelo: None,
             tasks: std::collections::BTreeMap::new(),
             lote: None,
             sesion: Sesion {
@@ -4022,6 +4071,10 @@ impl Estado {
             UiAction::AiRenameDecide { approve } => {
                 self.decidir_revision_ia(*approve, backend, buzon)
             }
+            UiAction::OrganizeDecide { approve } => {
+                self.decidir_revision_organizar(*approve, backend, buzon)
+            }
+            UiAction::OrganizeScroll { down } => self.recorrer_organizar(*down),
             UiAction::Resync => self.responde_con_foto(),
             UiAction::RequestQuit => self.pedir_salir(),
             UiAction::MenuOpen { menu } => self.desplegar_menu(*menu),

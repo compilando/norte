@@ -292,6 +292,26 @@ pub struct Falso {
     /// entero. Es lo que permite comprobar que marcar cinco ficheros no manda
     /// los mil del directorio al proveedor.
     pub nombres_ia: std::sync::Mutex<Vec<Vec<String>>>,
+    /// Lo que contesta un plan de ORGANIZAR (fase 8), venga del modelo o de un
+    /// plugin: `(nombre actual, destino relativo)`. `None` = el daemon falla.
+    pub plan_organizar: Option<Vec<(String, String)>>,
+    /// Con qué frase REHÚSA el productor del plan de organizar: gana a
+    /// `plan_organizar`.
+    pub organizar_rehusa: Option<String>,
+    /// El token que acompaña al plan de organizar. `None` = un daemon que
+    /// manda un plan SIN token, que es un plan que no se puede aprobar — y
+    /// esta es la forma de comprobar que la revisión no se abre.
+    pub organizar_hash: Option<norte_proto::methods::PlanHash>,
+    /// Qué organizer se pidió: `(plugin, organizer)`.
+    pub organizers_pedidos: std::sync::Mutex<Vec<(String, String)>>,
+    /// Los planes de organizar que se mandaron EJECUTAR: `(dir, moves, hash)`.
+    pub organizados: std::sync::Mutex<
+        Vec<(
+            VPath,
+            Vec<norte_proto::methods::OrganizeMove>,
+            norte_proto::methods::PlanHash,
+        )>,
+    >,
     /// El veredicto que contesta `fs.rename_batch_plan`. `None` = falla.
     pub veredicto: Option<norte_proto::methods::FsRenameBatchPlanResult>,
     /// Las parejas con las que se pidió el veredicto, en orden.
@@ -578,6 +598,45 @@ impl Falso {
     /// es exactamente la que este mecanismo existe para quitar.
     pub fn latido(&self) {
         self.pulso.notify_waiters();
+    }
+
+    /// Lo que contestan los DOS productores de un plan de organizar (fase 8).
+    ///
+    /// Uno solo, porque el host trata sus respuestas igual a propósito: un
+    /// plan de plugin y uno de modelo aterrizan en la misma revisión, y dos
+    /// dobles distintos dejarían que esa igualdad se rompiera sin que ningún
+    /// test lo notara.
+    fn respuesta_de_organizar(
+        &self,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::AiOrganizePlanResult, Error>> {
+        let plan = self.plan_organizar.clone();
+        let rehusa = self.organizar_rehusa.clone();
+        let hash = self.organizar_hash.clone();
+        Box::pin(async move {
+            if let Some(why) = rehusa {
+                return Ok(norte_proto::methods::AiOrganizePlanResult {
+                    moves: Vec::new(),
+                    refused: Some(why),
+                    plan_hash: None,
+                });
+            }
+            let Some(pares) = plan else {
+                return Err(Error::NotFound);
+            };
+            Ok(norte_proto::methods::AiOrganizePlanResult {
+                moves: pares
+                    .into_iter()
+                    .map(
+                        |(current, proposed_rel)| norte_proto::methods::OrganizeMove {
+                            current,
+                            proposed_rel,
+                        },
+                    )
+                    .collect(),
+                refused: None,
+                plan_hash: hash,
+            })
+        })
     }
 
     /// Espera a que el doble haya anotado lo que se le pregunta. Sin reloj.
@@ -2054,6 +2113,71 @@ impl HostBackend for Falso {
                     .map(|(from, to)| norte_proto::methods::AiRenameEntry { from, to })
                     .collect(),
                 refused: None,
+            })
+        })
+    }
+
+    fn ai_organize_plan(
+        &self,
+        _dir: VPath,
+        _instruction: String,
+        _names: Vec<String>,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::AiOrganizePlanResult, Error>> {
+        self.latido();
+        self.respuesta_de_organizar()
+    }
+
+    fn plugin_organize_plan(
+        &self,
+        plugin_id: String,
+        organizer_id: String,
+        _dir: VPath,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::AiOrganizePlanResult, Error>> {
+        self.organizers_pedidos
+            .lock()
+            .expect("organizers")
+            .push((plugin_id, organizer_id));
+        self.latido();
+        self.respuesta_de_organizar()
+    }
+
+    fn organize(
+        &self,
+        dir: VPath,
+        moves: Vec<norte_proto::methods::OrganizeMove>,
+        plan_hash: norte_proto::methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.organizados
+            .lock()
+            .expect("organizados")
+            .push((dir, moves, plan_hash));
+        self.latido();
+        let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
+        let id = norte_proto::TaskId::new(300 + n as u64);
+        let progreso = norte_proto::TaskProgress {
+            task_id: id,
+            kind: norte_proto::TaskKind::Move,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: Some(1),
+            current: None,
+            unreadable: None,
+            unvisited: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        *self.progreso.lock().expect("progreso") = Some(tx.clone());
+        self.progresos
+            .lock()
+            .expect("progresos")
+            .insert(id.get(), tx);
+        Box::pin(async move {
+            Ok(HostTask {
+                id,
+                progress: rx,
+                cancel: Arc::new(|| {}),
+                foreign: false,
             })
         })
     }

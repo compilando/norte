@@ -157,6 +157,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     program_output: null,
     viewer: null,
     ai_rename: null,
+    organize: null,
     locale: "es",
   };
 }
@@ -393,6 +394,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
   const aiRename = document.createElement("div");
+  const organize = document.createElement("div");
   const splash = document.createElement("div");
   document.body.append(
     root,
@@ -412,6 +414,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     viewer,
     dialogs,
     aiRename,
+    organize,
     splash,
   );
   document.documentElement.style.setProperty("--cell-h", `${CELL_H}px`);
@@ -440,6 +443,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     viewer,
     dialogs,
     aiRename,
+    organize,
     splash,
     catalogo(),
     (a: UiAction) => enviadas.push(a),
@@ -4056,6 +4060,96 @@ describe("la revisión de un plan de renombrado", () => {
     v.ai_rename = null;
     screen.paint(v);
     expect(document.querySelector(".ai-rename")).toBeNull();
+  });
+});
+
+describe("la revisión de un plan de organizar", () => {
+  /** Un árbol con las tres clases de línea y un nombre alterado. */
+  function arbol(): NonNullable<ViewSnapshot["organize"]> {
+    return {
+      dir: { text: "⟨mem⟩/casa/descargas", hostile: false },
+      lines: [
+        {
+          depth: 0,
+          text: { text: "facturas", hostile: false },
+          kind: "existing_dir",
+        },
+        { depth: 1, text: { text: "2026", hostile: false }, kind: "new_dir" },
+        {
+          depth: 2,
+          text: { text: "caf�.pdf", hostile: true },
+          kind: "moved",
+        },
+      ],
+      first_visible: 0,
+      total: 12,
+      more_note: "… 3/12 (desplazar: ↓/↑)",
+      hidden_hostile: true,
+      summary: "crea 1 carpetas y mueve 2 ficheros",
+      seen_all: false,
+    };
+  }
+
+  it("marca cada clase de línea de dos formas y sangra con un dato, no con texto", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.organize = arbol();
+    screen.paint(v);
+    const caja = document.querySelector(".organize") as HTMLElement;
+    expect(caja).not.toBeNull();
+    expect(caja.getAttribute("aria-modal")).toBe("true");
+    // El recuento va ANTES del árbol: es lo que se lee para decidir.
+    const cuerpo = Array.from(caja.children).map((e) => e.className);
+    expect(cuerpo.indexOf("organize-summary")).toBeLessThan(
+      cuerpo.indexOf("organize-tree"),
+    );
+
+    const filas = Array.from(caja.querySelectorAll<HTMLElement>(".organize-line"));
+    expect(filas).toHaveLength(3);
+    // La clase dice qué es, Y el marcador lo dice otra vez: el color no
+    // sobrevive a un tema monocromo.
+    expect(filas[0]?.classList.contains("organize-existing-dir")).toBe(true);
+    expect(filas[1]?.classList.contains("organize-new-dir")).toBe(true);
+    expect(filas[0]?.querySelector(".organize-mark")?.textContent).toBe("·");
+    expect(filas[1]?.querySelector(".organize-mark")?.textContent).toBe("+");
+    expect(filas[2]?.querySelector(".organize-mark")?.textContent).toBe("→");
+    // El sangrado es una variable del estilo, no espacios en el nombre: un
+    // nombre que empiece por espacios no puede fingir estar más adentro.
+    expect(filas[2]?.style.getPropertyValue("--depth")).toBe("2");
+    const nombre = filas[2]?.querySelector(".organize-name") as HTMLElement;
+    expect(nombre.textContent?.startsWith(" ")).toBe(false);
+    expect(nombre.dataset["hostile"]).toBe("true");
+    expect(nombre.textContent).toContain("nombre alterado");
+  });
+
+  it("no deja aprobar hasta haberlo leído entero", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.organize = arbol();
+    screen.paint(v);
+    const botones = Array.from(document.querySelectorAll(".organize .choices button"));
+    expect(botones[0]?.disabled).toBe(true);
+    // Descartar SIEMPRE se puede: quien no quiere esto tiene que poder
+    // quitárselo de encima.
+    expect(botones[1]?.disabled).toBe(false);
+
+    v.organize = { ...arbol(), seen_all: true };
+    screen.paint(v);
+    const despues = document.querySelector(
+      ".organize .choices button",
+    ) as HTMLButtonElement;
+    expect(despues.disabled).toBe(false);
+  });
+
+  it("sin plan no queda nada pintado", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.organize = arbol();
+    screen.paint(v);
+    expect(document.querySelector(".organize")).not.toBeNull();
+    v.organize = null;
+    screen.paint(v);
+    expect(document.querySelector(".organize")).toBeNull();
   });
 });
 

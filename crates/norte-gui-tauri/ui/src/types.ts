@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 71;
+export const BRIDGE_VERSION = 72;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -565,6 +565,47 @@ export interface AiRenamePairView {
 }
 
 /** El plan de renombrado que un modelo propuso, en revisión. */
+/**
+ * El plan de ORGANIZAR en revisión (puente 72).
+ *
+ * El gemelo de `AiRenameView` con dos diferencias: el cuerpo es un ÁRBOL —lo
+ * que cambia es la forma del directorio— y no hay veredicto que esperar,
+ * porque el token del plan viajó con él.
+ */
+export interface OrganizeView {
+  dir: DialogLine;
+  /** La ventana que viaja, NO el árbol entero. */
+  lines: OrganizeLineView[];
+  first_visible: number;
+  total: number;
+  /** Cuánto se ve de cuánto hay, ya traducido. Vacío = se ve todo. */
+  more_note: string;
+  /** Fuera de la ventana hay un nombre que se pinta distinto de lo que es. */
+  hidden_hostile: boolean;
+  /** «Crea N carpetas y mueve M ficheros», ya traducido. Va ANTES del árbol. */
+  summary: string;
+  /** El lector ha recorrido el árbol entero. Aprobar lo exige. */
+  seen_all: boolean;
+}
+
+/** Una línea del árbol de organizar (puente 72). */
+export interface OrganizeLineView {
+  /** Cuánto se sangra: 0 es hijo directo del directorio del plan. */
+  depth: number;
+  /** El nombre, ya saneado, con su marca si difiere de lo real. */
+  text: DialogLine;
+  kind: OrganizeLineKind;
+}
+
+/**
+ * Qué es una línea del árbol.
+ *
+ * Llega como DATO y no resuelto a un color: el renderer decide cómo se ve una
+ * carpeta que se va a crear, y un tema monocromo necesita poder marcarla de
+ * otra forma.
+ */
+export type OrganizeLineKind = "new_dir" | "existing_dir" | "moved";
+
 export interface AiRenameView {
   dir: DialogLine;
   /** La ventana que viaja, NO el plan entero. */
@@ -1289,6 +1330,7 @@ export interface ViewSnapshot {
   picker: PickerView | null;
   viewer: ViewerView | null;
   ai_rename: AiRenameView | null;
+  organize: OrganizeView | null;
   locale: string;
 }
 
@@ -1337,6 +1379,7 @@ export type ViewChange =
   | { change: "columns"; slot_id: number; columns: ColumnHeader[] }
   | { change: "viewer"; viewer: ViewerView | null }
   | { change: "ai_rename"; ai_rename: AiRenameView | null }
+  | { change: "organize"; organize: OrganizeView | null }
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "menu"; menu: MenuView }
   | { change: "panel_bar"; panel_bar: PanelBarView }
@@ -1478,6 +1521,8 @@ export type UiAction =
   | { action: "layout_activate_row"; row: number }
   | { action: "search_activate_row"; row: number }
   | { action: "ai_rename_decide"; approve: boolean }
+  | { action: "organize_decide"; approve: boolean }
+  | { action: "organize_scroll"; down: boolean }
   | { action: "menu_open"; menu: number }
   | { action: "menu_point_row"; row: number }
   | { action: "menu_activate_row"; row: number }

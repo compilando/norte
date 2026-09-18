@@ -163,6 +163,7 @@ impl Estado {
             picker: self.vista_selector(),
             viewer: self.vista_visor(),
             ai_rename: self.vista_ia(),
+            organize: self.vista_organizar(),
             locale: self.locale.clone(),
         }
     }
