@@ -140,9 +140,26 @@ waits a short grace period (`GRACIA`, 1.5 s, polled with `try_wait` so the
 event loop never blocks) and, if the window dies inside it, stays, reclaims the
 session it had released, and says with which exit code the window died.
 
-What remains unverified is narrower: the window → terminal direction opens an
-emulator, and the emulator stays alive even if the `ntc` inside it dies, so
-that direction cannot use the same grace check.
+**The window never closed itself on handing back.** The window → terminal
+direction launched the emulator and forgot about it: it neither closed when
+the terminal opened — its own `HandoffToTerminal` contract said it would —
+nor noticed when it did not, and sat saying "handing the screen over…" with
+the session already released. The native pump now waits for the launch, and
+closes the window only if the emulator started; otherwise it tells the host
+with `handoff_failed { no_terminal }` (bridge 73), and the host stays,
+reclaims the session and says which of the two failures it was. That action
+is honoured only while a handover is actually in flight, since anyone who can
+talk to the host can send it.
+
+**The window never restored the cursor** either — a pre-existing gap the
+first test made visible, since the terminal did. It now does, through the
+same door as the marks.
+
+After these fixes a person ran the handover in both directions on a desktop,
+and both kept the place, the marks and the cursor. What stays unverifiable by
+the process itself: in the window → terminal direction the emulator lives on
+even if the `ntc` inside it dies, so that side can only check that the
+emulator started.
 
 ## Alternatives considered
 
