@@ -381,6 +381,40 @@ impl Estado {
     /// `header_label` y `sort_column_id` son las MISMAS funciones que usa el
     /// TUI: cómo se llama una columna y si ordena no puede depender de quién
     /// pinta.
+    /// Las columnas que se pintan en `hueco`, ajustadas para que sus
+    /// nombres se lean: la MISMA regla que el terminal
+    /// (`norte_frontend::columns::fitted_columns`), sobre el ancho en celdas
+    /// que el reparto le da al hueco.
+    ///
+    /// El interior descuenta cuatro celdas —bordes, relleno y la casilla de
+    /// marca— y lo que va delante del nombre en la fila es la insignia y,
+    /// si los hay, los iconos. Un hueco que el reparto no coloca pinta todas
+    /// sus columnas: no hay ancho con el que decidir, y ceder sin saber es
+    /// quitar por quitar.
+    pub(super) fn ajuste_de(&self, hueco: &Hueco) -> Vec<norte_frontend::columns::Fitted> {
+        use norte_frontend::columns::fitted_columns;
+        let esquema = hueco.pane.dir().scheme();
+        let ancho = self
+            .huecos
+            .iter()
+            .find(|(_, h)| std::ptr::eq(*h, hueco))
+            .and_then(|(id, _)| {
+                self.reparto
+                    .placements
+                    .iter()
+                    .find(|(s, _)| s.0 == *id)
+                    .map(|(_, r)| r.width)
+            });
+        match ancho {
+            Some(ancho) => {
+                let delante: u16 = 2 + if hueco.pane.any_icon() { 3 } else { 0 };
+                let quiere = hueco.pane.name_width_p80().saturating_add(delante);
+                fitted_columns(&self.columnas, esquema, ancho.saturating_sub(4), quiere)
+            }
+            None => fitted_columns(&self.columnas, esquema, u16::MAX / 2, 0),
+        }
+    }
+
     pub(super) fn cabeceras(&self, hueco: &Hueco) -> Vec<ColumnHeader> {
         use norte_frontend::columns::{header_label_in, sort_column_id};
         let spec = hueco.pane.sort();
@@ -390,9 +424,10 @@ impl Estado {
         // la fija viaja (puente 64); `auto` y `flex` se pintan a lo que
         // midan, que es lo que esta ventana hacía con todas.
         let politicas = self.columnas.layout_items_for(&esquema);
-        self.columnas_de(hueco.pane.dir())
+        self.ajuste_de(hueco)
             .iter()
-            .map(|id| {
+            .map(|f| {
+                let id = &f.id;
                 let width =
                     politicas
                         .iter()
@@ -402,6 +437,9 @@ impl Estado {
                             // del reparto compartido, para que el renderer no
                             // tenga que repetir el número.
                             _ if item.is_name => Some(norte_frontend::columns::NAME_MIN),
+                            // Compacta, su ancho es el corto aunque la
+                            // política diga otra cosa.
+                            _ if f.compact => Some(norte_frontend::columns::COMPACT_WIDTH),
                             norte_frontend::columns::WidthPolicy::Fixed(n) => Some(n),
                             norte_frontend::columns::WidthPolicy::Auto
                             | norte_frontend::columns::WidthPolicy::Flex { .. } => None,
@@ -413,7 +451,10 @@ impl Estado {
                 // El rótulo del manifiesto de una columna de plugin viene
                 // dentro, por `apply_plugin_headers`: sin él la cabecera
                 // enseñaba el id (`ORG.NORTE.SIZE-BAR/BAR` en vez de «Size»).
-                let estilo = self.columnas.style_for_id(&esquema, id, catalogo);
+                let estilo = self
+                    .columnas
+                    .style_for_id(&esquema, id, catalogo)
+                    .compacted(f.compact);
                 let ordena = sort_column_id(id);
                 let sort = ordena.filter(|c| *c == spec.column).map(|_| {
                     match spec.dir {

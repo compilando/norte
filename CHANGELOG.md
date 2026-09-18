@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Columns give way so the name can be read** (ADR 0124), in the terminal and
+  the window alike. The name aims for the width that covers 80% of the names
+  in the listing (at most 3/5 of the pane). Until it gets there, the other
+  columns give way one step at a time: Type hides, the date turns short
+  (`22:19`/`09-16`/`2025`), the size turns short (`80K`/`1.3M`), then Date
+  and Size hide. It stops as soon as the name fits, so a wide pane loses
+  nothing. A width you dragged or a format you chose is never touched.
 - **Carrying on in the other frontend** (ADR 0123, protocol 0.78.0), phase 9 of
   the WOW programme and its last. `app.handoff` — in the palette, the Go menu
   and the help in both locales — hands the screen to the other frontend: the

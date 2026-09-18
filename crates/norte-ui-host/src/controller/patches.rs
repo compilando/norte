@@ -29,6 +29,8 @@ impl Estado {
         if let UiUpdate::Snapshot(s) = &u {
             self.ultima_barra = Some(s.panel_bar.clone());
             self.ultima_teclas = Some(s.key_bar.clone());
+            // La foto se armó con el ajuste de AHORA (`ajuste_de` es puro).
+            let _ = self.ajustes_movidos();
         }
         self.sequence += 1;
         BridgeEnvelope::new(self.instance.clone(), self.sequence, u)
@@ -58,6 +60,19 @@ impl Estado {
             });
             self.ultima_teclas = Some(teclas);
         }
+        // Y el ajuste de columnas de cada hueco: lo mueven el ancho del
+        // hueco y los nombres del listado, y ninguno de los caminos que los
+        // cambian manda cabecera. Cabecera y filas van JUNTAS, detrás de lo
+        // que el parche ya traía, así que mandan sobre ello.
+        for slot in self.ajustes_movidos() {
+            if let Some(h) = self.huecos.get(&slot) {
+                changes.push(ViewChange::Columns {
+                    slot_id: slot,
+                    columns: self.cabeceras(h),
+                });
+            }
+            changes.push(self.cambio_de_filas_de(slot));
+        }
         let base = self.sequence;
         self.sobre(UiUpdate::Patch(ViewPatch {
             base_sequence: base,
@@ -80,6 +95,9 @@ impl Estado {
         // y un clon por ENTRADA visible, en cada repintado, y los repintados
         // los provoca justo lo que llena esa lista: el progreso.
         let operandos = self.operandos_vivos();
+        // Y el ajuste de columnas, por lo mismo: la cabecera y todas las
+        // filas del lote tienen que salir del MISMO.
+        let columnas = self.ajuste_de(hueco);
         hueco
             .pane
             .entries()
@@ -87,7 +105,7 @@ impl Estado {
             .enumerate()
             .skip(primera)
             .take(cuantas.min(MAX_ROWS_PER_BATCH))
-            .map(|(i, e)| self.fila(hueco, i, e, &operandos))
+            .map(|(i, e)| self.fila(hueco, i, e, &operandos, &columnas))
             .collect()
     }
 
@@ -382,27 +400,7 @@ impl Estado {
 
     /// Las filas visibles de UN hueco concreto, no del que tenga el foco.
     pub(super) fn parche_filas_de(&mut self, slot: u32) -> BridgeEnvelope<UiUpdate> {
-        let (generacion, primera, filas, total, iconos) = match self.huecos.get(&slot) {
-            Some(h) => (
-                h.pane.listing_epoch(),
-                h.primera_visible,
-                self.filas_de(h),
-                Some(h.pane.entries().len() as u64),
-                h.pane.any_icon(),
-            ),
-            None => (0, 0, Vec::new(), None, false),
-        };
-        let cambio = ViewChange::Rows {
-            slot_id: slot,
-            generation: generacion,
-            first_visible: primera,
-            rows: filas,
-            icon_column: iconos,
-            // El total va CON las filas: es la altura del desplazamiento del
-            // renderer, y el drenaje paginado no manda otra cosa —tampoco en
-            // el último lote—.
-            total_rows: total,
-        };
+        let cambio = self.cambio_de_filas_de(slot);
         // La cabecera va CON las filas: `pane.names-encoding` retranscribe la
         // ruta igual que los nombres, y ocultar mueve entradas dentro y fuera
         // del listado. Mandar solo las filas dejaba el título con la lectura
@@ -413,6 +411,51 @@ impl Estado {
             .map(|h| self.cabecera_de(slot, h))
             .into_iter();
         self.parche(std::iter::once(cambio).chain(cabecera).collect())
+    }
+
+    /// El cambio de FILAS de un hueco cualquiera, sin envolver.
+    fn cambio_de_filas_de(&self, slot: u32) -> ViewChange {
+        let (generacion, primera, filas, total, iconos) = match self.huecos.get(&slot) {
+            Some(h) => (
+                h.pane.listing_epoch(),
+                h.primera_visible,
+                self.filas_de(h),
+                Some(h.pane.entries().len() as u64),
+                h.pane.any_icon(),
+            ),
+            None => (0, 0, Vec::new(), None, false),
+        };
+        ViewChange::Rows {
+            slot_id: slot,
+            generation: generacion,
+            first_visible: primera,
+            rows: filas,
+            icon_column: iconos,
+            // El total va CON las filas: es la altura del desplazamiento del
+            // renderer, y el drenaje paginado no manda otra cosa —tampoco en
+            // el último lote—.
+            total_rows: total,
+        }
+    }
+
+    /// Los huecos cuyo ajuste de columnas ya no es el último que cruzó, con
+    /// el nuevo ya apuntado como cruzado.
+    fn ajustes_movidos(&mut self) -> Vec<u32> {
+        let ahora: Vec<(u32, Vec<norte_frontend::columns::Fitted>)> = self
+            .huecos
+            .iter()
+            .map(|(id, h)| (*id, self.ajuste_de(h)))
+            .collect();
+        let mut movidos = Vec::new();
+        for (id, ajuste) in ahora {
+            if self.ultimo_ajuste.get(&id) != Some(&ajuste) {
+                self.ultimo_ajuste.insert(id, ajuste);
+                movidos.push(id);
+            }
+        }
+        self.ultimo_ajuste
+            .retain(|id, _| self.huecos.contains_key(id));
+        movidos
     }
 
     /// Lo que cambia una marca o un scroll: las filas visibles.
@@ -450,6 +493,7 @@ impl Estado {
         i: usize,
         e: &Entry,
         operandos: &[(VPath, Option<u8>)],
+        columnas: &[norte_frontend::columns::Fitted],
     ) -> RowView {
         let bytes = e
             .path
@@ -503,7 +547,7 @@ impl Estado {
             ),
             selected: i == hueco.pane.cursor(),
             marked: hueco.pane.is_marked(e),
-            cells: self.celdas(hueco, e),
+            cells: self.celdas(hueco, e, columnas),
             badge: adorno
                 .and_then(|d| d.badge.clone())
                 .map(clamp_display)
@@ -558,14 +602,28 @@ impl Estado {
     /// puede depender de quién pinta. `None` es AUSENCIA —un directorio sin
     /// tamaño, un atributo que el provider no mandó— y viaja como tal: jamás
     /// un `0` fabricado.
-    pub(super) fn celdas(&self, hueco: &Hueco, e: &Entry) -> Vec<crate::dto::CellView> {
+    ///
+    /// Solo las de `columnas`, el ajuste del hueco (`ajuste_de`): una celda
+    /// de una columna que la cabecera cedió se pintaría sin ancho.
+    pub(super) fn celdas(
+        &self,
+        hueco: &Hueco,
+        e: &Entry,
+        columnas: &[norte_frontend::columns::Fitted],
+    ) -> Vec<crate::dto::CellView> {
         use norte_frontend::columns::{ColumnId, styled_cell_in};
         let ahora = ahora_ms();
         let esquema = hueco.pane.dir().scheme().to_owned();
-        self.columnas_de(hueco.pane.dir())
+        columnas
             .iter()
-            .filter(|c| !matches!(c, ColumnId::Builtin(norte_frontend::columns::Builtin::Name)))
-            .map(|col| {
+            .filter(|f| {
+                !matches!(
+                    f.id,
+                    ColumnId::Builtin(norte_frontend::columns::Builtin::Name)
+                )
+            })
+            .map(|f| {
+                let col = &f.id;
                 let texto = match col {
                     // Las de plugin no viven en la `Entry` sino en el
                     // side-map del pane: se resuelven por ese camino.
@@ -588,7 +646,8 @@ impl Estado {
                         ahora,
                         &self
                             .columnas
-                            .style_for_id(&esquema, otra, self.catalogo_de(&e.path)),
+                            .style_for_id(&esquema, otra, self.catalogo_de(&e.path))
+                            .compacted(f.compact),
                         self.lang,
                     ),
                 };

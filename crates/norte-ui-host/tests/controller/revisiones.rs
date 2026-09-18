@@ -652,3 +652,82 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
         "y su atributo se PIDE en el listado"
     );
 }
+
+/// La ventana ajusta las columnas con la MISMA regla que el terminal: en un
+/// hueco estrecho con nombres largos cede la clase y la fecha pasa a corta,
+/// y en uno ancho no cede nada. Cabecera y celdas salen del mismo ajuste.
+#[tokio::test]
+async fn la_ventana_cede_columnas_para_leer_los_nombres() {
+    async fn arrancar(ancho: u16) -> norte_ui_host::ViewSnapshot {
+        let mut f = Falso::default();
+        f.pon(
+            "mem:///casa",
+            (0..5).map(|i| {
+                (
+                    format!("Captura de pantalla 202{i}.png").into_bytes(),
+                    false,
+                )
+            }),
+        );
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(
+                ["name", "size", "mtime", "kind"]
+                    .map(str::to_owned)
+                    .to_vec(),
+            ),
+            ..norte_config::ColumnsConfig::default()
+        };
+        let (h, snap) = UiHost::start(UiHostOptions {
+            backend: Arc::new(f) as Arc<dyn norte_ui_host::HostBackend>,
+            initial_dir: dir(),
+            initial_dir_pedido: false,
+            attach: false,
+            locale: "es".to_owned(),
+            keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+            keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+            keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox")
+                .expect("preset"),
+            layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+            viewport: (ancho, 40),
+            settings: ajustes_de_prueba(),
+            paths: norte_ui_host::settings::HostPaths::default(),
+            theme: norte_ui_host::pickers::HostTheme::default(),
+            user_layouts: Vec::new(),
+            profile: None,
+            columns: norte_frontend::columns::ColumnsSettings::resolve(&cfg),
+            effects: norte_ui_host::commands::Efectos::Completo,
+            log_ring: None,
+        })
+        .await
+        .expect("arranca");
+        drop(h);
+        snap
+    }
+
+    let estrecho = Box::pin(arrancar(50)).await;
+    let b = listado(&estrecho);
+    let ids: Vec<&str> = b.columns.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["name", "size", "mtime"], "la clase cede primero");
+    let fecha = b.columns.iter().find(|c| c.id == "mtime").expect("fecha");
+    assert_eq!(
+        fecha.width,
+        Some(norte_frontend::columns::COMPACT_WIDTH),
+        "y la fecha pasa a corta"
+    );
+    for fila in &b.rows {
+        let celdas: Vec<&str> = fila.cells.iter().map(|c| c.column.as_str()).collect();
+        assert_eq!(celdas, ["size", "mtime"], "las celdas siguen a la cabecera");
+    }
+
+    let ancho = Box::pin(arrancar(200)).await;
+    let ids: Vec<&str> = listado(&ancho)
+        .columns
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        ["name", "size", "mtime", "kind"],
+        "con sitio no cede nada"
+    );
+}
