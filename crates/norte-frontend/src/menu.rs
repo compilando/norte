@@ -100,13 +100,15 @@ impl ItemRole {
     }
 }
 
-/// El papel de una orden del menú. Una lista y no un campo del catálogo: es
-/// una decisión de presentación, y los dos que pintan la leen de aquí.
+/// El papel de una orden del menú, DERIVADO del efecto que el catálogo le
+/// declara (ADR 0126, que reemplaza aquí la lista propia de ADR 0125): borrar
+/// se pinta como peligro y mandar datos a un modelo lleva `✦`. Era el mismo
+/// hecho que la ventana de solo lectura consultaba por su lado, en otra lista.
 #[must_use]
 pub fn role(id: &str) -> ItemRole {
-    match id {
-        "pane.delete" | "pane.delete-permanent" => ItemRole::Destructive,
-        "pane.ai-rename" | "pane.semantic-search" => ItemRole::Ai,
+    match crate::keymap::catalogue::effect(id) {
+        Some(crate::keymap::Effect::Destroys) => ItemRole::Destructive,
+        Some(crate::keymap::Effect::SendsOut) => ItemRole::Ai,
         _ => ItemRole::Normal,
     }
 }

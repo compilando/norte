@@ -19,6 +19,65 @@ pub struct CommandDef {
     pub counts: bool,
     /// Why a binding to this name may resolve to nothing.
     pub status: Status,
+    /// What running it does to the reader's world (ADR 0126). Declared on
+    /// every row, with no default, because a mutating command classed as
+    /// harmless by omission is one a read-only window would run.
+    pub effect: Effect,
+}
+
+/// What a command does to the reader's files and data — the ONE effect a
+/// reader must be warned about first (ADR 0126).
+///
+/// A read-only window runs only [`Effect::Inert`] commands, and the menu
+/// paints [`Effect::Destroys`] and [`Effect::SendsOut`] apart. *Where* a
+/// command writes (source, destination) is not this: that depends on runtime
+/// facts and is [`crate::availability::verdict`]'s question.
+///
+/// ```
+/// use norte_frontend::keymap::catalogue::{Effect, effect};
+///
+/// assert_eq!(effect("pane.copy"), Some(Effect::Writes));
+/// assert_eq!(effect("pane.delete"), Some(Effect::Destroys));
+/// // Renames too, but the listing has left the machine first.
+/// assert_eq!(effect("pane.ai-rename"), Some(Effect::SendsOut));
+/// assert!(effect("cursor.down").is_some_and(Effect::is_inert));
+/// assert_eq!(effect("pane.no-existe-jamas"), None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    /// Touches only norte's own state: the view, marks, layout, tabs, and
+    /// norte's own configuration (a saved profile, the settings). Showing a
+    /// file in the viewer is inert too — looking is what a read-only window
+    /// is for, and so is testing an archive, which answers "is it sound?"
+    /// and nothing more.
+    ///
+    /// A command that only OPENS a screen is classified by the opening.
+    /// Whatever writes from inside that screen (`app.agents` can undo a
+    /// session, a dialog can approve) is guarded where it happens, not here.
+    Inert,
+    /// Reads whole files and produces a result that leaves the screen: a
+    /// fingerprint of the reader's files (checksums), which can be copied,
+    /// compared and published. That, not the reading, is what sets it apart
+    /// from testing an archive.
+    ReadsContent,
+    /// Hands control to a program norte does not govern: an editor, the
+    /// desktop's opener, a shell, another frontend. What it then does to the
+    /// files is not norte's to say.
+    Launches,
+    /// Creates or changes the reader's files, through the journal.
+    Writes,
+    /// Deletes the reader's files, to the trash or for good.
+    Destroys,
+    /// Sends the reader's data out of the process, to an AI provider.
+    SendsOut,
+}
+
+impl Effect {
+    /// Whether a window that promised to only look may run it.
+    #[must_use]
+    pub fn is_inert(self) -> bool {
+        self == Self::Inert
+    }
 }
 
 /// Whether norte has built this command at all.
@@ -39,11 +98,12 @@ pub enum Status {
     },
 }
 
-const fn live(name: &'static str, counts: bool) -> CommandDef {
+const fn live(name: &'static str, counts: bool, effect: Effect) -> CommandDef {
     CommandDef {
         name,
         counts,
         status: Status::Live,
+        effect,
     }
 }
 
@@ -58,37 +118,45 @@ const fn live(name: &'static str, counts: bool) -> CommandDef {
 /// Esta maquinaria (fila atenuada, motivo traducido, número de issue) es la
 /// respuesta a eso, y reconstruirla costaría más que dejarla.
 #[allow(dead_code, reason = "el vocabulario está entero: ver el doc de arriba")]
-const fn planned(name: &'static str, reason: &'static str, issue: u32) -> CommandDef {
+const fn planned(
+    name: &'static str,
+    reason: &'static str,
+    issue: u32,
+    effect: Effect,
+) -> CommandDef {
     CommandDef {
         name,
         counts: false,
         status: Status::Planned { reason, issue },
+        effect,
     }
 }
+
+use Effect::{Destroys, Inert, Launches, ReadsContent, SendsOut, Writes};
 
 /// Every command either frontend knows, plus the ones a preset may honestly
 /// bind before norte builds them.
 pub const CATALOGUE: &[CommandDef] = &[
     // --- app ---
-    live("app.quit", false),
-    live("app.help", false),
-    live("app.theme", false),
-    live("app.settings", false),
-    live("app.extensions", false),
+    live("app.quit", false, Inert),
+    live("app.help", false, Inert),
+    live("app.theme", false, Inert),
+    live("app.settings", false, Inert),
+    live("app.extensions", false, Inert),
     // Las sesiones de AGENTE que este cliente ha visto pedir permiso, y el
     // deshacer de una entera (#276). Vive en el catálogo compartido —y no
     // solo en el host gráfico— porque el vocabulario de comandos es UNO: un
     // preset puede atarlo, la ayuda lo documenta, y el frontend que aún no lo
     // implementa lo dice con la misma frase que cualquier otro que no tenga.
-    live("app.agents", false),
-    live("app.palette", false),
+    live("app.agents", false, Inert),
+    live("app.palette", false, Inert),
     // «Ir a cualquier sitio» (fase 6 del programa WOW): una pantalla sobre
     // lo que ya había repartido en cinco —historia, populares, favoritos,
     // conexiones y la paleta— más una ruta tecleada y lo que encuentre el
     // índice. No sustituye a ninguna: cada una sigue teniendo su tecla, y
     // ésta es la que sirve cuando no sabes en cuál de las cinco está.
-    live("app.goto", false),
-    live("app.menu", false),
+    live("app.goto", false, Inert),
+    live("app.menu", false, Inert),
     // `--pick` (S2): being in this table only means the NAME is known to the
     // vocabulary (help, palette, rebind checks). No preset binds it — the
     // TUI's run loop decides, per keystroke, whether Enter/Ctrl+Enter means
@@ -97,73 +165,73 @@ pub const CATALOGUE: &[CommandDef] = &[
     // cannot express. A preset that bound it directly would fire outside
     // `--pick` too, which is exactly what keeping it out of every preset
     // prevents.
-    live("app.pick-accept", false),
+    live("app.pick-accept", false, Inert),
     // #135 (S4): the TUI builds these by SUSPENDING itself — it hands the
     // whole terminal over and takes it back. `app.terminal` is also live in
     // the GUI, which cannot suspend and launches the desktop's terminal
     // emulator instead; the other two are TUI-only and resolve to
     // `Availability::NotHere` there, which is the truth and is what the
     // reference sheet greys out.
-    live("app.terminal", false),
-    live("app.toggle-panels", false),
+    live("app.terminal", false, Launches),
+    live("app.toggle-panels", false, Launches),
     // Fase 9: el RELEVO entre frontends. Vive aquí y no en un preset porque
     // lo que decide si se puede hacer es estado de ejecución —hay daemon,
     // hay a dónde abrir una ventana— que un fichero de keymap no sabe
     // expresar; la disponibilidad lo dice con su motivo.
-    live("app.handoff", false),
+    live("app.handoff", false, Launches),
     // --- pane ---
-    live("pane.command-line", false),
-    live("pane.switch", false),
+    live("pane.command-line", false, Launches),
+    live("pane.switch", false, Inert),
     // --- pestañas (L1b, cierra #137) ---
     //
     // Los cuatro primeros estaban RESERVADOS aquí como `planned` desde K2, y
     // varios presets ya los ataban: `total-commander` y `krusader` los tenían
     // escritos y en gris. Construirlos con otro nombre habría dejado dos
     // vocabularios para lo mismo y esas teclas muertas para siempre.
-    live("pane.tab-new", false),
-    live("pane.tab-close", false),
-    live("pane.tab-next", false),
-    live("pane.tab-prev", false),
-    live("pane.tab-move-left", false),
-    live("pane.tab-move-right", false),
-    live("pane.tab-goto-1", false),
-    live("pane.tab-goto-2", false),
-    live("pane.tab-goto-3", false),
-    live("pane.tab-goto-4", false),
-    live("pane.tab-goto-5", false),
-    live("pane.tab-goto-6", false),
-    live("pane.tab-goto-7", false),
-    live("pane.tab-goto-8", false),
-    live("pane.tab-goto-9", false),
+    live("pane.tab-new", false, Inert),
+    live("pane.tab-close", false, Inert),
+    live("pane.tab-next", false, Inert),
+    live("pane.tab-prev", false, Inert),
+    live("pane.tab-move-left", false, Inert),
+    live("pane.tab-move-right", false, Inert),
+    live("pane.tab-goto-1", false, Inert),
+    live("pane.tab-goto-2", false, Inert),
+    live("pane.tab-goto-3", false, Inert),
+    live("pane.tab-goto-4", false, Inert),
+    live("pane.tab-goto-5", false, Inert),
+    live("pane.tab-goto-6", false, Inert),
+    live("pane.tab-goto-7", false, Inert),
+    live("pane.tab-goto-8", false, Inert),
+    live("pane.tab-goto-9", false, Inert),
     // --- layout (L1b) ---
-    live("layout.split-h", false),
-    live("layout.split-v", false),
-    live("layout.focus-next", false),
-    live("layout.focus-prev", false),
-    live("layout.close-slot", false),
-    live("layout.grow", true),
-    live("layout.shrink", true),
-    live("layout.equalize", false),
-    live("layout.set-target", false),
+    live("layout.split-h", false, Inert),
+    live("layout.split-v", false, Inert),
+    live("layout.focus-next", false, Inert),
+    live("layout.focus-prev", false, Inert),
+    live("layout.close-slot", false, Inert),
+    live("layout.grow", true, Inert),
+    live("layout.shrink", true, Inert),
+    live("layout.equalize", false, Inert),
+    live("layout.set-target", false, Inert),
     // L3: el sidebar de sitios. En la familia `layout.*` y no en `pane.*`
     // porque lo que hace es REORGANIZAR la pantalla —acopla un panel nuevo—,
     // no operar sobre un listado.
-    live("layout.places", false),
+    live("layout.places", false, Inert),
     // L3: el visor acoplado. Mismo motivo para estar en `layout.*`: acopla un
     // panel. Lo que hay DENTRO es el kind `viewer` de siempre.
-    live("layout.preview", false),
+    live("layout.preview", false, Inert),
     // Fase A: el panel de procesos y la hoja de atributos. Sin acorde en
     // ningún preset: quince `layout.*` por siete presets es #228, y ligar dos
     // aquí dejaría la familia a medias sin regla que diga qué mitad. Se
     // alcanzan desde la paleta y desde el menú.
-    live("layout.processes", false),
-    live("layout.metadata", false),
+    live("layout.processes", false, Inert),
+    live("layout.metadata", false, Inert),
     // El registro (#323). Este SÍ lleva acorde en los siete, a diferencia de
     // sus vecinos: lo que se abre aquí es lo que explica por qué acaba de
     // fallar algo, y buscarlo en la paleta justo cuando algo va mal es pedirle
     // al lector el paso de más en el peor momento. `alt+l` estaba libre en los
     // siete presets.
-    live("layout.log", false),
+    live("layout.log", false, Inert),
     // El mapa de disco (fase 4). Lleva acorde en los siete por lo mismo que el
     // registro: es un panel que se queda el TECLADO —se anda por los
     // rectángulos y se entra en uno—, y a un panel así hay que poder entrar y
@@ -176,7 +244,7 @@ pub const CATALOGUE: &[CommandDef] = &[
     // `alt+j` procesos, `alt+l` el registro—, así que o era esta o era un
     // acorde que ya significa otra cosa en el gestor que alguien viene
     // imitando. Una tecla rara se aprende; una que hace dos cosas, no.
-    live("layout.disk-map", false),
+    live("layout.disk-map", false, Inert),
     // La línea de tiempo del journal (fase 7): qué se ha hecho y hasta dónde
     // se puede volver. SIN tecla en ningún preset, y es deliberado: el
     // espacio de `alt+<letra>` para paneles está agotado —b, j, l, t, z ya
@@ -185,11 +253,11 @@ pub const CATALOGUE: &[CommandDef] = &[
     // que la mitad de los lectores no tendría y que nadie les diría por qué.
     // Se llega por la barra de paneles, que se genera del registro de kinds y
     // por tanto la tiene en LOS SIETE, y por el menú Ver.
-    live("layout.timeline", false),
+    live("layout.timeline", false, Inert),
     // El selector de disposición. Sin acorde por el mismo #228, y además
     // porque el nombre de una disposición NO es el de un preset de teclas
     // aunque coincida: el diálogo lo dice en su pie.
-    live("layout.pick", false),
+    live("layout.pick", false, Inert),
     // Los perfiles (ADR 0079). Sin acorde por el mismo #228 —atar cuatro
     // teclas nuevas en siete presets sin que nadie lo haya pedido es el error
     // contrario al que #228 arregló— y llegando por la paleta y el menú.
@@ -197,39 +265,39 @@ pub const CATALOGUE: &[CommandDef] = &[
     // El selector avisa además de que un nombre de perfil que coincide con
     // una disposición o con un preset de teclas NO es esa otra cosa: son tres
     // ajustes distintos que pueden compartir nombre.
-    live("profile.pick", false),
-    live("profile.next", false),
-    live("profile.prev", false),
-    live("profile.save-as", false),
-    live("pane.mirror", false),
-    live("pane.mirror-target", false),
-    live("pane.pull", false),
-    live("pane.swap", false),
-    live("pane.copy", false),
-    live("pane.move", false),
-    live("pane.delete", false),
-    live("pane.delete-permanent", false),
-    live("pane.mkdir", false),
-    live("pane.rename", false),
-    live("pane.rename-batch", false),
-    live("pane.refresh", false),
-    live("pane.view", false),
-    live("pane.open", false),
-    live("pane.quick-search", false),
-    live("pane.history", false),
-    live("pane.hotlist", false),
+    live("profile.pick", false, Inert),
+    live("profile.next", false, Inert),
+    live("profile.prev", false, Inert),
+    live("profile.save-as", false, Inert),
+    live("pane.mirror", false, Inert),
+    live("pane.mirror-target", false, Inert),
+    live("pane.pull", false, Inert),
+    live("pane.swap", false, Inert),
+    live("pane.copy", false, Writes),
+    live("pane.move", false, Writes),
+    live("pane.delete", false, Destroys),
+    live("pane.delete-permanent", false, Destroys),
+    live("pane.mkdir", false, Writes),
+    live("pane.rename", false, Writes),
+    live("pane.rename-batch", false, Writes),
+    live("pane.refresh", false, Inert),
+    live("pane.view", false, Inert),
+    live("pane.open", false, Launches),
+    live("pane.quick-search", false, Inert),
+    live("pane.history", false, Inert),
+    live("pane.hotlist", false, Inert),
     // La historia entera (spec 2026-09-15, fase 1). `pane.popular` es la lista
     // de la sesión ordenada por visitas (Krusader `Ctrl+Z`); `-left`/`-right`
     // nombran un LADO, como los volúmenes. Ninguno lleva contador: son listas.
-    live("pane.popular", false),
-    live("pane.history-left", false),
-    live("pane.history-right", false),
+    live("pane.popular", false, Inert),
+    live("pane.history-left", false, Inert),
+    live("pane.history-right", false, Inert),
     // `pane.select-drive*` (2026-08-10-volumes.md, closes #131): the focused
     // pane and the two sides Total Commander's `Alt+F1`/`Alt+F2` name. None
     // is a clamped mover — a drive picker has no count to take.
-    live("pane.select-drive", false),
-    live("pane.select-drive-left", false),
-    live("pane.select-drive-right", false),
+    live("pane.select-drive", false, Inert),
+    live("pane.select-drive-left", false, Inert),
+    live("pane.select-drive-right", false, Inert),
     // `pane.compare-dirs` (2026-08-11-directory-comparison.md, roadmap item 1
     // spec 1): compares the two panes and opens the diff pane. `pane.sync-dirs`
     // (2026-08-11-directory-sync.md, spec 2) is the half that WRITES, and it
@@ -239,53 +307,53 @@ pub const CATALOGUE: &[CommandDef] = &[
     // `crate::availability`, which dims it with a reason the reader can act on
     // instead of an issue number nobody can close. Neither takes a count: two
     // whole trees are a task, not a clamped mover (ADR 0044).
-    live("pane.compare-dirs", false),
+    live("pane.compare-dirs", false, Inert),
     // #312: la PAREJA, que es otra pregunta que comparar dos árboles. Se
     // delega en el programa de `[ui] diff`, así que lo que norte decide es el
     // operando —dos ficheros, o lo dice— y no el formato de la diferencia.
-    live("pane.compare-files", false),
-    live("pane.sync-dirs", false),
-    live("pane.search", false),
-    live("pane.names-encoding", false),
-    live("pane.toggle-hidden", false),
-    live("pane.columns", false),
-    live("pane.ai-rename", false),
-    live("pane.organize", false),
-    live("pane.semantic-search", false),
-    live("pane.copy-path", false),
+    live("pane.compare-files", false, Launches),
+    live("pane.sync-dirs", false, Writes),
+    live("pane.search", false, Inert),
+    live("pane.names-encoding", false, Inert),
+    live("pane.toggle-hidden", false, Inert),
+    live("pane.columns", false, Inert),
+    live("pane.ai-rename", false, SendsOut),
+    live("pane.organize", false, Writes),
+    live("pane.semantic-search", false, SendsOut),
+    live("pane.copy-path", false, Inert),
     // --- cursor (the count-aware family) ---
-    live("cursor.up", true),
-    live("cursor.down", true),
-    live("cursor.page-up", true),
-    live("cursor.page-down", true),
-    live("cursor.top", false),
-    live("cursor.bottom", false),
+    live("cursor.up", true, Inert),
+    live("cursor.down", true, Inert),
+    live("cursor.page-up", true, Inert),
+    live("cursor.page-down", true, Inert),
+    live("cursor.top", false, Inert),
+    live("cursor.bottom", false, Inert),
     // --- nav ---
-    live("nav.enter", false),
-    live("nav.parent", false),
-    live("nav.back", true),
-    live("nav.forward", true),
+    live("nav.enter", false, Inert),
+    live("nav.parent", false, Inert),
+    live("nav.back", true, Inert),
+    live("nav.forward", true, Inert),
     // El punto de salto de Krusader (`Ctrl+J`). Sin contador: hay UN punto, y
     // saltar a él cinco veces es saltar a él.
-    live("nav.jump-back", false),
-    live("nav.set-jump-point", false),
+    live("nav.jump-back", false, Inert),
+    live("nav.set-jump-point", false, Inert),
     // --- mark ---
-    live("mark.toggle", false),
-    live("mark.all", false),
-    live("mark.invert", false),
-    live("mark.clear", false),
-    live("mark.pattern-add", false),
-    live("mark.pattern-remove", false),
+    live("mark.toggle", false, Inert),
+    live("mark.all", false, Inert),
+    live("mark.invert", false, Inert),
+    live("mark.clear", false, Inert),
+    live("mark.pattern-add", false, Inert),
+    live("mark.pattern-remove", false, Inert),
     // #313: los tres huecos que Total Commander tiene en su familia Gray y
     // norte no tenía. `extension-*` actúa sobre la extensión de la entrada
     // BAJO EL CURSOR; `files`/`dirs` son aditivos como `pattern-add`; y
     // `restore` devuelve la selección de antes del último gesto en bloque,
     // que es la red del que pulsó «desmarcar todo» sin querer.
-    live("mark.extension-add", false),
-    live("mark.extension-remove", false),
-    live("mark.files", false),
-    live("mark.dirs", false),
-    live("mark.restore", false),
+    live("mark.extension-add", false, Inert),
+    live("mark.extension-remove", false, Inert),
+    live("mark.files", false, Inert),
+    live("mark.dirs", false, Inert),
+    live("mark.restore", false, Inert),
     // Marcar MOVIÉNDOSE, que es la mitad de la familia que faltaba: `space` e
     // `insert` marcan bajando y no había nada para subir ni para un tramo.
     // `toggle-up` es el espejo exacto de `mark.toggle`; los dos `page-*`
@@ -294,46 +362,46 @@ pub const CATALOGUE: &[CommandDef] = &[
     // `Shift+Home`/`Shift+End` de Krusader, que además DESMARCAN el otro lado
     // — eso es literal de su documentación y es lo que los distingue de
     // «añade un tramo».
-    live("mark.toggle-up", false),
-    live("mark.toggle-page-down", false),
-    live("mark.toggle-page-up", false),
-    live("mark.to-top", false),
-    live("mark.to-bottom", false),
+    live("mark.toggle-up", false, Inert),
+    live("mark.toggle-page-down", false, Inert),
+    live("mark.toggle-page-up", false, Inert),
+    live("mark.to-top", false, Inert),
+    live("mark.to-bottom", false, Inert),
     // --- task ---
-    live("task.cancel", false),
+    live("task.cancel", false, Inert),
     // Los tres de RECORRER el tablero estuvieron un rato en `Planned`: la
     // matriz de paridad de la fase 6 destapó que la tabla los declaraba vivos
     // sin que los implementara NINGÚN frontend. Vuelven a vivos porque la
     // ventana ya los hace (#292); el TUI sigue atando solo `task.cancel`, que
     // es una asimetría normal —lo que no es normal es que la tabla prometa lo
     // que no hace nadie.
-    live("task.next", false),
-    live("task.prev", false),
-    live("task.dismiss", false),
+    live("task.next", false, Inert),
+    live("task.prev", false, Inert),
+    live("task.dismiss", false, Inert),
     // --- viewer ---
-    live("viewer.close", false),
-    live("viewer.up", true),
-    live("viewer.down", true),
-    live("viewer.page-up", true),
-    live("viewer.page-down", true),
-    live("viewer.top", false),
-    live("viewer.bottom", false),
+    live("viewer.close", false, Inert),
+    live("viewer.up", true, Inert),
+    live("viewer.down", true, Inert),
+    live("viewer.page-up", true, Inert),
+    live("viewer.page-down", true, Inert),
+    live("viewer.top", false, Inert),
+    live("viewer.bottom", false, Inert),
     // A lo ANCHO. Con cuenta, como sus gemelas verticales: el visor no
     // envuelve, así que una línea larga se recorre igual que un fichero alto.
-    live("viewer.left", true),
-    live("viewer.right", true),
-    live("viewer.encoding", false),
-    live("viewer.encoding-auto", false),
-    live("viewer.hex", false),
+    live("viewer.left", true, Inert),
+    live("viewer.right", true, Inert),
+    live("viewer.encoding", false, Inert),
+    live("viewer.encoding-auto", false, Inert),
+    live("viewer.hex", false, Inert),
     // --- dialog ---
-    live("dialog.confirm", false),
-    live("dialog.cancel", false),
-    live("dialog.approve", false),
-    live("dialog.deny", false),
-    live("dialog.overwrite", false),
-    live("dialog.skip", false),
-    live("dialog.rename", false),
-    live("dialog.newer", false),
+    live("dialog.confirm", false, Inert),
+    live("dialog.cancel", false, Inert),
+    live("dialog.approve", false, Inert),
+    live("dialog.deny", false, Inert),
+    live("dialog.overwrite", false, Inert),
+    live("dialog.skip", false, Inert),
+    live("dialog.rename", false, Inert),
+    live("dialog.newer", false, Inert),
     // The four dialog movers are the shape that WOULD take a count, and they
     // declare `false` anyway (ADR 0044, rust-reviewer MAJOR-2): no overlay
     // dispatcher honours one. Every overlay handler resolves against this
@@ -343,24 +411,24 @@ pub const CATALOGUE: &[CommandDef] = &[
     // command. `true` here would be the catalogue claiming a capability
     // nothing implements, which is precisely the drift the shared catalogue
     // exists to end. Flip them the day an overlay learns to repeat.
-    live("dialog.up", false),
-    live("dialog.down", false),
-    live("dialog.page-up", false),
-    live("dialog.page-down", false),
-    live("dialog.add", false),
-    live("dialog.toggle-enabled", false),
-    live("dialog.remove", false),
-    live("dialog.move-up", false),
-    live("dialog.move-down", false),
-    live("dialog.sort", false),
-    live("dialog.cycle-format", false),
-    live("dialog.pane", false),
-    live("dialog.back", false),
-    live("dialog.filter", false),
+    live("dialog.up", false, Inert),
+    live("dialog.down", false, Inert),
+    live("dialog.page-up", false, Inert),
+    live("dialog.page-down", false, Inert),
+    live("dialog.add", false, Inert),
+    live("dialog.toggle-enabled", false, Inert),
+    live("dialog.remove", false, Inert),
+    live("dialog.move-up", false, Inert),
+    live("dialog.move-down", false, Inert),
+    live("dialog.sort", false, Inert),
+    live("dialog.cycle-format", false, Inert),
+    live("dialog.pane", false, Inert),
+    live("dialog.back", false, Inert),
+    live("dialog.filter", false, Inert),
     // Las listas de historia (spec 2026-09-15 D2): abrir lo elegido en el
     // OTRO panel sin mover el foco, y vaciar la lista entera.
-    live("dialog.confirm-other", false),
-    live("dialog.clear", false),
+    live("dialog.confirm-other", false, Inert),
+    live("dialog.clear", false, Inert),
     // --- planned: named by a preset, not built yet ---
     //
     // K2b imports four foreign keymaps (Total Commander, Krusader, Norton,
@@ -380,15 +448,15 @@ pub const CATALOGUE: &[CommandDef] = &[
     // —el provider de archivos sigue read-only, ADR 0018—: empaquetar, partir
     // y juntar fabrican ficheros nuevos, comprobar solo lee, y desempaquetar
     // es la copia de siempre desde el interior del archivo.
-    live("pane.pack", false),
-    live("pane.unpack", false),
-    live("pane.test-archive", false),
-    live("pane.split-file", false),
-    live("pane.combine-files", false),
+    live("pane.pack", false, Writes),
+    live("pane.unpack", false, Writes),
+    live("pane.test-archive", false, Inert),
+    live("pane.split-file", false, Writes),
+    live("pane.combine-files", false, Writes),
     // #133: norte no trae editor —lo suyo es el gestor— y F4 abre el TUYO,
     // que es lo que hacen los cuatro presets al atarlo.
-    live("pane.edit", false),
-    live("pane.edit-new", false),
+    live("pane.edit", false, Launches),
+    live("pane.edit-new", false, Writes),
     // #134's second half (`pane.sync-dirs`) left this block and is `live`
     // above; `keymap-reason-sync` went with it, out of both locales, because
     // nothing else claimed it — same disposal as `keymap-reason-shell` when
@@ -397,30 +465,30 @@ pub const CATALOGUE: &[CommandDef] = &[
     // family's reason id (`keymap-reason-shell`) went with them, out of both
     // locales, because nothing else claimed it.
     // #136: el árbol de directorios, acoplado a la izquierda del listado.
-    live("pane.tree", false),
+    live("pane.tree", false, Inert),
     // Orden por tecla (#138). `sort-menu` no abre un menú propio: abre el
     // diálogo de columnas, que es donde vive el orden desde #108 —tiene la
     // columna, la dirección y `dirs_first` en un sitio— y así no hay dos
     // pantallas que digan lo mismo con distinta letra.
-    live("pane.sort-name", false),
-    live("pane.sort-ext", false),
-    live("pane.sort-size", false),
-    live("pane.sort-time", false),
-    live("pane.sort-menu", false),
+    live("pane.sort-name", false, Inert),
+    live("pane.sort-ext", false, Inert),
+    live("pane.sort-size", false, Inert),
+    live("pane.sort-time", false, Inert),
+    live("pane.sort-menu", false, Inert),
     // #139: las propiedades salen del listado; el tamaño de una carpeta se
     // CUENTA, y por eso es una Task cancelable y no un campo del diálogo.
-    live("pane.properties", false),
+    live("pane.properties", false, Inert),
     // #314: la única categoría en la que los tres gestores de referencia TOCAN
     // y norte solo miraba. Es una mutación entera —journal con reversa,
     // política— y por eso vive aquí y no dentro del cuadro de propiedades.
-    live("pane.chmod", false),
-    live("pane.dir-size", false),
-    live("pane.checksum", false),
-    live("pane.checksum-verify", false),
+    live("pane.chmod", false, Writes),
+    live("pane.dir-size", false, Inert),
+    live("pane.checksum", false, ReadsContent),
+    live("pane.checksum-verify", false, ReadsContent),
     // #140: abrir es elegir de `connections.toml`; desconectar SUELTA la
     // sesión de verdad, no solo se va del panel.
-    live("pane.connect", false),
-    live("pane.disconnect", false),
+    live("pane.connect", false, Inert),
+    live("pane.disconnect", false, Inert),
 ];
 
 /// The entry for `name`, or `None` if the vocabulary has never heard of it —
@@ -442,6 +510,15 @@ pub const CATALOGUE: &[CommandDef] = &[
 #[must_use]
 pub fn lookup(name: &str) -> Option<&'static CommandDef> {
     CATALOGUE.iter().find(|d| d.name == name)
+}
+
+/// The [`Effect`] of `name`, or `None` if the vocabulary does not know it.
+///
+/// A caller deciding whether something may RUN must treat `None` as not
+/// inert: an unknown name is not a licence.
+#[must_use]
+pub fn effect(name: &str) -> Option<Effect> {
+    lookup(name).map(|d| d.effect)
 }
 
 #[cfg(test)]
@@ -555,6 +632,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// What a command does to the reader's world is decided ONCE, here
+    /// (ADR 0126), and a read-only window and the menu's colours are derived
+    /// from it. A command that stops being `Inert`, or starts, must fail this
+    /// test, so the argument is made in review: a mutating command classed
+    /// `Inert` is one a read-only window would run.
+    #[test]
+    fn el_conjunto_que_no_es_inerte_es_exactamente_este() {
+        use super::Effect::{Destroys, Launches, ReadsContent, SendsOut, Writes};
+        let mut actuan: Vec<(&str, super::Effect)> = CATALOGUE
+            .iter()
+            .filter(|d| !d.effect.is_inert())
+            .map(|d| (d.name, d.effect))
+            .collect();
+        actuan.sort_unstable_by_key(|(n, _)| *n);
+        assert_eq!(
+            actuan,
+            [
+                ("app.handoff", Launches),
+                ("app.terminal", Launches),
+                ("app.toggle-panels", Launches),
+                ("pane.ai-rename", SendsOut),
+                ("pane.checksum", ReadsContent),
+                ("pane.checksum-verify", ReadsContent),
+                ("pane.chmod", Writes),
+                ("pane.combine-files", Writes),
+                ("pane.command-line", Launches),
+                ("pane.compare-files", Launches),
+                ("pane.copy", Writes),
+                ("pane.delete", Destroys),
+                ("pane.delete-permanent", Destroys),
+                ("pane.edit", Launches),
+                ("pane.edit-new", Writes),
+                ("pane.mkdir", Writes),
+                ("pane.move", Writes),
+                ("pane.open", Launches),
+                ("pane.organize", Writes),
+                ("pane.pack", Writes),
+                ("pane.rename", Writes),
+                ("pane.rename-batch", Writes),
+                ("pane.semantic-search", SendsOut),
+                ("pane.split-file", Writes),
+                ("pane.sync-dirs", Writes),
+                ("pane.unpack", Writes),
+            ],
+            "un comando cambió de efecto: ver ADR 0126 antes de tocar esta lista"
+        );
     }
 
     #[test]

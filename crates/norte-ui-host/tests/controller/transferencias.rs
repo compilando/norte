@@ -2096,7 +2096,12 @@ async fn en_solo_lectura_la_paleta_no_ofrece_lo_que_muta() {
     .await
     .expect("host vivo");
     let p = siguiente_paleta(&mut sub).await.expect("la paleta abre");
-    for cmd in norte_ui_host::commands::MUTAN {
+    let solo_lectura =
+        norte_ui_host::commands::implementados(norte_ui_host::commands::Efectos::SoloLectura);
+    let no_inertes = norte_ui_host::commands::IMPLEMENTADOS
+        .iter()
+        .filter(|c| !solo_lectura.contains(c));
+    for cmd in no_inertes {
         assert!(
             !p.rows.iter().any(|r| r.text == *cmd),
             "la paleta de una ventana de solo lectura ofrece {cmd}"
