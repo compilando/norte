@@ -148,6 +148,73 @@ async fn el_relevo_escribe_suelta_y_entonces_abre_la_terminal() {
     );
 }
 
+/// Si la terminal del relevo NO se abre, la ventana se queda y lo dice
+/// (enmienda de la ADR 0123).
+///
+/// La primera versión lanzaba el emulador y se olvidaba: se quedaba diciendo
+/// «entregando la pantalla…» con la sesión ya soltada. Ahora quien hospeda
+/// avisa con `HandoffFailed`, y el host cuenta cuál de los dos fallos fue.
+#[tokio::test]
+async fn si_la_terminal_no_abre_la_ventana_se_queda_y_lo_dice() {
+    use norte_ui_host::dto::NativeEffect;
+
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    f.suelta_la_sesion = true;
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let mut nativos = h.native_effects();
+    por_la_paleta(&h, &mut sub, "handoff").await;
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(5), nativos.recv())
+        .await
+        .expect("sale el efecto del relevo")
+        .expect("canal vivo");
+    assert!(matches!(efecto, NativeEffect::HandoffToTerminal { .. }));
+
+    // Quien hospeda no encontró emulador.
+    let ack = h
+        .dispatch(UiAction::HandoffFailed { no_terminal: true })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, norte_ui_host::ActionAck::Applied { .. }),
+        "con un relevo en curso, se atiende: {ack:?}"
+    );
+    let mut dicho = String::new();
+    for _ in 0..10 {
+        dicho = siguiente_aviso(&mut sub).await;
+        if dicho.starts_with("msg-handoff-no") {
+            break;
+        }
+    }
+    assert_eq!(
+        dicho, "msg-handoff-no-terminal",
+        "dice cuál de los dos fallos"
+    );
+}
+
+/// Un `HandoffFailed` SIN relevo en curso no hace nada.
+///
+/// La acción la puede mandar cualquiera que hable con el host: sin esta
+/// guarda, bastaba con mandarla para pintar «la terminal no arrancó» sobre una
+/// ventana que no había pedido nada, y para que volviera a pedir la sesión.
+#[tokio::test]
+async fn un_handoff_failed_sin_relevo_es_obsoleto() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let ack = h
+        .dispatch(UiAction::HandoffFailed { no_terminal: false })
+        .await
+        .expect("host vivo");
+    assert!(
+        !matches!(ack, norte_ui_host::ActionAck::Applied { .. }),
+        "sin relevo no hay nada que atender: {ack:?}"
+    );
+}
+
 /// Si el daemon dice que esta conexión NO era la dueña, no se lanza nada.
 ///
 /// `released: false` no es un error, es un hecho: la sesión sigue teniendo

@@ -150,7 +150,8 @@ msg-handoff-failed = no se pudo entregar la pantalla; sigues donde estabas
 # de salida o el error del sistema, que es lo que permite averiguar por qué.
 msg-handoff-window-died = la ventana no arrancó ({ $reason }); sigues aquí, con tu pantalla
 msg-handoff-running = entregando la pantalla…
-msg-handoff-no-terminal = la pantalla se entregó pero la terminal no abrió: ábrela a mano con `ntc --attach --daemon`
+msg-handoff-no-terminal = no hay ningún emulador de terminal donde abrir `ntc`; sigues aquí, con tu pantalla
+msg-handoff-terminal-failed = el emulador de terminal no arrancó; sigues aquí, con tu pantalla
 host-handoff-not-owner = esta ventana no tiene la pantalla: la lleva otra, y sólo su dueña la puede entregar
 modal-ai-rename = Renombrado IA — instrucción
 modal-ai-rename-hint = Enter: pedir plan · Esc: cancelar

@@ -81,6 +81,10 @@
     "action": "focus_slot",
     "slot_id": 2
   },
+  "handoff_failed": {
+    "action": "handoff_failed",
+    "no_terminal": true
+  },
   "help_activate": {
     "action": "help_activate",
     "index": 1

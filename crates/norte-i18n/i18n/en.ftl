@@ -149,7 +149,8 @@ msg-handoff-failed = the screen could not be handed over; you are still where yo
 # exit code or the system error, which is what lets anyone find out why.
 msg-handoff-window-died = the window did not start ({ $reason }); you are still here, with your screen
 msg-handoff-running = handing the screen over…
-msg-handoff-no-terminal = the screen was handed over but the terminal did not open: start it yourself with `ntc --attach --daemon`
+msg-handoff-no-terminal = there is no terminal emulator to open `ntc` in; you are still here, with your screen
+msg-handoff-terminal-failed = the terminal emulator did not start; you are still here, with your screen
 host-handoff-not-owner = this window does not hold the screen: another one does, and only its owner can hand it over
 modal-ai-rename = AI rename — instruction
 modal-ai-rename-hint = Enter: request plan · Esc: cancel

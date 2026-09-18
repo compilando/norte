@@ -388,7 +388,18 @@ use serde::{Deserialize, Serialize};
 ///   `organize_scroll { down }` existe aparte de las teclas porque aprobar
 ///   exige haber llegado al final: sin un gesto para recorrer, la pantalla
 ///   era una que un lector con el ratón no podía aprobar nunca.
-pub const BRIDGE_VERSION: u32 = 72;
+/// - **73**: `handoff_failed { no_terminal }` (fase 9, enmienda de la ADR
+///   0123). La manda el hilo de los efectos nativos cuando la terminal de un
+///   relevo NO se abrió, para que la ventana se quede, recupere la sesión y
+///   lo diga. Antes la ventana lanzaba el emulador y se olvidaba: ni se
+///   cerraba al conseguirlo ni se enteraba de no conseguirlo, y se quedaba
+///   diciendo «entregando la pantalla…» con la sesión ya soltada.
+///
+///   Sin texto libre: un bool y no un motivo, porque cualquiera que hable con
+///   el host puede mandar la acción, y un motivo escrito por quien la manda
+///   sería un mensaje que el host pintaría sin haberlo escrito. Y sólo hace
+///   algo con un relevo EN CURSO; fuera de él es una acción obsoleta.
+pub const BRIDGE_VERSION: u32 = 73;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

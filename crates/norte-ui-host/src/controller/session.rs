@@ -251,6 +251,9 @@ impl Estado {
         // Ya no somos dueños: dejar de escribir es lo honesto, y el indicador
         // de la barra lo dice solo.
         self.sesion.owner = false;
+        // Y queda un relevo EN CURSO hasta que quien hospeda diga si la
+        // terminal se abrió: es lo que autoriza un `HandoffFailed`.
+        self.relevo_en_curso = true;
         // Lanzar la terminal y cerrarse es de quien hospeda. Si no puede, lo
         // dice y NO se cierra: la sesión está suelta pero la pantalla sigue
         // aquí, que es el fallo barato.
@@ -258,6 +261,35 @@ impl Estado {
             return self.decir("msg-handoff-no-terminal");
         }
         self.decir("msg-handoff-running")
+    }
+
+    /// La terminal del relevo no se abrió: esta ventana se QUEDA, recupera la
+    /// sesión que había soltado y dice por qué (fase 9).
+    ///
+    /// Es la decisión 4 de la ADR 0123 del lado de la ventana: cuando algo
+    /// falla, no pasa nada y el proceso sigue donde estaba. La pantalla está
+    /// escrita en el core, así que recuperarla es volver a pedir la propiedad
+    /// — por el camino de siempre, que es la política del escritor: si otro
+    /// frontend la reclamó entretanto, se queda con él y esta ventana sigue
+    /// suelta, que es la verdad.
+    pub(super) fn relevo_fallido(
+        &mut self,
+        no_terminal: bool,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Sólo si HAY un relevo en curso: la acción la puede mandar cualquiera
+        // que hable con el host, y sin esta comprobación bastaría con mandarla
+        // para pintar «la terminal no arrancó» sobre una ventana que no había
+        // pedido nada.
+        if !std::mem::take(&mut self.relevo_en_curso) {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        self.sesion.policy.ask_soon();
+        let clave = if no_terminal {
+            "msg-handoff-no-terminal"
+        } else {
+            "msg-handoff-terminal-failed"
+        };
+        (self.aplicada(), self.decir(clave))
     }
 
     /// El `session.put` del tic contestó.

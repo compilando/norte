@@ -3222,6 +3222,11 @@ struct Estado {
     /// Viene de un RELEVO (`--attach`, fase 9): las marcas de la sesión se
     /// reclaman. Sin él se ignoran — un arranque no es un relevo.
     attach: bool,
+    /// Esta ventana ha entregado la pantalla y espera a saber si la terminal
+    /// se abrió (fase 9). Es lo único que autoriza un `HandoffFailed`: la
+    /// acción la puede mandar cualquiera, y sin un relevo en curso no hay
+    /// nada que recuperar ni que decir.
+    relevo_en_curso: bool,
     status: StatusView,
     conexion: ConnectionView,
     /// Las sesiones de provider que viajan sin cifrar (#44), acotadas por el
@@ -3611,6 +3616,7 @@ impl Estado {
             },
             dir_pedido: initial_dir_pedido.then(|| initial_dir.clone()),
             attach,
+            relevo_en_curso: false,
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
             degradadas: norte_frontend::banners::DegradedSet::default(),
@@ -4099,6 +4105,7 @@ impl Estado {
                 self.decidir_revision_organizar(*approve, backend, buzon)
             }
             UiAction::OrganizeScroll { down } => self.recorrer_organizar(*down),
+            UiAction::HandoffFailed { no_terminal } => self.relevo_fallido(*no_terminal),
             UiAction::Resync => self.responde_con_foto(),
             UiAction::RequestQuit => self.pedir_salir(),
             UiAction::MenuOpen { menu } => self.desplegar_menu(*menu),
