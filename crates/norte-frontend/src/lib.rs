@@ -23,59 +23,59 @@
 //! 7: aquí no hay lógica de NEGOCIO. Vigilar un directorio no decide nada sobre
 //! los ficheros; dice que algo cambió y quien decide qué hacer es el frontend,
 //! por el mismo camino que su refresco manual.
+//!
+//! # Dónde está cada cosa
+//!
+//! El código fuente se agrupa en carpetas por lo que HACE: `ops/`
+//! (operaciones sobre ficheros), `navigation/` (ir a sitios), `chrome/` (lo
+//! que enmarca los paneles), `overlays/` (lo que se abre encima y pide
+//! elegir) y `view/` (cómo se enseña). Las carpetas son PRIVADAS: cada módulo
+//! se re-exporta en la raíz (`norte_frontend::chmod`), y ésa sigue siendo la
+//! única ruta pública. Un módulo nuevo va en la carpeta de su grupo y se
+//! re-exporta aquí; uno que no encaja en ninguna se queda en la raíz.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod chrome;
+mod navigation;
+mod ops;
+mod overlays;
+mod view;
+
+pub use chrome::{banners, footer, frame, keybar, menu, panelbar, splash};
+pub use navigation::{goto, history, places, tree, watch};
+pub use ops::{checksums, chmod, compare, diffpair, organize, rename_pattern};
+pub use overlays::{
+    columns_picker, connections_picker, layout_picker, palette, palette_state, profile_picker,
+    whichkey, wizard,
+};
+pub use view::{columns, diskmap, display, format, treemap, viewer};
+
 pub mod ansi;
 pub mod availability;
-pub mod banners;
 pub mod busy;
-pub mod checksums;
-pub mod chmod;
 pub mod cli;
-pub mod columns;
-pub mod columns_picker;
-pub mod compare;
 pub mod config;
 pub mod confine;
-pub mod connections_picker;
 mod decoration;
-pub mod diffpair;
-pub mod diskmap;
-pub mod display;
 pub mod error;
-pub mod footer;
-pub mod format;
-pub mod frame;
-pub mod goto;
 pub mod handoff;
 pub mod help;
 pub mod help_badge;
 pub mod help_chords;
-pub mod history;
-pub mod keybar;
 pub mod keymap;
 pub mod keysheet;
 pub mod layout;
-pub mod layout_picker;
 pub mod logpanel;
-pub mod menu;
 pub mod metadata;
 mod modal;
 pub mod mouse;
 pub mod nav;
 pub mod notes;
 pub mod openers;
-pub mod organize;
-pub mod palette;
-pub mod palette_state;
 mod pane;
-pub mod panelbar;
-pub mod places;
 pub mod plugin_config;
 pub mod processes;
-pub mod profile_picker;
-pub mod rename_pattern;
 pub mod search_status;
 pub mod secret;
 pub mod session;
@@ -84,20 +84,13 @@ pub mod shell;
 pub mod shortcuts;
 mod sort;
 pub mod space;
-pub mod splash;
 pub mod subshell;
 pub mod sync;
 pub mod tasks;
 pub mod theme;
 pub mod timeline;
-pub mod tree;
-pub mod treemap;
 pub mod version;
-pub mod viewer;
 pub mod viewport;
-pub mod watch;
-pub mod whichkey;
-pub mod wizard;
 
 pub use decoration::{
     BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration, sanitize_icon,
