@@ -1947,6 +1947,15 @@ struct Hueco {
     /// Vacío siempre que lo que vuela es una navegación: ahí las filas son de
     /// otro directorio y una marca no significa nada. Se consume al aterrizar.
     marcas_a_restaurar: Vec<VPath>,
+    /// La fila que la SESIÓN dejó bajo el cursor, hasta que llegue su listado.
+    ///
+    /// Espera por lo mismo que las marcas: sobre un pane vacío, poner el
+    /// cursor en la fila 12 es ponerlo en la 0. Se consume en el primer
+    /// aterrizaje —bueno o malo—, así que nunca cae sobre un listado posterior
+    /// de otro sitio. Es un ÍNDICE, el mismo que guarda y restaura la
+    /// terminal: un relevo tiene que caer en la misma fila en los dos
+    /// sentidos.
+    cursor_a_restaurar: Option<usize>,
     /// Hay filas mezcladas que no se han publicado todavía.
     ///
     /// El relleno se calla cuando el lote que mezcla no cambia la ventana
@@ -3374,6 +3383,7 @@ impl Hueco {
             en_vuelo: None,
             dir_pedido: None,
             marcas_a_restaurar: Vec::new(),
+            cursor_a_restaurar: None,
             filas_por_publicar: false,
             drenando: None,
             sondeando: false,
@@ -3924,6 +3934,12 @@ impl Estado {
                 // operación se llevó no se vuelve a marcar.
                 let marcas = std::mem::take(&mut hueco.marcas_a_restaurar);
                 hueco.pane.restore_marks(&marcas);
+                // Y el cursor que dejó la sesión, también TRAS `set_listing`:
+                // antes no hay filas y la fila 12 sería la 0. `set_cursor` lo
+                // acota si el directorio tiene hoy menos entradas que entonces.
+                if let Some(fila) = hueco.cursor_a_restaurar.take() {
+                    hueco.pane.set_cursor(fila);
+                }
                 // TRAS `set_listing`, que la limpia: es un dato de ESTE
                 // listado y arrastrar el del anterior sería decir que faltan
                 // entradas de un directorio en el que faltaban de otro.
@@ -3937,6 +3953,10 @@ impl Estado {
                 hueco.drenando = None;
                 hueco.pane.set_listing(dir, Vec::new());
                 hueco.marcas_a_restaurar.clear();
+                // Un listado fallido CONSUME el cursor guardado: si quedara
+                // pendiente, caería sobre el siguiente listado que llegue, que
+                // puede ser de otro sitio.
+                hueco.cursor_a_restaurar = None;
                 hueco.estado = SlotState::Error {
                     reason_key: norte_frontend::error::error_key(&e).to_owned(),
                     // CUÁL pide la contraseña. Sin esto, un arranque con dos

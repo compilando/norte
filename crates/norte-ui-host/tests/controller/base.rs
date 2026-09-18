@@ -878,6 +878,122 @@ async fn la_sesion_coloca_los_huecos() {
     );
 }
 
+/// La ventana devuelve el CURSOR que guardó la sesión, como la terminal.
+///
+/// Se vio en el primer relevo con una persona delante: la terminal tenía el
+/// cursor en `c.txt` y la ventana abrió en `/..`. Guardaba el cursor y nunca lo
+/// leía —sitio, orden, ocultos e historia sí—, así que «sigue donde estabas»
+/// se cumplía a medias. Mismo índice que usa la terminal (`restore_cursor`),
+/// para que un relevo caiga en la misma fila en los dos sentidos.
+#[tokio::test]
+async fn la_sesion_devuelve_el_cursor() {
+    let mut falso = Falso::default();
+    falso.pon(
+        "mem:///casa",
+        vec![
+            (b"a.txt".to_vec(), false),
+            (b"b.txt".to_vec(), false),
+            (b"c.txt".to_vec(), false),
+        ],
+    );
+    let mut sesion = sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut body: norte_frontend::session::SessionBody =
+        serde_json::from_value(sesion.body.clone()).expect("cuerpo");
+    body.slots.get_mut(&1).expect("hueco").cursor = 2;
+    sesion.body = serde_json::to_value(&body).expect("json");
+    *falso.sesion.lock().expect("sesión") = (sesion, true);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let (tercera, bajo_el_cursor) = foto_hasta(&h, &mut sub, "el listado con sus filas", |s| {
+        let b = listado(s);
+        let tercera = b.rows.get(2)?.display_name.clone();
+        let cursor = b.cursor?;
+        let bajo = b
+            .rows
+            .iter()
+            .find(|r| r.key == cursor)?
+            .display_name
+            .clone();
+        Some((tercera, bajo))
+    })
+    .await;
+    assert_eq!(
+        bajo_el_cursor, tercera,
+        "el cursor vuelve a la fila que guardó"
+    );
+}
+
+/// Un directorio tecleado gana a la sesión, y entonces el cursor guardado NO
+/// vale: era una fila de OTRO directorio. La misma regla que `pin_start_dir`
+/// en la terminal.
+#[tokio::test]
+async fn con_dir_tecleado_el_cursor_guardado_no_vale() {
+    let mut falso = Falso::default();
+    falso.pon(
+        "mem:///casa",
+        vec![(b"a".to_vec(), false), (b"b".to_vec(), false)],
+    );
+    falso.pon(
+        "mem:///casa/docs",
+        vec![
+            (b"x.md".to_vec(), false),
+            (b"y.md".to_vec(), false),
+            (b"z.md".to_vec(), false),
+        ],
+    );
+    let mut sesion = sesion_guardada(1, 7, 1, "mem:///casa/docs");
+    let mut body: norte_frontend::session::SessionBody =
+        serde_json::from_value(sesion.body.clone()).expect("cuerpo");
+    body.slots.get_mut(&1).expect("hueco").cursor = 2;
+    sesion.body = serde_json::to_value(&body).expect("json");
+    *falso.sesion.lock().expect("sesión") = (sesion, true);
+    let (h, _snap) = Box::pin(UiHost::start(UiHostOptions {
+        backend: Arc::new(falso),
+        initial_dir: VPath::parse("mem:///casa").expect("vpath"),
+        initial_dir_pedido: true,
+        attach: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    }))
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let (primera, bajo_el_cursor) = foto_hasta(&h, &mut sub, "el listado tecleado", |s| {
+        let b = listado(s);
+        if !b.path_display.ends_with("/casa") {
+            return None;
+        }
+        let primera = b.rows.first()?.display_name.clone();
+        let cursor = b.cursor?;
+        let bajo = b
+            .rows
+            .iter()
+            .find(|r| r.key == cursor)?
+            .display_name
+            .clone();
+        Some((primera, bajo))
+    })
+    .await;
+    assert_eq!(
+        bajo_el_cursor, primera,
+        "el cursor de `docs` no se aplica sobre `casa`"
+    );
+}
+
 /// Arranca como [`host_arbol`], con `[profile.start]` puesto.
 pub(super) async fn host_con_start(
     backend: Arc<Falso>,

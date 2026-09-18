@@ -449,6 +449,10 @@ impl Estado {
         let activo = self.activo();
         if let Some(hueco) = self.huecos.get_mut(&activo) {
             hueco.pane.begin_loading(dir);
+            // El cursor que guardó la sesión era una fila de OTRO directorio:
+            // aplicarlo sobre el tecleado pondría el cursor en una fila al
+            // azar. La misma regla que `pin_start_dir` en la terminal.
+            hueco.cursor_a_restaurar = None;
         }
     }
 
@@ -470,6 +474,10 @@ impl Estado {
             // dotfiles duraba hasta cerrar.
             hueco.pane.set_sort(estado.sort);
             hueco.pane.set_show_hidden(estado.show_hidden);
+            // El CURSOR se guardaba y no lo leía nadie: la ventana volvía al
+            // sitio y a la fila `..`. Lo aplica `aterriza_en` cuando lleguen
+            // las filas, como hace la terminal en `restore_cursor`.
+            hueco.cursor_a_restaurar = usize::try_from(estado.cursor).ok();
             hueco
                 .historial
                 .seed(estado.back.clone(), estado.forward.clone());
