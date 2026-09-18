@@ -239,6 +239,9 @@ pub enum KeyOwner {
     /// seis sitios, y el mapa se declara `multi: false`, así que hay como mucho
     /// uno y el reparto ya sabe cuál.
     DiskMap,
+    /// La línea de tiempo del journal (fase 7). Sin carga, por lo mismo que
+    /// el mapa: se declara `multi: false`, así que hay como mucho una.
+    Timeline,
     /// Un panel aportado por un PLUGIN (fase 3, ADR 0115/0116).
     ///
     /// SIN decir cuál, a propósito. `KeyOwner` se compara por igualdad en
@@ -692,6 +695,14 @@ pub struct App {
     /// —que no dice QUÉ cambió, así que lo único honesto es volver a medir—.
     /// Lo drena el bucle.
     pub disk_map_stale: bool,
+    /// La línea de tiempo tiene que (re)leerse (fase 7).
+    ///
+    /// La pone quien la ABRE y quien la hereda de una disposición guardada:
+    /// un panel adoptado no pasa por el toggle que lo habría llenado, y sin
+    /// esto se quedaba diciendo «todavía no se ha hecho nada» sobre un
+    /// journal que ni había mirado — que es la peor frase posible en una
+    /// pantalla de historial.
+    pub timeline_stale: bool,
     /// La barra de paneles está fijada (`[ui] panel_bar`, #324).
     ///
     /// Los paneles laterales se abrían por atajo, por el menú o por la paleta,
@@ -1253,6 +1264,7 @@ impl App {
             pending_panel_command: None,
             pending_disk_map_enter: None,
             disk_map_stale: false,
+            timeline_stale: false,
             // Apagada hasta que el arranque diga: un `App` de test no lee
             // configuración, y una fila que aparece sola cambiaría los
             // índices de ochenta tests que no van de esto.

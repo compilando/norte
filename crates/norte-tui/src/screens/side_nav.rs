@@ -169,6 +169,89 @@ pub fn on_processes_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifie
     }
 }
 
+/// Teclas de la línea de tiempo del journal (fase 7).
+///
+/// Cuatro cosas: moverse, pedir más historia al llegar abajo, devolver el
+/// teclado a los listados, y preguntar si se deshace hasta la fila señalada.
+///
+/// Es `async` porque dos de ellas necesitan el backend, y por lo mismo que el
+/// mapa NO navega desde su handler: pedir una página es I/O, y aquí sí se
+/// puede esperar porque este handler ya vive en el bucle.
+///
+/// **Intro no deshace: pregunta.** Y la pregunta lleva el RECUENTO, que se
+/// calcula sobre lo que hay cargado —todo lo posterior al cursor lo está, por
+/// definición: se pagina hacia atrás desde lo más nuevo—. Deshacer sin decir
+/// cuánto sería la peor tecla de este programa.
+pub async fn on_timeline_key(
+    app: &mut App,
+    backend: &Backend,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return;
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return;
+        }
+        Resolution::Reset => return,
+    };
+    let Some(slot) = app.timeline_slot() else {
+        return;
+    };
+    match cmd.as_str() {
+        "dialog.up" => {
+            if let Some(t) = app.panes.timeline_mut(slot) {
+                t.up();
+            }
+        }
+        "dialog.down" => {
+            let (al_final, cursor) = app.panes.timeline_mut(slot).map_or((false, None), |t| {
+                t.down();
+                (t.cursor() + 1 >= t.len(), t.next_before_seq())
+            });
+            // Llegar abajo pide la siguiente página. Es el único momento en
+            // que se pide más: una lista que se cargara entera al abrir
+            // traería meses de journal para enseñar doce filas.
+            if al_final && let Some(desde) = cursor {
+                crate::dispatch::cargar_timeline(app, backend, Some(desde)).await;
+            }
+        }
+        "dialog.cancel" | "dialog.pane" | "pane.switch" => app.return_keys_to_panes(),
+        "dialog.confirm" => {
+            let Some(tl) = app.panes.timeline(slot) else {
+                return;
+            };
+            let (Some(seq), resumen) = (tl.corte(), tl.resumen()) else {
+                return;
+            };
+            // Un corte que no se lleva nada NO abre un diálogo: preguntar
+            // «¿seguro?» por algo que no va a pasar enseña a decir que sí sin
+            // leer, que es la forma de que la siguiente pregunta —una que sí
+            // importa— tampoco se lea.
+            if resumen.no_hace_nada() {
+                app.message = Some(t("timeline-undo-nothing"));
+                return;
+            }
+            app.modal = Some(crate::app::Modal::ConfirmUndoAfter {
+                seq,
+                a_deshacer: resumen.a_deshacer,
+                irreversibles: resumen.irreversibles,
+                ajenas: resumen.ajenas,
+            });
+        }
+        _ => {}
+    }
+}
+
 /// Teclas del mapa de disco (fase 4).
 ///
 /// Dos capas, como en el panel de registro y por el mismo motivo. Primero las

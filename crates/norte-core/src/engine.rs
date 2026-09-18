@@ -770,9 +770,14 @@ impl Engine {
                 // El motivo lleva el fichero y va al LOG del operador; la
                 // categoría que cruza al frontend no lleva ninguno de los dos
                 // (ver el rustdoc de la variante).
+                // «Operación» y no «mutación»: desde la fase 7 esta puerta la
+                // cruza también una LECTURA (`journal_page`, la línea de
+                // tiempo), y decirle al operador que se rehusó una mutación
+                // cuando alguien sólo abrió una pantalla es una línea de log
+                // que manda a buscar un cambio que no existió.
                 tracing::error!(
                     motivo = %motivo,
-                    "mutación rehusada: el journal de esta sesión no se puede abrir (#178)"
+                    "operación rehusada: el journal de esta sesión no se puede abrir (#178)"
                 );
                 Err(Error::JournalUnavailable)
             } // SIN brazo comodín, y eso es el fail-closed: `NoJournal` es
@@ -3929,11 +3934,20 @@ impl Engine {
     /// compensaciones llevan el actor real). El caso «humano deshace la sesión
     /// de un agente» (performer ≠ target) es [`Self::undo_session_for`].
     ///
-    /// El undo pasa por el gate de policy (M3-3, regla 9): cada reversa se evalúa
-    /// como su `PolicyOp` inverso ANTES de resolver el provider; una denegación
-    /// para el bucle LIFO (`report.blocked`). Gatear antes de `provider_for`
-    /// evita además establecer conexiones remotas dirigidas por el journal sin
-    /// pasar por policy.
+    /// El undo pasa por el gate de policy (M3-3, regla 9): cada reversa se
+    /// evalúa como su `PolicyOp` inverso, unidad a unidad, DENTRO de la Task
+    /// (#171); una denegación bloquea esa unidad y el bucle sigue con las
+    /// demás (`report.denied`), mientras que un conflicto real sí para el
+    /// LIFO (`report.blocked`).
+    ///
+    /// **El provider se resuelve ANTES que el gate**, en la planificación, y
+    /// eso hay que escribirlo porque el texto de aquí decía lo contrario: al
+    /// mover el gate dentro de la Task, `provider_for` se quedó fuera. O sea
+    /// que el journal sí puede dirigir la apertura de una conexión remota
+    /// antes de que la policy opine sobre la reversa. Se acepta porque
+    /// resolver un provider no muta nada y las rutas del journal las escribió
+    /// este mismo core; lo que no se acepta es que el rustdoc afirme una
+    /// garantía que el código no da.
     ///
     /// # Errors
     /// [`Error::JournalUnavailable`] si el journal de esta sesión existe pero no
@@ -3978,7 +3992,119 @@ impl Engine {
             .revertible_for(target)
             .await
             .map_err(Error::from)?;
+        self.undo_entries(entries, executor).await
+    }
 
+    /// Deshace, en LIFO, lo que el HUMANO hizo DESPUÉS de `after_seq` (fase 7
+    /// del programa WOW, `journal.undo_after`).
+    ///
+    /// La entrada `after_seq` se queda: es el estado al que se quiere volver.
+    ///
+    /// Es [`Self::undo_session_for`] con otro criterio de SELECCIÓN y nada
+    /// más — las mismas unidades, el mismo gate de policy por unidad, el
+    /// mismo LIFO estricto que para en el primer bloqueo, los mismos
+    /// contadores y el mismo informe—. Eso no es una coincidencia que haya
+    /// que mantener a mano: las dos llaman al mismo cuerpo privado, donde
+    /// vive todo eso una sola vez. Un segundo undo «parecido» escrito aparte
+    /// habría divergido en la primera regla que alguien afinara.
+    ///
+    /// Un LOTE entra entero o no entra: si el corte cae en medio de uno, ese
+    /// lote se queda fuera completo. Partirlo revertiría media unidad
+    /// creyéndola entera, y meterlo entero desharía entradas anteriores al
+    /// corte. El porqué, con la forma de la consulta, está sobre
+    /// `SELECT_REVERTIBLE_AFTER`.
+    ///
+    /// # Errors
+    /// Las de [`Self::undo_session_for`], y [`Error::NotFound`] si `seq` no
+    /// nombra ninguna entrada — un corte que no existe no se interpreta como
+    /// «desde el principio».
+    ///
+    /// # Panics
+    /// Como [`Self::undo_session`] (Mutex del reporte envenenado; no ocurre).
+    pub async fn undo_after(
+        &self,
+        after_seq: i64,
+    ) -> Result<(TaskHandle, Arc<std::sync::Mutex<crate::UndoReport>>), Error> {
+        self.journal_gate().await?;
+        let journal = self.journal().await.ok_or(Error::Unsupported)?;
+        // El corte tiene que NOMBRAR una entrada que existe, y no sólo ser un
+        // número. `seq > 0` seleccionaría TODO lo del humano desde el
+        // principio de los tiempos, y ese cero es justo lo que sale de un
+        // cursor rancio o de un cliente que traduce «no hay nada señalado» a
+        // cero. Deshacer de menos se vuelve a pedir; deshacer la historia
+        // entera de alguien porque su cliente mandó un cero, no.
+        //
+        // Comprobarlo contra el journal, y no con un `>= 1` a secas, cubre
+        // además el cursor de una entrada que ya no está.
+        if journal
+            .journal()
+            .entry_hash_at(after_seq)
+            .await
+            .map_err(Error::from)?
+            .is_none()
+        {
+            return Err(Error::NotFound);
+        }
+        let entries = journal
+            .journal()
+            .revertible_for_after(&crate::journal::Actor::User, after_seq)
+            .await
+            .map_err(Error::from)?;
+        self.undo_entries(entries, crate::journal::Actor::User)
+            .await
+    }
+
+    /// Una PÁGINA del journal hacia atrás (fase 7, `journal.list`).
+    ///
+    /// Lectura pura: no toca nada y no pasa por el gate de policy, que
+    /// gobierna mutaciones. Quién puede preguntarlo lo decide el borde —el
+    /// daemon sólo se lo sirve a una conexión humana—, que es donde se sabe
+    /// quién está al otro lado del socket.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] sin journal; la categoría propia de un journal
+    /// ILEGIBLE (#178), que no es lo mismo; [`Error::Internal`] de sqlite.
+    pub async fn journal_page(
+        &self,
+        before_seq: Option<i64>,
+        limit: u32,
+        actor_kind: Option<&str>,
+    ) -> Result<Vec<crate::journal::PageEntry>, Error> {
+        self.journal_gate().await?;
+        let journal = self.journal().await.ok_or(Error::Unsupported)?;
+        // El tope se aplica AQUÍ y no sólo en cada borde: los dos que hay hoy
+        // lo hacen, y el tercero que venga heredaría la cota en vez de tener
+        // que acordarse de ponerla.
+        let limit = limit.clamp(1, norte_proto::methods::JOURNAL_LIST_MAX_PAGE);
+        journal
+            .journal()
+            .page(before_seq, limit, actor_kind)
+            .await
+            .map_err(Error::from)
+    }
+
+    /// El cuerpo COMPARTIDO de un undo: agrupa en unidades, resuelve el
+    /// provider de cada una, y lanza la Task que las revierte en LIFO con el
+    /// gate de policy unidad a unidad.
+    ///
+    /// Lo que varía entre deshacer una sesión y deshacer hasta un punto es
+    /// QUÉ entradas entran, y eso lo decide el llamante. Todo lo demás —y es
+    /// donde están las reglas que duelen si divergen— vive aquí.
+    ///
+    /// # Errors
+    /// Las de [`Self::undo_session_for`].
+    ///
+    /// # Panics
+    /// Como [`Self::undo_session`] (Mutex del reporte envenenado; no ocurre).
+    async fn undo_entries(
+        &self,
+        entries: Vec<crate::journal::JournalEntry>,
+        executor: crate::journal::Actor,
+    ) -> Result<(TaskHandle, Arc<std::sync::Mutex<crate::UndoReport>>), Error> {
+        // El journal se vuelve a pedir aquí y no se recibe del llamante: es
+        // el que viaja DENTRO de la Task para escribir las compensaciones, y
+        // cada llamante ya comprobó el suyo para poder leer las entradas.
+        let journal = self.journal().await.ok_or(Error::Unsupported)?;
         let report = Arc::new(std::sync::Mutex::new(crate::UndoReport::default()));
 
         // Un lote (`fs.rename_batch`) es UNA unidad: se revierte entero o no se

@@ -41,6 +41,7 @@ commands = [
     "layout.metadata",
     "layout.log",
     "layout.disk-map",
+    "layout.timeline",
     "layout.pick",
 
     "profile.pick",
@@ -388,6 +389,33 @@ which is what explains a failure, and no key in this panel can raise them. The
 file `norte paths` points at holds everyone's at that level, and the same cap
 holds on the far side: the daemon's ring applies it in the process that owns it,
 which is where it has to be.
+
+{{cmd:layout.timeline}} opens the timeline: what has been done on this machine,
+newest first, with the time, who did it — you, an agent or an extension, and the
+dot's colour says which — the verb and what it was done to. A batch shows as
+**one** row and says how many entries it carries, because it is undone whole or
+not at all. Reaching the bottom asks for more history; it is not all loaded when
+it opens.
+
+Pointing at a row and pressing {{cmd:dialog.confirm}} asks whether to undo **what
+you did after it**. The row you point at stays: it is the state you want to get
+back to, not the first casualty. The question carries the count before you
+answer, in three numbers that do not add up to one: what will be undone, what
+will be skipped — what has no way back, what you already undid — and what is not
+yours, which this undo never touches (an agent's work is undone from its own
+screen). If there is nothing of yours above that row, no dialog opens and it
+says so: asking about something that will not happen teaches you to say yes
+without reading.
+
+Undoing runs as a task, with its progress and its cancel, in reverse order, and
+it stops the moment something does not line up — if a file is no longer where it
+was, it stops there and tells you, instead of guessing onward. What has no way
+back is not invented: it is counted and skipped.
+
+It has no keyboard shortcut in any preset, deliberately: the `alt+letter` space
+for panels is taken and none is free across all seven, so binding it in some and
+not others would be a feature half the readers do not have. It is in the panel
+bar — which carries them all — and in the View menu.
 
 {{cmd:layout.metadata}} opens a details panel on the right that also follows
 the cursor: name, kind, size, when it was last modified, and whatever the

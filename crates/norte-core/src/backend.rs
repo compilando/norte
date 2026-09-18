@@ -2337,6 +2337,57 @@ impl Backend {
         }
     }
 
+    /// Una página de la línea de tiempo del journal (`journal.list`, 0.76.0,
+    /// fase 7): de la más nueva hacia atrás, `before_seq` exclusivo.
+    ///
+    /// Funciona EMBEBIDO, al contrario que [`Backend::undo_session`]: lo que
+    /// aquél no puede contestar sin daemon son las sesiones de agente, y esto
+    /// es el journal de esta máquina, que el engine embebido tiene delante.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo. `Unsupported` sin journal; contra un daemon,
+    /// `PolicyDenied` si la conexión no es humana.
+    pub async fn journal_list(
+        &self,
+        before_seq: Option<i64>,
+        limit: u32,
+        actor_kind: Option<&str>,
+    ) -> Result<norte_proto::methods::JournalListResult, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let limit = limit.clamp(1, norte_proto::methods::JOURNAL_LIST_MAX_PAGE);
+                let entries = engine.journal_page(before_seq, limit, actor_kind).await?;
+                // El MISMO cálculo de cursor que el daemon, porque es la
+                // misma función: dos copias de esta expresión es lo que la
+                // revisión de protocolo señaló, y ninguna podía ponerse roja
+                // por su cuenta.
+                Ok(crate::journal::page_to_wire(&entries, limit))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.journal_list(before_seq, limit, actor_kind).await,
+        }
+    }
+
+    /// Deshace lo que el humano hizo DESPUÉS de `seq` (`journal.undo_after`,
+    /// 0.76.0, fase 7). La entrada señalada se queda.
+    ///
+    /// También embebido, por lo mismo que [`Backend::journal_list`]: deshacer
+    /// lo propio no necesita daemon. El informe se lee como el de cualquier
+    /// undo.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; `Unsupported` sin journal.
+    pub async fn undo_after(&self, seq: i64) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let (handle, _report) = engine.undo_after(seq).await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.undo_after(seq).await.map(TaskRef::from),
+        }
+    }
+
     /// Informe de una Task de undo (`policy.undo_report`, #71): qué se
     /// deshizo, qué se saltó y por qué, dónde se bloqueó el LIFO. Snapshot;
     /// definitivo cuando la Task es terminal.

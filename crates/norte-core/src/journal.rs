@@ -152,6 +152,90 @@ const SELECT_REVERTIBLE_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_k
        ) \
      ORDER BY seq DESC";
 
+/// Una PÁGINA hacia atrás para la línea de tiempo (fase 7).
+///
+/// `?1` es la cota superior EXCLUSIVA (`NULL` = desde la más nueva) y `?2`
+/// la clase de actor (`NULL` = todas). El `IS NULL OR` de cada una es lo que
+/// permite una sola sentencia para las cuatro combinaciones, en vez de
+/// construir SQL por concatenación — que es como se acaba metiendo en una
+/// consulta algo que vino de fuera.
+///
+/// Las compensaciones (`undoes_seq IS NOT NULL`) SÍ salen: son mutaciones
+/// que ocurrieron, y una línea de tiempo que las escondiera enseñaría un
+/// pasado que no pasó — «deshice esto» es un suceso tan real como lo que
+/// deshizo.
+/// La columna 12 de las dos que siguen: si la entrada YA está deshecha, o
+/// sea si tiene una compensación VIVA.
+///
+/// Es la MISMA condición que usa [`SELECT_REVERTIBLE`] para descartarla, y
+/// por eso se escribe una vez y se pega en las dos: si divergieran, la línea
+/// de tiempo prometería deshacer entradas que el undo se va a saltar — que
+/// es exactamente el número que una confirmación no puede tener mal.
+///
+/// El cliente NO puede calcularlo: la compensación puede estar fuera de la
+/// página que tiene delante.
+const COL_UNDONE: &str = "(seq IN ( \
+       SELECT c.undoes_seq FROM journal c \
+       WHERE c.undoes_seq IS NOT NULL \
+         AND c.seq NOT IN (SELECT d.undoes_seq FROM journal d WHERE d.undoes_seq IS NOT NULL) \
+     ))";
+
+/// La página, con [`COL_UNDONE`] pegado detrás de las doce de siempre.
+fn select_page(con_batch: bool) -> String {
+    let batch = if con_batch { "batch_id" } else { "NULL" };
+    format!(
+        "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, {batch}, {COL_UNDONE} \
+         FROM journal \
+         WHERE seq >= 1 AND (?1 IS NULL OR seq < ?1) AND (?2 IS NULL OR actor_kind = ?2) \
+         ORDER BY seq DESC LIMIT ?3"
+    )
+}
+
+/// [`SELECT_REVERTIBLE`] acotado a lo POSTERIOR a un `seq` (fase 7).
+///
+/// Mismo cuerpo, dos condiciones más. Se duplica en vez de componerse porque
+/// la condición de «compensada viva» es la parte delicada de esta consulta
+/// —su porqué está sobre [`SELECT_REVERTIBLE`]— y un constructor de SQL que
+/// la pegue por trozos es la forma de que un día deje de estar.
+///
+/// **Un LOTE entra entero o no entra** (`batch_id NOT IN (…seq <= corte)`),
+/// y ésta es la condición que de verdad importa aquí. `revertible_for` no la
+/// necesitaba: traía TODAS las entradas del actor, así que un `batch_id`
+/// siempre llegaba completo a `undo_units`. Al cortar por `seq` deja de ser
+/// cierto, y `revert_batch` —que revierte «entero o nada»— recibiría media
+/// unidad creyéndola entera: su propio `debug_assert` sólo comprueba que el
+/// trozo sea internamente coherente, y un trozo lo es. El resultado sería un
+/// `fs.rename_batch` con la mitad de los nombres devueltos y la otra mitad
+/// no, con compensaciones escritas para la mitad que se movió.
+///
+/// Y NO se resuelve metiendo el lote entero: eso desharía entradas anteriores
+/// al corte, o sea la fila que el humano señaló para conservar. Se excluye,
+/// que es la dirección segura — deshacer de menos se vuelve a pedir; deshacer
+/// de más, no. Los seqs de un lote pueden además no ser contiguos (dos tareas
+/// concurrentes se intercalan, como dice `alloc_batch`), así que esto no se
+/// puede dejar en manos de que el corte «caiga entre lotes».
+const SELECT_REVERTIBLE_AFTER: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id \
+     FROM journal \
+     WHERE seq >= 1 AND seq > ?3 AND undoes_seq IS NULL AND actor_kind = ?1 AND actor_id IS ?2 \
+       AND seq NOT IN ( \
+         SELECT c.undoes_seq FROM journal c \
+         WHERE c.undoes_seq IS NOT NULL \
+           AND c.seq NOT IN (SELECT d.undoes_seq FROM journal d WHERE d.undoes_seq IS NOT NULL) \
+       ) \
+       AND (batch_id IS NULL OR batch_id NOT IN ( \
+         SELECT b.batch_id FROM journal b WHERE b.batch_id IS NOT NULL AND b.seq <= ?3 \
+       )) \
+     ORDER BY seq DESC";
+const SELECT_REVERTIBLE_AFTER_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, NULL \
+     FROM journal \
+     WHERE seq >= 1 AND seq > ?3 AND undoes_seq IS NULL AND actor_kind = ?1 AND actor_id IS ?2 \
+       AND seq NOT IN ( \
+         SELECT c.undoes_seq FROM journal c \
+         WHERE c.undoes_seq IS NOT NULL \
+           AND c.seq NOT IN (SELECT d.undoes_seq FROM journal d WHERE d.undoes_seq IS NOT NULL) \
+       ) \
+     ORDER BY seq DESC";
+
 /// Errores del journal.
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
@@ -237,6 +321,26 @@ impl Reversal {
             Reversal::SetModeBack => "set_mode_back",
         }
     }
+
+    /// La reversa que nombra esa etiqueta, o `None` si este binario no la
+    /// conoce.
+    ///
+    /// `None` NO es «irreversible»: es «no sé qué es esto», y quien pregunte
+    /// tiene que decidir qué hacer con esa diferencia. La línea de tiempo la
+    /// cuenta como SIN vuelta, porque en un journal manipulado —o escrito
+    /// por una versión que no es ésta— afirmar que algo se puede deshacer es
+    /// la mentira que cuesta cara.
+    #[must_use]
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "delete" => Some(Reversal::Delete),
+            "rename_back" => Some(Reversal::RenameBack),
+            "restore_trash" => Some(Reversal::RestoreTrash),
+            "irreversible" => Some(Reversal::Irreversible),
+            "set_mode_back" => Some(Reversal::SetModeBack),
+            _ => None,
+        }
+    }
 }
 
 /// Una entrada del journal materializada para LECTURA (undo M3-2, audit M3-5,
@@ -276,6 +380,108 @@ pub struct JournalEntry {
     /// mutación suelta — y para toda entrada escrita antes de que existieran
     /// los lotes.
     pub batch_id: Option<i64>,
+}
+
+/// Una entrada tal y como la sirve [`Journal::page`]: la entrada, más si YA
+/// está deshecha.
+///
+/// «Deshecha» no es un campo de la tabla: es que exista una compensación
+/// suya VIVA, y eso se calcula con una subconsulta (`COL_UNDONE`). Viaja
+/// pegada a la entrada porque el cliente no puede deducirlo — la
+/// compensación puede estar fuera de su página — y sin ello una línea de
+/// tiempo cuenta como deshacible lo que el undo se va a saltar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageEntry {
+    /// La entrada.
+    pub entry: JournalEntry,
+    /// Si tiene una compensación viva.
+    pub undone: bool,
+}
+
+impl PageEntry {
+    /// Esta entrada en su forma de WIRE, para la línea de tiempo
+    /// ([`norte_proto::methods::JOURNAL_LIST`], fase 7).
+    ///
+    /// Vive aquí y no en el daemon porque los dos backends la necesitan: el
+    /// embebido contesta la misma lista sin socket de por medio, y dos
+    /// conversiones para la misma pregunta divergen en el primer campo que
+    /// alguien añada.
+    ///
+    /// Las rutas salen SANEADAS (`mask_terminal_hazards`) y con
+    /// [`norte_proto::methods::JournalRow::hostile`] puesta si el texto dejó
+    /// de decir lo que decían los bytes. El nombre de un fichero lo elige
+    /// quien lo crea —incluido un agente dentro de su recinto—, y ésta es la
+    /// pantalla donde un humano decide qué revertir: un override bidi o una
+    /// secuencia de escape aquí repintan esa decisión. Es el mismo trato que
+    /// `fs.search` le da a la línea que devuelve, y por el mismo motivo.
+    ///
+    /// Que los bytes no sean texto no tira la fila: se enseña con
+    /// reemplazos. Una mutación que no se ve es indistinguible de una que no
+    /// ocurrió.
+    #[must_use]
+    pub fn to_wire_row(&self) -> norte_proto::methods::JournalRow {
+        let e = &self.entry;
+        let (path, path_hostil) = texto_de_ruta(&e.path);
+        let (path_to, to_hostil) = match &e.path_to {
+            Some(b) => {
+                let (t, h) = texto_de_ruta(b);
+                (Some(t), h)
+            }
+            None => (None, false),
+        };
+        norte_proto::methods::JournalRow {
+            seq: e.seq,
+            ts_ms: e.ts_ms,
+            actor_kind: e.actor_kind.clone(),
+            actor_id: e.actor_id.clone(),
+            op: e.op.clone(),
+            path,
+            path_to,
+            hostile: path_hostil || to_hostil,
+            // Un token de `reversal` que este daemon no conoce cuenta como
+            // SIN vuelta: en un journal manipulado, afirmar que algo se
+            // puede deshacer es la mentira cara.
+            reversible: Reversal::from_str_opt(&e.reversal)
+                .is_some_and(|r| r != Reversal::Irreversible),
+            undoes_seq: e.undoes_seq,
+            undone: self.undone,
+            batch_id: e.batch_id,
+        }
+    }
+}
+
+/// Una página en su forma de wire, con el CURSOR ya calculado.
+///
+/// Vive aquí, junto a [`PageEntry::to_wire_row`], y por la misma razón: los
+/// dos bordes que sirven `journal.list` —el daemon y el backend embebido—
+/// tenían esta misma expresión de seis fichas copiada, y ninguna de las dos
+/// copias podía ponerse roja sola.
+///
+/// **El cursor sólo se ofrece si la página vino LLENA.** Con una a medias ya
+/// no queda nada más viejo, y ofrecerlo haría que el cliente pidiera otra
+/// vuelta para recibir cero filas, indefinidamente. Y es el `seq` de la
+/// última servida, nunca `seq - 1`: los `seq` no son densos, y esa resta es
+/// justo la aritmética que se rompe el día que dejen de serlo.
+#[must_use]
+pub fn page_to_wire(entries: &[PageEntry], limit: u32) -> norte_proto::methods::JournalListResult {
+    let lleno = entries.len() == limit as usize;
+    norte_proto::methods::JournalListResult {
+        rows: entries.iter().map(PageEntry::to_wire_row).collect(),
+        // El `flatten` no es adorno: con `limit` cero —que ningún borde deja
+        // pasar, pero que nadie de aquí abajo puede garantizar— una página
+        // vacía contaría como «llena», y esto la salva de anunciar un cursor
+        // que no existe.
+        next_before_seq: lleno.then(|| entries.last().map(|e| e.entry.seq)).flatten(),
+    }
+}
+
+/// El texto pintable de unos bytes de ruta, y si dejó de decir lo que ellos
+/// decían (por no ser texto, o por llevar algo que un terminal ejecutaría).
+fn texto_de_ruta(bytes: &[u8]) -> (String, bool) {
+    let crudo = String::from_utf8_lossy(bytes);
+    let saneado = norte_encoding::mask_terminal_hazards(&crudo);
+    let hostil = matches!(crudo, std::borrow::Cow::Owned(_)) || saneado != crudo;
+    (saneado, hostil)
 }
 
 /// Materializa un `JournalEntry` desde una fila con el orden de columnas
@@ -1544,6 +1750,64 @@ impl Journal {
         let rows = sqlx::query(self.pick(SELECT_ENTRIES, SELECT_ENTRIES_NO_BATCH))
             .fetch_all(&self.pool)
             .await?;
+        rows.iter().map(row_to_entry).collect()
+    }
+
+    /// Una PÁGINA de entradas hacia atrás, de la más nueva a la más vieja
+    /// (fase 7): las anteriores a `before_seq` —`None` = desde la última—,
+    /// como mucho `limit`, y sólo las de `actor_kind` si se da uno.
+    ///
+    /// A diferencia de [`Self::entries`], que trae el journal ENTERO y es
+    /// para auditar, esto es lo que lee una pantalla: acotado por
+    /// construcción, porque un journal de meses no cabe en la memoria de
+    /// nadie.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`].
+    pub async fn page(
+        &self,
+        before_seq: Option<i64>,
+        limit: u32,
+        actor_kind: Option<&str>,
+    ) -> Result<Vec<PageEntry>, JournalError> {
+        let sql = select_page(self.has_batch_id);
+        let rows = sqlx::query(&sql)
+            .bind(before_seq)
+            .bind(actor_kind)
+            .bind(i64::from(limit))
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(PageEntry {
+                    entry: row_to_entry(r)?,
+                    undone: r.try_get::<bool, _>(12)?,
+                })
+            })
+            .collect()
+    }
+
+    /// Como [`Self::revertible_for`], pero sólo lo POSTERIOR a `after_seq`
+    /// (fase 7, base de [`crate::Engine::undo_after`]).
+    ///
+    /// La entrada `after_seq` NO entra: es el punto al que se quiere volver,
+    /// no la primera víctima.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`].
+    pub async fn revertible_for_after(
+        &self,
+        actor: &Actor,
+        after_seq: i64,
+    ) -> Result<Vec<JournalEntry>, JournalError> {
+        let (actor_kind, actor_id) = actor.parts();
+        let rows =
+            sqlx::query(self.pick(SELECT_REVERTIBLE_AFTER, SELECT_REVERTIBLE_AFTER_NO_BATCH))
+                .bind(actor_kind)
+                .bind(actor_id)
+                .bind(after_seq)
+                .fetch_all(&self.pool)
+                .await?;
         rows.iter().map(row_to_entry).collect()
     }
 
@@ -3702,5 +3966,432 @@ CREATE TABLE IF NOT EXISTS journal (
             .is_err(),
             "record sobre readonly DEBE fallar"
         );
+    }
+
+    /// Escribe `n` mutaciones del humano y devuelve sus `seq`.
+    async fn del_humano(j: &Journal, n: usize) -> Vec<i64> {
+        let mut seqs = Vec::new();
+        for i in 0..n {
+            let seq = j
+                .record(
+                    "created",
+                    format!("file:///a/{i}").as_bytes(),
+                    None,
+                    Reversal::Delete,
+                    None,
+                    &Actor::User,
+                )
+                .await
+                .expect("record");
+            seqs.push(seq);
+        }
+        seqs
+    }
+
+    /// La página va de la más NUEVA hacia atrás, respeta el tope, y el
+    /// `before_seq` es ESTRICTO: la entrada señalada no vuelve a salir, que
+    /// es lo que hace que paginar termine en vez de repetir una fila para
+    /// siempre.
+    #[tokio::test]
+    async fn la_pagina_va_hacia_atras_y_before_seq_es_estricto() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let seqs = del_humano(&j, 5).await;
+
+        let primera = j.page(None, 2, None).await.expect("page");
+        assert_eq!(
+            primera.iter().map(|e| e.entry.seq).collect::<Vec<_>>(),
+            vec![seqs[4], seqs[3]],
+            "las dos más nuevas, en ese orden"
+        );
+
+        let segunda = j.page(Some(seqs[3]), 2, None).await.expect("page");
+        assert_eq!(
+            segunda.iter().map(|e| e.entry.seq).collect::<Vec<_>>(),
+            vec![seqs[2], seqs[1]],
+            "sigue por debajo de la última servida, sin repetirla"
+        );
+    }
+
+    /// **Paginar hasta el final devuelve cada entrada UNA vez y termina**
+    /// (hallazgo de la revisión de protocolo: la regla del cursor estaba
+    /// escrita dos veces y probada cero).
+    ///
+    /// Es el contrato entero en un test: sin repetir, sin saltarse ninguna,
+    /// en orden descendente, y con `next_before_seq` a `None` exactamente
+    /// cuando ya no queda nada más viejo.
+    #[tokio::test]
+    async fn paginar_hasta_el_final_no_repite_ni_se_salta_nada() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let seqs = del_humano(&j, 5).await;
+
+        let mut vistas = Vec::new();
+        let mut cursor = None;
+        let mut vueltas = 0;
+        loop {
+            vueltas += 1;
+            assert!(vueltas < 10, "el bucle de paginación no termina");
+            let pagina = j.page(cursor, 2, None).await.expect("page");
+            let wire = page_to_wire(&pagina, 2);
+            vistas.extend(wire.rows.iter().map(|r| r.seq));
+            match wire.next_before_seq {
+                Some(c) => cursor = Some(c),
+                None => break,
+            }
+        }
+
+        let mut esperadas = seqs.clone();
+        esperadas.reverse();
+        assert_eq!(vistas, esperadas, "todas, una vez, de la nueva a la vieja");
+        assert_eq!(vueltas, 3, "2 + 2 + 1, y la de 1 ya no ofrece cursor");
+    }
+
+    /// Una página que viene LLENA justo al agotar el journal ofrece cursor, y
+    /// la vuelta siguiente contesta vacío y sin cursor. Es el único caso en
+    /// que el cliente da una vuelta de más, y es correcto: el servidor no
+    /// puede saber que no queda nada sin mirar.
+    #[tokio::test]
+    async fn una_pagina_justa_ofrece_cursor_y_la_siguiente_cierra() {
+        let j = Journal::open_in_memory().await.expect("open");
+        del_humano(&j, 2).await;
+
+        let primera = page_to_wire(&j.page(None, 2, None).await.expect("page"), 2);
+        let cursor = primera.next_before_seq.expect("la página vino llena");
+
+        let segunda = page_to_wire(&j.page(Some(cursor), 2, None).await.expect("page"), 2);
+        assert!(segunda.rows.is_empty());
+        assert_eq!(segunda.next_before_seq, None, "y ahí se cierra");
+    }
+
+    /// Filtrar por clase de actor deja fuera a las demás — y no filtrar las
+    /// trae todas.
+    #[tokio::test]
+    async fn la_pagina_filtra_por_clase_de_actor() {
+        let j = Journal::open_in_memory().await.expect("open");
+        del_humano(&j, 2).await;
+        j.record(
+            "created",
+            b"file:///a/agente",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::Agent {
+                session: "s-1".into(),
+            },
+        )
+        .await
+        .expect("record");
+
+        let todas = j.page(None, 50, None).await.expect("page");
+        assert_eq!(todas.len(), 3);
+
+        let solo_humano = j.page(None, 50, Some("user")).await.expect("page");
+        assert_eq!(solo_humano.len(), 2);
+        assert!(solo_humano.iter().all(|e| e.entry.actor_kind == "user"));
+
+        let solo_agente = j.page(None, 50, Some("agent")).await.expect("page");
+        assert_eq!(solo_agente.len(), 1);
+    }
+
+    /// `revertible_for_after` deja FUERA la entrada señalada y todo lo
+    /// anterior. Señalar una fila es decir «vuelve a este estado», así que
+    /// esa fila es lo que se conserva, no la primera víctima — y equivocarse
+    /// aquí deshace una mutación que el humano quería mantener.
+    #[tokio::test]
+    async fn revertible_after_no_toca_la_entrada_senalada() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let seqs = del_humano(&j, 4).await;
+
+        let desde_la_segunda = j
+            .revertible_for_after(&Actor::User, seqs[1])
+            .await
+            .expect("revertible");
+
+        assert_eq!(
+            desde_la_segunda.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![seqs[3], seqs[2]],
+            "LIFO, y sin la señalada ni lo de antes"
+        );
+    }
+
+    /// **Un LOTE partido por el corte se queda FUERA entero** (BLOCKER de la
+    /// revisión de seguridad).
+    ///
+    /// `revertible_for` traía todas las entradas del actor, así que un
+    /// `batch_id` llegaba siempre completo a `undo_units`. Cortar por `seq`
+    /// rompe eso: `revert_batch` —que revierte «entero o nada»— recibiría
+    /// media unidad creyéndola entera, porque su `debug_assert` sólo
+    /// comprueba que el trozo sea internamente coherente, y un trozo lo es.
+    /// El resultado sería un `fs.rename_batch` con la mitad de los nombres
+    /// devueltos y la otra mitad no.
+    ///
+    /// Se excluye entero, y no se incluye entero, porque incluirlo desharía
+    /// la entrada que el humano señaló para CONSERVAR.
+    #[tokio::test]
+    async fn un_lote_partido_por_el_corte_se_queda_fuera_entero() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let lote = j.alloc_batch().await.expect("batch");
+        let mut seqs = Vec::new();
+        for i in 0..3 {
+            let seq = j
+                .record_entry(&NewEntry {
+                    op: "renamed",
+                    path: format!("file:///a/{i}").as_bytes(),
+                    path_to: Some(format!("file:///a/viejo{i}").as_bytes()),
+                    reversal: Reversal::RenameBack,
+                    reversal_ref: None,
+                    actor: &Actor::User,
+                    undoes_seq: None,
+                    batch_id: Some(lote),
+                })
+                .await
+                .expect("record");
+            seqs.push(seq);
+        }
+        let suelta = j
+            .record(
+                "created",
+                b"file:///a/suelta",
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("record");
+
+        // Corte EN MEDIO del lote: la de en medio.
+        let elegidas = j
+            .revertible_for_after(&Actor::User, seqs[1])
+            .await
+            .expect("revertible");
+
+        assert_eq!(
+            elegidas.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![suelta],
+            "sólo lo de fuera del lote: el lote no se parte"
+        );
+    }
+
+    /// Y un lote ENTERAMENTE posterior al corte sí entra entero.
+    #[tokio::test]
+    async fn un_lote_entero_posterior_al_corte_entra() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let corte = j
+            .record(
+                "created",
+                b"file:///a/base",
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("record");
+        let lote = j.alloc_batch().await.expect("batch");
+        for i in 0..2 {
+            j.record_entry(&NewEntry {
+                op: "renamed",
+                path: format!("file:///a/{i}").as_bytes(),
+                path_to: Some(format!("file:///a/viejo{i}").as_bytes()),
+                reversal: Reversal::RenameBack,
+                reversal_ref: None,
+                actor: &Actor::User,
+                undoes_seq: None,
+                batch_id: Some(lote),
+            })
+            .await
+            .expect("record");
+        }
+
+        let elegidas = j
+            .revertible_for_after(&Actor::User, corte)
+            .await
+            .expect("revertible");
+
+        assert_eq!(elegidas.len(), 2, "el lote entero: {elegidas:?}");
+        assert!(elegidas.iter().all(|e| e.batch_id == Some(lote)));
+    }
+
+    /// Y sólo mira al actor que se le pide: lo que hizo un agente no entra en
+    /// el «deshaz lo mío» de un humano, aunque sea posterior.
+    #[tokio::test]
+    async fn revertible_after_no_se_lleva_lo_de_otro_actor() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let seqs = del_humano(&j, 1).await;
+        j.record(
+            "created",
+            b"file:///a/agente",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::Agent {
+                session: "s-1".into(),
+            },
+        )
+        .await
+        .expect("record");
+
+        let del_humano = j
+            .revertible_for_after(&Actor::User, seqs[0])
+            .await
+            .expect("revertible");
+
+        assert!(
+            del_humano.is_empty(),
+            "lo del agente es suyo: {del_humano:?}"
+        );
+    }
+
+    /// La fila de wire dice `reversible` por lo que la entrada DECLARÓ, y
+    /// una ruta ilegible se enseña con reemplazos en vez de perderse: una
+    /// mutación que no se ve es indistinguible de una que no ocurrió.
+    #[tokio::test]
+    async fn la_fila_de_wire_no_pierde_una_entrada_ilegible() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "deleted",
+            b"file:///a/\xff\xfe",
+            None,
+            Reversal::Irreversible,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("record");
+
+        let filas: Vec<_> = j
+            .page(None, 10, None)
+            .await
+            .expect("page")
+            .iter()
+            .map(PageEntry::to_wire_row)
+            .collect();
+
+        assert_eq!(
+            filas.len(),
+            1,
+            "la entrada sale aunque su ruta no sea texto"
+        );
+        assert!(!filas[0].reversible, "un Irreversible lo dice");
+        assert!(filas[0].path.contains('\u{FFFD}'));
+        assert!(filas[0].hostile, "y la fila lo DICE, no lo deja adivinar");
+    }
+
+    /// **Una ruta con algo que un terminal ejecutaría sale SANEADA, y la fila
+    /// lo dice** (hallazgo de la revisión de seguridad).
+    ///
+    /// El nombre de un fichero lo elige quien lo crea —incluido un agente
+    /// dentro de su recinto— y ésta es la pantalla donde un humano decide
+    /// qué revertir: un override bidi o una secuencia de escape aquí
+    /// repintan esa decisión. Mismo trato que le da `fs.search` a la línea
+    /// que devuelve.
+    #[tokio::test]
+    async fn una_ruta_con_trampa_de_terminal_sale_saneada() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "renamed",
+            "file:///a/\u{202E}gpj.exe".as_bytes(),
+            Some("file:///a/\u{1b}[2Jborrado".as_bytes()),
+            Reversal::RenameBack,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("record");
+
+        let filas: Vec<_> = j
+            .page(None, 10, None)
+            .await
+            .expect("page")
+            .iter()
+            .map(PageEntry::to_wire_row)
+            .collect();
+
+        assert!(
+            !filas[0].path.contains('\u{202E}'),
+            "el override RTL no sale crudo: {}",
+            filas[0].path
+        );
+        let destino = filas[0].path_to.as_deref().expect("hay destino");
+        assert!(
+            !destino.contains('\u{1b}'),
+            "ni un ESC en el destino: {destino}"
+        );
+        assert!(filas[0].hostile, "y se marca como pintado distinto");
+    }
+
+    /// Un `reversal` que este binario no conoce cuenta como SIN vuelta: en
+    /// un journal manipulado, afirmar que algo se puede deshacer es la
+    /// mentira que cuesta cara.
+    #[tokio::test]
+    async fn un_reversal_desconocido_no_promete_vuelta() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "created",
+            b"file:///a/x",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("record");
+        sqlx::query("UPDATE journal SET reversal = 'lo_que_sea' WHERE seq = 1")
+            .execute(&j.pool)
+            .await
+            .expect("tocar la fila");
+
+        let filas: Vec<_> = j
+            .page(None, 10, None)
+            .await
+            .expect("page")
+            .iter()
+            .map(PageEntry::to_wire_row)
+            .collect();
+
+        assert!(!filas[0].reversible);
+    }
+
+    /// Una entrada YA deshecha lo dice, y su compensación también: son las
+    /// dos cosas que el undo no va a volver a tocar, y sin ellas una línea
+    /// de tiempo promete el doble de lo que va a pasar.
+    #[tokio::test]
+    async fn la_pagina_dice_lo_que_ya_esta_deshecho() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let seq = j
+            .record(
+                "created",
+                b"file:///a/x",
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("record");
+        j.record_undoing(
+            "deleted",
+            b"file:///a/x",
+            None,
+            Reversal::Irreversible,
+            None,
+            &Actor::User,
+            Some(seq),
+        )
+        .await
+        .expect("compensación");
+
+        let filas: Vec<_> = j
+            .page(None, 10, None)
+            .await
+            .expect("page")
+            .iter()
+            .map(PageEntry::to_wire_row)
+            .collect();
+
+        let compensacion = &filas[0];
+        let original = &filas[1];
+        assert_eq!(compensacion.undoes_seq, Some(seq), "es la compensación");
+        assert!(original.undone, "y la de abajo ya está deshecha");
     }
 }

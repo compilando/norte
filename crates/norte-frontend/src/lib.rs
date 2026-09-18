@@ -87,6 +87,7 @@ pub mod subshell;
 pub mod sync;
 pub mod tasks;
 pub mod theme;
+pub mod timeline;
 pub mod tree;
 pub mod treemap;
 pub mod version;

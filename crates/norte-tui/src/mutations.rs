@@ -165,6 +165,13 @@ pub async fn confirm_modal(
         Modal::ConfirmPluginUninstall { id, .. } => {
             crate::screens::extensions::desinstalar_confirmada(app, backend, &id).await;
         }
+        // El humano leyó el recuento y dijo que sí (fase 7). Corre como Task
+        // de undo, con el progreso y la cancelación de siempre: lo que aquí
+        // se dice es que ARRANCÓ, y lo que pasó lo cuenta su informe.
+        Modal::ConfirmUndoAfter { seq, .. } => match backend.undo_after(seq).await {
+            Ok(_task) => app.message = Some(t("msg-timeline-undo-running")),
+            Err(e) => app.message = Some(error_message(&e)),
+        },
         Modal::ConfirmTransfer {
             kind, items, to, ..
         } => {

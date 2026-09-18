@@ -173,6 +173,10 @@ pub const MENUS: &[Menu] = &[
             // tres contestan «¿qué está pasando aquí?», y este además «¿en qué
             // se ha ido el sitio?».
             "layout.disk-map",
+            // Fase 7: la línea de tiempo con sus vecinos de sentido. Además
+            // es la única forma de TECLADO de abrirla —no tiene atajo en
+            // ningún preset, ver el catálogo—, así que aquí no es un extra.
+            "layout.timeline",
             "layout.pick",
             "app.theme",
         ],

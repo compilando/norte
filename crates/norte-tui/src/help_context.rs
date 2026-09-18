@@ -69,8 +69,11 @@ fn modal_context(modal: &Modal) -> &'static str {
     match modal {
         // Desinstalar una extensión es un borrado que pregunta: misma
         // página que el borrado.
+        // Deshacer hasta un punto también es una consecuencia que se acepta,
+        // así que comparte la página de confirmar.
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmPluginUninstall { .. }
+        | Modal::ConfirmUndoAfter { .. }
         | Modal::ConfirmTransfer { .. } => "dialog.confirm",
         Modal::ConfirmQuit => "dialog.quit",
         Modal::Collision { .. } => "dialog.collision",
@@ -178,6 +181,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::AskSecret { .. } => false,
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmPluginUninstall { .. }
+        | Modal::ConfirmUndoAfter { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit
         | Modal::Collision { .. }

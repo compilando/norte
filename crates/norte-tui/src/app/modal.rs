@@ -122,6 +122,27 @@ pub enum Modal {
         /// El nombre difiere del real y hay que marcarlo.
         name_hostile: bool,
     },
+    /// Confirmación de DESHACER hasta un punto de la línea de tiempo (fase
+    /// 7, `journal.undo_after`).
+    ///
+    /// Pregunta porque revierte trabajo, y el cuerpo lleva el RECUENTO: lo
+    /// que se va a deshacer, lo que se va a saltar y lo que no es del lector
+    /// — tres números que no se suman, porque prometer uno solo sería
+    /// prometer algo que no va a pasar. La regla de esta pantalla es que una
+    /// confirmación que no dice cuánto no es una confirmación.
+    ConfirmUndoAfter {
+        /// El corte: se deshace lo del humano POSTERIOR a este `seq`, y la
+        /// entrada que lo nombra se queda.
+        seq: i64,
+        /// Cuántas entradas se van a intentar deshacer.
+        a_deshacer: usize,
+        /// Cuántas se van a saltar (sin vuelta, ya deshechas, o
+        /// compensaciones).
+        irreversibles: usize,
+        /// Cuántas hay por encima del corte que NO son del lector, y que por
+        /// tanto este undo no toca.
+        ajenas: usize,
+    },
     /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
     /// papelera.
     ConfirmDelete {

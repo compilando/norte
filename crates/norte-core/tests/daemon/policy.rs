@@ -3766,6 +3766,63 @@ async fn un_agente_no_lee_el_registro() {
     );
 }
 
+/// Un agente no lee la línea de tiempo NI deshace hasta un punto (fase 7).
+///
+/// El journal es la lista completa de lo que se ha tocado en la máquina, con
+/// origen y destino: para un agente con scope acotado es un oráculo de
+/// existencia sobre todo lo que hay fuera de su recinto, y además le enseña
+/// lo que hicieron las demás sesiones. Y `undo_after` revierte trabajo del
+/// HUMANO — un agente que pudiera pedirlo borraría la huella de lo suyo.
+///
+/// Se comprueba lo mismo que en el registro y por el mismo motivo: que está
+/// VEDADO y no vacío, y que el gate corre ANTES del parseo, para que un
+/// agente no pueda distinguir «prohibido» de «params malos» probando formas.
+#[tokio::test]
+async fn un_agente_no_lee_la_linea_de_tiempo_ni_deshace() {
+    let d = spawn_daemon(None).await;
+    let agent = connected_agent(&d, "a1").await;
+
+    let vedado = |err: ClientError| match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(
+                rpc.data,
+                Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"
+            ),
+            "vedado, no vacío ni mal-formado: {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    };
+
+    for params in [
+        serde_json::json!({ "limit": 10 }),
+        serde_json::json!({ "limit": 0 }),
+        serde_json::json!({ "before_seq": 3, "limit": 5, "actor_kind": "user" }),
+        serde_json::json!({ "algo": "que no existe" }),
+        serde_json::Value::Null,
+    ] {
+        vedado(
+            agent
+                .call::<_, methods::JournalListResult>(methods::JOURNAL_LIST, &params)
+                .await
+                .expect_err("un agente no lee el journal"),
+        );
+    }
+
+    for params in [
+        serde_json::json!({ "seq": 1 }),
+        serde_json::json!({ "seq": -1 }),
+        serde_json::Value::Null,
+    ] {
+        vedado(
+            agent
+                .call::<_, methods::PolicyUndoSessionResult>(methods::JOURNAL_UNDO_AFTER, &params)
+                .await
+                .expect_err("un agente no deshace el trabajo del humano"),
+        );
+    }
+}
+
 /// #294 — el SDK RETIENE la versión que el peer declaró en el handshake.
 ///
 /// Sin ella un cliente no puede saber que la comprobación que acaba de pedir

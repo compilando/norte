@@ -134,6 +134,18 @@ impl KindRegistry {
                 // dos tiras con su etiqueta más el marco: con menos solo cabe
                 // una tira, y una sola tira no reparte nada — es una barra.
                 decl("disk-map", (24, 6), true, true, false, SIN_ROLES),
+                // La línea de tiempo del journal (fase 7): se enfoca, toma
+                // teclas —se anda por las filas y se deshace hasta uno— y hay
+                // UNA. No opta a ningún rol: nadie copia dentro de un
+                // historial.
+                //
+                // 34x4 es el mínimo con el que una fila sigue diciendo algo:
+                // la hora, quién, el verbo y un nombre corto. Por debajo, el
+                // nombre desaparece entero y quedan la hora y el verbo, que
+                // no distinguen dos copias seguidas — y esta es una pantalla
+                // desde la que se DESHACE, así que una fila que no identifica
+                // lo que va a revertir es peor que no tenerla.
+                decl("timeline", (34, 4), true, true, false, SIN_ROLES),
             ],
         }
     }

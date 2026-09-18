@@ -9,6 +9,30 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The journal timeline, and undoing back to a point** (ADR 0121, protocol
+  0.76.0), phase 7 of the WOW programme. A new `timeline` panel — in the panel
+  bar for every preset, and in the View menu — lists what has been done on this
+  machine, newest first: the time, who did it (you, an agent or an extension,
+  by the dot's colour), the verb and what it was done to. A batch is ONE row
+  and says how many entries it carries, because it is undone whole or not at
+  all. Point at a row, press Enter, and it asks whether to undo what YOU did
+  after it — the row you pointed at stays, since it is the state you want back.
+  The question carries the count before you answer, in three numbers that do
+  not add up to one: what will be undone, what will be skipped, and what is not
+  yours and is never touched. Two RPCs back it: `journal.list` (paginated
+  backwards by `seq`, capped at 200 rows) and `journal.undo_after` (a Task,
+  reported through the existing `policy.undo_report`, because it is the same
+  undo with a different selection). Both are refused to an agent connection
+  before their params are even parsed: the journal names everything touched on
+  this machine, which for a scoped agent is an existence oracle, and undoing
+  the human's work is not an agent's decision. A batch the cut falls inside is
+  excluded WHOLE — slicing one would revert half a `fs.rename_batch` believing
+  it whole — and a cut that names no entry is refused rather than read as
+  "everything since the beginning". Paths on the wire are sanitised and carry a
+  `hostile` flag, the same treatment `fs.search` gives its lines, because a
+  filename is chosen by whoever creates the file and this is the screen where a
+  human decides what to revert.
+
 - **`app.goto` — go anywhere from one screen** (ADR 0120), phase 6 of the WOW
   programme. `ctrl+g` in `orthodox`, `cua` and `vim`, and first in the Go menu
   for every preset, opens one list with sections: the path you are typing,

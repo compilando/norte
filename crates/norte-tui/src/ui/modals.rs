@@ -190,6 +190,9 @@ pub(crate) fn is_warning_modal(modal: &crate::app::Modal) -> bool {
             permanent: true,
             ..
         } | Modal::ConfirmPluginUninstall { .. }
+            // Deshacer revierte trabajo ya hecho: se pinta con el cuidado de
+            // un borrado permanente, no con el de un «¿seguro?» cualquiera.
+            | Modal::ConfirmUndoAfter { .. }
             | Modal::ApproveAgentOp { .. }
             | Modal::TrustHostKey { .. }
             | Modal::TrustLuaInit { .. }
@@ -512,6 +515,33 @@ fn modal_title_text(
             ]
             .join("\n"),
         ),
+        // Deshacer hasta un punto (fase 7): el cuerpo es el RECUENTO, y los
+        // tres números van en líneas distintas porque significan cosas
+        // distintas y no se suman. Lo que se va a saltar y lo que no es del
+        // lector sólo se dicen si los hay: una línea que diga «0 no son
+        // tuyas» es ruido que empuja hacia abajo lo que sí importa.
+        Modal::ConfirmUndoAfter {
+            a_deshacer,
+            irreversibles,
+            ajenas,
+            ..
+        } => {
+            let mut lineas = vec![
+                t("timeline-undo-body"),
+                ta("timeline-undo-count", &[("n", &a_deshacer.to_string())]),
+            ];
+            if *irreversibles > 0 {
+                lineas.push(ta(
+                    "timeline-undo-skipped",
+                    &[("n", &irreversibles.to_string())],
+                ));
+            }
+            if *ajenas > 0 {
+                lineas.push(ta("timeline-undo-foreign", &[("n", &ajenas.to_string())]));
+            }
+            lineas.push(hints.uninstall.clone());
+            (t("timeline-undo-title"), lineas.join("\n"))
+        }
         Modal::ConfirmDelete { items, permanent } => (
             if *permanent {
                 t("modal-delete-permanent-title")

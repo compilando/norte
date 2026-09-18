@@ -365,6 +365,10 @@ mod tests {
                 // su orden de registro en `builtin()`. Los de siempre no se
                 // mueven de sitio: la posición es lo que el dedo aprende.
                 "disk-map",
+                // Fase 7: la línea de tiempo, detrás del mapa por la misma
+                // razón — el último en registrarse va el último, y los de
+                // siempre no se mueven.
+                "timeline",
             ],
             "cambió el orden de los botones de serie"
         );

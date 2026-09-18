@@ -523,7 +523,12 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // Desinstalar una extensión es un borrado que pregunta, con la
         // semántica de borrar ficheros (Enter confirma) — salvo que aquí
         // `dialog.approve` no está en la lista: ver [`ALLOW_UNINSTALL`].
-        Modal::ConfirmPluginUninstall { .. } => {
+        // Deshacer hasta un punto (fase 7) comparte allowlist y semántica con
+        // desinstalar, y por la misma razón: las dos aceptan una CONSECUENCIA
+        // sobre lo que ya existe, así que Enter confirma, Esc no, y
+        // `dialog.approve` no está — aprobar es el verbo de conceder
+        // permisos, no el de asumir un efecto.
+        Modal::ConfirmPluginUninstall { .. } | Modal::ConfirmUndoAfter { .. } => {
             if !ALLOW_UNINSTALL.contains(&cmd) {
                 return None;
             }

@@ -1064,6 +1064,21 @@ panelbar-processes = Jobs
 panelbar-metadata = Details
 panelbar-log = Log
 panelbar-disk-map = Map
+panelbar-timeline = History
+# The journal timeline (phase 7).
+timeline-title = Timeline
+timeline-empty = nothing has been done yet
+timeline-loading = reading the history…
+timeline-batch = { $n } at once
+timeline-irreversible = no way back
+timeline-unavailable = this daemon keeps no history
+timeline-undo-title = Undo back to here?
+timeline-undo-body = This undoes what you did AFTER this row, newest first. The row you pointed at stays.
+timeline-undo-count = { $n } entries are undone
+timeline-undo-skipped = { $n } have no way back and are skipped
+timeline-undo-foreign = { $n } are not yours and are left alone
+timeline-undo-nothing = there is nothing of yours to undo above that row
+msg-timeline-undo-running = undoing back to the chosen point…
 
 # The first-run wizard (spec 2026-09-10): three questions when there is no
 # user norte.toml yet. Esc at any step means "do not ask again".
@@ -1090,6 +1105,7 @@ menu-item-layout-preview = Docked viewer
 menu-item-layout-processes = Processes panel
 menu-item-layout-log = Log
 menu-item-layout-disk-map = Disk map
+menu-item-layout-timeline = Timeline
 menu-item-layout-metadata = Details panel
 menu-item-layout-pick = Layout...
 menu-item-profile-pick = Profile...
@@ -1193,6 +1209,7 @@ help-cmd-layout-preview = show or hide the docked viewer
 help-cmd-layout-processes = show or hide the processes panel
 help-cmd-layout-log = show or hide this session's log
 help-cmd-layout-disk-map = show or hide the disk map
+help-cmd-layout-timeline = show or hide the timeline
 help-cmd-layout-metadata = show or hide the details panel
 help-cmd-layout-pick = choose a layout
 help-cmd-profile-pick = choose a profile

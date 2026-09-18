@@ -2932,6 +2932,161 @@
       ],
       "type": "object"
     },
+    "JournalListParams": {
+      "description": "Params de [`JOURNAL_LIST`].",
+      "properties": {
+        "actor_kind": {
+          "default": null,
+          "description": "Filtra por clase de actor: `\"user\"`, `\"agent\"`, `\"plugin\"`… `null` es\ntodas.\n\nEs la clase, no la identidad: «qué hizo la sesión 7» ya se pregunta\npor otro lado, y lo que una línea de tiempo necesita separar es lo que\nhice yo de lo que hizo algo en mi nombre.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "before_seq": {
+          "default": null,
+          "description": "Devuelve entradas ESTRICTAMENTE anteriores a este `seq`.\n\n`null` (o ausente) es «desde la más nueva», que es lo que manda una\nlínea de tiempo al abrirse. No es lo mismo que un número grande: el\ncliente no tiene por qué saber cuál es el último `seq`, y obligarle a\ninventarse una cota superior sería pedirle que adivine el estado del\nservidor.\n\nSe pagina por `seq` y no por desplazamiento porque `seq` es monótono\ny no se reutiliza: una entrada nueva escrita entre dos páginas no\npuede desplazar a las que ya se leyeron ni esconder una.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Cuántas filas COMO MUCHO. Petición, no contrato: el daemon recorta a\n[`JOURNAL_LIST_MAX_PAGE`], y pedir de más no es un error.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "limit"
+      ],
+      "type": "object"
+    },
+    "JournalListResult": {
+      "description": "Result de [`JOURNAL_LIST`].",
+      "properties": {
+        "next_before_seq": {
+          "default": null,
+          "description": "Qué mandar como [`JournalListParams::before_seq`] para seguir hacia\natrás, o `null` cuando ya no queda nada más viejo.\n\nLo calcula el servidor y no el cliente restando uno al último `seq`:\nlos `seq` no son densos —una entrada puede faltar— y esa resta es\nexactamente el tipo de aritmética que se rompe el día que dejan de\nserlo.\n\n**El final de la lista es este campo a `null`, y NO «vinieron menos\nfilas de las que pedí»**: el servidor recorta `limit` y no dice a\ncuánto, así que contar filas no distingue «se acabó» de «te di lo que\ntu petición permitía». Una página que venga justo llena al agotar el\njournal ofrece cursor y la vuelta siguiente contesta vacía: es una\nvuelta de más, y es correcta — el servidor no puede saber que no\nqueda nada sin mirar.\n\nAl seguir hacia atrás, [`JournalListParams::actor_kind`] tiene que ser\nEL MISMO de la vuelta anterior. Cambiarlo a mitad no es un error y no\nse detecta: el cursor es un `seq`, no una consulta, así que lo que se\nrecibe son las filas del otro filtro desde ese punto, y las que el\nfiltro nuevo habría traído por encima no vuelven.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rows": {
+          "description": "Las filas, de la más nueva a la más vieja.",
+          "items": {
+            "$ref": "#/$defs/JournalRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "type": "object"
+    },
+    "JournalRow": {
+      "description": "Una entrada del journal, tal y como la lee una línea de tiempo\n([`JOURNAL_LIST`]).\n\nNo lleva el hash de la entrada ni el de la cadena: verificar es otra\npregunta, con su propia superficie, y meter aquí un hash invitaría a un\ncliente a creer que enseñar la lista es haberla verificado.",
+      "properties": {
+        "actor_id": {
+          "default": null,
+          "description": "Cuál, dentro de esa clase (la sesión de un agente). `null` para el\nhumano, que no tiene sesiones que distinguir.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "actor_kind": {
+          "description": "Quién: `\"user\"`, `\"agent\"`, `\"plugin\"`…",
+          "type": "string"
+        },
+        "batch_id": {
+          "default": null,
+          "description": "El lote al que pertenece, si va en uno. Las entradas con el mismo\n`batch_id` se deshacen JUNTAS o no se tocan, así que una línea de\ntiempo que las pintara sueltas ofrecería un corte que no existe.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "hostile": {
+          "default": false,
+          "description": "El texto de [`Self::path`] (o el de [`Self::path_to`]) se pinta\nDISTINTO de lo que dicen los bytes guardados: hubo que enmascarar\nalgo, o los bytes no eran texto.\n\nViaja con la fila porque un texto ya saneado se lee como fiel, y\nperder esa distinción justo aquí es perderla en la pantalla donde se\ndecide qué se revierte.",
+          "type": "boolean"
+        },
+        "op": {
+          "description": "Qué operación (`fs.copy`, `fs.move`…).",
+          "type": "string"
+        },
+        "path": {
+          "description": "Sobre qué, YA SANEADO para pintar.\n\nEs el wire de un [`crate::VPath`] tal y como se guardó, con los\ncaracteres peligrosos para un terminal enmascarados por el servidor\n(`norte_encoding::mask_terminal_hazards`, el mismo trato que las\nlíneas de `fs.search`). Un nombre de fichero lo elige quien crea el\nfichero —incluido un agente dentro de su recinto—, y esta es la\npantalla donde un humano decide qué revertir: un override bidi o una\nsecuencia de escape aquí repinta la decisión.\n\nVa como texto y no como `VPath` para que UNA entrada ilegible —un\njournal manipulado— no tumbe la página entera: una línea de tiempo a\nla que le falta una fila es peor que una con una fila rara, porque\nuna mutación que no se ve es indistinguible de una que no ocurrió.\n\n**No lo parsees para actuar.** Está enmascarado, así que puede NO ser\nel path real; es texto para enseñar. Lo que identifica la entrada es\n[`Self::seq`], que es lo que [`JOURNAL_UNDO_AFTER`] consume.",
+          "type": "string"
+        },
+        "path_to": {
+          "default": null,
+          "description": "El destino, cuando la operación tiene dos lados (mover, renombrar).\nSaneado igual que [`Self::path`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reversible": {
+          "description": "Si esta entrada TIENE vuelta (no es `Irreversible`).\n\nEs lo que la entrada declaró cuando se escribió, no una promesa de\nque deshacerla vaya a funcionar ahora: entre medias el árbol ha\npodido moverse, y de eso se entera el undo cuando lo intenta.\n\nUn token de `reversal` que este daemon no reconoce cuenta como\n`false`: en un journal manipulado, afirmar que algo tiene vuelta es\nla mentira cara.",
+          "type": "boolean"
+        },
+        "seq": {
+          "description": "Número de secuencia, monótono y nunca reutilizado. Es la identidad de\nla entrada y lo que [`JOURNAL_UNDO_AFTER`] recibe.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "ts_ms": {
+          "description": "Cuándo, en milisegundos desde el epoch.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "undoes_seq": {
+          "default": null,
+          "description": "Si esta entrada es la COMPENSACIÓN de otra — el `seq` que deshizo.\n\nUna compensación es una mutación que ocurrió y por eso sale en la\nlista, pero [`JOURNAL_UNDO_AFTER`] no la vuelve a deshacer: se\nescribe con el actor del humano que ejecutó el undo y con una\nreversa de verdad, así que sin este campo un cliente la contaría\ncomo deshacible y prometería el doble de lo que va a pasar.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "undone": {
+          "default": false,
+          "description": "Si esta entrada YA está deshecha: existe una compensación suya que\nsigue viva.\n\nLo calcula el servidor con la MISMA condición que usa el undo para\nelegir —«compensada viva», no «compensada alguna vez», que no es lo\nmismo cuando el undo de un lote se desanda a sí mismo—. Un cliente no\npuede deducirlo de la página que tiene: la compensación puede estar\nfuera de ella.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "seq",
+        "ts_ms",
+        "actor_kind",
+        "op",
+        "path",
+        "reversible"
+      ],
+      "type": "object"
+    },
+    "JournalUndoAfterParams": {
+      "description": "Params de [`JOURNAL_UNDO_AFTER`].",
+      "properties": {
+        "seq": {
+          "description": "Se deshace lo del humano con `seq` ESTRICTAMENTE mayor que éste.\n\nO sea: la entrada que se señala se queda. Es lo que un humano espera\nde «vuelve hasta aquí» señalando una fila — la fila señalada es el\nestado al que se quiere volver, no la primera víctima.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq"
+      ],
+      "type": "object"
+    },
     "LogLevelParams": {
       "description": "Params de [`LOG_LEVEL`]: el nivel que el cliente PIDE.\n\n```\nuse norte_proto::methods::LogLevelParams;\nlet p = LogLevelParams { level: \"debug\".to_owned() };\nassert_eq!(serde_json::to_value(&p).unwrap()[\"level\"], serde_json::json!(\"debug\"));\n```",
       "properties": {
@@ -4608,7 +4763,7 @@
       "type": "object"
     },
     "PolicyUndoSessionResult": {
-      "description": "Result de [`POLICY_UNDO_SESSION`]: el undo corre como Task (progreso por\n`task.progress`, cancelable con `task.cancel`).",
+      "description": "Result de [`POLICY_UNDO_SESSION`] **y de [`JOURNAL_UNDO_AFTER`]**: el undo\ncorre como Task (progreso por `task.progress`, cancelable con\n`task.cancel`).\n\nUn tipo para dos métodos porque los dos contestan lo mismo —«aquí tienes\nel id de tu Task»— y son el MISMO undo con otro criterio de selección: el\nmismo `TaskKind`, el mismo informe por [`POLICY_UNDO_REPORT`]. Inventar un\nsegundo tipo idéntico sólo habría dado dos sitios donde equivocarse. Lo\nque esto obliga a recordar: un campo que se le añada algún día tiene que\ntener sentido para los dos, o no tiene sitio aquí.",
       "properties": {
         "task_id": {
           "$ref": "#/$defs/TaskId",
@@ -6548,6 +6703,18 @@
     "initialize_result": {
       "$ref": "#/$defs/InitializeResult"
     },
+    "journal_list_params": {
+      "$ref": "#/$defs/JournalListParams"
+    },
+    "journal_list_result": {
+      "$ref": "#/$defs/JournalListResult"
+    },
+    "journal_row": {
+      "$ref": "#/$defs/JournalRow"
+    },
+    "journal_undo_after_params": {
+      "$ref": "#/$defs/JournalUndoAfterParams"
+    },
     "log_level_params": {
       "$ref": "#/$defs/LogLevelParams"
     },
@@ -7033,6 +7200,10 @@
     "policy_decide_params",
     "policy_decide_result",
     "policy_pending_result",
+    "journal_list_params",
+    "journal_list_result",
+    "journal_row",
+    "journal_undo_after_params",
     "policy_undo_report_params",
     "policy_undo_report_result",
     "policy_undo_session_params",

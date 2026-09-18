@@ -86,6 +86,13 @@ const APLAZADOS: &[(&str, u32)] = &[
     // filtro, el tope y el cursor que salta cabeceras viven en
     // `norte_frontend::goto`, que es de los dos.
     ("app.goto", 357),
+    // La línea de tiempo del journal (fase 7, ADR 0121). El kind es del
+    // registro compartido, así que la ventana YA enseña su botón en la barra
+    // de paneles; lo que le falta es pintar el hueco y la pregunta del
+    // deshacer. El modelo —qué es una fila, que un lote es una, qué `seq`
+    // manda el corte y cómo se cuenta lo que se va a deshacer— está en
+    // `norte_frontend::timeline` y es de los dos.
+    ("layout.timeline", 359),
 ];
 
 /// Todo comando vivo o lo implementa la ventana, o está clasificado.

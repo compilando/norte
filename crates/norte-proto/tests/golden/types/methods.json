@@ -738,6 +738,56 @@
       "version": "0.1.0"
     }
   },
+  "journal_list_params": {
+    "actor_kind": "user",
+    "before_seq": 4096,
+    "limit": 50
+  },
+  "journal_list_params_desde_el_final": {
+    "actor_kind": null,
+    "before_seq": null,
+    "limit": 50
+  },
+  "journal_list_result": {
+    "next_before_seq": 12,
+    "rows": [
+      {
+        "actor_id": "s-1",
+        "actor_kind": "agent",
+        "batch_id": null,
+        "hostile": false,
+        "op": "created",
+        "path": "file:///a/x",
+        "path_to": null,
+        "reversible": true,
+        "seq": 12,
+        "ts_ms": 1756000000000,
+        "undoes_seq": 11,
+        "undone": false
+      }
+    ]
+  },
+  "journal_list_result_final": {
+    "next_before_seq": null,
+    "rows": []
+  },
+  "journal_row": {
+    "actor_id": null,
+    "actor_kind": "user",
+    "batch_id": 7,
+    "hostile": true,
+    "op": "renamed",
+    "path": "file:///a/%EF%BF%BDgpj.exe",
+    "path_to": "file:///a/antes",
+    "reversible": true,
+    "seq": 4096,
+    "ts_ms": 1756000000000,
+    "undoes_seq": null,
+    "undone": false
+  },
+  "journal_undo_after_params": {
+    "seq": 4096
+  },
   "log_level_params_debug": {
     "level": "debug"
   },

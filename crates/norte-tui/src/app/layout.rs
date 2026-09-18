@@ -56,6 +56,17 @@ impl App {
                     tree.anchor(dir.clone());
                     self.panes.insert_tree(id, tree);
                 }
+                // Fase 7, y por el mismo motivo que el árbol de arriba: una
+                // disposición que trae la línea de tiempo —la sesión de ayer,
+                // un perfil— no pasa por el toggle que le habría creado el
+                // estado, y sin esto el hueco se queda en blanco para
+                // siempre. Nace VACÍA; quien la llena es el bucle, que es
+                // quien tiene el backend.
+                Some(crate::timeline::KIND) if self.panes.timeline(id).is_none() => {
+                    self.panes
+                        .insert_timeline(id, norte_frontend::timeline::Timeline::default());
+                    self.timeline_stale = true;
+                }
                 _ => {}
             }
             // Los ids del layout no pueden chocar con los que se acuñen luego.
@@ -103,6 +114,7 @@ impl App {
             KeyOwner::Processes => self.slot_of_kind_visible(crate::processes::KIND).is_some(),
             KeyOwner::Tree => self.slot_of_kind_visible(crate::tree::KIND).is_some(),
             KeyOwner::DiskMap => self.slot_of_kind_visible(crate::diskmap::KIND).is_some(),
+            KeyOwner::Timeline => self.slot_of_kind_visible(crate::timeline::KIND).is_some(),
             KeyOwner::Log => self.slot_of_kind_visible(crate::logview::KIND).is_some(),
             // Un panel de plugin sigue teniendo el teclado mientras se VEA.
             // Si el plugin se desactiva, o su hueco se va detrás de una
@@ -656,6 +668,76 @@ impl App {
     #[must_use]
     pub fn disk_map_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::diskmap::KIND)
+    }
+
+    /// El hueco de la línea de tiempo, si está abierta (fase 7).
+    #[must_use]
+    pub fn timeline_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::timeline::KIND)
+    }
+
+    /// Abre la línea de tiempo, la enfoca, o la cierra.
+    ///
+    /// Tres estados, como el mapa: se abre para ANDAR por ella —elegir hasta
+    /// dónde volver— así que llevarse el teclado al abrir es lo que se
+    /// espera.
+    ///
+    /// **Lo que hay dentro no se pide aquí.** Abrir es colocar el hueco; leer
+    /// el journal es del bucle, que es quien tiene el backend. Separarlo evita
+    /// que abrir un panel dispare una lectura desde un sitio que no puede
+    /// esperarla.
+    pub fn toggle_timeline(&mut self) {
+        match self.timeline_slot() {
+            Some(id) if self.key_owner == KeyOwner::Timeline && self.se_ve(id) => {
+                self.close_timeline();
+            }
+            Some(id) => {
+                self.revelar(id);
+                self.key_owner = KeyOwner::Timeline;
+            }
+            None => self.open_timeline(),
+        }
+    }
+
+    /// Coloca la línea de tiempo si no estaba, y la revela si estaba
+    /// escondida.
+    pub fn open_timeline(&mut self) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        if let Some(id) = self.timeline_slot() {
+            self.revelar(id);
+            self.key_owner = KeyOwner::Timeline;
+            return;
+        }
+        let id = self.mint_slot();
+        self.panes
+            .insert_timeline(id, norte_frontend::timeline::Timeline::default());
+        self.layout = self.layout.dock(
+            self.focused_slot(),
+            Edge::Bottom,
+            // Doce filas: una lista de la que se elige un punto necesita ver
+            // varios a la vez para poder compararlos, y el mínimo del kind
+            // son cuatro, que sólo enseña dos filas con el marco.
+            Size::Fixed(12),
+            &Node::slot(id, KindId::new(crate::timeline::KIND)),
+        );
+        self.panes.refresh_visible(&self.layout);
+        self.key_owner = KeyOwner::Timeline;
+    }
+
+    /// Cierra la línea de tiempo si está abierta, y devuelve el teclado a los
+    /// listados si lo tenía ella.
+    pub fn close_timeline(&mut self) {
+        let Some(id) = self.timeline_slot() else {
+            return;
+        };
+        if let Some(nuevo) = self.layout.close_slot(id) {
+            self.layout = nuevo;
+            self.panes.refresh_visible(&self.layout);
+            self.podar_por_arbol();
+        }
+        if self.key_owner == KeyOwner::Timeline {
+            self.key_owner = KeyOwner::Panes;
+        }
     }
 
     /// Abre el mapa de disco, lo enfoca, o lo cierra.
@@ -1227,6 +1309,7 @@ impl App {
             KeyOwner::Processes => self.processes_slot(),
             KeyOwner::Log => self.log_slot(),
             KeyOwner::DiskMap => self.disk_map_slot(),
+            KeyOwner::Timeline => self.timeline_slot(),
             // Un panel de plugin se agranda como cualquier otro lateral: la
             // tecla es la misma y el hueco lo dice el reparto.
             KeyOwner::Panel => self.panel_slot(),
