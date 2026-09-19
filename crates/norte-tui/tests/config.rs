@@ -204,12 +204,12 @@ fn archive_limits_ultimo_gana_y_proyecto_no_los_toca() {
     };
     let cfg = load(&layers).expect("carga");
     assert_eq!(
-        cfg.common.archive_max_entries,
+        cfg.common.archive.max_entries,
         Some(50),
         "usuario pisa sistema"
     );
     assert_eq!(
-        cfg.common.archive_max_decompressed_bytes,
+        cfg.common.archive.max_decompressed_bytes,
         Some(4096),
         "campo no pisado conserva la capa inferior"
     );

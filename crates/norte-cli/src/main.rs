@@ -651,11 +651,11 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // señalando uno de los dos, que es peor que no señalar ninguno.
     let cfg_log = norte_config::load(&norte_config::standard_layers()).ok();
     let log_cfg = norte_core::logging::LogConfig {
-        dir: cfg_log.as_ref().and_then(|c| c.log_dir.as_deref()),
-        retain: cfg_log.as_ref().and_then(|c| c.log_retain),
+        dir: cfg_log.as_ref().and_then(|c| c.log.dir.as_deref()),
+        retain: cfg_log.as_ref().and_then(|c| c.log.retain),
         // El fichero compartido: es el que lee `norte doctor`.
         prefix: None,
-        format: cfg_log.as_ref().map(|c| c.log_format).unwrap_or_default(),
+        format: cfg_log.as_ref().map(|c| c.log.format).unwrap_or_default(),
     };
     // `norte daemon run` —y solo él— monta además un anillo en memoria (#328,
     // ADR 0092): es el registro que `log.tail` sirve a un frontend que vive en
@@ -1585,7 +1585,7 @@ async fn paths_cmd(json: bool, socket: Option<PathBuf>) -> anyhow::Result<ExitCo
     let entries = tokio::task::spawn_blocking(move || {
         let dir_log = norte_config::load(&layers_log)
             .ok()
-            .and_then(|c| c.log_dir)
+            .and_then(|c| c.log.dir)
             .filter(|d| d.is_absolute());
         let log_dir = norte_core::logging::log_dir(dir_log.as_deref());
         paths::collect(
@@ -1675,7 +1675,7 @@ async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
         // el log de verdad está en otro sitio es peor que no decir nada.
         let dir_log = norte_config::load(&layers_log)
             .ok()
-            .and_then(|c| c.log_dir)
+            .and_then(|c| c.log.dir)
             .filter(|d| d.is_absolute());
         findings.extend(doctor::check_logs(
             norte_core::logging::log_dir(dir_log.as_deref()).as_deref(),

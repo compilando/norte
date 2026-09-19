@@ -733,7 +733,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     let socket = cli
         .socket
         .clone()
-        .or_else(|| cfg.common.daemon_socket.clone())
+        .or_else(|| cfg.common.daemon.socket.clone())
         .unwrap_or_else(|| norte_client::default_socket_path(None));
 
     // Daemon y SOLO daemon: la GUI de referencia no construye un `Engine` en
@@ -1085,10 +1085,10 @@ fn start_dir(dir: Option<PathBuf>) -> Result<VPath, StartupError> {
 fn logging(cfg: &norte_frontend::config::FrontendConfig) -> Option<norte_config::logring::LogRing> {
     norte_config::logging::init_to_file_with_ring(
         norte_config::logging::LogConfig {
-            dir: cfg.common.log_dir.as_deref(),
-            retain: cfg.common.log_retain,
+            dir: cfg.common.log.dir.as_deref(),
+            retain: cfg.common.log.retain,
             prefix: Some("norte-gui.log"),
-            format: cfg.common.log_format,
+            format: cfg.common.log.format,
         },
         norte_config::logring::RING_DEFAULT,
     )

@@ -294,6 +294,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A profile that asks for a log format now says it was ignored.** A
+  profile cannot change where or how this process logs, and asking for it
+  is reported, but only `[log] dir` and `retain` were checked. A profile
+  with only `[log] format` was dropped without a word. The check now covers
+  every key of `[log]`, `[daemon]` and `[archive]`, and a key added later
+  does not build until it is covered.
+
 - **Undoing without a daemon now says what it undid.** With the core
   in-process (the terminal's default), "undo back to here" ran but its report
   answered "unsupported", so the result of the undo could not be shown. The

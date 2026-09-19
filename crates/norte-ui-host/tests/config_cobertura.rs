@@ -32,10 +32,19 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         preset: _,
         ui_lang: _,
         ui_layout: _,
-        log_dir: _,
-        log_retain: _,
-        log_format: _,
-        daemon_socket: _,
+        log:
+            norte_config::LogSettings {
+                dir: _,
+                retain: _,
+                format: _,
+            },
+        daemon:
+            norte_config::DaemonSettings {
+                socket: _,
+                // De la TERMINAL: la ventana SIEMPRE habla con un daemon
+                // (ADR 0066, D10), así que no hay modo que elegir.
+                mode: _,
+            },
 
         // ─── El host las lee de `self.config`, en caliente respecto a su
         //     propio estado (un hueco nuevo las relee).
@@ -85,22 +94,23 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         // ─── De la TERMINAL, y con motivo.
         //
         //     `ui_mouse`: activar el ratón es una decisión de un emulador de
-        //     terminal; una ventana lo tiene siempre.
-        //     `daemon_mode`: la ventana SIEMPRE habla con un daemon
-        //     (ADR 0066, D10), así que no hay modo que elegir.
+        //     terminal; una ventana lo tiene siempre. (`daemon.mode` también
+        //     es de aquí; está arriba, con el resto de `daemon`.)
         ui_mouse: _,
         //     `ui_alt_menu`: el Alt solo lo tiene SIEMPRE una ventana; la
         //     clave existe porque en un terminal cuesta un protocolo de
         //     teclado que se come las tildes de tecla muerta.
         ui_alt_menu: _,
-        daemon_mode: _,
 
         // ─── Del DAEMON: las aplica el proceso que sirve, no el que pinta.
         //     Llegan por el socket ya en efecto.
-        archive_max_entries: _,
-        archive_max_decompressed_bytes: _,
-        archive_max_nesting: _,
-        archive_rar_delegate: _,
+        archive:
+            norte_config::ArchiveSettings {
+                max_entries: _,
+                max_decompressed_bytes: _,
+                max_nesting: _,
+                rar_delegate: _,
+            },
         ai: _,
 
         // ─── Del CATÁLOGO de arranque, no de la foto: las cuatro cruzan en
