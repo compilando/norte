@@ -630,6 +630,9 @@ impl Estado {
         if acabo {
             cambios.extend(self.refrescar_afectados(p.task_id.get(), backend, buzon));
             self.pedir_informe_de_lote(p, backend, buzon);
+            // Y la línea de tiempo (#359): lo que acaba de hacerse —o de
+            // deshacerse— tiene que aparecer en un panel que sigue abierto.
+            self.recargar_lineas();
             cambios.extend(self.cerrar_comparacion(p));
             cambios.extend(self.cerrar_sincronizacion(p));
             self.pedir_informe_de_sync(p, backend, buzon);

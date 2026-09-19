@@ -3461,7 +3461,7 @@ async fn handle_journal_undo_after(
     }
     let (handle, _report) = shared
         .engine
-        .undo_after(p.seq)
+        .undo_after(p.seq, p.upto_seq)
         .await
         .map_err(RpcError::from)?;
     let task_id = register_task_undo(shared, handle)?;

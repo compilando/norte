@@ -773,7 +773,10 @@ async fn deshacer_hasta_un_punto_respeta_lo_anterior() {
         .entry
         .seq;
 
-    let (h, report) = engine.undo_after(seq_primera).await.expect("undo submit");
+    let (h, report) = engine
+        .undo_after(seq_primera, None)
+        .await
+        .expect("undo submit");
     let id = h.id();
     assert_eq!(h.join().await, TaskState::Completed);
     let r = report.lock().expect("lock").clone();
@@ -842,7 +845,7 @@ async fn deshacer_hasta_un_punto_no_toca_lo_de_un_agente() {
         .await
         .expect("record del agente");
 
-    let (h, report) = engine.undo_after(corte).await.expect("undo submit");
+    let (h, report) = engine.undo_after(corte, None).await.expect("undo submit");
     assert_eq!(h.join().await, TaskState::Completed);
     let r = report.lock().expect("lock").clone();
 
@@ -886,8 +889,8 @@ async fn un_undo_en_cola_se_cancela_limpio() {
     // El primero, lento: tiene el turno mientras el segundo espera.
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(300)));
-    let (h1, _r1) = engine.undo_after(corte).await.expect("primer undo");
-    let (h2, r2) = engine.undo_after(corte).await.expect("segundo undo");
+    let (h1, _r1) = engine.undo_after(corte, None).await.expect("primer undo");
+    let (h2, r2) = engine.undo_after(corte, None).await.expect("segundo undo");
     h2.cancel();
     assert_eq!(
         h2.join().await,
@@ -951,8 +954,8 @@ async fn dos_undos_que_eligieron_lo_mismo_no_lo_deshacen_dos_veces() {
     // no prueba nada), nunca un rojo falso.
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(200)));
-    let (h1, r1) = engine.undo_after(corte).await.expect("primer undo");
-    let (h2, r2) = engine.undo_after(corte).await.expect("segundo undo");
+    let (h1, r1) = engine.undo_after(corte, None).await.expect("primer undo");
+    let (h2, r2) = engine.undo_after(corte, None).await.expect("segundo undo");
     assert_eq!(h1.join().await, TaskState::Completed);
     assert_eq!(h2.join().await, TaskState::Completed);
     let (r1, r2) = (
@@ -979,4 +982,62 @@ async fn dos_undos_que_eligieron_lo_mismo_no_lo_deshacen_dos_veces() {
         .filter(|p| p.entry.undoes_seq.is_some())
         .count();
     assert_eq!(compensaciones, 1, "una sola compensación en el journal");
+}
+
+/// **El techo (`upto_seq`, 0.80.0): no se deshace lo que no se contó.**
+///
+/// La línea de tiempo cuenta sobre lo que tiene cargado. Lo hecho después de
+/// pintarla —con el panel abierto, que es lo normal— entraba en el undo sin
+/// haberse contado: la pregunta prometía una y se deshacían dos. Con el techo,
+/// lo más nuevo que lo contado se queda donde está.
+#[tokio::test]
+async fn el_techo_deja_fuera_lo_que_no_se_conto() {
+    let (engine, mem, journal) = setup().await;
+    write_file(&mem, "mem:///a.txt", b"a").await;
+    let copia = |dst: &'static str| {
+        let engine = &engine;
+        async move {
+            let h = engine
+                .copy(&vp("mem:///a.txt"), &vp(dst))
+                .await
+                .expect("copy");
+            assert_eq!(h.join().await, TaskState::Completed);
+        }
+    };
+    let ultimo = || async {
+        journal
+            .journal()
+            .page(None, 1, Some("user"))
+            .await
+            .expect("page")
+            .first()
+            .expect("entrada")
+            .entry
+            .seq
+    };
+    copia("mem:///corte.txt").await;
+    let corte = ultimo().await;
+    copia("mem:///contada.txt").await;
+    let techo = ultimo().await;
+    // Lo que se hace DESPUÉS de pintar la lista: el recuento no lo vio.
+    copia("mem:///nueva.txt").await;
+
+    let (h, report) = engine
+        .undo_after(corte, Some(techo))
+        .await
+        .expect("undo submit");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(report.lock().expect("lock").undone, 1, "solo la contada");
+    assert!(
+        mem.stat(&vp("mem:///contada.txt")).await.is_err(),
+        "la contada se deshizo"
+    );
+    assert!(
+        mem.stat(&vp("mem:///nueva.txt")).await.is_ok(),
+        "la que no se contó se queda"
+    );
+    assert!(
+        mem.stat(&vp("mem:///corte.txt")).await.is_ok(),
+        "y la señalada, como siempre"
+    );
 }

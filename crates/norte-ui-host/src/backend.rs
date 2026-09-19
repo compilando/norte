@@ -554,7 +554,14 @@ pub trait HostBackend: Send + Sync + 'static {
     ///
     /// Es el mismo undo que [`Self::undo_session`] con otro criterio de
     /// selección: una Task, con su progreso, su cancelación y su informe.
-    fn undo_after(&self, seq: i64) -> BoxFuture<'static, Result<HostTask, Error>>;
+    ///
+    /// `upto_seq` es el techo (0.80.0): lo más nuevo que el humano vio
+    /// contado. Nada por encima se deshace.
+    fn undo_after(
+        &self,
+        seq: i64,
+        upto_seq: Option<i64>,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
     /// Mueve UNA entrada a un destino EXACTO. Mismas reglas que
     /// [`Self::copy`].
@@ -1567,10 +1574,14 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move { backend.journal_list(before_seq, limit, None).await })
     }
 
-    fn undo_after(&self, seq: i64) -> BoxFuture<'static, Result<HostTask, Error>> {
+    fn undo_after(
+        &self,
+        seq: i64,
+        upto_seq: Option<i64>,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
         let backend = self.clone();
         Box::pin(async move {
-            let task = backend.undo_after(seq).await?;
+            let task = backend.undo_after(seq, upto_seq).await?;
             let canceller = task.canceller();
             Ok(HostTask {
                 id: task.id(),

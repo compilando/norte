@@ -20,9 +20,9 @@ impl App {
         // Los informes, detrás: una colisión PREGUNTA algo con una copia
         // esperando, un informe solo cuenta lo que ya pasó.
         if self.modal.is_none()
-            && let Some((title_key, lines)) = self.pending_reports.pop_front()
+            && let Some((kind, lines)) = self.pending_reports.pop_front()
         {
-            self.modal = Some(Modal::Report { title_key, lines });
+            self.modal = Some(Modal::Report { kind, lines });
             self.abandon_shortcut_capture();
         }
     }

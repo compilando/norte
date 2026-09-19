@@ -2236,6 +2236,9 @@ enum Pendiente {
     DeshacerHasta {
         /// El corte: el `seq` más nuevo de la fila señalada.
         seq: i64,
+        /// El techo: lo más nuevo que el recuento contó (`upto_seq`). Se
+        /// congela al PREGUNTAR, como los operandos de cualquier diálogo.
+        techo: Option<i64>,
     },
     /// Conceder las capabilities de una extensión.
     ///

@@ -14,7 +14,7 @@ import type {
   TabGroupView,
   WhichKeyView,
 } from "../types";
-import { badge, colVar, sinCambios } from "./dom";
+import { badge, colVar, revelar, sinCambios } from "./dom";
 import type { SlotDom } from "./dom";
 
 /**
@@ -466,6 +466,10 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
   }
   caja.append(lista);
   this.gotoRoot.replaceChildren(caja);
+  // Con la consulta vacía, las secciones pueden pasar del alto de la caja, y
+  // la lista se rehace en cada parche con el scroll arriba: sin esto, bajar
+  // movía un cursor invisible y Enter iba a un sitio que el lector no veía.
+  revelar(lista.querySelector('[aria-selected="true"]') ?? undefined);
 }
 
 /** Lo que puede seguir a un prefijo a medias. */

@@ -38,7 +38,11 @@ pub fn pedir_al_indice(app: &mut App, backend: &Backend, work: &mut InFlight) {
         return;
     };
     let q = goto.query().to_owned();
-    if q.chars().count() < MINIMO_PARA_EL_INDICE {
+    // Una RUTA tecleada tampoco: no es una consulta semántica, y mandarla a un
+    // proveedor de embeddings —quizá remoto— es mandarle el nombre de un
+    // directorio del lector.
+    if q.chars().count() < MINIMO_PARA_EL_INDICE || norte_frontend::goto::parece_ruta(&q).is_some()
+    {
         olvidar(work);
         goto.reemplazar_seccion(SECCION_INDICE, Vec::new(), true);
         return;

@@ -123,6 +123,38 @@ async fn un_comando_se_corre_como_su_tecla() {
     assert_ne!(listado(&foto).cursor, cursor_antes, "y el comando corrió");
 }
 
+/// Una RUTA tecleada no se le pregunta al índice semántico, y una palabra sí.
+///
+/// Mandar `/home/u/secreto` a un proveedor de embeddings —quizá remoto— es
+/// mandarle el nombre de un directorio del lector, y una ruta no es una
+/// consulta de significado.
+#[tokio::test]
+async fn una_ruta_tecleada_no_va_al_indice() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host vivo");
+    let _ = siguiente_ir_a(&mut sub).await;
+    for c in "/casa/secreto".chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(ctrl_g()).await.expect("host vivo");
+    for c in "facturas".chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    let pedidas = backend
+        .hasta("una pregunta al índice", |f| {
+            let p = f.semanticas_pedidas.lock().expect("semánticas").clone();
+            (!p.is_empty()).then_some(p)
+        })
+        .await;
+    assert!(
+        pedidas.iter().all(|(q, _)| !q.starts_with('/')),
+        "ninguna ruta fue al índice: {pedidas:?}"
+    );
+}
+
 /// `Escape` cierra sin ir a ninguna parte.
 #[tokio::test]
 async fn escape_cierra_sin_ir_a_ninguna_parte() {

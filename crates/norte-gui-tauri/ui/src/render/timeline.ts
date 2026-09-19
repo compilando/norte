@@ -8,7 +8,7 @@
 import type { Screen } from "../render";
 import type { TimelineSlotView } from "../types";
 import type { SlotDom } from "./dom";
-import { badge } from "./dom";
+import { badge, revelar } from "./dom";
 
 /**
  * Pinta la línea de tiempo de un hueco: una fila por mutación —o por lote—,
@@ -82,4 +82,7 @@ export function paintTimeline(this: Screen, dom: SlotDom, slot: TimelineSlotView
   pie.className = "timeline-footer";
   pie.textContent = slot.footer;
   dom.scroller.replaceChildren(lista, pie);
+  // La fila del cursor, a la vista: la siguiente página se pide al llegar a
+  // la última cargada, y un cursor que baja sin verse no sabe dónde está.
+  revelar(lista.querySelector('[aria-selected="true"]') ?? undefined);
 }

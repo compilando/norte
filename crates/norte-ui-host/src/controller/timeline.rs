@@ -29,8 +29,23 @@ pub(super) struct EstadoLinea {
     /// Ya se pidió la primera página (contestara lo que contestara). Sin esto
     /// un journal que no se deja leer se repide tras cada mensaje del actor.
     pedida: bool,
-    /// Por qué no hay historial que enseñar, ya traducido.
+    /// Por qué no hay historial que enseñar, ya traducido. Solo lo pone la
+    /// PRIMERA página: sin ella no hay nada que pintar y el motivo va en su
+    /// lugar.
     motivo: Option<String>,
+    /// El fallo de una página POSTERIOR, ya traducido. Va al pie —las filas
+    /// que sí llegaron siguen ahí, así que el hueco de «vacío» no se pinta— y
+    /// no para la paginación para siempre: se reintenta al volver a bajar.
+    error_pagina: Option<String>,
+    /// El cursor se ha movido desde ese fallo: se puede volver a pedir.
+    reintentar: bool,
+    /// El daemon dejó de avanzar —una página vacía, o un cursor que no
+    /// retrocede—. Se trata como el final: uno honesto nunca lo hace, y uno
+    /// que lo hiciera provocaría una petición tras cada mensaje del actor.
+    agotada: bool,
+    /// Tras una recarga, a qué fila volver: su `seq`. Sin esto, cada Task que
+    /// terminara devolvería el cursor arriba mientras alguien lo mira.
+    volver_a: Option<i64>,
 }
 
 impl Estado {
@@ -73,8 +88,12 @@ impl Estado {
                 // en que se pide más: cargar el journal entero al abrir traería
                 // meses de historial para enseñar diez filas.
                 let abajo = !est.modelo.is_empty() && est.modelo.cursor() + 1 >= est.modelo.len();
+                // Y no más allá de lo que el puente deja cruzar: una fila
+                // cargada que no se manda es un cursor sobre algo invisible.
+                let cabe = est.modelo.len() < crate::bridge::MAX_ROWS_PER_BATCH;
+                let puede = est.error_pagina.is_none() || est.reintentar;
                 match est.modelo.next_before_seq() {
-                    Some(s) if abajo => Some(s),
+                    Some(s) if abajo && cabe && puede && !est.agotada => Some(s),
                     _ => continue,
                 }
             } else {
@@ -122,30 +141,63 @@ impl Estado {
         }
         est.en_vuelo = None;
         est.pedida = true;
-        match res {
-            Ok(pagina) => {
-                if desde.is_none() {
-                    est.modelo = norte_frontend::timeline::Timeline::new(
-                        &pagina.rows,
-                        pagina.next_before_seq,
-                    );
-                } else {
-                    est.modelo.extend(&pagina.rows, pagina.next_before_seq);
+        match (res, desde) {
+            (Ok(pagina), None) => {
+                est.modelo =
+                    norte_frontend::timeline::Timeline::new(&pagina.rows, pagina.next_before_seq);
+                // Una recarga vuelve a la fila que tenía el cursor, si sigue.
+                if let Some(seq) = est.volver_a.take()
+                    && let Some(i) = est.modelo.rows().iter().position(|r| r.seq == seq)
+                {
+                    est.modelo.set_cursor(i);
                 }
+            }
+            (Ok(pagina), Some(d)) => {
+                if pagina.rows.is_empty() || pagina.next_before_seq.is_some_and(|n| n >= d) {
+                    est.agotada = true;
+                }
+                est.modelo.extend(&pagina.rows, pagina.next_before_seq);
+                est.error_pagina = None;
             }
             // Un daemon sin journal, o que no conoce el método: aquí no hay
             // historial que enseñar, y se DICE.
-            Err(Error::Unsupported) => {
+            (Err(Error::Unsupported), None) => {
                 est.motivo = Some(norte_i18n::t_in(lang, "timeline-unavailable"));
             }
-            Err(e) => {
+            (Err(e), None) => {
                 est.motivo = Some(clamp_display(norte_frontend::error::error_category_in(
                     lang, &e,
                 )));
             }
+            (Err(e), Some(_)) => {
+                est.error_pagina = Some(clamp_display(norte_frontend::error::error_category_in(
+                    lang, &e,
+                )));
+                est.reintentar = false;
+            }
         }
         let snap = self.snapshot();
         Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+    }
+
+    /// Vuelve a pedir la primera página de las líneas abiertas, conservando la
+    /// fila del cursor.
+    ///
+    /// Se llama cuando termina una Task: con el panel ABIERTO —que es lo
+    /// normal en un hueco lateral— lo que se acaba de hacer, o de deshacer,
+    /// tiene que aparecer. El techo (`upto_seq`) ya impide que un undo pase de
+    /// lo contado; esto es para que lo contado sea lo de ahora.
+    pub(super) fn recargar_lineas(&mut self) {
+        for est in self.lineas.values_mut() {
+            if !est.pedida || est.en_vuelo.is_some() {
+                continue;
+            }
+            est.volver_a = est.modelo.selected().map(|r| r.seq);
+            est.pedida = false;
+            est.agotada = false;
+            est.error_pagina = None;
+            est.motivo = None;
+        }
     }
 
     /// El hueco de línea de tiempo con el foco, si lo tiene uno.
@@ -176,7 +228,11 @@ impl Estado {
         }
         let id = self.linea_enfocada()?;
         let est = self.lineas.get_mut(&id)?;
-        let filas = est.modelo.len();
+        // Hasta la última fila que CRUZA el puente: más allá, el cursor
+        // señalaría una fila que el renderer no tiene.
+        let filas = est.modelo.len().min(crate::bridge::MAX_ROWS_PER_BATCH);
+        // Moverse es lo que autoriza a volver a pedir una página que falló.
+        est.reintentar = true;
         if filas == 0 {
             return Some((self.aplicada(), Vec::new()));
         }
@@ -217,6 +273,9 @@ impl Estado {
         let (Some(seq), resumen) = (est.modelo.corte(), est.modelo.resumen()) else {
             return (self.aplicada(), Vec::new());
         };
+        // El techo se congela AHORA, con el recuento que se va a enseñar: el
+        // undo no pasa de lo que esta pregunta contó.
+        let techo = est.modelo.techo();
         if resumen.no_hace_nada() {
             return (self.aplicada(), self.decir("timeline-undo-nothing"));
         }
@@ -288,7 +347,7 @@ impl Estado {
             vista,
             tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
-            al_confirmar: Some(Pendiente::DeshacerHasta { seq }),
+            al_confirmar: Some(Pendiente::DeshacerHasta { seq, techo }),
         });
         let cambio = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
@@ -302,6 +361,7 @@ impl Estado {
     pub(super) fn deshacer_hasta(
         &mut self,
         seq: i64,
+        techo: Option<i64>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
@@ -311,7 +371,7 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            match backend.undo_after(seq).await {
+            match backend.undo_after(seq, techo).await {
                 Ok(task) => {
                     let _ = buzon
                         .send(Mensaje::TaskNueva(Box::new((task, visibles, None))))
@@ -364,11 +424,21 @@ impl Estado {
             Some(e) if e.modelo.cargada() => norte_i18n::t_in(self.lang, "timeline-empty"),
             _ => norte_i18n::t_in(self.lang, "timeline-loading"),
         };
+        let solo_lectura = self.efectos == crate::commands::Efectos::SoloLectura;
         let footer = est
             .filter(|e| !e.modelo.is_empty())
             .map(|e| {
                 let c = e.modelo.resumen();
-                if c.no_hace_nada() {
+                // Una página que no llegó se dice aquí: las filas que sí
+                // llegaron ocupan el hueco, así que el motivo no tiene otro
+                // sitio donde verse.
+                if let Some(error) = &e.error_pagina {
+                    error.clone()
+                } else if solo_lectura {
+                    // Un pie que promete deshacer en una ventana que no lo va
+                    // a hacer enseña a no fiarse del pie.
+                    norte_i18n::t_in(self.lang, "host-read-only")
+                } else if c.no_hace_nada() {
                     norte_i18n::t_in(self.lang, "timeline-undo-nothing")
                 } else {
                     norte_i18n::ta_in(

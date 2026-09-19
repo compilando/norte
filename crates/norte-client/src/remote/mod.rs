@@ -1825,13 +1825,16 @@ impl RemoteBackend {
     /// y el mismo informe (`policy.undo_report`) que deshacer una sesión
     /// entera: es el mismo undo con otro criterio de selección.
     ///
+    /// `upto_seq` (0.80.0) es el techo: lo más nuevo que el humano vio
+    /// contado. Un daemon 0.79 no lo conoce, lo ignora y deshace sin techo.
+    ///
     /// # Errors
     /// Lo que responda el daemon.
-    pub async fn undo_after(&self, seq: i64) -> Result<RemoteTask, Error> {
+    pub async fn undo_after(&self, seq: i64, upto_seq: Option<i64>) -> Result<RemoteTask, Error> {
         let result: methods::PolicyUndoSessionResult = self
             .call_maybe_unknown(
                 methods::JOURNAL_UNDO_AFTER,
-                &methods::JournalUndoAfterParams { seq },
+                &methods::JournalUndoAfterParams { seq, upto_seq },
             )
             .await?;
         Ok(self.own_task(result.task_id, TaskKind::Undo))

@@ -186,8 +186,9 @@ async fn enter_pregunta_con_el_recuento_y_confirmar_manda_el_corte() {
         .await;
     assert_eq!(
         cortes,
-        vec![2],
-        "el corte es la fila señalada, que se queda"
+        vec![(2, Some(3))],
+        "el corte es la fila señalada, que se queda; el techo, lo más nuevo \
+         que el recuento contó"
     );
 }
 

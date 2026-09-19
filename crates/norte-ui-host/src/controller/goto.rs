@@ -32,8 +32,11 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let fuentes = self.fuentes_de_ir_a();
+        // Reabrir con la pantalla ya abierta (desde un menú, por ejemplo)
+        // cierra la anterior como es debido: su pregunta al índice se aborta
+        // en vez de seguir gastando proveedor para una consulta que ya no hay.
+        self.cerrar_ir_a();
         self.ir_a = Some(Goto::new(fuentes));
-        self.gen_ir_a += 1;
         let apertura = self.gen_ir_a;
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
@@ -149,7 +152,18 @@ impl Estado {
             return;
         };
         let consulta = goto.query().to_owned();
-        if consulta.chars().count() < MINIMO_PARA_EL_INDICE {
+        // Tres casos en los que no se pregunta, y los tres VACÍAN la sección:
+        // - una consulta corta no puede ser buena;
+        // - una RUTA tecleada no es una consulta semántica, y mandarla a un
+        //   proveedor de embeddings —quizá remoto— es mandarle el nombre de
+        //   un directorio del lector;
+        // - una ventana de solo lectura no deja salir consultas del proceso,
+        //   igual que su búsqueda semántica explícita (`ConsultaSemantica`).
+        let solo_lectura = self.efectos == crate::commands::Efectos::SoloLectura;
+        if consulta.chars().count() < MINIMO_PARA_EL_INDICE
+            || norte_frontend::goto::parece_ruta(&consulta).is_some()
+            || solo_lectura
+        {
             goto.reemplazar_seccion(SECCION_INDICE, Vec::new(), true);
             return;
         }
@@ -297,18 +311,27 @@ impl Estado {
     pub(super) fn vista_ir_a(&self) -> Option<crate::dto::GotoView> {
         let g = self.ir_a.as_ref()?;
         let filas = g.rows();
+        // UNA línea de vista por línea del modelo, sin saltarse ninguna: el
+        // cursor es un índice en `lines`, y una línea caída lo descuadraría en
+        // silencio. El invariante —`GotoLine::Row(i)` siempre nombra una fila
+        // que existe— lo mantiene `Goto::refrescar`, que empuja las dos a la
+        // vez; si algún día se rompiera, sale una fila vacía y el cursor sigue
+        // señalando lo mismo que el modelo.
         let lines: Vec<crate::dto::GotoLineView> = g
             .lines()
             .iter()
-            .filter_map(|l| match l {
-                GotoLine::Header(s) => Some(crate::dto::GotoLineView::Header {
+            .map(|l| match l {
+                GotoLine::Header(s) => crate::dto::GotoLineView::Header {
                     title: norte_i18n::t_in(self.lang, s.title_key),
-                }),
-                GotoLine::Row(i) => filas.get(*i).map(|r| crate::dto::GotoLineView::Row {
-                    text: clamp_display(r.text.clone()),
-                    desc: clamp_display(r.desc.clone()),
-                    hostile: r.hostile,
-                }),
+                },
+                GotoLine::Row(i) => {
+                    let r = filas.get(*i);
+                    crate::dto::GotoLineView::Row {
+                        text: clamp_display(r.map(|r| r.text.clone()).unwrap_or_default()),
+                        desc: clamp_display(r.map(|r| r.desc.clone()).unwrap_or_default()),
+                        hostile: r.is_some_and(|r| r.hostile),
+                    }
+                }
             })
             .collect();
         Some(crate::dto::GotoView {

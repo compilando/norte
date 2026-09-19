@@ -352,8 +352,9 @@ pub struct Falso {
     /// paginado de verdad por `before_seq`. `None` = `Unsupported` (un daemon
     /// sin journal).
     pub journal: Option<Vec<norte_proto::methods::JournalRow>>,
-    /// Los cortes que se pidió deshacer (`journal.undo_after`), en orden.
-    pub deshechos_hasta: std::sync::Mutex<Vec<i64>>,
+    /// Los cortes que se pidió deshacer (`journal.undo_after`), con su techo,
+    /// en orden.
+    pub deshechos_hasta: std::sync::Mutex<Vec<(i64, Option<i64>)>>,
     /// Cuántas veces se ha pedido el catálogo de extensiones.
     pub catalogos_pedidos: std::sync::atomic::AtomicU64,
     /// Con qué DESENLACE termina una búsqueda.
@@ -1254,11 +1255,15 @@ impl HostBackend for Falso {
         Box::pin(async move { res })
     }
 
-    fn undo_after(&self, seq: i64) -> BoxFuture<'static, Result<HostTask, Error>> {
+    fn undo_after(
+        &self,
+        seq: i64,
+        upto_seq: Option<i64>,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.deshechos_hasta
             .lock()
             .expect("deshechos_hasta")
-            .push(seq);
+            .push((seq, upto_seq));
         self.latido();
         let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(950 + n as u64);
