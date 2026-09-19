@@ -774,8 +774,16 @@ async fn deshacer_hasta_un_punto_respeta_lo_anterior() {
         .seq;
 
     let (h, report) = engine.undo_after(seq_primera).await.expect("undo submit");
+    let id = h.id();
     assert_eq!(h.join().await, TaskState::Completed);
     let r = report.lock().expect("lock").clone();
+
+    // El engine lo retiene para `policy.undo_report`, y lo suelta cuando el
+    // daemon no llega a entregar el id (OVERLOADED): un informe de una tarea
+    // que nadie recibió no tiene a quién servirse.
+    assert_eq!(engine.undo_report(id).map(|(_, r)| r.undone), Some(1));
+    engine.forget_undo_report(id);
+    assert!(engine.undo_report(id).is_none(), "olvidado");
 
     assert_eq!(r.undone, 1, "sólo la segunda copia");
     assert!(r.blocked.is_none());

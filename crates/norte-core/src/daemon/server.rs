@@ -3366,9 +3366,19 @@ async fn handle_policy_undo_session(
     // lanzar la Task. OJO honestidad: si esto contesta OVERLOADED, la Task YA
     // corre desde el submit y la cancelación es cooperativa — pueden aterrizar
     // reverts reales, y el cliente no recibe el id con el que pedir su informe
-    // (el journal sí registra las compensaciones).
-    let task_id = register_task_id(shared, handle, Actor::User)?;
+    // (el journal sí registra las compensaciones). Por eso el informe se
+    // SUELTA en ese caso: un id que nadie recibió no tiene a quién servirse.
+    let task_id = register_task_undo(shared, handle)?;
     to_value(&methods::PolicyUndoSessionResult { task_id })
+}
+
+/// [`register_task_id`] para una Task de undo, que además suelta su informe
+/// retenido si el registro falla (OVERLOADED): ese id no llega a nadie.
+fn register_task_undo(shared: &Arc<Shared>, handle: TaskHandle) -> Result<TaskId, RpcError> {
+    let id = handle.id();
+    register_task_id(shared, handle, Actor::User).inspect_err(|_| {
+        shared.engine.forget_undo_report(id);
+    })
 }
 
 /// `journal.list` (0.76.0, fase 7): una página de la línea de tiempo.
@@ -3428,7 +3438,7 @@ async fn handle_journal_undo_after(
         .undo_after(p.seq)
         .await
         .map_err(RpcError::from)?;
-    let task_id = register_task_id(shared, handle, Actor::User)?;
+    let task_id = register_task_undo(shared, handle)?;
     // Material de auditoría, como el undo de una sesión de agente: hasta
     // dónde, quién y con qué Task. Sin el `task_id` la línea no se puede
     // cruzar ni con el informe ni con las compensaciones que aparecen
@@ -3465,14 +3475,19 @@ fn handle_policy_undo_report(
             "only a human (non-agent) connection may read an undo report",
         ));
     }
-    // El dueño guardado no hace falta mirarlo: un undo sólo lo ejecuta el
-    // humano, y sólo el humano llega hasta aquí.
-    let Some((_owner, snapshot)) = shared.engine.undo_report(p.task_id) else {
-        return Err(RpcError::protocol(
-            codes::INVALID_PARAMS,
-            "unknown undo task (never an undo, or evicted from the ring)",
-        ));
-    };
+    // `NotFound` de la taxonomía (0.79.0), el MISMO que su gemelo
+    // `fs.rename_batch_report` y que el brazo embebido, para las dos
+    // situaciones —nunca fue un undo, desalojado del anillo—. Antes era
+    // `INVALID_PARAMS` pelado, que el cliente leía como `Internal`.
+    //
+    // El dueño guardado no se mira: a diferencia del gemelo, aquí solo llega
+    // el humano (la barrera de arriba), y todo undo lo ejecuta el humano, así
+    // que un `may_observe` no podría negar nada — sería código muerto que
+    // parece una comprobación.
+    let (_owner, snapshot) = shared
+        .engine
+        .undo_report(p.task_id)
+        .ok_or_else(|| RpcError::from(norte_proto::Error::NotFound))?;
     to_value(&crate::undo::report_to_proto(snapshot))
 }
 

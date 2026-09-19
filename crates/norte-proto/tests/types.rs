@@ -1344,10 +1344,14 @@ fn version_ventana_actual() {
     // comando se declara no disponible con su motivo en vez de fingir que
     // funciona. Nada de lo viejo cambia de forma: un método nuevo y un tipo
     // nuevo, y ningún tipo existente gana ni pierde un campo.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.78.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.77.0"), "N-1");
+    // 0.79.0: `policy.undo_report` contesta `NotFound` a un id desconocido en
+    // vez de `INVALID_PARAMS`. Ningún tipo cambia; un cliente 0.78 que
+    // distinguía el caso por el código deja de reconocerlo y lo lee como el
+    // error genérico que ya sabía leer.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.79.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.78.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.76.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.77.9"),
         "N-2 fuera de la ventana"
     );
 }

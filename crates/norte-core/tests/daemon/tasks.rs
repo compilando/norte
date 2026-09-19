@@ -397,9 +397,12 @@ async fn task_cancel_de_agente_cancela_la_suya() {
     );
 }
 
-/// Un `task_id` desconocido (o expulsado del anillo) es `INVALID_PARAMS`.
+/// Un `task_id` desconocido (o expulsado del anillo) es `NotFound` de la
+/// taxonomía (0.79.0), lo mismo que su gemelo `fs.rename_batch_report` y lo
+/// mismo que contesta el brazo embebido. Antes era `INVALID_PARAMS` pelado, que
+/// el cliente leía como `Internal` —la respuesta de un provider que panica—.
 #[tokio::test]
-async fn undo_report_task_desconocida_es_invalid_params() {
+async fn undo_report_task_desconocida_es_not_found() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
     let err = c
@@ -411,7 +414,14 @@ async fn undo_report_task_desconocida_es_invalid_params() {
         )
         .await
         .expect_err("sin undo no hay informe");
-    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::NotFound)),
+            "NotFound de la taxonomía, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
 }
 
 /// #72 (borde): `rpc.cancel` de un id DESCONOCIDO (nada en vuelo) es un no-op

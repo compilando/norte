@@ -4532,6 +4532,19 @@ impl Engine {
         Ok((handle, report))
     }
 
+    /// Suelta el informe de un undo cuyo id no llegó a nadie.
+    ///
+    /// El engine retiene el informe al LANZAR la Task, y el daemon puede
+    /// contestar después OVERLOADED sin entregar el id. Ese informe ya no
+    /// tiene a quién servirse, y guardarlo solo dejaba en el anillo un id que
+    /// cualquier otra conexión humana podía pedir por enumeración.
+    pub fn forget_undo_report(&self, task_id: TaskId) {
+        self.undo_reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(id, _, _)| *id != task_id);
+    }
+
     /// El informe de un undo (`policy.undo_report`, #71): snapshot, definitivo
     /// cuando la Task es terminal. `None` si ese id no fue un undo o el anillo
     /// ya lo desalojó ([`UNDO_REPORTS_MAX`]). El actor es quien lo ejecutó: el
