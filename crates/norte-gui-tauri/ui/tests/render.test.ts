@@ -2598,6 +2598,35 @@ describe("la ayuda", () => {
     expect(screen.desplazarAyuda("x"), "una letra no es suya").toBe(false);
   });
 
+  it("una página con tres secciones o más lleva su índice arriba", () => {
+    const { screen } = montar();
+    const v = conAyuda();
+    if (v.help !== null) {
+      v.help.blocks = ["Uno", "Dos", "Tres"].flatMap((t) => [
+        { block: "heading" as const, level: 1, text: t },
+        { block: "paragraph" as const, spans: [{ span: "text" as const, text: "…" }] },
+      ]);
+    }
+    screen.paint(v);
+    const botones = [...document.querySelectorAll(".help-toc-item")].map(
+      (b) => b.textContent,
+    );
+    expect(botones).toEqual(["Uno", "Dos", "Tres"]);
+    // `[`/`]` son teclas de desplazar: el renderer las consume.
+    expect(screen.desplazarAyuda("]")).toBe(true);
+    expect(screen.desplazarAyuda("[")).toBe(true);
+  });
+
+  it("con menos de tres secciones no hay índice de página", () => {
+    const { screen } = montar();
+    const v = conAyuda();
+    if (v.help !== null) {
+      v.help.blocks = [{ block: "heading", level: 1, text: "Sola" }];
+    }
+    screen.paint(v);
+    expect(document.querySelector(".help-toc")).toBeNull();
+  });
+
   it("las flechas desplazan solo una página SIN acciones", () => {
     // Con acciones, las flechas eligen una y son del host; sin ellas (la hoja
     // de teclado) son la única forma de leer línea a línea.

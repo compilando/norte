@@ -1782,6 +1782,9 @@ body {
    padding, el texto tocaba el borde de la caja y la última línea quedaba
    pegada al pie. */
 .help-body {
+  /* `relative` para que el `offsetTop` de un encabezado se mida desde esta
+     caja: es a donde saltan `[`, `]` y el índice de la página. */
+  position: relative;
   grid-row: 1;
   padding: 12px 24px 24px;
   overflow: auto;
@@ -1839,6 +1842,31 @@ body {
 
 .help-badge {
   color: var(--hostile-fg);
+}
+
+/* El índice de la página: las secciones en una fila que se parte, debajo del
+   título. Discreto — es un atajo, no parte del texto. */
+.help-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  max-width: 72ch;
+  margin: 0 0 1em;
+}
+
+.help-toc-item {
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 0.9em;
+  color: var(--border-focus);
+  background: transparent;
+  border: 1px solid var(--separator, var(--border));
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.help-toc-item:hover {
+  border-color: var(--border-focus);
 }
 
 .help-bullets {

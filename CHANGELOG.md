@@ -312,6 +312,13 @@ independently through `PROTOCOL_VERSION`.
     full title of a truncated page on hover.
   - The page "Two panes, one destination" was 663 lines: comparing,
     synchronising and profiles now have their own pages.
+  - `[` and `]` jump to the previous and next section of a page (`{`/`}`
+    too in vim); in the window a page with three or more sections lists
+    them at the top.
+  - The filter ignores accents (`raton` finds «ratón») and, when no page is
+    named for the word, searches the text of the pages.
+  - A `[[link]]` in the prose can be followed: with Enter from the rows at
+    the end of the page, and in the window by clicking it.
 - **Keys are named in the language of the screen.** In Spanish, `AvPág`,
   `Retroceso`, `Intro`, `Inicio`, `Supr` and arrows instead of `PgDn`,
   `Backspace`, `Enter`… in the key bar, the palette, the help and the

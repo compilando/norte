@@ -26,6 +26,8 @@ const NAVIGATION_HINT_EXCLUDED: &[&str] = &[
     "dialog.page-down",
     "dialog.top",
     "dialog.bottom",
+    "dialog.section-prev",
+    "dialog.section-next",
 ];
 
 /// Filters a SUPPORTED allowlist down to the commands worth spelling out in
@@ -670,7 +672,12 @@ mod tests {
             .filter(|c| {
                 !matches!(
                     *c,
-                    "dialog.up" | "dialog.down" | "dialog.top" | "dialog.bottom"
+                    "dialog.up"
+                        | "dialog.down"
+                        | "dialog.top"
+                        | "dialog.bottom"
+                        | "dialog.section-prev"
+                        | "dialog.section-next"
                 )
             })
             .collect();

@@ -22,7 +22,8 @@ use norte_i18n::{t, ta};
 use crate::app::{App, HelpOutcome, PAGE, Palette, detail_for_bar, error_message};
 use crate::keymap::{Command, Resolution, Resolver, chord_from_crossterm, parse_plugin_key};
 
-/// Las seis teclas que MUEVEN, en la lateral o en el cuerpo.
+/// Las teclas que MUEVEN, en la lateral o en el cuerpo: flechas, página,
+/// extremos y saltos de sección.
 ///
 /// Una página, en la lateral, son diez temas; en el cuerpo es la ventana que
 /// se ve, que es lo que un lector entiende por «una pantalla» — con diez
@@ -40,6 +41,8 @@ fn desplazar(help: &mut crate::app::HelpView, mover: HelpOutcome) {
         HelpOutcome::PageDown => help.state.page_down(pagina),
         HelpOutcome::Top => help.state.top(),
         HelpOutcome::Bottom => help.state.bottom(),
+        HelpOutcome::SectionPrev => help.section_prev(),
+        HelpOutcome::SectionNext => help.section_next(),
         _ => {}
     }
 }
@@ -311,8 +314,9 @@ pub fn on_help_key(
                 }
             }
         },
-        // Lo que queda son las seis teclas que desplazan (flechas, página,
-        // extremos): todas las demás variantes tienen su brazo arriba.
+        // Lo que queda son las teclas que desplazan (flechas, página,
+        // extremos, secciones): todas las demás variantes tienen su brazo
+        // arriba.
         mover => desplazar(help, mover),
     }
     None

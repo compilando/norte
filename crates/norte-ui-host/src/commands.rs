@@ -229,6 +229,8 @@ pub const IMPLEMENTADOS_DIALOGO: &[&str] = &[
     "dialog.page-down",
     "dialog.top",
     "dialog.bottom",
+    "dialog.section-prev",
+    "dialog.section-next",
     // El selector de columnas y el gestor de extensiones.
     "dialog.toggle-enabled",
     "dialog.move-up",

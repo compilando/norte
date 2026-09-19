@@ -432,6 +432,8 @@ pub const ALLOW_HELP: &[&str] = &[
     "dialog.page-down",
     "dialog.top",
     "dialog.bottom",
+    "dialog.section-prev",
+    "dialog.section-next",
     "dialog.confirm",
     "dialog.cancel",
     "dialog.pane",
@@ -669,6 +671,10 @@ pub enum HelpOutcome {
     Top,
     /// The last topic, or the end of the body (`End`).
     Bottom,
+    /// The previous section of the page (`[`).
+    SectionPrev,
+    /// The next section of the page (`]`).
+    SectionNext,
     /// Enter: open the selected topic, or run/follow the focused body row.
     Activate,
     /// Close the overlay.
@@ -701,6 +707,8 @@ pub fn help_action(cmd: &str) -> Option<HelpOutcome> {
         "dialog.page-down" => HelpOutcome::PageDown,
         "dialog.top" => HelpOutcome::Top,
         "dialog.bottom" => HelpOutcome::Bottom,
+        "dialog.section-prev" => HelpOutcome::SectionPrev,
+        "dialog.section-next" => HelpOutcome::SectionNext,
         "dialog.confirm" => HelpOutcome::Activate,
         "dialog.cancel" => HelpOutcome::Close,
         "dialog.pane" => HelpOutcome::TogglePane,

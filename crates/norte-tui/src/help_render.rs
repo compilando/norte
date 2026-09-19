@@ -78,6 +78,10 @@ pub struct Rendered<'a> {
     /// [`lines`](Self::lines): an action occupies EXACTLY one line, which is
     /// why rows and links are truncated rather than wrapped.
     pub action_lines: Vec<usize>,
+    /// Line index of each heading of the page, in order: where `[` and `]`
+    /// jump to. Strictly increasing, every entry a valid index into
+    /// [`lines`](Self::lines).
+    pub heading_lines: Vec<usize>,
 }
 
 /// Paints a whole topic: title, a rule, the blocks separated by a blank line,
@@ -173,6 +177,7 @@ pub fn render_topic<'a>(
         ));
     }
 
+    let mut heading_lines = Vec::new();
     for (i, block) in topic.blocks.iter().enumerate() {
         lines.push(Line::default());
         // A heading opens a SECTION, and one blank line — the same one that
@@ -183,6 +188,9 @@ pub fn render_topic<'a>(
         // for.
         if i > 0 && matches!(block, Block::Heading { .. }) {
             lines.push(Line::default());
+        }
+        if matches!(block, Block::Heading { .. }) {
+            heading_lines.push(lines.len());
         }
         lines.extend(render_block(block, lang, r, width, theme));
     }
@@ -235,6 +243,7 @@ pub fn render_topic<'a>(
     Rendered {
         lines,
         action_lines,
+        heading_lines,
     }
 }
 
@@ -364,6 +373,7 @@ pub fn into_static(r: Rendered<'_>) -> Rendered<'static> {
             })
             .collect(),
         action_lines: r.action_lines,
+        heading_lines: r.heading_lines,
     }
 }
 

@@ -96,6 +96,23 @@ export function desplazarAyuda(this: Screen, key: string): boolean {
     case "End":
       cuerpo.scrollTop = cuerpo.scrollHeight;
       return true;
+    // Secciones: el encabezado siguiente (o el anterior) arriba de la caja.
+    // `[`/`]` como en el terminal, y `{`/`}` por los de vim.
+    case "]":
+    case "}":
+    case "[":
+    case "{": {
+      const adelante = key === "]" || key === "}";
+      const tope = cuerpo.scrollTop;
+      const secciones = [...cuerpo.querySelectorAll("h2, h3")].filter(
+        (h): h is HTMLElement => h instanceof HTMLElement,
+      );
+      const destino = adelante
+        ? secciones.find((h) => h.offsetTop > tope + 1)
+        : secciones.reverse().find((h) => h.offsetTop < tope - 1);
+      cuerpo.scrollTop = destino?.offsetTop ?? (adelante ? cuerpo.scrollHeight : 0);
+      return true;
+    }
     case "ArrowDown":
       if (sinAcciones) {
         cuerpo.scrollTop += linea;
@@ -181,9 +198,28 @@ export function helpBody(this: Screen, help: HelpView): HTMLElement {
     badge.textContent = help.badge;
     cuerpo.append(badge);
   }
-  for (const b of help.blocks) {
-    cuerpo.append(this.helpBlock(b));
+  const bloques = help.blocks.map((b) => this.helpBlock(b));
+  // El índice de la PÁGINA, arriba: sus secciones, cada una un botón que la
+  // trae a la vista. Solo con tres o más — con una o dos, el índice ocupa más
+  // de lo que ahorra.
+  const secciones = bloques.filter((el) => el.tagName === "H2");
+  if (secciones.length >= 3) {
+    const indice = document.createElement("nav");
+    indice.className = "help-toc";
+    indice.setAttribute("aria-label", this.t("help-toc"));
+    for (const h of secciones) {
+      const ir = document.createElement("button");
+      ir.type = "button";
+      ir.className = "help-toc-item";
+      ir.textContent = h.textContent;
+      ir.addEventListener("click", () => {
+        cuerpo.scrollTop = h.offsetTop;
+      });
+      indice.append(ir);
+    }
+    cuerpo.append(indice);
   }
+  cuerpo.append(...bloques);
   if (help.actions.length > 0) {
     const lista = document.createElement("ul");
     lista.className = "help-actions";

@@ -675,6 +675,7 @@ cli-ls-skipped = warning: { $n } container entries omitted from the index (hosti
 
 # --- Help (F1) — built from the effective keymap ---
 help-title = Help
+help-toc = Sections of this page
 help-section-browse = Browsing (panes)
 help-section-viewer = Viewer
 help-section-dialog = Dialogs and overlays
@@ -1370,6 +1371,8 @@ help-cmd-dialog-confirm-other = open in the other panel
 help-cmd-dialog-clear = clear the list
 help-cmd-dialog-top = go to the start of the list or text
 help-cmd-dialog-bottom = go to the end of the list or text
+help-cmd-dialog-section-prev = go to the previous section of the page
+help-cmd-dialog-section-next = go to the next section of the page
 help-cmd-nav-forward = forward again
 help-cmd-pane-mirror = send this location to the other pane
 help-cmd-pane-mirror-target = send the folder under the cursor to the other pane
@@ -1947,6 +1950,8 @@ dialog-cmd-page-up = pg up
 dialog-cmd-page-down = pg dn
 dialog-cmd-top = home
 dialog-cmd-bottom = end
+dialog-cmd-section-prev = previous section
+dialog-cmd-section-next = next section
 dialog-cmd-add = add
 dialog-cmd-toggle-enabled = toggle
 dialog-cmd-remove = remove
