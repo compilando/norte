@@ -72,6 +72,11 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
  * Las flechas solo cuando la página no tiene nada ejecutable (la hoja de
  * teclado, la más larga): con acciones, las flechas eligen una y son del
  * host, que la revela.
+ *
+ * Límite conocido: estas teclas son FIJAS aquí y no pasan por el keymap,
+ * así que reatar `dialog.page-down`, `dialog.top` o `dialog.section-next`
+ * cambia el terminal y no esta ventana. Enrutarlas por el keymap pide que
+ * el host diga qué verbo es cada tecla sin consumirla, y es otro cambio.
  */
 export function desplazarAyuda(this: Screen, key: string): boolean {
   const cuerpo = this.helpRoot.querySelector(".help-body");
@@ -104,7 +109,9 @@ export function desplazarAyuda(this: Screen, key: string): boolean {
     case "{": {
       const adelante = key === "]" || key === "}";
       const tope = cuerpo.scrollTop;
-      const secciones = [...cuerpo.querySelectorAll("h2, h3")].filter(
+      // Los TRES niveles del corpus (`helpBlock` los pinta como h2..h4): el
+      // terminal para en todos, y la ventana tiene que parar en los mismos.
+      const secciones = [...cuerpo.querySelectorAll("h2, h3, h4")].filter(
         (h): h is HTMLElement => h instanceof HTMLElement,
       );
       const destino = adelante

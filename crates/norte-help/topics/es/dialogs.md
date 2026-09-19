@@ -39,7 +39,9 @@ anuncie y luego ignore.
 
 Reasigna cualquiera de ellos y todos los overlays le siguen, esta página
 incluida: las teclas de esta ayuda se consultan en tu keymap al dibujarla. De
-eso va [[help]].
+eso va [[help]]. Una excepción, en la ventana: las teclas que desplazan el
+texto de esta ayuda (página, principio y final, secciones) siguen siendo allí
+las de serie.
 
 # La regla que importa
 
