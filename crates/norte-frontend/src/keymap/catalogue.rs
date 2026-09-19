@@ -418,6 +418,9 @@ pub const CATALOGUE: &[CommandDef] = &[
     // The two ends. Same count rule as the movers above: no overlay repeats.
     live("dialog.top", false, Inert),
     live("dialog.bottom", false, Inert),
+    // Saltar de sección en una página de texto (la ayuda).
+    live("dialog.section-prev", false, Inert),
+    live("dialog.section-next", false, Inert),
     live("dialog.add", false, Inert),
     live("dialog.toggle-enabled", false, Inert),
     live("dialog.remove", false, Inert),

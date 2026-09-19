@@ -18,8 +18,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use norte_encoding::mask_terminal_hazards;
 use norte_help::{Lang, Origin, Topic, TopicId, topics};
 
-use crate::nav::fold;
-
 /// Id of the topic the overlay opens on.
 const INDEX_ID: &str = "index";
 
@@ -883,11 +881,20 @@ impl HelpState {
     /// contents the author wrote, and silently regrouping it would reorder
     /// the reading path.
     fn rebuild_rows(&mut self) {
-        let needle = fold(self.filter.as_bytes());
+        let needle = plegar(&self.filter);
+        // Dos niveles (ver `matches`): el texto de las páginas solo cuenta
+        // cuando ninguna se llama así ni documenta un comando que lo sea.
+        let por_texto =
+            !needle.is_empty() && !topics(self.lang).iter().any(|t| matches(t, &needle));
         let mut rows: Vec<SidebarRow> = Vec::new();
         let mut group: Option<&str> = None;
         for topic in topics(self.lang) {
-            if !matches(topic, &needle) {
+            let dentro = if por_texto {
+                matches_text(topic, &needle)
+            } else {
+                matches(topic, &needle)
+            };
+            if !dentro {
                 continue;
             }
             let tag = topic.tags.first().map_or("", String::as_str);
@@ -913,8 +920,8 @@ impl HelpState {
         // the row SAYS (`tecl…` against `Teclado`) finds the row they are
         // looking straight at — before, only the literal `keys` reached it.
         if needle.is_empty()
-            || fold(KEYS_ID.as_bytes()).contains(&needle)
-            || fold(self.keys_label.as_bytes()).contains(&needle)
+            || plegar(KEYS_ID).contains(&needle)
+            || plegar(&self.keys_label).contains(&needle)
         {
             rows.push(SidebarRow::Group {
                 tag: KEYS_TAG.to_owned(),
@@ -938,8 +945,8 @@ impl HelpState {
             .iter()
             .filter(|n| {
                 needle.is_empty()
-                    || fold(n.id.as_bytes()).contains(&needle)
-                    || fold(n.title.as_bytes()).contains(&needle)
+                    || plegar(&n.id).contains(&needle)
+                    || plegar(&n.title).contains(&needle)
             })
             .collect();
         if !hits.is_empty() {
@@ -1070,7 +1077,10 @@ impl HelpState {
                 .iter()
                 .cloned()
                 .map(Action::Run)
-                .chain(topic.see_also.iter().cloned().map(Action::Open))
+                // `links()`: el `see_also` y DESPUÉS los `[[enlaces]]` de la
+                // prosa, que antes se pintaban como enlace y no se podían
+                // seguir ni con Enter ni con un clic.
+                .chain(topic.links().into_iter().map(Action::Open))
                 .collect()
         });
         self.action_cursor = 0;
@@ -1090,32 +1100,82 @@ impl HelpState {
 /// (`pane.co`, `task.cancel`) still finds the page that documents it, which
 /// is what matching commands at all was for.
 ///
-/// # Known gap: diacritics
+/// The TEXT of the page is the second tier, [`matches_text`]: used only when
+/// no page matches here. A word that is nobody's name (`bucket`)
+/// still finds the page that explains it, and a word that IS a name keeps its
+/// precise answer — searched in the prose, `copy` hit 15 of 23 pages and
+/// buried «Copying» among them.
 ///
-/// [`fold`] normalizes to NFC and lowercases; it does NOT strip diacritics.
-/// So a needle typed without accents misses a title that has them: `como`
-/// does not find «Cómo se lee esta ayuda» and `raton` does not find «Usar el
-/// ratón» — 3 of the 8 Spanish titles as the corpus stands. Typing the accent
-/// works, and so does any accent-free substring of the same title (`se lee`,
-/// `usar el`), so no page is unreachable; it is worse than that for the
-/// reader who does not know that.
+/// # Diacritics
 ///
-/// Deliberately NOT fixed here. [`fold`] is ONE pipeline shared with the
-/// filename path (quick search, `nav`), and there a name is BYTES: `café` and
-/// `cafe` are two different files that must stay two different rows, so
-/// folding the accent away would make the filename filter lie about what is
-/// on disk. Splitting the two would mean a second normalization pipeline and
-/// a second cache, and the choice of which surface gets which rule is a
-/// design decision this phase is not the place to take. The next phase that
-/// touches help search should take it explicitly — decompose to NFD and drop
-/// `Mn` for the HELP needle only, or accept the gap and say so in the docs.
+/// Matched with [`plegar`], not with the filename [`crate::nav::fold`]:
+/// `raton` finds «ratón». The two had to split. That one is shared with the
+/// filename path
+/// (quick search, `nav`), where a name is BYTES and `café` and `cafe` are two
+/// different files that must stay two rows; the help is prose, where they are
+/// the same word typed in a hurry.
 fn matches(topic: &Topic, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    fold(topic.id.as_str().as_bytes()).contains(needle)
-        || fold(topic.title.as_bytes()).contains(needle)
+    plegar(topic.id.as_str()).contains(needle)
+        || plegar(&topic.title).contains(needle)
         || topic.commands.iter().any(|c| command_matches(c, needle))
+}
+
+/// The second tier of [`matches`]: the needle appears in the page's prose.
+fn matches_text(topic: &Topic, needle: &str) -> bool {
+    plegar(&texto_de(topic)).contains(needle)
+}
+
+/// Folds help text for SEARCHING: canonical decomposition, combining marks
+/// dropped, lower case. `Ratón` and `raton` fold to the same thing.
+///
+/// Help only — see [`matches`] for why the filename [`crate::nav::fold`] must
+/// not do this.
+fn plegar(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    s.nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// The searchable text of a page: the prose of every block, one line each.
+/// Command marks and links are left out — a command is matched by its id
+/// ([`command_matches`]) and a link names ANOTHER page.
+fn texto_de(topic: &Topic) -> String {
+    use norte_help::{Block, Span};
+    fn spans(out: &mut String, ss: &[Span]) {
+        for s in ss {
+            match s {
+                Span::Text(t) | Span::Strong(t) | Span::Emph(t) | Span::Code(t) => {
+                    out.push_str(t);
+                }
+                Span::CommandRef(_) | Span::TopicLink(_) => out.push(' '),
+            }
+        }
+        out.push('\n');
+    }
+    let mut out = String::new();
+    for b in &topic.blocks {
+        match b {
+            Block::Heading { text, .. } | Block::Code { text, .. } => {
+                out.push_str(text);
+                out.push('\n');
+            }
+            Block::Paragraph(ss) | Block::Callout { spans: ss, .. } => spans(&mut out, ss),
+            Block::Bullets(items) => items.iter().for_each(|ss| spans(&mut out, ss)),
+            Block::Table { header, rows } => {
+                for celda in header.iter().chain(rows.iter().flatten()) {
+                    out.push_str(celda);
+                    out.push(' ');
+                }
+                out.push('\n');
+            }
+        }
+    }
+    out
 }
 
 /// A command matches when the needle is a prefix of its full id or of any of
@@ -1133,13 +1193,14 @@ fn matches(topic: &Topic, needle: &str) -> bool {
 /// because dragging between panes IS a copy and that page is where it is
 /// explained.
 fn command_matches(command: &str, needle: &str) -> bool {
-    let folded = fold(command.as_bytes());
+    let folded = plegar(command);
     folded.starts_with(needle) || folded.split('.').any(|segment| segment.starts_with(needle))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nav::fold;
     use norte_help::{Lang, TopicId};
 
     /// The label the TUI would hand in, standing in for `t("help-topic-keys")`
@@ -1650,6 +1711,76 @@ mod tests {
              instead, so the cheatsheet could not be read past its first screen"
         );
         assert_eq!(s.action(), None);
+    }
+
+    fn filtra(s: &mut HelpState, texto: &str) -> Vec<String> {
+        s.start_filter();
+        for c in texto.chars() {
+            s.push_char(c);
+        }
+        s.rows()
+            .iter()
+            .filter_map(|r| match r {
+                SidebarRow::Topic { id, .. } => Some(id.as_str().to_owned()),
+                SidebarRow::Group { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Sin tildes encuentra lo que tiene tildes: «raton» es «ratón» para
+    /// cualquiera que teclee deprisa. Antes 3 de los títulos en español no
+    /// salían sin el acento exacto.
+    #[test]
+    fn el_filtro_de_la_ayuda_no_distingue_acentos() {
+        let mut s = HelpState::new(Lang::Es, "Teclado".to_owned());
+        assert!(filtra(&mut s, "raton").contains(&"mouse".to_owned()));
+        let mut s = HelpState::new(Lang::Es, "Teclado".to_owned());
+        assert!(
+            filtra(&mut s, "RATÓN").contains(&"mouse".to_owned()),
+            "ni mayúsculas"
+        );
+    }
+
+    /// El filtro busca también en el TEXTO de las páginas: una palabra que
+    /// solo sale en la prosa encuentra la página que la explica.
+    #[test]
+    fn el_filtro_busca_en_el_texto_de_las_paginas() {
+        let mut s = HelpState::new(Lang::Es, "Teclado".to_owned());
+        let hallados = filtra(&mut s, "bucket");
+        assert!(
+            hallados.contains(&"index".to_owned()),
+            "«bucket» solo está en la prosa del índice (y de remoto): {hallados:?}"
+        );
+        let mut s = HelpState::new(Lang::Es, "Teclado".to_owned());
+        assert!(
+            filtra(&mut s, "zzzqqq").is_empty(),
+            "y lo que no está, no sale"
+        );
+    }
+
+    /// Los `[[enlaces]]` de la prosa son acciones: se pintaban como enlace y
+    /// no se podían seguir ni con Intro ni con un clic. El orden es el de
+    /// `Topic::links()`, que es el que pintan los dos frontends.
+    #[test]
+    fn the_links_in_the_prose_are_actions_too() {
+        let mut algun_extra = false;
+        for t in norte_help::topics(Lang::En) {
+            let mut s = state();
+            s.open(&t.id);
+            let esperadas: Vec<Action> = t
+                .commands
+                .iter()
+                .cloned()
+                .map(Action::Run)
+                .chain(t.links().into_iter().map(Action::Open))
+                .collect();
+            assert_eq!(s.actions(), esperadas.as_slice(), "{}", t.id);
+            algun_extra |= t.links().len() > t.see_also.len();
+        }
+        assert!(
+            algun_extra,
+            "some page links in its prose to something see_also does not name"
+        );
     }
 
     #[test]

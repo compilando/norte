@@ -166,6 +166,7 @@ impl HelpView {
             body: crate::help_render::Rendered {
                 lines: Vec::new(),
                 action_lines: Vec::new(),
+                heading_lines: Vec::new(),
             },
             asked: std::collections::BTreeSet::new(),
             publishers: std::collections::BTreeMap::new(),
@@ -179,6 +180,40 @@ impl HelpView {
     #[must_use]
     pub fn page(&self) -> usize {
         self.height.saturating_sub(2).max(1)
+    }
+
+    /// Where each heading of the open page landed, in body lines.
+    #[must_use]
+    pub fn heading_lines(&self) -> &[usize] {
+        &self.body.heading_lines
+    }
+
+    /// `]`: the next section at the top of the window. Past the last heading,
+    /// the end of the page — a key that does nothing reads as broken.
+    ///
+    /// Whatever half has the focus: the sections are the BODY's, and jumping
+    /// to one is reading, so the view leads (`scroll_body_to`).
+    pub fn section_next(&mut self) {
+        let scroll = self.state.body_scroll();
+        match self.body.heading_lines.iter().find(|&&l| l > scroll) {
+            Some(&linea) => self.state.scroll_body_to(linea),
+            None => self.state.scroll_body_to(usize::MAX),
+        }
+    }
+
+    /// `[`: the previous section at the top of the window; before the first
+    /// heading, the start of the page.
+    pub fn section_prev(&mut self) {
+        let scroll = self.state.body_scroll();
+        let linea = self
+            .body
+            .heading_lines
+            .iter()
+            .rev()
+            .find(|&&l| l < scroll)
+            .copied()
+            .unwrap_or(0);
+        self.state.scroll_body_to(linea);
     }
 
     /// Down arrow: one topic in the sidebar; in the body, the next action if
@@ -375,6 +410,7 @@ impl HelpView {
             crate::help_render::Rendered {
                 lines: self.keys_lines.clone(),
                 action_lines: Vec::new(),
+                heading_lines: Vec::new(),
             }
         } else {
             // A plugin page still in flight — and any other page that resolves
@@ -385,6 +421,7 @@ impl HelpView {
             crate::help_render::Rendered {
                 lines: Vec::new(),
                 action_lines: Vec::new(),
+                heading_lines: Vec::new(),
             }
         };
         self.height = height;
@@ -748,6 +785,49 @@ mod help_view_tests {
         view.line_down();
         refresh(&mut view, 60, 6);
         assert_eq!(view.state.action_cursor(), first + 1, "the next action");
+    }
+
+    /// `]` pone arriba la SIGUIENTE sección y `[` la anterior; pasado el
+    /// último encabezado, `]` va al final, y antes del primero `[` al
+    /// principio — una tecla que no hace nada se lee como rota.
+    #[test]
+    fn los_saltos_de_seccion_van_de_encabezado_en_encabezado() {
+        let mut view = HelpView::new(Lang::Es, Vec::new());
+        view.state.open(&TopicId::new("panes"));
+        refresh(&mut view, 60, 8);
+        let encabezados = view.heading_lines().to_vec();
+        assert!(
+            encabezados.len() >= 3,
+            "panes tiene secciones: {encabezados:?}"
+        );
+
+        view.section_next();
+        refresh(&mut view, 60, 8);
+        assert_eq!(view.state.body_scroll(), encabezados[0]);
+        view.section_next();
+        refresh(&mut view, 60, 8);
+        assert_eq!(view.state.body_scroll(), encabezados[1]);
+        view.section_prev();
+        refresh(&mut view, 60, 8);
+        assert_eq!(view.state.body_scroll(), encabezados[0]);
+        view.section_prev();
+        refresh(&mut view, 60, 8);
+        assert_eq!(
+            view.state.body_scroll(),
+            0,
+            "antes del primero, al principio"
+        );
+
+        for _ in 0..encabezados.len() + 2 {
+            view.section_next();
+            refresh(&mut view, 60, 8);
+        }
+        let total = view.body().0.len();
+        assert_eq!(
+            view.state.body_scroll(),
+            total - 8,
+            "después del último, al final"
+        );
     }
 
     /// A page is the WINDOW, less two lines of overlap, not a fixed ten.

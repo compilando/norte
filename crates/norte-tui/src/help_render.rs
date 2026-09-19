@@ -78,6 +78,10 @@ pub struct Rendered<'a> {
     /// [`lines`](Self::lines): an action occupies EXACTLY one line, which is
     /// why rows and links are truncated rather than wrapped.
     pub action_lines: Vec<usize>,
+    /// Line index of each heading of the page, in order: where `[` and `]`
+    /// jump to. Strictly increasing, every entry a valid index into
+    /// [`lines`](Self::lines).
+    pub heading_lines: Vec<usize>,
 }
 
 /// Paints a whole topic: title, a rule, the blocks separated by a blank line,
@@ -118,7 +122,7 @@ pub struct Rendered<'a> {
 /// // One action line per command and per link, in `HelpState::actions` order.
 /// assert_eq!(
 ///     out.action_lines.len(),
-///     copying.commands.len() + copying.see_also.len()
+///     copying.commands.len() + copying.links().len()
 /// );
 /// assert!(out.action_lines.iter().all(|&i| i < out.lines.len()));
 ///
@@ -173,6 +177,7 @@ pub fn render_topic<'a>(
         ));
     }
 
+    let mut heading_lines = Vec::new();
     for (i, block) in topic.blocks.iter().enumerate() {
         lines.push(Line::default());
         // A heading opens a SECTION, and one blank line — the same one that
@@ -184,11 +189,18 @@ pub fn render_topic<'a>(
         if i > 0 && matches!(block, Block::Heading { .. }) {
             lines.push(Line::default());
         }
+        if matches!(block, Block::Heading { .. }) {
+            heading_lines.push(lines.len());
+        }
         lines.extend(render_block(block, lang, r, width, theme));
     }
 
     let rows = norte_help::rows_of(topic, r);
-    let mut action_lines = Vec::with_capacity(rows.len() + topic.see_also.len());
+    // `links()`: el `see_also` y los `[[enlaces]]` de la prosa, en el MISMO
+    // orden que las acciones del modelo — si no, el cursor señalaría una fila
+    // y Enter seguiría otra.
+    let enlaces = topic.links();
+    let mut action_lines = Vec::with_capacity(rows.len() + enlaces.len());
 
     if !rows.is_empty() {
         lines.push(Line::default());
@@ -205,9 +217,9 @@ pub fn render_topic<'a>(
         }
     }
 
-    if !topic.see_also.is_empty() {
+    if !enlaces.is_empty() {
         lines.push(Line::default());
-        for id in &topic.see_also {
+        for id in &enlaces {
             action_lines.push(lines.len());
             // The TITLE of the page the link opens, not its id: the sidebar
             // row for that same page says exactly this, and a reader who
@@ -231,6 +243,7 @@ pub fn render_topic<'a>(
     Rendered {
         lines,
         action_lines,
+        heading_lines,
     }
 }
 
@@ -360,6 +373,7 @@ pub fn into_static(r: Rendered<'_>) -> Rendered<'static> {
             })
             .collect(),
         action_lines: r.action_lines,
+        heading_lines: r.heading_lines,
     }
 }
 
@@ -1173,7 +1187,7 @@ mod tests {
         let out = render_topic(copying, Lang::En, &Fake, 60, &theme());
         assert_eq!(
             out.action_lines.len(),
-            copying.commands.len() + copying.see_also.len(),
+            copying.commands.len() + copying.links().len(),
             "one line per action of `HelpState::actions`, commands then links"
         );
         assert!(
@@ -1232,7 +1246,7 @@ mod tests {
                     let ctx = format!("{lang:?}/{} at {width} cells", t.id);
                     assert_eq!(
                         out.action_lines.len(),
-                        t.commands.len() + t.see_also.len(),
+                        t.commands.len() + t.links().len(),
                         "[{ctx}] one action line per command and per link, in \
                          `HelpState::actions` order"
                     );
@@ -1773,7 +1787,7 @@ mod tests {
         assert!(!out.lines.is_empty());
         assert_eq!(
             out.action_lines.len(),
-            t.commands.len() + t.see_also.len(),
+            t.commands.len() + t.links().len(),
             "the map matches the topic even when it has no runnable rows"
         );
     }

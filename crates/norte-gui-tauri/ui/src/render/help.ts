@@ -72,6 +72,11 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
  * Las flechas solo cuando la página no tiene nada ejecutable (la hoja de
  * teclado, la más larga): con acciones, las flechas eligen una y son del
  * host, que la revela.
+ *
+ * Límite conocido: estas teclas son FIJAS aquí y no pasan por el keymap,
+ * así que reatar `dialog.page-down`, `dialog.top` o `dialog.section-next`
+ * cambia el terminal y no esta ventana. Enrutarlas por el keymap pide que
+ * el host diga qué verbo es cada tecla sin consumirla, y es otro cambio.
  */
 export function desplazarAyuda(this: Screen, key: string): boolean {
   const cuerpo = this.helpRoot.querySelector(".help-body");
@@ -96,6 +101,25 @@ export function desplazarAyuda(this: Screen, key: string): boolean {
     case "End":
       cuerpo.scrollTop = cuerpo.scrollHeight;
       return true;
+    // Secciones: el encabezado siguiente (o el anterior) arriba de la caja.
+    // `[`/`]` como en el terminal, y `{`/`}` por los de vim.
+    case "]":
+    case "}":
+    case "[":
+    case "{": {
+      const adelante = key === "]" || key === "}";
+      const tope = cuerpo.scrollTop;
+      // Los TRES niveles del corpus (`helpBlock` los pinta como h2..h4): el
+      // terminal para en todos, y la ventana tiene que parar en los mismos.
+      const secciones = [...cuerpo.querySelectorAll("h2, h3, h4")].filter(
+        (h): h is HTMLElement => h instanceof HTMLElement,
+      );
+      const destino = adelante
+        ? secciones.find((h) => h.offsetTop > tope + 1)
+        : secciones.reverse().find((h) => h.offsetTop < tope - 1);
+      cuerpo.scrollTop = destino?.offsetTop ?? (adelante ? cuerpo.scrollHeight : 0);
+      return true;
+    }
     case "ArrowDown":
       if (sinAcciones) {
         cuerpo.scrollTop += linea;
@@ -181,9 +205,28 @@ export function helpBody(this: Screen, help: HelpView): HTMLElement {
     badge.textContent = help.badge;
     cuerpo.append(badge);
   }
-  for (const b of help.blocks) {
-    cuerpo.append(this.helpBlock(b));
+  const bloques = help.blocks.map((b) => this.helpBlock(b));
+  // El índice de la PÁGINA, arriba: sus secciones, cada una un botón que la
+  // trae a la vista. Solo con tres o más — con una o dos, el índice ocupa más
+  // de lo que ahorra.
+  const secciones = bloques.filter((el) => el.tagName === "H2");
+  if (secciones.length >= 3) {
+    const indice = document.createElement("nav");
+    indice.className = "help-toc";
+    indice.setAttribute("aria-label", this.t("help-toc"));
+    for (const h of secciones) {
+      const ir = document.createElement("button");
+      ir.type = "button";
+      ir.className = "help-toc-item";
+      ir.textContent = h.textContent;
+      ir.addEventListener("click", () => {
+        cuerpo.scrollTop = h.offsetTop;
+      });
+      indice.append(ir);
+    }
+    cuerpo.append(indice);
   }
+  cuerpo.append(...bloques);
   if (help.actions.length > 0) {
     const lista = document.createElement("ul");
     lista.className = "help-actions";
@@ -378,14 +421,22 @@ export function helpSpan(this: Screen, s: HelpSpanView): HTMLElement {
       return el;
     }
     case "link": {
-      // NO es un control: una marca `[[topic]]` en la prosa no está en la
-      // lista de acciones —esa la forman los comandos de la página y sus
-      // «ver también»—, así que no hay nada que activar. Un `button` que
-      // no hace nada es peor que un texto que se lee como enlace, y es la
-      // misma decisión que tomó el TUI.
+      // Desde el puente 75 un `[[enlace]]` de la prosa ES una fila de las
+      // acciones de la página, y pulsarlo es activar esa fila: lo mismo que
+      // Intro sobre ella, con el mismo camino por el host. Viaja el ÍNDICE,
+      // no la clave del destino. Sin fila (`null`) sigue siendo texto: un
+      // control que no hace nada es peor que un texto que se lee como enlace.
       const el = document.createElement("span");
       el.className = "help-link";
       el.textContent = s.text;
+      const fila = s.action;
+      if (fila !== null) {
+        el.setAttribute("role", "link");
+        el.dataset["live"] = "true";
+        el.addEventListener("click", () => {
+          this.send({ action: "help_activate", index: fila });
+        });
+      }
       return el;
     }
   }

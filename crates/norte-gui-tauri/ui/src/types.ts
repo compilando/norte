@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 74;
+export const BRIDGE_VERSION = 75;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -848,7 +848,7 @@ export type HelpSpanView =
   | { span: "emph"; text: string }
   | { span: "code"; text: string }
   | { span: "command"; text: string; is_chord: boolean }
-  | { span: "link"; text: string };
+  | { span: "link"; text: string; action: number | null };
 
 export interface HelpKeyRowView {
   chord: string;

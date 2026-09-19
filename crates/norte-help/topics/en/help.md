@@ -31,8 +31,11 @@ leaves the help open.
 {{cmd:dialog.filter}} starts filtering the list on the left. It matches page
 titles, page ids and the commands each page documents — a command from the
 start of the id or of any of its dotted parts — so `copy` brings up every page
-that documents `pane.copy`, not only the one named after it. Leaving the search
-box keeps what you typed; emptying it is what backspace is for.
+that documents `pane.copy`, not only the one named after it. When no page is
+named that and no command matches it, it searches the text of the pages:
+`bucket` finds the pages that talk about it even though it is nobody's title. It
+ignores accents and case. Leaving the search box keeps what you typed;
+emptying it is what backspace is for.
 
 # The keys here are yours
 

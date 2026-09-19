@@ -207,6 +207,16 @@ fn the_structure_is_identical_across_locales() {
             en.context, es.context,
             "{id}: `context` differs across locales"
         );
+        // The prose `[[links]]` are rows too since bridge 75
+        // (`Topic::links()`), so a translation that drops or adds one hands
+        // one language a row the other does not have. As a SET: a translated
+        // sentence may legitimately mention two pages in the other order.
+        let links = |t: &Topic| t.links().into_iter().collect::<BTreeSet<_>>();
+        assert_eq!(
+            links(en),
+            links(es),
+            "{id}: the pages linked from the prose differ across locales"
+        );
     }
 }
 
@@ -508,7 +518,7 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 171] = [
+const DOCUMENTED: [&str; 173] = [
     "app.extensions",
     "app.goto",
     "app.handoff",
@@ -548,6 +558,8 @@ const DOCUMENTED: [&str; 171] = [
     "dialog.pane",
     "dialog.remove",
     "dialog.rename",
+    "dialog.section-next",
+    "dialog.section-prev",
     "dialog.skip",
     "dialog.sort",
     "dialog.toggle-enabled",

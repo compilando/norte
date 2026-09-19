@@ -12,6 +12,8 @@ commands = [
     "dialog.page-down",
     "dialog.top",
     "dialog.bottom",
+    "dialog.section-prev",
+    "dialog.section-next",
     "app.quit",
 ]
 context = ["dialog.quit"]
@@ -25,8 +27,10 @@ the same six verbs:
 - {{cmd:dialog.page-up}} and {{cmd:dialog.page-down}} move a screen at a time
 
 In this help, {{cmd:dialog.top}} and {{cmd:dialog.bottom}} also go to the start
-and the end of the index or the page, and in the text the arrows scroll it a
-line at a time until an action is in view.
+and the end of the index or the page, {{cmd:dialog.section-prev}} and
+{{cmd:dialog.section-next}} jump to the previous or next section of the page,
+and in the text the arrows scroll it a line at a time until an action is in
+view.
 
 Each dialog supports the subset that means something in it, and the footer is
 GENERATED from that subset rather than written by hand. What the footer offers
@@ -35,6 +39,8 @@ advertises and ignores.
 
 Rebind any of them and every overlay follows, including this page. The keys
 in this help are looked up in your keymap as the page is drawn; see [[help]].
+One exception, in the window: the keys that scroll the text of this help
+(page, start and end, sections) stay the default ones there.
 
 # The rule that matters
 

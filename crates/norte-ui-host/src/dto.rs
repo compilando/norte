@@ -609,6 +609,12 @@ pub enum HelpSpanView {
     Link {
         /// Su título, o el id si el corpus de este idioma no la tiene.
         text: String,
+        /// La fila de `HelpView::actions` que la sigue (puente 75): pulsar el
+        /// enlace es activar ESA fila. Un ÍNDICE y no el id, por lo mismo que
+        /// arriba: el renderer no recibe claves que no puede usar. `None` si
+        /// la página no tiene esa fila —no pasa en el corpus, que añade cada
+        /// enlace de la prosa a sus acciones—.
+        action: Option<u64>,
     },
 }
 

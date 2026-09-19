@@ -678,6 +678,7 @@ cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nom
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
 help-title = Ayuda
+help-toc = Secciones de esta página
 help-section-browse = Navegación (panes)
 help-section-viewer = Viewer
 help-section-dialog = Diálogos y overlays
@@ -1320,6 +1321,8 @@ help-cmd-dialog-confirm-other = abrir en el otro panel
 help-cmd-dialog-clear = vaciar la lista
 help-cmd-dialog-top = ir al principio de la lista o del texto
 help-cmd-dialog-bottom = ir al final de la lista o del texto
+help-cmd-dialog-section-prev = ir a la sección anterior de la página
+help-cmd-dialog-section-next = ir a la sección siguiente de la página
 help-cmd-nav-forward = avanzar otra vez
 help-cmd-pane-mirror = mandar esta ubicación al otro pane
 help-cmd-pane-mirror-target = mandar al otro pane la carpeta bajo el cursor
@@ -1904,6 +1907,8 @@ dialog-cmd-page-up = re pág
 dialog-cmd-page-down = av pág
 dialog-cmd-top = inicio
 dialog-cmd-bottom = fin
+dialog-cmd-section-prev = sección anterior
+dialog-cmd-section-next = sección siguiente
 dialog-cmd-add = añadir
 dialog-cmd-toggle-enabled = activar
 dialog-cmd-remove = quitar

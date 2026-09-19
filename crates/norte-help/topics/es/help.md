@@ -33,7 +33,10 @@ de ellas te lo dice y deja la ayuda abierta.
 títulos, en los ids de las páginas y en los comandos que cada una documenta —el
 comando, por el principio del id o de cualquiera de sus partes separadas por
 puntos—, así que `copy` saca todas las páginas que documentan `pane.copy`, no
-solo la que se llama así. Salir de la caja de búsqueda no borra lo escrito;
+solo la que se llama así. Si ninguna página se llama así ni documenta un
+comando que lo sea, busca en el texto de las páginas: `bucket` encuentra las
+que hablan de ello aunque no sea el título de ninguna. No distingue acentos ni mayúsculas, así que
+`raton` encuentra el ratón. Salir de la caja de búsqueda no borra lo escrito;
 para vaciarla está el borrado.
 
 # Las teclas que salen aquí son las tuyas

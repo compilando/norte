@@ -12,6 +12,8 @@ commands = [
     "dialog.page-down",
     "dialog.top",
     "dialog.bottom",
+    "dialog.section-prev",
+    "dialog.section-next",
     "app.quit",
 ]
 context = ["dialog.quit"]
@@ -25,8 +27,10 @@ misma ayuda— hablan los mismos seis verbos:
 - {{cmd:dialog.page-up}} y {{cmd:dialog.page-down}} se mueven de pantalla en pantalla
 
 En esta ayuda, además, {{cmd:dialog.top}} y {{cmd:dialog.bottom}} van al
-principio y al final del índice o de la página, y en el texto las flechas lo
-desplazan línea a línea hasta que hay una acción a la vista.
+principio y al final del índice o de la página, {{cmd:dialog.section-prev}} y
+{{cmd:dialog.section-next}} saltan a la sección anterior o siguiente de la
+página, y en el texto las flechas lo desplazan línea a línea hasta que hay una
+acción a la vista.
 
 Cada diálogo admite el subconjunto que significa algo en él, y el pie se GENERA
 a partir de ese subconjunto en vez de escribirse a mano. Lo que el pie ofrece es
@@ -35,7 +39,9 @@ anuncie y luego ignore.
 
 Reasigna cualquiera de ellos y todos los overlays le siguen, esta página
 incluida: las teclas de esta ayuda se consultan en tu keymap al dibujarla. De
-eso va [[help]].
+eso va [[help]]. Una excepción, en la ventana: las teclas que desplazan el
+texto de esta ayuda (página, principio y final, secciones) siguen siendo allí
+las de serie.
 
 # La regla que importa
 

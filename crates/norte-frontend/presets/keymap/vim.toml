@@ -205,6 +205,12 @@ keymap = [
     # `G` y no `g g`: sobre un overlay no hay secuencias (se descartan en el
     # primer `g`), así que el principio queda en Inicio.
     { on = ["G"], run = "dialog.bottom" },
+    # `{`/`}` son los saltos de párrafo de vim; `[`/`]` los de los demás
+    # presets. Los dos, que sobre la ayuda no hay otra cosa que atar ahí.
+    { on = ["["], run = "dialog.section-prev" },
+    { on = ["]"], run = "dialog.section-next" },
+    { on = ["{"], run = "dialog.section-prev" },
+    { on = ["}"], run = "dialog.section-next" },
     { on = ["a"], run = "dialog.add" },
     { on = ["e"], run = "dialog.toggle-enabled" },
     { on = ["space"], run = "dialog.toggle-enabled" },

@@ -247,6 +247,8 @@ keymap = [
     { on = ["pgdn"], run = "dialog.page-down" },
     { on = ["home"], run = "dialog.top" },
     { on = ["end"], run = "dialog.bottom" },
+    { on = ["["], run = "dialog.section-prev" },
+    { on = ["]"], run = "dialog.section-next" },
     { on = ["a"], run = "dialog.add" },
     { on = ["e"], run = "dialog.toggle-enabled" },
     { on = ["space"], run = "dialog.toggle-enabled" },

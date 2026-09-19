@@ -392,6 +392,7 @@
               "text": "F5"
             },
             {
+              "action": 1,
               "span": "link",
               "text": "Marcar"
             }
