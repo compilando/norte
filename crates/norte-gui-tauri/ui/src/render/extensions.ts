@@ -176,7 +176,10 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
     errores.setAttribute("role", "listbox");
     errores.setAttribute("aria-labelledby", titulo.id);
     if (ext.cursor >= ext.rows.length) {
-      errores.setAttribute("aria-activedescendant", `extension-row-${String(ext.cursor)}`);
+      errores.setAttribute(
+        "aria-activedescendant",
+        `extension-row-${String(ext.cursor)}`,
+      );
     }
     for (const [j, e] of ext.errors.entries()) {
       // Una fila más: se señala con un clic, y su ficha tiene el único
