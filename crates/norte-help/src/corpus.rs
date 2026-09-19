@@ -33,7 +33,12 @@ const EN: &[(&str, &str)] = &[
     ("dialogs", include_str!("../topics/en/dialogs.md")),
     ("settings", include_str!("../topics/en/settings.md")),
     ("appearance", include_str!("../topics/en/appearance.md")),
+    // Each tag's pages TOGETHER: the sidebar groups consecutive pages, so a
+    // page out of place prints its group header twice (a test pins it).
+    ("profiles", include_str!("../topics/en/profiles.md")),
     ("copying", include_str!("../topics/en/copying.md")),
+    ("compare", include_str!("../topics/en/compare.md")),
+    ("sync", include_str!("../topics/en/sync.md")),
     ("finding", include_str!("../topics/en/finding.md")),
     ("columns", include_str!("../topics/en/columns.md")),
     ("viewer", include_str!("../topics/en/viewer.md")),
@@ -60,7 +65,10 @@ const ES: &[(&str, &str)] = &[
     ("dialogs", include_str!("../topics/es/dialogs.md")),
     ("settings", include_str!("../topics/es/settings.md")),
     ("appearance", include_str!("../topics/es/appearance.md")),
+    ("profiles", include_str!("../topics/es/profiles.md")),
     ("copying", include_str!("../topics/es/copying.md")),
+    ("compare", include_str!("../topics/es/compare.md")),
+    ("sync", include_str!("../topics/es/sync.md")),
     ("finding", include_str!("../topics/es/finding.md")),
     ("columns", include_str!("../topics/es/columns.md")),
     ("viewer", include_str!("../topics/es/viewer.md")),

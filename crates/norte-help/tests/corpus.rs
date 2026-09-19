@@ -27,7 +27,7 @@ const LANGS: [Lang; 2] = [Lang::En, Lang::Es];
 /// the corpus so that DELETING a topic file is a test failure too: a check
 /// that reads the corpus to decide what the corpus should contain cannot see
 /// an absence.
-const EXPECTED: [&str; 20] = [
+const EXPECTED: [&str; 23] = [
     "index",
     "panes",
     "tabs",
@@ -38,7 +38,10 @@ const EXPECTED: [&str; 20] = [
     "dialogs",
     "settings",
     "appearance",
+    "profiles",
     "copying",
+    "compare",
+    "sync",
     "finding",
     "columns",
     "viewer",
@@ -134,6 +137,32 @@ fn a_topic_id_matches_its_filename() {
                 expected,
                 "{lang:?}: the table is out of order or misnamed"
             );
+        }
+    }
+}
+
+/// The topics of one tag sit TOGETHER in the table. The sidebar groups
+/// consecutive topics under their tag's header, so a `doing` page inserted
+/// between two `basics` pages splits "Basics" into two groups with the same
+/// name — which is exactly what splitting `panes` did, and nothing but a
+/// snapshot noticed.
+#[test]
+fn the_topics_of_a_tag_are_contiguous() {
+    for lang in LANGS {
+        let mut vistos: Vec<&str> = Vec::new();
+        let mut anterior: Option<&str> = None;
+        for t in topics(lang) {
+            let tag = t.tags.first().map_or("", String::as_str);
+            if anterior != Some(tag) {
+                assert!(
+                    !vistos.contains(&tag),
+                    "{lang:?}/{}: tag `{tag}` appears again after another tag \
+                     — the sidebar would show its group header twice",
+                    t.id
+                );
+                vistos.push(tag);
+                anterior = Some(tag);
+            }
         }
     }
 }
@@ -479,7 +508,7 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 169] = [
+const DOCUMENTED: [&str; 171] = [
     "app.extensions",
     "app.goto",
     "app.handoff",
@@ -501,6 +530,7 @@ const DOCUMENTED: [&str; 169] = [
     "dialog.add",
     "dialog.approve",
     "dialog.back",
+    "dialog.bottom",
     "dialog.cancel",
     "dialog.clear",
     "dialog.confirm",
@@ -521,6 +551,7 @@ const DOCUMENTED: [&str; 169] = [
     "dialog.skip",
     "dialog.sort",
     "dialog.toggle-enabled",
+    "dialog.top",
     "dialog.up",
     "layout.close-slot",
     "layout.disk-map",

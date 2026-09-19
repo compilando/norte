@@ -15,6 +15,9 @@ bucket is the same two keys as copying between two local directories.
 # Where to go next
 
 - [[panes]] — the two panes, focus, and why the other one is the destination
+- [[compare]] — are these two trees the same, and how do these two files differ
+- [[sync]] — a one-way plan you approve before anything is written
+- [[profiles]] — a whole workspace you can switch into, and the saved session
 - [[tabs]] — several tabs in one panel, each with its own directory and cursor
 - [[history]] — back and forward, the history list, popular directories and the jump point
 - [[selection]] — marking the entries a command will act on

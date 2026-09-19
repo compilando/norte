@@ -32,8 +32,37 @@ have I been, and where do I always go.
 ## Back and forward
 
 {{cmd:nav.back}} returns the panel to the directory it came from, and
-{{cmd:nav.forward}} undoes that step. It is a trail like a browser's: go back
-and then somewhere else, and the branch ahead is gone.
+{{cmd:nav.forward}} undoes that. Each pane walks its own trail, and neither key
+moves the focus.
+
+It is a TRAIL, not a list. From one directory to a second and then a third,
+back twice reaches the first. A most-recently-used list walked as if it were a
+trail would bounce between the two most recent directories forever, which is
+why "where was I a moment ago" and "where has this pane been" are two different
+questions here: the second one is the popup behind {{cmd:pane.history}}, and
+stepping back never adds to it.
+
+Navigating somewhere new from the middle of the trail forgets the branch you
+stepped off, exactly as a browser does. A way forward into a history you have
+already abandoned is the bug everyone has met.
+
+A step that does not arrive is rewound — you never left, so the trail is put
+back as it was. That covers the step that **fails** and the one you **abandon**
+with Esc while it is still listing: either way the pane is showing what
+it was showing, and a trail that counted the step would send you "forward" into
+the directory already on screen. When the reason is that the directory is
+**gone**, it also leaves the trail, the forward branch and the history popup, so
+the key can never trap you on a directory that has proved not to be there. Any
+other failure keeps it: a host that was down and a directory you may not read
+are both still places, and either may answer next time.
+
+A step that stops to ask about an unknown host key is the one case that waits:
+it is neither taken nor put back until you answer, because trusting the key
+resumes that very navigation. Trust it and the step finishes; deny it, or let
+the resumed step fail, and the step is rewound like any other that never
+arrived.
+
+> 💡 When there is nothing further back, the key says so. A key that goes quiet is indistinguishable from a broken one.
 
 ## The list
 
@@ -78,6 +107,8 @@ is `[ui] history_size`, between 5 and 64; 30 when unset.
 
 Bookmarks ({{cmd:pane.hotlist}}) are something else: you choose them and they
 live in your configuration.
+
+> 💡 A directory you visit often is worth a favourite: the pane remembers where it has been, and favourites are shared by both panes.
 
 In the window, the mouse's side buttons are back and forward. A terminal does
 not receive those buttons.
