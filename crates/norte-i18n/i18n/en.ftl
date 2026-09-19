@@ -402,6 +402,9 @@ cli-warn-ai-load-failed = warning: loading [ai] failed ({ $error }); ai.* will a
 cli-no-results = (no results)
 cli-spool-swept = swept { $count } orphaned sync plans
 cli-spool-sweep-failed = warning: could not sweep { $path }: { $error }
+cli-spool-partial = warning: swept { $removed } orphaned sync plans and { $failed } could not be removed in { $path }
+cli-warn-ai-unavailable = warning: AI provider unavailable ({ $error }); ai.* will answer Unsupported
+cli-warn-archive-invalid = warning: [archive] in norte.toml could not be read ({ $error }); using the default limits
 # Printed under a plugin that is installed and NOT approved: installing does
 # not activate, and saying only "installed" would leave the reader waiting for
 # something that is not going to happen.

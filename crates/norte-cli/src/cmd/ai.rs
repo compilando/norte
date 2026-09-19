@@ -3,10 +3,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anyhow::Context;
 use norte_core::backend::Backend;
-use norte_vfs::Provider;
-use norte_vfs_local::LocalProvider;
 
 use crate::cmd::compare::marcado;
 use crate::cmd::connect::vpath;
@@ -207,32 +204,34 @@ async fn informar_del_lote(
 /// también (#177): planificar es leer, y leer no le quita el journal a nadie;
 /// el lock se toma a un paso de renombrar.
 async fn backend_con_ia() -> anyhow::Result<Backend> {
-    let engine = norte_core::embedded::engine_in(&norte_core::connect::config_dir());
+    let dir = norte_core::connect::config_dir();
+    let engine = norte_core::embedded::engine_in(&dir);
     // Este brazo no pasa por `run`, así que instala el suyo — ver
     // `AvisoDeJournalPorStderr`.
     engine.set_journal_warning_sink(Arc::new(AvisoDeJournalPorStderr));
-    engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
-    engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
-        norte_core::connect::config_dir(),
-    )));
-
-    let config = tokio::task::spawn_blocking(norte_core::ai::AiConfig::load)
-        .await
-        .context("carga de [ai]")?
-        .context("[ai] inválido en norte.toml")?;
-    let Some(pcfg) = config.rename_provider_config().cloned() else {
+    // Lo que lleva todo engine, IA incluida (`norte_core::equipo`). El core
+    // resuelve el secreto (env → keyring → age) y construye el proveedor; la
+    // CLI no toca norte-connect ni ve la clave (regla 10).
+    let hecho = norte_core::equipo::equipar(&engine, &dir, true).await;
+    if let Err(e) = norte_core::archive_config::aplicar(&engine).await {
+        eprintln!(
+            "{}",
+            crate::cmd::daemon::texto_del_aviso(&norte_core::equipo::Aviso::ArchivoInvalido(
+                e.to_string()
+            ))
+        );
+    }
+    // Aquí la IA no es opcional: es el comando. Lo que en los demás es un
+    // aviso, aquí es el motivo de no poder hacer nada.
+    if !hecho.ia_renombrado {
+        for aviso in &hecho.avisos {
+            eprintln!("{}", crate::cmd::daemon::texto_del_aviso(aviso));
+        }
         anyhow::bail!(
             "sin proveedor de IA para el rename: define [ai.providers.<n>] y \
              rename_provider en norte.toml (ADR 0031)"
         );
-    };
-    // El core resuelve el secreto (env → keyring → age) y construye el
-    // proveedor; el CLI no toca norte-connect ni ve la clave (regla 10).
-    let provider = norte_core::ai::resolve_and_build(&pcfg, norte_core::connect::config_dir())
-        .await
-        .map_err(|e| anyhow::anyhow!("proveedor de IA: {e}"))?;
-    engine.set_ai_provider(provider);
-    engine.set_ai_config(config);
+    }
     Ok(Backend::Embedded(Arc::new(engine)))
 }
 

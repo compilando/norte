@@ -183,6 +183,40 @@ pub(crate) async fn undo_cmd(session: &str, socket: Option<PathBuf>) -> anyhow::
     Ok(outcome)
 }
 
+/// Un [`Aviso`](norte_core::equipo::Aviso) de arranque o de equipamiento, en
+/// el idioma del operador. Lo usan `norte daemon run` y el engine embebido de
+/// la CLI: los dos equipan con `norte_core::equipo` y los dos avisan igual.
+pub(crate) fn texto_del_aviso(aviso: &norte_core::equipo::Aviso) -> String {
+    use norte_core::equipo::Aviso;
+    use norte_i18n::ta;
+    match aviso {
+        Aviso::SpoolsBarridos(n) => ta("cli-spool-swept", &[("count", &n.to_string())]),
+        Aviso::SpoolsAMedias {
+            removed,
+            failed,
+            dir,
+        } => ta(
+            "cli-spool-partial",
+            &[
+                ("removed", &removed.to_string()),
+                ("failed", &failed.to_string()),
+                ("path", &dir.display().to_string()),
+            ],
+        ),
+        Aviso::SpoolsSinBarrer { dir, error } => ta(
+            "cli-spool-sweep-failed",
+            &[("path", &dir.display().to_string()), ("error", error)],
+        ),
+        Aviso::SinIndice(error) => ta("cli-warn-no-index", &[("error", error)]),
+        Aviso::IaNoDisponible(error) => ta("cli-warn-ai-unavailable", &[("error", error)]),
+        // Ya viene redactado por `install_embed_provider`.
+        Aviso::IaEmbeddings(w) => w.clone(),
+        Aviso::IaInvalida(error) => ta("cli-warn-ai-invalid", &[("error", error)]),
+        Aviso::IaNoCargo(error) => ta("cli-warn-ai-load-failed", &[("error", error)]),
+        Aviso::ArchivoInvalido(error) => ta("cli-warn-archive-invalid", &[("error", error)]),
+    }
+}
+
 /// Elige el transporte (regla 7: la lógica es la misma). `--daemon`
 /// conecta al socket, arrancando `norte daemon run` si hace falta.
 pub(crate) async fn make_backend(
@@ -255,19 +289,29 @@ pub(crate) async fn daemon_cmd(
             // `norte_core::daemon::componer`); aquí queda lo del binario: pintar
             // los avisos en el idioma del operador, el anillo de registro y las
             // señales.
-            use norte_core::daemon::componer::{Aviso, ErrorDeArranque, Opciones};
-            let compuesto = norte_core::daemon::componer(Opciones {
-                socket,
-                idle_timeout: (idle_timeout > 0)
-                    .then(|| std::time::Duration::from_secs(idle_timeout)),
-                // La sesión de UI (L2) vive en el directorio de estado. Sin él
-                // —un entorno sin HOME— el daemon sirve la pantalla y no la
-                // guarda.
-                state_dir: norte_config::dirs::state_dir(),
-            })
+            use norte_core::daemon::componer::{ErrorDeArranque, Opciones};
+            let mut avisos = Vec::new();
+            let compuesto = norte_core::daemon::componer(
+                Opciones {
+                    socket,
+                    idle_timeout: (idle_timeout > 0)
+                        .then(|| std::time::Duration::from_secs(idle_timeout)),
+                    // La sesión de UI (L2) vive en el directorio de estado. Sin
+                    // él —un entorno sin HOME— el daemon sirve la pantalla y no
+                    // la guarda.
+                    state_dir: norte_config::dirs::state_dir(),
+                    config_dir: None,
+                },
+                &mut avisos,
+            )
             .await;
-            let (daemon, avisos) = match compuesto {
-                Ok(c) => c,
+            // Los avisos se dicen ANTES de mirar si arrancó: lo que se averiguó
+            // por el camino sigue siendo verdad aunque el arranque falle luego.
+            for aviso in &avisos {
+                eprintln!("{}", texto_del_aviso(aviso));
+            }
+            let daemon = match compuesto {
+                Ok(d) => d,
                 // El aviso NOMBRA la causa probable: desde #167 un frontend
                 // embebido (un `ntc` sin `--daemon`) se queda el lock exclusivo,
                 // y sin esta frase el operador recibe un texto de sqlx y ninguna
@@ -280,46 +324,6 @@ pub(crate) async fn daemon_cmd(
                 }
                 Err(e) => return Err(e.into()),
             };
-            for aviso in avisos {
-                match aviso {
-                    Aviso::SpoolsBarridos(n) => eprintln!(
-                        "{}",
-                        norte_i18n::ta("cli-spool-swept", &[("count", &n.to_string())])
-                    ),
-                    Aviso::SpoolsAMedias {
-                        removed,
-                        failed,
-                        dir,
-                    } => eprintln!(
-                        "aviso: barridos {removed} planes de sync huérfanos y {failed} no se \
-                         dejaron borrar en {}",
-                        dir.display()
-                    ),
-                    Aviso::SpoolsSinBarrer { dir, error } => eprintln!(
-                        "{}",
-                        norte_i18n::ta(
-                            "cli-spool-sweep-failed",
-                            &[("path", &dir.display().to_string()), ("error", &error)]
-                        )
-                    ),
-                    Aviso::SinIndice(error) => eprintln!(
-                        "{}",
-                        norte_i18n::ta("cli-warn-no-index", &[("error", &error)])
-                    ),
-                    Aviso::IaNoDisponible(e) => eprintln!(
-                        "aviso: proveedor de IA no disponible ({e}); ai.* dará Unsupported"
-                    ),
-                    Aviso::IaEmbeddings(w) => eprintln!("{w}"),
-                    Aviso::IaInvalida(error) => eprintln!(
-                        "{}",
-                        norte_i18n::ta("cli-warn-ai-invalid", &[("error", &error)])
-                    ),
-                    Aviso::IaNoCargo(error) => eprintln!(
-                        "{}",
-                        norte_i18n::ta("cli-warn-ai-load-failed", &[("error", &error)])
-                    ),
-                }
-            }
             // El anillo se monta entre el bind y el `run`, que es donde puede
             // montarse: lo tiene el proceso (lo creó el subscriber), no la
             // config del daemon.

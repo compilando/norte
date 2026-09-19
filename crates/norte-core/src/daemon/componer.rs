@@ -13,8 +13,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use norte_vfs::Provider;
-
 use super::{Daemon, DaemonApprovalResolver, DaemonConfig, DaemonError};
 use crate::Engine;
 
@@ -27,40 +25,15 @@ pub struct Opciones {
     pub idle_timeout: Option<Duration>,
     /// Dónde persiste la sesión de UI; `None` = no se persiste.
     pub state_dir: Option<PathBuf>,
+    /// De dónde salen el journal, el índice, los spools y las conexiones;
+    /// `None` = el del usuario (`connect::config_dir`). Existe para que un
+    /// test no toque nunca el directorio real.
+    pub config_dir: Option<PathBuf>,
 }
 
-/// Algo que el operador debe saber y que NO impide arrancar.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Aviso {
-    /// Se barrieron `n` planes de sincronización huérfanos.
-    SpoolsBarridos(usize),
-    /// El barrido se llevó unos y otros no se dejaron borrar.
-    SpoolsAMedias {
-        /// Barridos.
-        removed: usize,
-        /// Los que se resistieron.
-        failed: usize,
-        /// Dónde.
-        dir: PathBuf,
-    },
-    /// El barrido no pudo ni empezar.
-    SpoolsSinBarrer {
-        /// Dónde.
-        dir: PathBuf,
-        /// Por qué.
-        error: String,
-    },
-    /// Sin índice de búsqueda: `index.*` contestará `Unsupported`.
-    SinIndice(String),
-    /// El proveedor de IA de renombrado no está disponible.
-    IaNoDisponible(String),
-    /// Lo que dijo la instalación del proveedor de embeddings.
-    IaEmbeddings(String),
-    /// `[ai]` no es válido.
-    IaInvalida(String),
-    /// `[ai]` no se pudo leer.
-    IaNoCargo(String),
-}
+/// Algo que el operador debe saber y que NO impide arrancar. El mismo tipo
+/// que devuelve [`crate::equipo::equipar`], que es de donde salen los de IA.
+pub use crate::equipo::Aviso;
 
 /// Lo que impide arrancar.
 ///
@@ -89,12 +62,16 @@ pub enum ErrorDeArranque {
 /// lock exclusivo es lo que garantiza que no hay otro daemon sobre este
 /// directorio de estado; el barrido de spools DESPUÉS, por eso mismo.
 ///
+/// Los avisos van a `avisos` A MEDIDA que ocurren, y no en el `Ok`: si el
+/// arranque falla después —un `[archive]` roto, el socket ocupado—, lo que ya
+/// se había averiguado por el camino (un spool que no se dejó barrer, un índice
+/// que no abrió) sigue siendo verdad y quien lanza lo tiene que poder decir.
+///
 /// # Errors
 /// [`ErrorDeArranque`]: el journal, la policy, los límites de archivo o el
 /// `bind`. Todo lo demás degrada con su [`Aviso`].
-pub async fn componer(o: Opciones) -> Result<(Daemon, Vec<Aviso>), ErrorDeArranque> {
-    let mut avisos = Vec::new();
-    let dir = crate::connect::config_dir();
+pub async fn componer(o: Opciones, avisos: &mut Vec<Aviso>) -> Result<Daemon, ErrorDeArranque> {
+    let dir = o.config_dir.unwrap_or_else(crate::connect::config_dir);
     // El daemon es el dueño ÚNICO del journal (spec §4, ADR 0024) y quien
     // instala policy + approvals: los agentes MCP se gobiernan aquí, jamás en
     // el puente.
@@ -136,40 +113,16 @@ pub async fn componer(o: Opciones) -> Result<(Daemon, Vec<Aviso>), ErrorDeArranq
         Arc::clone(&approvals) as _,
     );
     // Índice de búsqueda (M4, ADR 0034). Si no abre, se sigue sin él.
-    let engine = match crate::Index::open(&dir.join("index.db")).await {
-        Ok(idx) => engine.with_index(Arc::new(idx)),
-        Err(e) => {
-            avisos.push(Aviso::SinIndice(e.to_string()));
-            engine
-        }
-    };
+    let engine = crate::equipo::con_indice(engine, &dir, avisos).await;
     engine.set_spool(spool);
-    engine.register_provider(
-        Arc::new(norte_vfs_local::LocalProvider::os_root()) as Arc<dyn Provider>
-    );
+    // `[archive]` roto ABORTA el daemon (fail-loud, como `policy.toml`); un
+    // frontend embebido, en cambio, lo degrada a aviso.
     crate::archive_config::aplicar(&engine)
         .await
         .map_err(ErrorDeArranque::Archivo)?;
-    engine.set_connector(Arc::new(crate::connect::ConnectionManager::new(
-        dir.clone(),
-    )));
-    // IA (ADR 0031): opt-in, y jamás aborta el arranque.
-    match crate::blocking::spawn_blocking(crate::ai::AiConfig::load).await {
-        Ok(Ok(config)) => {
-            if let Some(pcfg) = config.rename_provider_config().cloned() {
-                match crate::ai::resolve_and_build(&pcfg, dir.clone()).await {
-                    Ok(provider) => engine.set_ai_provider(provider),
-                    Err(e) => avisos.push(Aviso::IaNoDisponible(e)),
-                }
-            }
-            if let Some(w) = crate::ai::install_embed_provider(&engine, &config).await {
-                avisos.push(Aviso::IaEmbeddings(w));
-            }
-            engine.set_ai_config(config);
-        }
-        Ok(Err(e)) => avisos.push(Aviso::IaInvalida(e.to_string())),
-        Err(e) => avisos.push(Aviso::IaNoCargo(e.to_string())),
-    }
+    // Proveedor local, conector e IA (ADR 0031: opt-in, jamás aborta): lo que
+    // lleva todo engine, igual que los embebidos.
+    avisos.extend(crate::equipo::equipar(&engine, &dir, true).await.avisos);
     let daemon = Daemon::bind_with_policy(
         Arc::new(engine),
         scopes,
@@ -185,5 +138,41 @@ pub async fn componer(o: Opciones) -> Result<(Daemon, Vec<Aviso>), ErrorDeArranq
     )
     .await
     .map_err(ErrorDeArranque::Bind)?;
-    Ok((daemon, avisos))
+    Ok(daemon)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ErrorDeArranque, Opciones, componer};
+
+    /// El journal va PRIMERO y su lock es exclusivo: con otro dueño vivo, el
+    /// daemon no arranca, y lo dice con su clase de error. Es lo único que
+    /// impide dos daemons sobre un mismo directorio.
+    ///
+    /// Es también el único camino de `componer` que se puede probar sin leer
+    /// la config REAL del usuario: los pasos siguientes cargan `policy.toml`
+    /// y `[ai]` por las capas estándar.
+    #[tokio::test]
+    async fn con_el_journal_tomado_no_arranca() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _dueno = crate::SqliteJournal::open(&dir.path().join("journal.db"))
+            .await
+            .expect("primer dueño");
+        let mut avisos = Vec::new();
+        let r = componer(
+            Opciones {
+                config_dir: Some(dir.path().to_path_buf()),
+                socket: Some(dir.path().join("d.sock")),
+                ..Opciones::default()
+            },
+            &mut avisos,
+        )
+        .await;
+        assert!(
+            matches!(r, Err(ErrorDeArranque::Journal(_))),
+            "esperaba Journal: {:?}",
+            r.err()
+        );
+        assert!(avisos.is_empty(), "nada se hizo antes del journal");
+    }
 }

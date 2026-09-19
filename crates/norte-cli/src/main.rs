@@ -12,8 +12,6 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use norte_core::{Engine, TransferOptions};
 use norte_proto::SymlinkPolicy;
-use norte_vfs::Provider;
-use norte_vfs_local::LocalProvider;
 
 mod cmd;
 mod doctor;
@@ -750,6 +748,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // query posterior lo lee. SOLO se abre en modo embebido: con `--daemon` el
     // dueño del índice es el daemon (se accede por RPC), y abrirlo aquí solo
     // arriesgaría contención de escritura. Si no abre, se sigue sin él.
+    let mut avisos = Vec::new();
     let engine = if cli.daemon {
         Engine::new()
     } else {
@@ -764,55 +763,32 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         // primera mutación. Aquí había una lista de subcomandos «que mutan»
         // mantenida a mano —con `norte ai rename` ya fuera de ella, abriendo su
         // journal por su cuenta— y es la que ese cambio hizo innecesaria.
-        let base = norte_core::embedded::engine_in(&norte_core::connect::config_dir());
-        let index_path = norte_core::connect::config_dir().join("index.db");
-        match norte_core::Index::open(&index_path).await {
-            Ok(idx) => base.with_index(Arc::new(idx)),
-            Err(e) => {
-                eprintln!(
-                    "{}",
-                    norte_i18n::ta("cli-warn-no-index", &[("error", &e.to_string())])
-                );
-                base
-            }
-        }
+        let dir = norte_core::connect::config_dir();
+        let base = norte_core::embedded::engine_in(&dir);
+        norte_core::equipo::con_indice(base, &dir, &mut avisos).await
     };
-    engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
-    // Conexiones remotas bajo demanda (fase 6e): connections.toml +
-    // known_hosts + secretos en el dir de config del usuario.
-    engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
-        norte_core::connect::config_dir(),
-    )));
-    // Embeddings (M4-IA-2): el engine embebido lleva el índice (arriba) pero
-    // sin proveedor `index embed`/`semantic` darían Unsupported aun con
-    // `[ai]` + embed_provider configurados. El bloque es LAZY: cargar `[ai]`
-    // (config + resolución de secreto) solo lo pagan los dos comandos que lo
-    // consumen — jamás un `ls`. Con `--daemon` el dueño del proveedor es el
-    // daemon (su propio wiring en daemon-run).
-    if !cli.daemon
-        && matches!(
+    if !cli.daemon {
+        // Proveedor local, conector y —solo para los dos comandos que la
+        // usan— la IA: lo que lleva todo engine (`norte_core::equipo`). Cargar
+        // `[ai]` resuelve secretos, y eso jamás lo paga un `ls`. Con `--daemon`
+        // el dueño de todo esto es el daemon.
+        let ia = matches!(
             cli.cmd,
             Cmd::Index {
                 cmd: IndexCmd::Embed { .. } | IndexCmd::Semantic { .. }
             }
-        )
-    {
-        match tokio::task::spawn_blocking(norte_core::ai::AiConfig::load).await {
-            Ok(Ok(config)) => {
-                if let Some(w) = norte_core::ai::install_embed_provider(&engine, &config).await {
-                    eprintln!("{w}");
-                }
-                engine.set_ai_config(config);
-            }
-            Ok(Err(e)) => eprintln!(
-                "{}",
-                norte_i18n::ta("cli-warn-ai-invalid", &[("error", &e.to_string())])
-            ),
-            Err(e) => eprintln!(
-                "{}",
-                norte_i18n::ta("cli-warn-ai-load-failed", &[("error", &e.to_string())])
-            ),
+        );
+        let dir = norte_core::connect::config_dir();
+        avisos.extend(norte_core::equipo::equipar(&engine, &dir, ia).await.avisos);
+        // `[archive]` también en embebido: sin esto un `norte ls` dentro de un
+        // zip usaba los límites por defecto aunque `norte.toml` fijara otros.
+        // Roto, aquí es un aviso; en el daemon, un error de arranque.
+        if let Err(e) = norte_core::archive_config::aplicar(&engine).await {
+            avisos.push(norte_core::equipo::Aviso::ArchivoInvalido(e.to_string()));
         }
+    }
+    for aviso in &avisos {
+        eprintln!("{}", cmd::daemon::texto_del_aviso(aviso));
     }
 
     // #177: si esta sesión acaba mutando sin journal, se dice a stderr y en el

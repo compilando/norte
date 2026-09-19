@@ -294,6 +294,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The CLI reads `[archive]`.** Commands run without `--daemon` used the
+  compiled archive limits whatever `norte.toml` said, and a broken
+  `norte.toml` went unnoticed. They now apply the same limits as the daemon
+  and the terminal, and warn when the file cannot be read.
+- **`norte daemon run` keeps its warnings when it fails to start.** A spool
+  it could not sweep or an index that did not open was only reported if the
+  daemon came up; a later failure (a broken `[archive]`, a busy socket) now
+  prints them too.
 - **In the terminal, a batch rename that is left half-done now says so.**
   The window and the CLI already asked for the batch report when the batch
   ended; the terminal never did, so a step that could not be put back went
