@@ -474,7 +474,7 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // cierra — Enter es lo que se pulsa para «entendido», y aquí no hay
         // nada que proteger con él. Un botón pintado que no hiciera nada sería
         // peor que no pintarlo.
-        Modal::BatchReport { .. } => match cmd {
+        Modal::Report { .. } => match cmd {
             "dialog.approve" | "dialog.confirm" | "dialog.deny" | "dialog.cancel" => {
                 Some(DialogOutcome::Cancelled)
             }
@@ -807,7 +807,10 @@ mod tests {
     /// «confirma» nada: no hay nada que confirmar. Lo demás, inerte.
     #[test]
     fn el_informe_de_lote_solo_se_cierra() {
-        let m = Modal::BatchReport { lines: Vec::new() };
+        let m = Modal::Report {
+            title_key: crate::app::BATCH_REPORT_TITLE,
+            lines: Vec::new(),
+        };
         for cmd in [
             "dialog.approve",
             "dialog.confirm",

@@ -623,9 +623,9 @@ fn modal_title_text(
         // El pie es el de confirmar (Enter/Esc cierran, `dialog_action`): sin
         // él nada decía cómo salir, y sin su línea de botones el ratón no
         // tenía dónde pinchar.
-        Modal::BatchReport { lines } => (
-            t("modal-batch-report-title"),
-            format!("{}\n{}", batch_report_text(lines), hints.confirm),
+        Modal::Report { title_key, lines } => (
+            t(title_key),
+            format!("{}\n{}", report_text(lines), hints.confirm),
         ),
         Modal::ConfirmQuit => (
             t("modal-confirm-quit-title"),
@@ -1187,17 +1187,18 @@ pub(crate) fn properties_modal_text(
     (title, lines.join("\n"))
 }
 
-/// El cuerpo del informe de un lote: una frase o una ruta por línea.
+/// El cuerpo de un informe (de lote o de undo): una frase o una ruta por
+/// línea.
 ///
 /// La ruta va SOLA en su línea y con el badge si hubo que enmascararla: es
 /// el nombre que el lector va a buscar (o teclear) a mano, y metida en una
 /// frase la podría suplantar otra (#273).
-pub(crate) fn batch_report_text(lines: &[norte_frontend::BatchReportLine]) -> String {
+pub(crate) fn report_text(lines: &[norte_frontend::ReportLine]) -> String {
     lines
         .iter()
         .map(|l| match l {
-            norte_frontend::BatchReportLine::Phrase(texto) => texto.clone(),
-            norte_frontend::BatchReportLine::Path(p) => {
+            norte_frontend::ReportLine::Phrase(texto) => texto.clone(),
+            norte_frontend::ReportLine::Path(p) => {
                 let (ruta, hostil) = norte_frontend::path_display(p);
                 format!("  {}", badge_prefixed(hostil, ruta))
             }

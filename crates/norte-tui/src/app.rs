@@ -662,10 +662,12 @@ pub struct App {
     /// (una tecla en vuelo respondería a la pregunta equivocada); se
     /// atienden en orden al cerrarse el modal actual.
     pub pending_collisions: std::collections::VecDeque<crate::tasks::RetrySpec>,
-    /// Informes de lotes de renombrado a la espera de diálogo, con la misma
-    /// disciplina: un lote que termina mientras se contesta otra cosa no le
-    /// quita la pantalla, pero tampoco se pierde.
-    pub pending_batch_reports: std::collections::VecDeque<Vec<norte_frontend::BatchReportLine>>,
+    /// Informes a la espera de diálogo (de un lote de renombrado o de un
+    /// undo), con la misma disciplina: lo que termina mientras se contesta
+    /// otra cosa no le quita la pantalla, pero tampoco se pierde. Cada uno
+    /// con la clave de su título.
+    pub pending_reports:
+        std::collections::VecDeque<(&'static str, Vec<norte_frontend::ReportLine>)>,
     /// Aprobaciones de policy a la espera de diálogo (M3-3b T5): misma
     /// disciplina que las colisiones (jamás pisar un modal abierto), pero con
     /// PRIORIDAD sobre ellas — una aprobación tiene TTL en el daemon y una
@@ -1304,7 +1306,7 @@ impl App {
             viewer_modo: crate::viewer_open::Modo::Nada,
             help: None,
             pending_collisions: std::collections::VecDeque::new(),
-            pending_batch_reports: std::collections::VecDeque::new(),
+            pending_reports: std::collections::VecDeque::new(),
             pending_approvals: std::collections::VecDeque::new(),
             theme: crate::theme::TuiTheme::default(),
             theme_picker: None,

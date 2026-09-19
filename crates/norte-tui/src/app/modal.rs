@@ -14,6 +14,11 @@ use norte_proto::VPath;
 /// aquí para no tocar los treinta call sites de este frontend.
 pub use norte_frontend::secret::TypedSecret;
 
+/// El título de [`Modal::Report`] cuando informa de un lote de renombrado.
+pub const BATCH_REPORT_TITLE: &str = "modal-batch-report-title";
+/// El título de [`Modal::Report`] cuando informa de un undo.
+pub const UNDO_REPORT_TITLE: &str = "modal-undo-report-title";
+
 /// Tipo de transferencia pendiente de confirmación/colisión.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferKind {
@@ -86,16 +91,19 @@ pub enum Modal {
         /// `(bytes, entradas)` cuando el recuento terminó.
         size: Option<(u64, u64)>,
     },
-    /// El informe de un lote de renombrado que dejó algo a medias, o cuyo
-    /// desenlace no se pudo comprobar.
+    /// El informe de algo que NO volvió entero: un lote de renombrado a
+    /// medias o un undo que dejó entradas sin deshacer (o cuyo desenlace no
+    /// se pudo comprobar).
     ///
     /// Se lee y se cierra, como las propiedades. Las líneas las decide
-    /// `norte_frontend::batch_report_lines`, las mismas que el diálogo de la
-    /// ventana y la salida de `norte ai rename`: un directorio medio
-    /// renombrado no puede pasar inadvertido en ninguno de los tres.
-    BatchReport {
+    /// `norte_frontend` (`batch_report_lines`, `undo_report_lines`), las
+    /// mismas que el diálogo de la ventana: un directorio medio renombrado o
+    /// medio deshecho no puede pasar inadvertido en ninguno de los dos.
+    Report {
+        /// La clave Fluent del título.
+        title_key: &'static str,
         /// Frases y rutas, cada ruta en su propia línea.
-        lines: Vec<norte_frontend::BatchReportLine>,
+        lines: Vec<norte_frontend::ReportLine>,
     },
     /// Conceder capabilities a una extensión (#280).
     ///

@@ -1173,72 +1173,32 @@ impl Estado {
     /// que NO volvieron, y un informe que las callara diría que el árbol
     /// está como estaba.
     pub(super) fn undo_limpio(r: &norte_proto::methods::PolicyUndoReportResult) -> bool {
-        r.blocked.is_none()
-            && r.batch_stuck.is_none()
-            && r.compensations_lost == 0
-            && r.denied_total == 0
-            && r.skipped_irreversible == 0
-            && r.skipped_created_no_trash == 0
+        norte_frontend::undo_report_is_clean(r)
     }
 
-    /// El cuerpo del informe de un undo: qué volvió y qué no.
+    /// El cuerpo del informe de un undo: qué volvió y qué no. Las líneas las
+    /// decide `norte_frontend::undo_report_lines`, que es también lo que
+    /// enseña la terminal; aquí solo se pintan.
     pub(super) fn cuerpo_de_undo(
         &self,
         r: &norte_proto::methods::PolicyUndoReportResult,
     ) -> Vec<crate::dto::DialogLine> {
-        let linea = |texto: String| crate::dto::DialogLine {
-            text: clamp_display(texto),
-            hostile: false,
-        };
-        let mut cuerpo = vec![linea(norte_i18n::ta_in(
-            self.lang,
-            "modal-undo-summary",
-            &[
-                ("undone", &r.undone.to_string()),
-                ("skipped", &r.skipped_irreversible.to_string()),
-            ],
-        ))];
-        if r.skipped_created_no_trash > 0 {
-            cuerpo.push(linea(norte_i18n::ta_in(
-                self.lang,
-                "modal-undo-left-in-place",
-                &[("n", &r.skipped_created_no_trash.to_string())],
-            )));
-        }
-        if let Some(b) = &r.blocked {
-            // El `seq` es una referencia OPACA: sirve para CITAR la entrada
-            // contra el journal del server, no para interpretarla aquí.
-            cuerpo.push(linea(norte_i18n::ta_in(
-                self.lang,
-                "modal-undo-blocked",
-                &[
-                    ("seq", &b.seq.to_string()),
-                    (
-                        "error",
-                        &norte_i18n::t_in(self.lang, norte_frontend::error::error_key(&b.error)),
-                    ),
-                ],
-            )));
-        }
-        if let Some(paso) = &r.batch_stuck {
-            cuerpo.push(linea(norte_i18n::t_in(self.lang, "modal-undo-batch-stuck")));
-            cuerpo.push(Self::linea_de_ruta(&paso.to));
-        }
-        if r.compensations_lost > 0 {
-            cuerpo.push(linea(norte_i18n::ta_in(
-                self.lang,
-                "modal-batch-compensations-lost",
-                &[("n", &r.compensations_lost.to_string())],
-            )));
-        }
-        if r.denied_total > 0 {
-            cuerpo.push(linea(norte_i18n::ta_in(
-                self.lang,
-                "modal-undo-denied",
-                &[("n", &r.denied_total.to_string())],
-            )));
-        }
-        cuerpo
+        Self::pintar_informe(norte_frontend::undo_report_lines(r, self.lang))
+    }
+
+    /// Las líneas de un informe compartido, pintadas: las frases acotadas, y
+    /// cada ruta como línea de ruta —enmascarada y marcada—.
+    fn pintar_informe(lineas: Vec<norte_frontend::ReportLine>) -> Vec<crate::dto::DialogLine> {
+        lineas
+            .into_iter()
+            .map(|linea| match linea {
+                norte_frontend::ReportLine::Phrase(texto) => crate::dto::DialogLine {
+                    text: clamp_display(texto),
+                    hostile: false,
+                },
+                norte_frontend::ReportLine::Path(p) => Self::linea_de_ruta(&p),
+            })
+            .collect()
     }
 
     /// El informe llegó: se apunta en el tablero y, si el lote dejó algo a
@@ -1345,16 +1305,7 @@ impl Estado {
         &self,
         r: &norte_proto::methods::FsRenameBatchReportResult,
     ) -> Vec<crate::dto::DialogLine> {
-        norte_frontend::batch_report_lines(r, self.lang)
-            .into_iter()
-            .map(|linea| match linea {
-                norte_frontend::BatchReportLine::Phrase(texto) => crate::dto::DialogLine {
-                    text: clamp_display(texto),
-                    hostile: false,
-                },
-                norte_frontend::BatchReportLine::Path(p) => Self::linea_de_ruta(&p),
-            })
-            .collect()
+        Self::pintar_informe(norte_frontend::batch_report_lines(r, self.lang))
     }
 
     /// Apila un diálogo, con techo.
