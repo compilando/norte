@@ -1210,6 +1210,32 @@ async fn revert_mode_batch(
 /// # Errors
 /// Las de [`revert_entry`], [`revert_batch`] y [`revert_sync_batch`]: la
 /// cancelación (regla 3) y el fallo al persistir una compensación (regla 4).
+/// Si alguna entrada de `unit` está YA deshecha según el journal de AHORA
+/// (#358).
+///
+/// Lo que se eligió al pedir el undo pudo deshacerlo, entretanto, otro undo:
+/// un doble clic, dos frontends contra un daemon, un reintento tras timeout.
+/// La verdad ya no es la selección sino el journal, y quien llama salta la
+/// unidad ENTERA si esto dice que sí. Entera porque un lote es todo o nada, y
+/// porque saltarla es la dirección segura: revertir dos veces puede renombrar
+/// encima de algo que el humano volvió a crear, y un undo nuevo la elegirá
+/// bien si queda algo por deshacer.
+///
+/// # Errors
+/// El del journal, como [`Error`].
+pub(crate) async fn ya_deshecha(
+    journal: &SqliteJournal,
+    unit: &[JournalEntry],
+) -> Result<bool, Error> {
+    let seqs: Vec<i64> = unit.iter().map(|e| e.seq).collect();
+    Ok(!journal
+        .journal()
+        .undone_among(&seqs)
+        .await
+        .map_err(Error::from)?
+        .is_empty())
+}
+
 pub(crate) async fn revert_unit(
     provider: &dyn Provider,
     journal: &Arc<SqliteJournal>,

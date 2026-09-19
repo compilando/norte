@@ -852,3 +852,77 @@ async fn deshacer_hasta_un_punto_no_toca_lo_de_un_agente() {
         "lo del agente sigue donde estaba"
     );
 }
+
+/// **Dos undos que eligieron lo mismo no lo deshacen dos veces** (#358).
+///
+/// Elegir y ejecutar están separados: las entradas se escogen al pedir el
+/// undo, y las reversas corren después dentro de la Task. Un doble clic, dos
+/// frontends contra un daemon o un reintento tras timeout dan a dos Tasks la
+/// MISMA pila. Sin volver a mirar dentro de la Task, la segunda revertía otra
+/// vez lo que la primera ya había devuelto — y si entretanto el humano había
+/// vuelto a crear el destino, lo renombraba encima.
+///
+/// Los dos `undo_after` se piden ANTES de que ninguno ejecute: la selección
+/// ocurre al pedirlo y la Task corre después, que es justo la ventana.
+#[tokio::test]
+async fn dos_undos_que_eligieron_lo_mismo_no_lo_deshacen_dos_veces() {
+    let (engine, mem, journal) = setup().await;
+    write_file(&mem, "mem:///a.txt", b"a").await;
+    // El corte tiene que ser una entrada que exista: una copia que se conserva.
+    let h = engine
+        .copy(&vp("mem:///a.txt"), &vp("mem:///ancla.txt"))
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let corte = journal
+        .journal()
+        .page(None, 50, Some("user"))
+        .await
+        .expect("page")
+        .first()
+        .expect("la copia")
+        .entry
+        .seq;
+    let h = engine
+        .move_(&vp("mem:///a.txt"), &vp("mem:///b.txt"))
+        .await
+        .expect("mv");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    // Latencia por operación del provider: la Task del primero sigue a medias
+    // mientras se elige el segundo (una consulta al journal, milisegundos).
+    // Sin ella, en este runtime de un hilo la primera Task corre ENTERA
+    // durante esa consulta y el segundo ya no elige nada. Bajo mucha carga,
+    // lo peor que pasa es que el test deje de ver la carrera (un verde que
+    // no prueba nada), nunca un rojo falso.
+    mem.faults()
+        .set_latency_per_op(Some(std::time::Duration::from_millis(200)));
+    let (h1, r1) = engine.undo_after(corte).await.expect("primer undo");
+    let (h2, r2) = engine.undo_after(corte).await.expect("segundo undo");
+    assert_eq!(h1.join().await, TaskState::Completed);
+    assert_eq!(h2.join().await, TaskState::Completed);
+    let (r1, r2) = (
+        r1.lock().expect("lock").clone(),
+        r2.lock().expect("lock").clone(),
+    );
+
+    assert!(mem.stat(&vp("mem:///a.txt")).await.is_ok(), "volvió");
+    assert_eq!(
+        r1.undone + r2.undone,
+        1,
+        "UNO de los dos lo deshizo: {r1:?} / {r2:?}"
+    );
+    assert!(
+        r1.blocked.is_none() && r2.blocked.is_none(),
+        "y el otro no tropezó con el árbol ya devuelto: {r1:?} / {r2:?}"
+    );
+    let compensaciones = journal
+        .journal()
+        .page(None, 50, None)
+        .await
+        .expect("page")
+        .iter()
+        .filter(|p| p.entry.undoes_seq.is_some())
+        .count();
+    assert_eq!(compensaciones, 1, "una sola compensación en el journal");
+}

@@ -197,6 +197,11 @@ pub struct Engine {
     /// el `Backend` embebido deshacía (`undo_after`) y no tenía de dónde leer
     /// qué había vuelto, así que contestaba `Unsupported` a su propio undo.
     undo_reports: std::sync::Mutex<std::collections::VecDeque<UndoReportEntry>>,
+    /// Un undo a la vez (#358). Lo toma la Task de undo entera, del primer
+    /// paso al último: dos undos que eligieron la misma pila (un doble clic,
+    /// dos frontends, un reintento) no se pisan, y el segundo, al entrar,
+    /// re-mira el journal y se salta lo que el primero ya devolvió.
+    undo_en_curso: Arc<tokio::sync::Mutex<()>>,
     /// Anillo ACOTADO de informes de `archive.pack`, por `task_id`
     /// ([`Engine::archive_pack_report`]).
     ///
@@ -340,6 +345,7 @@ impl Engine {
             sync_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             test_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             undo_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            undo_en_curso: Arc::new(tokio::sync::Mutex::new(())),
             pack_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             checksum_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             dir_usage_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
@@ -4377,6 +4383,11 @@ impl Engine {
     ///
     /// # Panics
     /// Como [`Self::undo_session`] (Mutex del reporte envenenado; no ocurre).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "el cuerpo de la Task es UNA secuencia —turno, re-comprobación, gate, \
+                  reversa, informe— y partirla esconde el orden, que es la regla"
+    )]
     async fn undo_entries(
         &self,
         entries: Vec<crate::journal::JournalEntry>,
@@ -4421,6 +4432,7 @@ impl Engine {
 
         let report_task = Arc::clone(&report);
         let owner = executor.clone();
+        let en_curso = Arc::clone(&self.undo_en_curso);
         let key = "undo".to_owned();
         let handle = self.sched.submit(
             &key,
@@ -4434,9 +4446,20 @@ impl Engine {
                     let total = plan.len() as u64;
                     let task_id = ctx.progress.snapshot().task_id;
                     ctx.progress.update(|p| p.entries_total = Some(total));
+                    // Un undo a la vez (#358), y la espera se puede cancelar:
+                    // un undo en cola detrás de otro largo no retiene a nadie.
+                    let _turno = tokio::select! {
+                        g = en_curso.lock() => g,
+                        () = ctx.cancel.cancelled() => return Err(Error::Cancelled),
+                    };
                     for (unit, provider) in plan {
                         if ctx.cancel.is_cancelled() {
                             return Err(Error::Cancelled);
+                        }
+                        // #358: lo elegido pudo deshacerlo otro undo entretanto.
+                        if crate::undo::ya_deshecha(&journal, &unit).await? {
+                            ctx.progress.update(|p| p.entries_done += 1);
+                            continue;
                         }
                         // La puerta, AQUÍ y por unidad (#171). Dos cosas
                         // cambian respecto a preguntarla toda por adelantado:

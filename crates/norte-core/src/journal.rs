@@ -1833,6 +1833,35 @@ impl Journal {
         rows.iter().map(row_to_entry).collect()
     }
 
+    /// Cuáles de `seqs` están deshechas AHORA: tienen una compensación viva,
+    /// con la misma condición (`COL_UNDONE`) que usa la selección de lo
+    /// revertible.
+    ///
+    /// Es la re-comprobación de un undo JUSTO ANTES de ejecutar una unidad
+    /// (#358): lo que se eligió al pedir el undo pudo deshacerlo, entretanto,
+    /// otro undo — un doble clic, dos frontends, un reintento tras timeout.
+    ///
+    /// Pregunta por trozos: una unidad de sincronización puede tener medio
+    /// millón de entradas, y `SQLite` pone techo a los parámetros de una
+    /// consulta.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`].
+    pub async fn undone_among(&self, seqs: &[i64]) -> Result<Vec<i64>, JournalError> {
+        const TROZO: usize = 500;
+        let mut deshechas = Vec::new();
+        for trozo in seqs.chunks(TROZO) {
+            let huecos = vec!["?"; trozo.len()].join(",");
+            let sql = format!("SELECT seq FROM journal WHERE seq IN ({huecos}) AND {COL_UNDONE}");
+            let mut q = sqlx::query_scalar::<_, i64>(&sql);
+            for s in trozo {
+                q = q.bind(s);
+            }
+            deshechas.extend(q.fetch_all(&self.pool).await?);
+        }
+        Ok(deshechas)
+    }
+
     /// SOLO TESTS: corrompe el `path` de una entrada sin recomputar su hash.
     #[cfg(test)]
     async fn corrupt_path_for_test(&self, seq: i64, path: &[u8]) -> Result<(), JournalError> {
@@ -2660,6 +2689,51 @@ mod tests {
             vec![1],
             "la compensación ya no vale, así que la 1 sigue por deshacer",
         );
+        // Y la re-comprobación del undo (#358) lee la MISMA condición: la 1 no
+        // está deshecha. Si divergieran, un undo en marcha se saltaría lo que
+        // la selección acaba de ofrecer, o al revés.
+        assert!(
+            j.undone_among(&[1]).await.expect("undone").is_empty(),
+            "desandada la compensación, la 1 no cuenta como deshecha"
+        );
+    }
+
+    /// `undone_among` dice cuáles de las pedidas tienen una compensación VIVA,
+    /// y pregunta por trozos: con más seqs que el trozo, sigue contestando
+    /// entero.
+    #[tokio::test]
+    async fn undone_among_devuelve_las_compensadas_vivas_y_cruza_los_trozos() {
+        let j = Journal::open_in_memory().await.expect("open");
+        for i in 0..3 {
+            j.record(
+                "created",
+                format!("file:///f{i}").as_bytes(),
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("mutación");
+        }
+        // seq 4 compensa la 2.
+        j.record_undoing(
+            "removed",
+            b"file:///f1",
+            None,
+            Reversal::Irreversible,
+            None,
+            &Actor::User,
+            Some(2),
+        )
+        .await
+        .expect("compensación");
+        assert_eq!(j.undone_among(&[1, 2, 3]).await.expect("undone"), vec![2]);
+        // Más de un trozo (500), con la compensada al final: la que importa
+        // no se pierde en la costura.
+        let mut muchas: Vec<i64> = (10_000..10_600).collect();
+        muchas.push(2);
+        assert_eq!(j.undone_among(&muchas).await.expect("undone"), vec![2]);
     }
 
     #[tokio::test]
