@@ -32,6 +32,10 @@ use crate::scheduler::TaskHandle;
 const PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(33);
 /// Cada cuánto evalúa el server la condición de inactividad.
 const IDLE_POLL: Duration = Duration::from_millis(250);
+/// Cuánto espera el apagado a que las conexiones terminen de escribir lo que
+/// ya tenían encolado (la respuesta al propio `daemon.shutdown`, el
+/// `daemon.going_away`). Un cliente que no lee no retiene el apagado más.
+const CONNECTION_DRAIN: Duration = Duration::from_secs(2);
 /// Frames pendientes de escribir por conexión. Un cliente que no drena su
 /// lado del socket llega aquí y se le CORTA: jamás memoria sin límite por
 /// un peer lento u hostil (hallazgo M1 del security-reviewer).
@@ -1122,6 +1126,26 @@ impl Daemon {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Y las CONEXIONES, antes de volver: quien llama a `run()` suele ser un
+        // `main` que retorna en cuanto esto vuelve, y soltar el runtime mata
+        // toda task viva — incluida la que está escribiendo la respuesta a
+        // este mismo `daemon.shutdown`. `norte daemon stop` fallaba así, de vez
+        // en cuando, con «conexión cerrada con la request en vuelo» sobre un
+        // daemon que sí se había parado. Cada conexión sale sola al ver el
+        // `shutdown`; esto solo espera a que termine de escribir. Con plazo:
+        // un cliente que no lee puede tener el socket lleno, y no retiene el
+        // apagado.
+        let plazo = tokio::time::Instant::now() + CONNECTION_DRAIN;
+        while shared.connections.load(Ordering::SeqCst) > 0 {
+            if tokio::time::Instant::now() >= plazo {
+                tracing::warn!(
+                    abiertas = shared.connections.load(Ordering::SeqCst),
+                    "apagado sin esperar a conexiones que no terminan de escribir"
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let _ = socket_path;
         tracing::info!("daemon apagado");

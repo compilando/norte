@@ -251,6 +251,51 @@ async fn daemon_shutdown_graceful_espera_y_apaga() {
     assert!(!d.socket.exists(), "el socket se retira del FS");
 }
 
+/// Cuando `run()` vuelve, las conexiones ya se CERRARON — con lo que tenían
+/// que decir ya escrito.
+///
+/// Quien llama a `run()` suele ser un `main` que retorna justo después, y al
+/// soltar el runtime se lleva por delante toda task que siga viva. La que
+/// escribe la respuesta a `daemon.shutdown` era una de ellas: `norte daemon
+/// stop` fallaba de vez en cuando con «conexión cerrada con la request en
+/// vuelo» sobre un daemon que sí se había parado. Se mira en otra conexión
+/// abierta porque es observable sin esperar: si `run()` ya drenó, su lectura
+/// da EOF en el acto; si no, todavía no hay nada que leer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_vuelve_con_las_conexiones_ya_cerradas() {
+    for _ in 0..30 {
+        run_vuelve_con_las_conexiones_ya_cerradas_una_vez().await;
+    }
+}
+
+async fn run_vuelve_con_las_conexiones_ya_cerradas_una_vez() {
+    let d = spawn_daemon(None).await;
+    let otra = tokio::net::UnixStream::connect(&d.socket)
+        .await
+        .expect("connect");
+    let c = connected_client(&d).await;
+    let _: DaemonShutdownResult = c
+        .call(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams {
+                graceful: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("shutdown aceptado");
+    tokio::time::timeout(Duration::from_secs(5), d.run)
+        .await
+        .expect("run() termina")
+        .expect("join limpio")
+        .expect("apagado sin error");
+    let mut buf = [0u8; 16];
+    match otra.try_read(&mut buf) {
+        Ok(0) => {}
+        leido => panic!("la conexión sigue abierta al volver run(): {leido:?}"),
+    }
+}
+
 /// Espera una `daemon.going_away` y devuelve si dice que vuelvas.
 pub(super) async fn going_away(c: &mut Client) -> bool {
     loop {
