@@ -294,6 +294,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`norte daemon stop` no longer fails now and then on a daemon it did
+  stop.** The daemon returned from its main loop without waiting for its
+  connections, and the process could exit before the reply to `stop` was
+  written: "connection closed with the request in flight". It now waits up
+  to two seconds for every connection to finish writing.
 - **`norte ai rename` can swap names.** It applied the model's plan one
   rename at a time, so `a↔b` failed on both with "already exists". It now
   applies the plan the way the terminal and the window do: as one batch the
