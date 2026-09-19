@@ -2724,6 +2724,28 @@ body {
   border-top: 1px solid var(--separator, var(--border));
 }
 
+/* Una que no cargó es una FILA que se elige, como las cargadas: sin el
+   cursor pintado aquí, el cursor cruzaba a esta lista y lo único que
+   cambiaba era la ficha del otro lado. Mismo acento que `.extensions-row`
+   para que el ojo una las dos. */
+.extensions-error {
+  list-style: none;
+  padding: 2px 0 2px 2ch;
+  margin-left: -2ch;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+
+.extensions-error:hover {
+  background: var(--panel-focus-bg);
+}
+
+.extensions-error[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+  border-left-color: var(--border-focus);
+}
+
 .extensions-error-reason {
   padding-left: 2ch;
   opacity: 0.9;

@@ -64,13 +64,26 @@ pub(crate) fn draw_extensions(
             ..ficha_area
         },
     );
-    if let Some(p) = mgr.plugins.get(mgr.cursor) {
+    // La elegida puede ser una que NO cargó: su ficha dice dónde y por qué,
+    // y su único botón es desinstalar.
+    let pane = match mgr.plugins.get(mgr.cursor) {
+        Some(p) => Some((
+            extension_buttons(p),
+            extension_pane_lines(p, mgr.config.as_ref(), theme),
+        )),
+        None => mgr.selected_broken().map(|e| {
+            (
+                broken_buttons(e, &mgr.plugins),
+                broken_pane_lines(e, &mgr.plugins, theme),
+            )
+        }),
+    };
+    if let Some((botones, ficha)) = pane {
         // Los BOTONES en la primera fila de la ficha, como en la ventana:
         // son lo que el lector busca, y en una fila fija —no dentro del
         // párrafo, cuyo ajuste de línea movería cada uno según lo largo
         // que sea el nombre— para que el ratón los encuentre donde se
         // pintaron. Debajo, una fila en blanco y la ficha.
-        let botones = extension_buttons(p);
         let mut spans = Vec::new();
         let mut x = 0usize;
         for (n, (etiqueta, _)) in botones.iter().enumerate() {
@@ -103,7 +116,6 @@ pub(crate) fn draw_extensions(
             height: ficha_area.height.saturating_sub(BUTTON_ROWS),
             ..ficha_area
         };
-        let ficha = extension_pane_lines(p, mgr.config.as_ref(), theme);
         frame.render_widget(
             Paragraph::new(ficha).wrap(ratatui::widgets::Wrap { trim: false }),
             cuerpo,
@@ -201,6 +213,45 @@ fn extension_buttons(p: &norte_proto::methods::PluginInfo) -> Vec<(String, &'sta
     out
 }
 
+/// Los botones de la ficha de una extensión que NO cargó: desinstalar, si su
+/// directorio se llama como un id, y nada más —no hay capabilities que
+/// aprobar ni nada que encender—. El mismo comando que su tecla.
+fn broken_buttons(
+    e: &norte_proto::methods::PluginLoadError,
+    loaded: &[norte_proto::methods::PluginInfo],
+) -> Vec<(String, &'static str)> {
+    if norte_frontend::broken_plugin::uninstallable_id(e, loaded).is_some() {
+        vec![(format!("[{}]", t("ext-uninstall")), "dialog.remove")]
+    } else {
+        Vec::new()
+    }
+}
+
+/// La ficha de una extensión que NO cargó: dónde y por qué, enmascarados, y
+/// —si no se puede desinstalar desde aquí— por qué no.
+fn broken_pane_lines(
+    e: &norte_proto::methods::PluginLoadError,
+    loaded: &[norte_proto::methods::PluginInfo],
+    theme: &TuiTheme,
+) -> Vec<Line<'static>> {
+    let (dir, _) = display_name(e.dir_bytes.as_deref().unwrap_or(e.dir.as_bytes()));
+    let (reason, _) = display_name(e.reason.as_bytes());
+    let mut lines = vec![
+        Line::styled(format!("{HOSTILE_BADGE} {dir}"), theme.role(Role::Title)),
+        Line::styled(t("ext-errors-title"), theme.role(Role::Error)),
+        Line::raw(""),
+        Line::raw(reason),
+    ];
+    if norte_frontend::broken_plugin::uninstallable_id(e, loaded).is_none() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            t("ext-broken-not-id"),
+            theme.role(Role::Warning),
+        ));
+    }
+    lines
+}
+
 /// Qué hay bajo una celda pulsable del gestor de extensiones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtensionHit {
@@ -270,13 +321,19 @@ pub fn extension_zones(app: &crate::app::App, area: Rect) -> Vec<ExtensionZone> 
             hit: ExtensionHit::Row(*index),
         });
     }
+    let botones = match mgr.plugins.get(mgr.cursor) {
+        Some(p) => Some(extension_buttons(p)),
+        None => mgr
+            .selected_broken()
+            .map(|e| broken_buttons(e, &mgr.plugins)),
+    };
     if let Some(ficha) = ficha
         && ficha.height > 0
-        && let Some(p) = mgr.plugins.get(mgr.cursor)
+        && let Some(botones) = botones
     {
         let mut x = usize::from(ficha.x);
         let tope = usize::from(ficha.x) + usize::from(ficha.width);
-        for (etiqueta, cmd) in extension_buttons(p) {
+        for (etiqueta, cmd) in botones {
             let w = UnicodeWidthStr::width(etiqueta.as_str());
             if x + w > tope {
                 break;
@@ -354,7 +411,7 @@ fn extensions_list_lines<'a>(
             filas.push(Some(i));
         }
     }
-    for e in &mgr.errors {
+    for (j, e) in mgr.errors.iter().enumerate() {
         // Los BYTES si el peer los manda (#265): la cadena `dir` viene de
         // un `to_string_lossy` del core, así que un directorio llamado
         // `caf\xff` llegaría por ahí ya convertido. La insignia de abajo
@@ -363,11 +420,20 @@ fn extensions_list_lines<'a>(
         // nombre, no la marca.
         let (dir, _) = display_name(e.dir_bytes.as_deref().unwrap_or(e.dir.as_bytes()));
         let (reason, _) = display_name(e.reason.as_bytes());
-        lines.push(Line::styled(
-            format!(" {HOSTILE_BADGE} {dir}: {reason}"),
+        // Una fila más, detrás de los plugins: se señala y se pulsa, y su
+        // único verbo es desinstalar.
+        let index = mgr.plugins.len() + j;
+        let selected = index == mgr.cursor;
+        let cursor = if selected { ">" } else { " " };
+        let mut line = Line::styled(
+            format!("{cursor}{HOSTILE_BADGE} {dir}: {reason}"),
             theme.role(Role::Error),
-        ));
-        filas.push(None);
+        );
+        if selected {
+            line = line.style(theme.role(Role::Selection));
+        }
+        lines.push(line);
+        filas.push(Some(index));
     }
     (lines, filas)
 }

@@ -811,7 +811,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             norte_core::connect::config_dir(),
         ));
     }
-    let mut backend = cmd::daemon::make_backend(engine, cli.daemon, cli.socket).await?;
+    let mut backend = cmd::daemon::make_backend(engine, cli.daemon, cli.socket.clone()).await?;
     // #44: toma el canal de avisos de degradación ANTES de correr el comando
     // (en embebido esto INSTALA el observer, que dispara síncrono dentro del
     // establecimiento; en remoto toma el receptor del pump del daemon). Se
@@ -948,7 +948,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             .context(norte_i18n::t("cli-enqueue-mkdir"))?;
             Ok(task::run_task(task, false).await)
         }
-        Cmd::Plugin { cmd } => cmd::plugin::plugin_cmd(&backend, cmd).await,
+        Cmd::Plugin { cmd } => cmd::plugin::plugin_cmd(&backend, cmd, cli.socket).await,
         Cmd::Index { cmd } => cmd::index::index_cmd(&backend, cmd).await,
         Cmd::Audit { .. }
         | Cmd::Ai { .. }

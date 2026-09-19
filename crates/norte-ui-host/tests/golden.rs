@@ -2020,6 +2020,7 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
             hostile: false,
             reason: "el manifiesto no parsea".to_owned(),
             reason_hostile: false,
+            id: None,
         }],
     }
 }
@@ -2706,7 +2707,9 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // Puente 76: `HelpView.scroll`, la petición de desplazar el cuerpo.
     // Puente 77: `GotoView` («ir a», #357) en la foto y en su cambio.
     // Puente 78: `SlotView::Timeline` (la línea de tiempo, #359).
-    const FORMA: u64 = 7_846_945_752_170_644_590;
+    // Puente 79: una extensión que no cargó lleva el id con el que se
+    // desinstala (`ExtensionErrorView.id`, ADR 0113).
+    const FORMA: u64 = 9_824_981_076_874_211_735;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

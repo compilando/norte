@@ -742,7 +742,7 @@ fn extensions_mouse(app: &mut App, ev: MouseEvent) -> After {
                     return After::Extension("dialog.confirm");
                 }
                 Some(crate::ui::ExtensionHit::Row(i)) => {
-                    if i < mgr.plugins.len() {
+                    if i < mgr.plugins.len() + mgr.errors.len() {
                         mgr.cursor = i;
                         // Elegir una fila devuelve el foco a la lista, como
                         // hacen las flechas: los botones son los del plugin

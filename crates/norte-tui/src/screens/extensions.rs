@@ -348,6 +348,9 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
         // con una tecla, enumerando nada.
         "dialog.approve" => {
             let Some(sel) = mgr.selected() else {
+                if mgr.selected_broken().is_some() {
+                    app.message = Some(t("ext-broken-only-uninstall"));
+                }
                 return;
             };
             if sel.approved {
@@ -379,6 +382,9 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
                 .selected()
                 .map(|p| (p.id.clone(), p.enabled, p.approved))
             else {
+                if mgr.selected_broken().is_some() {
+                    app.message = Some(t("ext-broken-only-uninstall"));
+                }
                 return;
             };
             // Encender lo que no está aprobado, no. Apagar lo que sí lo está
@@ -399,6 +405,7 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
         // confirmación que borrar ficheros.
         "dialog.remove" => {
             let Some((id, name)) = mgr.selected().map(|p| (p.id.clone(), p.name.clone())) else {
+                preguntar_desinstalar_rota(app);
                 return;
             };
             let (nombre, nombre_hostil) = crate::app::display_name(name.as_bytes());
@@ -410,6 +417,9 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
         }
         "dialog.confirm" => {
             let Some((id, name)) = mgr.selected().map(|p| (p.id.clone(), p.name.clone())) else {
+                if mgr.selected_broken().is_some() {
+                    app.message = Some(t("ext-broken-only-uninstall"));
+                }
                 return;
             };
             match backend.plugin_get_config(&id).await {
@@ -577,6 +587,66 @@ pub(crate) async fn conceder_aprobacion(
     }
 }
 
+/// `dialog.remove` sobre una extensión que NO cargó: se desinstala por su
+/// directorio si se llama como un id —es lo que `plugin.uninstall` borra—, y
+/// si no, se dice por qué no. La pregunta es la misma que para una cargada.
+fn preguntar_desinstalar_rota(app: &mut App) {
+    let Some(mgr) = app.extensions.as_ref() else {
+        return;
+    };
+    let Some(rota) = mgr.selected_broken() else {
+        return;
+    };
+    let Some(id) = norte_frontend::broken_plugin::uninstallable_id(rota, &mgr.plugins) else {
+        app.message = Some(t("ext-broken-not-id"));
+        return;
+    };
+    let (nombre, nombre_hostil) =
+        crate::app::display_name(rota.dir_bytes.as_deref().unwrap_or(rota.dir.as_bytes()));
+    app.modal = Some(crate::app::Modal::ConfirmPluginUninstall {
+        id,
+        name: nombre,
+        name_hostile: nombre_hostil,
+    });
+}
+
+/// Con qué se reconoce una fila que no cargó entre dos listados: los BYTES
+/// del directorio si el peer los manda (#265), y su cadena si no. No el id
+/// —una rota puede no tenerlo— ni la posición.
+fn clave_de_rota(e: &norte_proto::methods::PluginLoadError) -> Vec<u8> {
+    e.dir_bytes
+        .clone()
+        .unwrap_or_else(|| e.dir.as_bytes().to_vec())
+}
+
+/// Qué fila señala el cursor en el catálogo NUEVO.
+///
+/// La identidad primero —el id de la cargada, los bytes del directorio de la
+/// rota—, y la posición acotada solo si lo elegido ya no está. El catálogo
+/// se reordena (el core lo ordena por categoría e id) y desinstalar quita una
+/// fila, así que un cursor por posición deja al lector señalando otra, y la
+/// siguiente `e` encendería una extensión que nadie eligió. Es lo que ya hace
+/// el host en `Extensiones::set_catalogo`.
+fn cursor_tras_relistar(
+    id_elegido: Option<&str>,
+    rota_elegida: Option<&[u8]>,
+    plugins: &[norte_proto::methods::PluginInfo],
+    errores: &[norte_proto::methods::PluginLoadError],
+    previo: usize,
+) -> usize {
+    id_elegido
+        .and_then(|id| plugins.iter().position(|p| p.id == id))
+        .or_else(|| {
+            rota_elegida.and_then(|clave| {
+                errores
+                    .iter()
+                    .position(|e| clave_de_rota(e) == clave)
+                    .map(|j| plugins.len() + j)
+            })
+        })
+        .unwrap_or_else(|| previo.min((plugins.len() + errores.len()).saturating_sub(1)))
+}
+
 /// Vuelve a pedirle el catálogo al core y repinta la pantalla con ÉL.
 ///
 /// El camino anterior era `set_local_approved`: un `bool` de este proceso que
@@ -589,6 +659,14 @@ async fn relistar_extensiones(app: &mut App, backend: &Backend) {
     // de antes: el bucle lo olvida y lo vuelve a pedir.
     app.redecorate = true;
     let cursor = app.extensions.as_ref().map_or(0, |m| m.cursor);
+    // Quién estaba elegida, POR IDENTIDAD (ver `cursor_tras_relistar`): el id
+    // si era una cargada, los bytes del directorio si era una que no cargó.
+    let (id_elegido, rota_elegida) = app.extensions.as_ref().map_or((None, None), |m| {
+        (
+            m.selected().map(|p| p.id.clone()),
+            m.selected_broken().map(clave_de_rota),
+        )
+    });
     // El foco viaja a mano, como el cursor y por lo mismo: este relistado
     // es el de DESPUÉS de pulsar un botón, y perder el foco aquí sería
     // devolver el teclado a la lista justo cuando el lector acaba de usar
@@ -606,16 +684,100 @@ async fn relistar_extensiones(app: &mut App, backend: &Backend) {
             // (fase 3): si el catálogo se relee, lo aportado se redeclara.
             app.kinds.insert_panels(&plugins);
             let config = app.extensions.as_mut().and_then(|m| m.config.take());
-            let tope = plugins.len().saturating_sub(1);
+            let cursor = cursor_tras_relistar(
+                id_elegido.as_deref(),
+                rota_elegida.as_deref(),
+                &plugins,
+                &list.errors,
+                cursor,
+            );
             app.extensions = Some(crate::app::ExtensionManager {
                 plugins,
                 errors: list.errors,
-                cursor: cursor.min(tope),
+                cursor,
                 config,
                 foco,
             });
         }
         Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+/// El cursor del gestor sobrevive a un relistado por IDENTIDAD, no por
+/// posición.
+#[cfg(test)]
+mod cursor_tras_relistar_tests {
+    use super::cursor_tras_relistar;
+    use norte_proto::methods::{PluginInfo, PluginLoadError};
+
+    fn plugin(id: &str) -> PluginInfo {
+        PluginInfo {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            publisher: String::new(),
+            version: "1.0.0".to_owned(),
+            category: "command".to_owned(),
+            capabilities: Vec::new(),
+            approved: true,
+            enabled: true,
+            description: None,
+            commands: Vec::new(),
+            columns: Vec::new(),
+            panels: Vec::new(),
+            has_help: false,
+            manifest_digest: None,
+        }
+    }
+
+    fn rota(dir: &str) -> PluginLoadError {
+        PluginLoadError {
+            dir: dir.to_owned(),
+            reason: "no cargó".to_owned(),
+            dir_bytes: Some(dir.as_bytes().to_vec()),
+        }
+    }
+
+    /// El caso que trajo la fila rota: cursor sobre la única rota, se
+    /// desinstala, y el catálogo vuelve con las dos cargadas. Por posición el
+    /// cursor caía sobre la SEGUNDA cargada, y la siguiente `e` la encendía
+    /// sin que nadie la eligiera.
+    #[test]
+    fn desinstalar_la_rota_no_deja_el_cursor_sobre_una_cargada() {
+        let plugins = [plugin("org.a"), plugin("org.b")];
+        let cursor = cursor_tras_relistar(None, Some(b"org.rota"), &plugins, &[], 2);
+        assert_eq!(cursor, 1, "el tope, no una elección");
+        // Y lo que importa: no señala nada que se haya elegido.
+        assert!(cursor < plugins.len());
+    }
+
+    /// Aprobar reordena el catálogo (el core ordena por categoría e id): el
+    /// cursor sigue a SU extensión, no se queda en la fila.
+    #[test]
+    fn el_cursor_sigue_al_id_cuando_el_catalogo_se_reordena() {
+        let antes = [plugin("org.b")];
+        let despues = [plugin("org.a"), plugin("org.b")];
+        assert_eq!(
+            cursor_tras_relistar(Some(&antes[0].id), None, &despues, &[], 0),
+            1
+        );
+    }
+
+    /// Una rota se reconoce por los BYTES de su directorio, y sigue detrás de
+    /// las cargadas aunque su posición cambie.
+    #[test]
+    fn el_cursor_sigue_a_la_rota_por_su_directorio() {
+        let plugins = [plugin("org.a")];
+        let errores = [rota("otra"), rota("org.rota")];
+        assert_eq!(
+            cursor_tras_relistar(None, Some(b"org.rota"), &plugins, &errores, 1),
+            plugins.len() + 1
+        );
+    }
+
+    /// Catálogo vacío: no hay fila que señalar y el cursor no se sale.
+    #[test]
+    fn un_catalogo_vacio_deja_el_cursor_en_cero() {
+        assert_eq!(cursor_tras_relistar(Some("org.a"), None, &[], &[], 3), 0);
     }
 }
 
@@ -694,6 +856,54 @@ mod aprobacion_tests {
 
         assert!(app.modal.is_none(), "no abre ninguna pregunta");
         assert!(app.message.is_some(), "y lo DICE en vez de callarse");
+    }
+
+    fn roto(dir: &str) -> norte_proto::methods::PluginLoadError {
+        norte_proto::methods::PluginLoadError {
+            dir: dir.to_owned(),
+            reason: "el manifiesto no parsea".to_owned(),
+            dir_bytes: Some(dir.as_bytes().to_vec()),
+        }
+    }
+
+    /// Una extensión que NO CARGÓ es una fila más: el cursor baja hasta ella,
+    /// `dialog.remove` pregunta por ella, y los demás verbos lo dicen. Antes
+    /// el cursor se paraba en la última cargada y un roto solo se quitaba a
+    /// mano.
+    #[tokio::test]
+    async fn una_extension_rota_se_senala_y_solo_se_desinstala() {
+        let mut app = app_con(plugin(true, true));
+        if let Some(mgr) = &mut app.extensions {
+            mgr.errors = vec![roto("org.acme.roto"), roto("no un id")];
+            mgr.down();
+        }
+        let backend =
+            norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()));
+
+        super::on_extensions_list_cmd(&mut app, &backend, "dialog.approve").await;
+        assert!(app.modal.is_none(), "aprobar una rota no pregunta nada");
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("ext-broken-only-uninstall").as_str())
+        );
+
+        super::on_extensions_list_cmd(&mut app, &backend, "dialog.remove").await;
+        let Some(Modal::ConfirmPluginUninstall { id, .. }) = &app.modal else {
+            panic!("desinstalar una rota pregunta: {:?}", app.modal);
+        };
+        assert_eq!(id, "org.acme.roto");
+
+        app.modal = None;
+        app.message = None;
+        if let Some(mgr) = &mut app.extensions {
+            mgr.down();
+        }
+        super::on_extensions_list_cmd(&mut app, &backend, "dialog.remove").await;
+        assert!(app.modal.is_none(), "sin id no hay nada que preguntar");
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("ext-broken-not-id").as_str())
+        );
     }
 }
 

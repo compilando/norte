@@ -109,7 +109,7 @@ edits.
 | [0101](0101-a-hook-may-write-a-sidecar-through-the-policy-engine-as-a-plugin-actor.md) | A hook may write a sidecar, through the policy engine, as a plugin actor | accepted |
 | [0102](0102-a-side-panel-follows-and-tab-is-the-listing-ring.md) | A side panel FOLLOWS the active listing, and `Tab` is the listing ring | accepted |
 | [0103](0103-a-modal-line-declares-its-role-and-the-default-scheme-goes-unsaid.md) | A modal line declares its ROLE, and the default scheme goes unsaid | accepted |
-| [0104](0104-an-extension-is-uninstalled-from-the-manager-and-the-manager-has-buttons.md) | An extension is uninstalled from the manager, and the manager has buttons | accepted |
+| [0104](0104-an-extension-is-uninstalled-from-the-manager-and-the-manager-has-buttons.md) | An extension is uninstalled from the manager, and the manager has buttons | accepted, gaps closed by 0113 |
 | [0105](0105-an-icon-is-a-column-left-of-the-name-and-a-decorator-says-what-it-is.md) | An icon is a column left of the name, and a decorator is told what an entry is | accepted |
 | [0106](0106-the-chrome-is-derived-from-the-keymap-and-the-catalogue-not-drawn.md) | The chrome is derived from the keymap and the catalogue, not drawn | accepted |
 | [0107](0107-a-thumbnail-is-a-plugin-kind-of-its-own-package.md) | A thumbnail is a plugin kind, in a WIT package of its own | accepted |
@@ -118,6 +118,7 @@ edits.
 | [0110](0110-lua-stays-in-the-terminal-and-the-window-says-so.md) | Lua stays in the terminal, and the window says so | accepted |
 | [0111](0111-the-window-package-is-built-on-ubuntu-22-04.md) | The window package is built on Ubuntu 22.04, and that sets its floor | superseded in part by 0112 |
 | [0112](0112-release-artefacts-are-built-in-one-pinned-image-and-smoked-per-distribution.md) | Release artefacts are built in one pinned image and smoked per distribution | accepted |
+| [0113](0113-uninstall-reaches-the-daemon-and-a-broken-extension-is-a-row.md) | Uninstall reaches the daemon, and a broken extension is a row | accepted |
 | [0114](0114-a-panel-history-is-walked-listed-marked-and-counted.md) | A panel's history is walked, listed, marked and counted | accepted |
 | [0115](0115-the-start-screen-is-the-hosts-and-a-panel-that-opens-itself-closes-itself.md) | The start screen is the host's, and a panel that opens itself closes itself | accepted |
 | [0116](0116-a-plugin-describes-a-panel-and-norte-paints-it.md) | A plugin describes a panel, and norte paints it | accepted |

@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 78;
+export const BRIDGE_VERSION = 79;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -1000,6 +1000,8 @@ export interface ExtensionErrorView {
   reason: string;
   /** El motivo se pinta distinto de lo que es: puede citar el manifiesto. */
   reason_hostile: boolean;
+  /** Con qué id se desinstala; `null` si el directorio no se llama como uno. */
+  id: string | null;
 }
 
 export interface ExtensionConfigRowView {
