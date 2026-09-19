@@ -10,6 +10,60 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// El selector de tema abierto.
+///
+/// Mismo modelo que el del terminal: la lista, el cursor, y el que había
+/// puesto al abrir — sin el último, `Escape` dejaría puesto lo que el cursor
+/// rozó de paso, que es cambiar de tema sin querer.
+pub(super) struct SeleccionDeTema {
+    /// Los presets, en el orden en que se declaran.
+    pub(super) nombres: Vec<String>,
+    /// Cuál está señalado.
+    pub(super) cursor: usize,
+    /// El que estaba puesto al abrir, ENTERO y no su nombre.
+    ///
+    /// Entero porque el que había puede no ser un preset —un fichero de tema
+    /// del usuario lo es igual— y volver a resolverlo por nombre lo perdería.
+    /// La lista solo ofrece presets; lo que se restaura es lo que había.
+    pub(super) previo: Box<crate::pickers::HostTheme>,
+}
+
+/// Qué de un perfil NO se puede aplicar sin reiniciar ESTA VENTANA.
+///
+/// Medido, no supuesto, y distinto de la lista del terminal — por eso no se
+/// comparte. Aquí el tema SÍ se aplica: el catálogo vuelve a cruzar cuando
+/// cambia, y el renderer reenchufa sus variables CSS.
+///
+/// Las FUENTES y `reduce_motion` viajan por ese mismo catálogo y se aplican al
+/// ARRANCAR, pero no en un cambio de perfil: lo único que provoca un catálogo
+/// nuevo es el tema, y ese camino conserva la apariencia que había en vez de
+/// releerla. Hacerlas calientes es la pregunta de si esta ventana recarga su
+/// configuración en caliente, que tiene ADR propia pendiente — así que hasta
+/// entonces se DICE, que es lo que esta lista existe para hacer.
+///
+/// `[ui] lang` tampoco: `norte_i18n::force` corre una vez por proceso.
+///
+/// Un cambio que se callara esto sería un cambio que miente (ADR 0079, D8).
+fn fuera_de_alcance_en_caliente(
+    antes: &norte_config::CommonConfig,
+    despues: &norte_config::CommonConfig,
+) -> Vec<&'static str> {
+    let mut fuera = Vec::new();
+    if antes.ui_lang != despues.ui_lang {
+        fuera.push("ui.lang");
+    }
+    if antes.ui_font != despues.ui_font
+        || antes.ui_mono_font != despues.ui_mono_font
+        || antes.ui_font_size != despues.ui_font_size
+    {
+        fuera.push("ui.font");
+    }
+    if antes.ui_reduce_motion != despues.ui_reduce_motion {
+        fuera.push("ui.reduce_motion");
+    }
+    fuera
+}
+
 impl Estado {
     /// El perfil cargó (o no): se aplica todo lo que se puede aplicar sin
     /// reiniciar, y se DICE lo que no.

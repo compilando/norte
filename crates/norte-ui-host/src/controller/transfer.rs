@@ -7,6 +7,7 @@
 // los mismos imports que el padre. Enumerarlos aquí sería una lista de
 // cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
 // el padre importa algo — `super::*` la sigue sola.
+use super::tasks::Lote;
 #[allow(clippy::wildcard_imports)]
 use super::*;
 

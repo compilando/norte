@@ -10,6 +10,28 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// Un lote de sumas ENCOLADO y todavía sin id (#311).
+///
+/// Existe entre que el `checksum` se manda y el buzón devuelve la Task. Es un
+/// tipo y no un `Option<Option<_>>` porque «no hay lote» y «hay uno que no
+/// compara contra nada» son dos cosas distintas, y anidar dos opciones para
+/// decirlo se lee mal en el sitio donde importa.
+pub(super) struct SumasEncoladas {
+    /// Lo que el fichero de sumas publicaba, si esto es una comprobación.
+    pub(super) publicado: Option<Publicado>,
+}
+
+/// El fichero de sumas leído, tal como hace falta para juzgarlo (#311).
+///
+/// Gemelo del de la terminal, y con los mismos tres campos por el mismo
+/// motivo: las líneas en su orden, dónde quedó cada una en la petición, y
+/// cuántas no se entendieron —que es lo que prohíbe decir «todas correctas».
+pub(super) struct Publicado {
+    lines: Vec<norte_frontend::checksums::SumLine>,
+    asked: Vec<Option<usize>>,
+    refused: usize,
+}
+
 impl Estado {
     /// La Task de sumas terminó: se pide su informe (#311).
     ///
