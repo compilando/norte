@@ -620,6 +620,7 @@ fn modal_title_text(
             size,
             size_task,
         } => properties_modal_text(entry, *size, size_task.is_some()),
+        Modal::BatchReport { lines } => (t("modal-batch-report-title"), batch_report_text(lines)),
         Modal::ConfirmQuit => (
             t("modal-confirm-quit-title"),
             format!("{}\n{}", t("modal-confirm-quit-body"), hints.confirm),
@@ -1178,6 +1179,25 @@ pub(crate) fn properties_modal_text(
     }
     lines.push(t("props-hint"));
     (title, lines.join("\n"))
+}
+
+/// El cuerpo del informe de un lote: una frase o una ruta por línea.
+///
+/// La ruta va SOLA en su línea y con el badge si hubo que enmascararla: es
+/// el nombre que el lector va a buscar (o teclear) a mano, y metida en una
+/// frase la podría suplantar otra (#273).
+pub(crate) fn batch_report_text(lines: &[norte_frontend::BatchReportLine]) -> String {
+    lines
+        .iter()
+        .map(|l| match l {
+            norte_frontend::BatchReportLine::Phrase(texto) => texto.clone(),
+            norte_frontend::BatchReportLine::Path(p) => {
+                let (ruta, hostil) = norte_frontend::path_display(p);
+                format!("  {}", badge_prefixed(hostil, ruta))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// El valor de un atributo, listo para pintar, y si hubo que enmascararlo.

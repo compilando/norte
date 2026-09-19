@@ -68,6 +68,14 @@ pub async fn on_tick(
     let mut refresh = false;
     for fin in finished {
         use norte_proto::TaskState;
+        // Un lote de renombrado cuenta lo que pasó en su INFORME, y el
+        // desenlace de la Task no lo cubre: un lote `Completed` puede dejar un
+        // paso atascado, y uno `Failed` deshecho a medias deja el directorio
+        // medio renombrado. Se pide siempre, como hacen la ventana y la CLI.
+        let lote = (fin.progress.kind == norte_proto::TaskKind::RenameBatch).then_some((
+            fin.progress.task_id,
+            !matches!(fin.state, TaskState::Completed),
+        ));
         match fin.state {
             // #139: contar no muta nada, así que no recarga los paneles — y su
             // resultado ES su progreso: el último snapshot trae el total.
@@ -194,6 +202,12 @@ pub async fn on_tick(
             }
             _ => {}
         }
+        if let Some((id, fallo)) = lote {
+            let resultado = backend.rename_batch_report(id).await;
+            if let Some(lines) = informe_de_lote(&resultado, fallo) {
+                app.pending_batch_reports.push_back(lines);
+            }
+        }
     }
     app.open_next_pending();
     if refresh {
@@ -218,6 +232,45 @@ pub async fn on_tick(
 /// `task_id`: la intención se consume en la conexión vieja. Si esa síntesis
 /// desapareciera, un id reciclado abriría el editor sobre un fichero que quizá
 /// no se creó — y entonces lo crearía el editor, que es el bug entero de vuelta.
+/// Lo que hay que enseñar del informe de un lote de renombrado que acaba de
+/// terminar, o `None` si no hay nada que buscar.
+///
+/// El mismo criterio que la ventana (`Controller::informe_de_lote`): un lote
+/// limpio no abre nada; uno que dejó algo a medias, sí. Un informe que no se
+/// pudo pedir solo se dice si la Task además falló o se canceló — si terminó
+/// bien, la fila del tablero basta, y si no, el directorio quedaría sin
+/// explicación.
+///
+/// ```
+/// use norte_proto::methods::FsRenameBatchReportResult;
+/// let limpio = FsRenameBatchReportResult {
+///     applied: 2, rolled_back: 0, failed_pair: None, stuck: None,
+///     uncertain: None, compensations_lost: 0,
+/// };
+/// assert!(norte_tui::refresh::informe_de_lote(&Ok(limpio), false).is_none());
+/// let sin_informe = Err(norte_proto::Error::Unsupported);
+/// assert!(norte_tui::refresh::informe_de_lote(&sin_informe, false).is_none());
+/// assert!(norte_tui::refresh::informe_de_lote(&sin_informe, true).is_some());
+/// ```
+#[must_use]
+pub fn informe_de_lote(
+    resultado: &Result<norte_proto::methods::FsRenameBatchReportResult, Error>,
+    fallo_la_task: bool,
+) -> Option<Vec<norte_frontend::BatchReportLine>> {
+    match resultado {
+        Ok(r) if norte_frontend::batch_report_is_clean(r) => None,
+        Ok(r) => Some(norte_frontend::batch_report_lines(r, norte_i18n::active())),
+        Err(_) if !fallo_la_task => None,
+        Err(e) => Some(vec![norte_frontend::BatchReportLine::Phrase(t(
+            if matches!(e, Error::Unsupported) {
+                "modal-batch-unsupported"
+            } else {
+                "modal-batch-report-failed"
+            },
+        ))]),
+    }
+}
+
 /// El aviso de un empaquetado que acaba de terminar, o `None` si no hay nada
 /// que decir (#250).
 ///
@@ -404,6 +457,61 @@ mod tests {
 
     fn tid(n: u64) -> norte_proto::TaskId {
         norte_proto::TaskId::new(n)
+    }
+
+    fn atascado() -> norte_proto::methods::FsRenameBatchReportResult {
+        norte_proto::methods::FsRenameBatchReportResult {
+            applied: 1,
+            rolled_back: 1,
+            failed_pair: Some(1),
+            stuck: Some(norte_proto::methods::RenameStuckStep {
+                from: norte_proto::VPath::parse("mem:///d/a").expect("wire"),
+                to: norte_proto::VPath::parse("mem:///d/b").expect("wire"),
+                pair_index: 0,
+                error: Error::Io { retryable: false },
+                journalled: true,
+                still_applied: 1,
+            }),
+            uncertain: None,
+            compensations_lost: 0,
+        }
+    }
+
+    /// Un lote que dejó un paso atascado abre su informe, y con otro modal
+    /// abierto ESPERA en la cola en vez de pisarlo o perderse: se abre en
+    /// cuanto el otro se cierra.
+    #[test]
+    fn un_lote_atascado_abre_su_informe_sin_pisar_otro_modal() {
+        let mut app = app_with_entries(&["a"]);
+        let lineas = informe_de_lote(&Ok(atascado()), true).expect("hay que decirlo");
+        assert!(
+            lineas
+                .iter()
+                .any(|l| matches!(l, norte_frontend::BatchReportLine::Path(_))),
+            "dice dónde buscar: {lineas:?}"
+        );
+        app.modal = Some(Modal::ConfirmQuit);
+        app.pending_batch_reports.push_back(lineas);
+        app.open_next_pending();
+        assert!(matches!(app.modal, Some(Modal::ConfirmQuit)), "no pisa");
+        app.modal = None;
+        app.open_next_pending();
+        assert!(
+            matches!(app.modal, Some(Modal::BatchReport { .. })),
+            "se abre al quedar libre la pantalla"
+        );
+    }
+
+    /// El texto del informe pone la ruta SOLA en su línea (#273): un nombre
+    /// no puede fingir una frase del informe si no la comparte.
+    #[test]
+    fn la_ruta_del_informe_va_sola_en_su_linea() {
+        let lineas = informe_de_lote(&Ok(atascado()), false).expect("informe");
+        let texto = crate::ui::batch_report_text(&lineas);
+        assert!(
+            texto.lines().any(|l| l.trim() == "⟨mem⟩/d/b"),
+            "la ruta actual, sola: {texto}"
+        );
     }
 
     /// #290: la intención de `edit-new` la consume SU task y solo la suya.

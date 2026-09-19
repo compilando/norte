@@ -86,6 +86,17 @@ pub enum Modal {
         /// `(bytes, entradas)` cuando el recuento terminó.
         size: Option<(u64, u64)>,
     },
+    /// El informe de un lote de renombrado que dejó algo a medias, o cuyo
+    /// desenlace no se pudo comprobar.
+    ///
+    /// Se lee y se cierra, como las propiedades. Las líneas las decide
+    /// `norte_frontend::batch_report_lines`, las mismas que el diálogo de la
+    /// ventana y la salida de `norte ai rename`: un directorio medio
+    /// renombrado no puede pasar inadvertido en ninguno de los tres.
+    BatchReport {
+        /// Frases y rutas, cada ruta en su propia línea.
+        lines: Vec<norte_frontend::BatchReportLine>,
+    },
     /// Conceder capabilities a una extensión (#280).
     ///
     /// Es LA decisión de seguridad del sistema de extensiones: lo que se

@@ -110,7 +110,9 @@ fn modal_context(modal: &Modal) -> &'static str {
         | Modal::OrganizePlan { .. } => "dialog.ai-rename",
         // La plantilla del lote comparte página con renombrar, que es donde
         // se cuenta qué es un plan revisable y qué se puede deshacer.
-        Modal::RenameBatchPattern { .. } => "dialog.rename",
+        // Y el informe del lote, también: esa página cuenta qué se puede
+        // deshacer, que es lo que quien lee un lote atascado necesita.
+        Modal::RenameBatchPattern { .. } | Modal::BatchReport { .. } => "dialog.rename",
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
         // Las sumas comparten página con las propiedades: las dos son cuadros
         // de LECTURA sobre lo que hay bajo el cursor.
@@ -197,6 +199,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::AiRenamePlan { .. }
         // #139: se lee, no se escribe — F1 encima no le roba una tecla a nadie.
         | Modal::Properties { .. }
+        | Modal::BatchReport { .. }
         | Modal::Checksums { .. }
         | Modal::SemanticHits { .. } => true,
     }

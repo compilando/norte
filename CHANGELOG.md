@@ -294,6 +294,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **In the terminal, a batch rename that is left half-done now says so.**
+  The window and the CLI already asked for the batch report when the batch
+  ended; the terminal never did, so a step that could not be put back went
+  unmentioned. It now opens the same report: what was applied and rolled
+  back, and the current name of anything stuck, on a line of its own. A
+  clean batch opens nothing.
 - **`norte daemon stop` no longer fails now and then on a daemon it did
   stop.** The daemon returned from its main loop without waiting for its
   connections, and the process could exit before the reply to `stop` was

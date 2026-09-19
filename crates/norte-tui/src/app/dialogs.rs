@@ -469,6 +469,13 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // que solo entienden cancelar. Darle un «confirmar» a un cuadro de
         // solo lectura es enseñarle al lector que Enter hace algo aquí.
         Modal::Properties { .. } => (cmd == "dialog.cancel").then_some(DialogOutcome::Cancelled),
+        // El informe de un lote tampoco pregunta: ya pasó. Se cierra con
+        // cancelar Y con confirmar — Enter es lo que se pulsa para «entendido»,
+        // y aquí no hay nada que proteger con él.
+        Modal::BatchReport { .. } => match cmd {
+            "dialog.confirm" | "dialog.cancel" => Some(DialogOutcome::Cancelled),
+            _ => None,
+        },
         // Las sumas tampoco preguntan nada: `confirm` COPIA la lista al
         // portapapeles —lo único que se puede hacer con ella— y `cancel`
         // cierra. No hay mutación que Enter deba proteger.

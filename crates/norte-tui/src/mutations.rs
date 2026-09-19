@@ -252,6 +252,7 @@ pub async fn confirm_modal(
             }
         }
         Modal::Properties { .. }
+        | Modal::BatchReport { .. }
         | Modal::Collision { .. }
         | Modal::TrustLuaInit { .. }
         | Modal::MarkPattern { .. }
