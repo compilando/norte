@@ -44,6 +44,7 @@ pub mod volumes;
 
 pub use engine::{
     BATCH_REPORTS_MAX, Engine, RENAME_BATCH_MAX_LISTING, SYNC_REPORTS_MAX, TransferOptions,
+    UNDO_REPORTS_MAX,
 };
 pub use journal::{
     Actor, ChainStatus, JOURNAL_FORMAT, Journal, JournalEntry, JournalFormat, NewEntry, Reversal,
