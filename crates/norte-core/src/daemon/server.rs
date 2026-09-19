@@ -84,9 +84,6 @@ const RECENT_TERMINAL: usize = 64;
 /// los desenlaces del humano (que conserva ≥ `RECENT_TERMINAL -
 /// RECENT_TERMINAL_AGENTS` slots).
 const RECENT_TERMINAL_AGENTS: usize = 32;
-/// Informes de undo retenidos para `policy.undo_report` (#71). Los undos son
-/// operaciones humanas raras: un anillo corto basta; el más viejo se expulsa.
-const UNDO_REPORTS_MAX: usize = 8;
 /// Listados paginados VIVOS retenidos por conexión (ADR 0017): cada uno es un
 /// `EntryStream` perezoso sin drenar. Al abrir el (N+1), se expulsa el más
 /// viejo (LRU). Un TUI navega 1-2 a la vez; el tope acota el coste (incluido
@@ -246,13 +243,6 @@ struct Shared {
     /// borrado, que uno instalado después con el mismo id heredaría. Se toma
     /// ANTES de mutar la memoria y se suelta DESPUÉS de persistir.
     plugins_state_io: tokio::sync::Mutex<()>,
-    /// Informes de las últimas Tasks de undo (#71), por `task_id`: el humano
-    /// que deshizo consulta QUÉ pasó (`policy.undo_report`) — sin esto, un
-    /// undo que saltó/bloqueó todo parece «done». Anillo acotado a
-    /// [`UNDO_REPORTS_MAX`] (los undos son raros; mejor esfuerzo, como
-    /// `recent`). El `Arc` interior es EL MISMO que llena la Task en vuelo:
-    /// el informe se puede consultar en progreso (snapshot parcial).
-    undo_reports: Mutex<std::collections::VecDeque<(u64, Arc<Mutex<crate::UndoReport>>)>>,
     /// Conexiones que son DUEÑAS de al menos un feed dirigido vivo
     /// (`compare.rows`, `search.hits`, `sync.steps`), con cuántos (#155). Una
     /// conexión de esta lista NO se expulsa del mapa de suscriptores porque su
@@ -886,7 +876,6 @@ impl Daemon {
             pending_scope: Mutex::new(HashMap::new()),
             next_scope_req: AtomicU64::new(0),
             approvals: Arc::clone(&approvals),
-            undo_reports: Mutex::new(std::collections::VecDeque::new()),
             plugins: Mutex::new(plugins),
             plugins_state_io: tokio::sync::Mutex::new(()),
             plugin_runtime,
@@ -3362,7 +3351,7 @@ async fn handle_policy_undo_session(
         ));
     }
     let target = Actor::Agent { session: p.session };
-    let (handle, report) = shared
+    let (handle, _report) = shared
         .engine
         .undo_session_for(&target, Actor::User)
         .await
@@ -3373,19 +3362,12 @@ async fn handle_policy_undo_session(
         tracing::info!(session = %session, "undo de sesión de agente pedido por el humano");
     }
     // El dueño de la task de undo es el EJECUTOR humano (solo User llega aquí).
+    // El informe para `policy.undo_report` (#71) ya lo retuvo el engine al
+    // lanzar la Task. OJO honestidad: si esto contesta OVERLOADED, la Task YA
+    // corre desde el submit y la cancelación es cooperativa — pueden aterrizar
+    // reverts reales, y el cliente no recibe el id con el que pedir su informe
+    // (el journal sí registra las compensaciones).
     let task_id = register_task_id(shared, handle, Actor::User)?;
-    // Retiene el informe para `policy.undo_report` (#71) — SOLO si la task
-    // quedó registrada. OJO honestidad: en el camino OVERLOADED de arriba la
-    // Task YA corre desde el submit y la cancelación es cooperativa — pueden
-    // aterrizar reverts reales cuyo informe se pierde (el journal sí registra
-    // las compensaciones; el cliente solo ve el OVERLOADED).
-    {
-        let mut reports = shared.undo_reports.lock().expect("undo_reports lock sano");
-        reports.push_back((task_id.get(), report));
-        while reports.len() > UNDO_REPORTS_MAX {
-            reports.pop_front();
-        }
-    }
     to_value(&methods::PolicyUndoSessionResult { task_id })
 }
 
@@ -3441,7 +3423,7 @@ async fn handle_journal_undo_after(
             rule: "not-approved".into(),
         }));
     }
-    let (handle, report) = shared
+    let (handle, _report) = shared
         .engine
         .undo_after(p.seq)
         .await
@@ -3463,15 +3445,9 @@ async fn handle_journal_undo_after(
         task_id = task_id.get(),
         "undo hasta un punto pedido por el humano"
     );
-    // El MISMO anillo de informes que `policy.undo_session`, porque es el
-    // mismo undo y se lee por el mismo `policy.undo_report`.
-    {
-        let mut reports = shared.undo_reports.lock().expect("undo_reports lock sano");
-        reports.push_back((task_id.get(), report));
-        while reports.len() > UNDO_REPORTS_MAX {
-            reports.pop_front();
-        }
-    }
+    // El informe lo retuvo el engine, en el MISMO anillo que el de
+    // `policy.undo_session`: es el mismo undo y se lee por el mismo
+    // `policy.undo_report`.
     to_value(&methods::PolicyUndoSessionResult { task_id })
 }
 
@@ -3489,41 +3465,15 @@ fn handle_policy_undo_report(
             "only a human (non-agent) connection may read an undo report",
         ));
     }
-    let snapshot = {
-        let reports = shared.undo_reports.lock().expect("undo_reports lock sano");
-        let Some((_, r)) = reports.iter().find(|(id, _)| *id == p.task_id.get()) else {
-            return Err(RpcError::protocol(
-                codes::INVALID_PARAMS,
-                "unknown undo task (never an undo, or evicted from the ring)",
-            ));
-        };
-        r.lock().expect("undo report lock").clone()
+    // El dueño guardado no hace falta mirarlo: un undo sólo lo ejecuta el
+    // humano, y sólo el humano llega hasta aquí.
+    let Some((_owner, snapshot)) = shared.engine.undo_report(p.task_id) else {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "unknown undo task (never an undo, or evicted from the ring)",
+        ));
     };
-    to_value(&methods::PolicyUndoReportResult {
-        undone: snapshot.undone,
-        skipped_irreversible: snapshot.skipped_irreversible,
-        skipped_created_no_trash: snapshot.skipped_created_no_trash,
-        blocked: snapshot
-            .blocked
-            .map(|(seq, error)| methods::UndoBlocked { seq, error }),
-        // 0.36.0: deshacer un LOTE puede quedarse a medias, y eso no es un
-        // `blocked` — `blocked` dice «paré y el árbol está consistente». Sin
-        // estos dos campos, el humano REMOTO cuyo undo dejó un directorio medio
-        // renombrado veía exactamente lo mismo que uno que fue bien.
-        batch_stuck: snapshot
-            .batch_stuck
-            .as_ref()
-            .map(crate::rename::stuck_to_proto),
-        compensations_lost: snapshot.compensations_lost,
-        // #171: lo que la policy denegó unidad a unidad. Va aparte de
-        // `blocked` porque dice lo contrario que él — el undo NO paró.
-        denied: snapshot
-            .denied
-            .into_iter()
-            .map(|(seq, error)| methods::UndoBlocked { seq, error })
-            .collect(),
-        denied_total: snapshot.denied_total,
-    })
+    to_value(&crate::undo::report_to_proto(snapshot))
 }
 
 /// `host.volumes` (0.37.0, #131): enumeración de los volúmenes del HOST. El

@@ -41,6 +41,35 @@ use crate::rename::plan::{NameCaps, name_key};
 /// que deniegue por defecto son tantas filas como unidades tenga la sesión.
 pub use norte_proto::methods::UNDO_MAX_DENIED_REPORTED;
 
+/// Proyecta un [`UndoReport`] a lo que viaja (`policy.undo_report`, #71). Lo
+/// usan los dos brazos del `Backend`: el daemon para contestar por el socket y
+/// el embebido para leerlo sin él.
+pub(crate) fn report_to_proto(r: UndoReport) -> norte_proto::methods::PolicyUndoReportResult {
+    use norte_proto::methods;
+    methods::PolicyUndoReportResult {
+        undone: r.undone,
+        skipped_irreversible: r.skipped_irreversible,
+        skipped_created_no_trash: r.skipped_created_no_trash,
+        blocked: r
+            .blocked
+            .map(|(seq, error)| methods::UndoBlocked { seq, error }),
+        // 0.36.0: deshacer un LOTE puede quedarse a medias, y eso no es un
+        // `blocked` — `blocked` dice «paré y el árbol está consistente». Sin
+        // estos dos campos, el humano cuyo undo dejó un directorio medio
+        // renombrado veía exactamente lo mismo que uno que fue bien.
+        batch_stuck: r.batch_stuck.as_ref().map(crate::rename::stuck_to_proto),
+        compensations_lost: r.compensations_lost,
+        // #171: lo que la policy denegó unidad a unidad. Va aparte de
+        // `blocked` porque dice lo contrario que él — el undo NO paró.
+        denied: r
+            .denied
+            .into_iter()
+            .map(|(seq, error)| methods::UndoBlocked { seq, error })
+            .collect(),
+        denied_total: r.denied_total,
+    }
+}
+
 /// Resultado de un [`crate::Engine::undo_session`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UndoReport {

@@ -2473,15 +2473,19 @@ impl Backend {
     /// definitivo cuando la Task es terminal.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; `Unsupported` en embebido, por la misma razón
-    /// que [`Backend::undo_session`]: la sesión que se deshace es de un agente,
-    /// y los agentes viven en el daemon.
+    /// Taxonomía del protocolo; [`Error::NotFound`] en embebido si ese id no
+    /// fue un undo o el anillo ya lo desalojó.
     pub async fn undo_report(
         &self,
         task_id: TaskId,
     ) -> Result<norte_proto::methods::PolicyUndoReportResult, Error> {
         match self {
-            Self::Embedded(_) => Err(Error::Unsupported),
+            // Embebido no hay actor que comprobar: este `Backend` ES el humano
+            // en proceso (mismo criterio que `rename_batch_report`).
+            Self::Embedded(engine) => engine
+                .undo_report(task_id)
+                .map(|(_owner, r)| crate::undo::report_to_proto(r))
+                .ok_or(Error::NotFound),
             #[cfg(unix)]
             Self::Remote(r) => r.undo_report(task_id).await,
         }

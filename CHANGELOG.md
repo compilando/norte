@@ -294,6 +294,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Undoing without a daemon now says what it undid.** With the core
+  in-process (the terminal's default), "undo back to here" ran but its report
+  answered "unsupported", so the result of the undo could not be shown. The
+  report now lives with the core, like the other task reports, and reads the
+  same with or without a daemon. Found by a new test that runs the same
+  script through both, and must get the same answers.
+
 - **A batch-rename plan logged its directory unredacted.** Every other engine
   span passes paths through the redaction that hides a `user:pass@`. This
   one recorded the raw path.

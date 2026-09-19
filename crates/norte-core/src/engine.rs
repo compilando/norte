@@ -190,6 +190,13 @@ pub struct Engine {
     /// falló y por qué— no cabe en un `Failed`. El mismo desalojo, con la misma
     /// regla de «primero lo que no cuenta nada».
     test_reports: std::sync::Mutex<std::collections::VecDeque<TestReportEntry>>,
+    /// Anillo ACOTADO de informes de undo, por `task_id`
+    /// ([`Engine::undo_report`]).
+    ///
+    /// Vivía en el daemon, y era el único de la familia que no estaba aquí:
+    /// el `Backend` embebido deshacía (`undo_after`) y no tenía de dónde leer
+    /// qué había vuelto, así que contestaba `Unsupported` a su propio undo.
+    undo_reports: std::sync::Mutex<std::collections::VecDeque<UndoReportEntry>>,
     /// Anillo ACOTADO de informes de `archive.pack`, por `task_id`
     /// ([`Engine::archive_pack_report`]).
     ///
@@ -332,6 +339,7 @@ impl Engine {
             batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             sync_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             test_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            undo_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             pack_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             checksum_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             dir_usage_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
@@ -4412,6 +4420,7 @@ impl Engine {
         let checker = self.policy_checker();
 
         let report_task = Arc::clone(&report);
+        let owner = executor.clone();
         let key = "undo".to_owned();
         let handle = self.sched.submit(
             &key,
@@ -4515,7 +4524,41 @@ impl Engine {
                 })
             }),
         );
+        {
+            let mut ring = self.undo_reports.lock().expect("undo_reports lock sano");
+            ring.push_back((handle.id(), owner, Arc::clone(&report)));
+            evict_undo_reports(&mut ring);
+        }
         Ok((handle, report))
+    }
+
+    /// El informe de un undo (`policy.undo_report`, #71): snapshot, definitivo
+    /// cuando la Task es terminal. `None` si ese id no fue un undo o el anillo
+    /// ya lo desalojó ([`UNDO_REPORTS_MAX`]). El actor es quien lo ejecutó: el
+    /// daemon lo necesita para decidir quién puede leerlo.
+    ///
+    /// # Panics
+    /// Nunca en la práctica: el lock del informe sólo se envenena si la Task
+    /// entra en pánico a mitad de escribirlo, y se lee igual.
+    #[must_use]
+    pub fn undo_report(
+        &self,
+        task_id: TaskId,
+    ) -> Option<(crate::journal::Actor, crate::UndoReport)> {
+        let ring = self
+            .undo_reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ring.iter()
+            .find(|(id, _, _)| *id == task_id)
+            .map(|(_, owner, r)| {
+                (
+                    owner.clone(),
+                    r.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone(),
+                )
+            })
     }
 }
 
@@ -4810,6 +4853,9 @@ type SyncReportEntry = ReportEntry<norte_proto::methods::SyncReportResult>;
 /// El anillo de informes de `archive.test` ([`Engine::archive_test_report`]).
 type TestReportEntry = ReportEntry<norte_proto::methods::ArchiveTestResult>;
 
+/// El anillo de informes de undo ([`Engine::undo_report`]).
+type UndoReportEntry = ReportEntry<crate::UndoReport>;
+
 /// El anillo de informes de `archive.pack` ([`Engine::archive_pack_report`]).
 type PackReportEntry = ReportEntry<norte_proto::methods::ArchivePackReportResult>;
 
@@ -4929,7 +4975,7 @@ fn evict_reports<T>(
 /// Anillo, no mapa: un informe se pide una vez, justo después del terminal de
 /// su Task, y el que nadie recoja tiene que caducar solo o el daemon acumula
 /// memoria por cada lote que corrió en su vida. El mismo criterio (y el mismo
-/// orden de magnitud) que el anillo de informes de undo del daemon.
+/// orden de magnitud) que el anillo de informes de undo ([`UNDO_REPORTS_MAX`]).
 pub const BATCH_REPORTS_MAX: usize = 32;
 
 /// Cuántos de los [`BATCH_REPORTS_MAX`] puede ocupar el conjunto de los actores
@@ -4955,6 +5001,35 @@ pub const TEST_REPORTS_MAX: usize = 32;
 
 /// Sub-tope por clase del anillo de `archive.test`.
 pub(crate) const TEST_REPORTS_AGENTS_MAX: usize = 16;
+
+/// Cuántos informes de undo retiene [`Engine::undo_report`]. Ocho, el número
+/// que tenía cuando vivía en el daemon: los undos son raros y los pide una
+/// persona.
+pub const UNDO_REPORTS_MAX: usize = 8;
+
+/// Sub-tope por clase del anillo de undo. Hoy todo undo lo ejecuta el humano,
+/// así que no muerde; está para que eso siga siendo cierto el día que deje de
+/// serlo — `Engine::undo_session` acepta cualquier actor —, igual que en los
+/// anillos gemelos: la mitad.
+pub(crate) const UNDO_REPORTS_AGENTS_MAX: usize = 4;
+
+/// Desalojo del anillo de undo: primero lo que no cuenta nada. Un undo que
+/// paró, se quedó a medias, perdió compensaciones o tuvo unidades denegadas
+/// es el único sitio donde el humano se entera de que el árbol no volvió
+/// entero.
+fn evict_undo_reports(ring: &mut std::collections::VecDeque<UndoReportEntry>) {
+    evict_reports(
+        ring,
+        UNDO_REPORTS_MAX,
+        UNDO_REPORTS_AGENTS_MAX,
+        |r: &crate::UndoReport| {
+            r.blocked.is_some()
+                || r.batch_stuck.is_some()
+                || r.compensations_lost > 0
+                || r.denied_total > 0
+        },
+    );
+}
 
 /// Desalojo del anillo de `archive.test`: lo que no cuenta nada —un archivo
 /// que pasó entero— se sacrifica antes que un informe con fallos, que es el
