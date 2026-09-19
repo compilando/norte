@@ -294,6 +294,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A project's `.norte.toml` says what it asked for and does not get.** A
+  repository cannot choose the daemon, the AI, the logs, the archive limits,
+  the editor or diff program, the key preset or favourites; those keys were
+  ignored without a word. Now each one is reported, and so is a profile that
+  asks for an editor or diff program.
+
 - **An unknown undo report is "not found", not an internal error**
   (protocol 0.79.0). `policy.undo_report` answered an id it did not know with
   a bare `INVALID_PARAMS`, which a client read as `Internal`; it now answers
