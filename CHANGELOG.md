@@ -294,6 +294,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Two undos that picked the same changes no longer undo them twice**
+  (#358). A double-click, two frontends on one daemon, or a retry after a
+  timeout could start two undos over the same list. The second one reverted
+  again what the first had already put back, and if you had re-created a
+  path in between, it could rename onto it. Undos now run one at a time,
+  and each one checks the journal again right before reverting, skipping
+  whatever another undo already reverted.
 - **The CLI reads `[archive]`.** Commands run without `--daemon` used the
   compiled archive limits whatever `norte.toml` said, and a broken
   `norte.toml` went unnoticed. They now apply the same limits as the daemon
