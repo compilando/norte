@@ -751,6 +751,9 @@ pub async fn dispatch(
         Command::ViewerEncoding => viewer_do(app, crate::viewer::Viewer::cycle_encoding),
         Command::ViewerEncodingAuto => viewer_do(app, crate::viewer::Viewer::reset_encoding),
         Command::ViewerHex => viewer_do(app, crate::viewer::Viewer::toggle_hex),
+        Command::ViewerZoomIn => viewer_do(app, crate::viewer::Viewer::zoom_in),
+        Command::ViewerZoomOut => viewer_do(app, crate::viewer::Viewer::zoom_out),
+        Command::ViewerZoomFit => viewer_do(app, crate::viewer::Viewer::zoom_fit),
         // H3c: la página de DONDE ESTÁ el lector, no el índice. Todo el cuerpo
         // vive en `open_contextual_help` (documentado allí) para que los tests
         // abran la ayuda por el MISMO sitio que F1.

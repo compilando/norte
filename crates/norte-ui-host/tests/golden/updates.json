@@ -932,6 +932,7 @@
       "title_key": "program-output-compare",
       "truncated": true
     },
+    "row_stripes": true,
     "search": {
       "cursor": 0,
       "query": "*.rs",
@@ -1273,6 +1274,7 @@
             "width": 1920
           },
           "image_refused": "",
+          "image_zoom": 150,
           "lines": [
             "quinta línea"
           ],
@@ -1444,6 +1446,7 @@
         "width": 1920
       },
       "image_refused": "",
+      "image_zoom": 150,
       "lines": [
         "quinta línea"
       ],

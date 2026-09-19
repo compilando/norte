@@ -393,6 +393,12 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("viewer.encoding", false, Inert),
     live("viewer.encoding-auto", false, Inert),
     live("viewer.hex", false, Inert),
+    // El ZOOM de una imagen (spec 2026-09-20). Sin cuenta: `3` delante de
+    // «acercar» leería como «tres peldaños», y el peldaño ya es la unidad —
+    // pulsar tres veces es exactamente eso y se ve mientras ocurre.
+    live("viewer.zoom-in", false, Inert),
+    live("viewer.zoom-out", false, Inert),
+    live("viewer.zoom-fit", false, Inert),
     // --- dialog ---
     live("dialog.confirm", false, Inert),
     live("dialog.cancel", false, Inert),

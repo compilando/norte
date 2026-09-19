@@ -398,6 +398,20 @@ pub struct UiSection {
     /// directory lives on. Absent = `true`.
     #[serde(default)]
     pub pane_footer: Option<bool>,
+    /// Whether a listing paints its odd rows on a band of their own — the
+    /// «pyjama» that makes a wide row easy to follow from its name to its
+    /// date. Absent = `false`.
+    ///
+    /// It is off by default because the band is a READING aid whose worth
+    /// depends on the pane being wide, and because the colour is the theme's:
+    /// a theme that does not define the `stripe` role paints nothing, and a
+    /// setting that looks broken on half the themes is worse than one the
+    /// reader turns on. Every bundled preset defines it.
+    ///
+    /// The band never covers what MEANS something: the cursor, a marked row
+    /// and the pointer are painted over it.
+    #[serde(default)]
+    pub row_stripes: Option<bool>,
     /// Default format of the `mtime` column when `[ui.columns]` does not fix
     /// one: `"smart"` (default — the time today, day and time this year,
     /// the date before that), `"relative"` (`11h ago`) or `"iso"`

@@ -752,6 +752,23 @@ body {
   cursor: default;
 }
 
+/* El «pijama» (spec 2026-09-20): la banda de las filas impares, encendida
+   por `[ui] row_stripes`. El color lo pone el tema (`stripe`); sin él la
+   banda es transparente y el listado queda como estaba, que es el defecto.
+
+   El `:where()` NO es cosmético y no se puede quitar: pone la especificidad
+   de este selector a CERO, que es lo único que hace que pierda contra el
+   puntero, el cursor y la marca. Sin él vale (0,4,0) y les gana a las cuatro
+   —que valen (0,2,0) y (0,3,0)— porque la cascada mira la especificidad
+   ANTES que el orden. El resultado medido con el tema de serie: la fila del
+   cursor en una línea impar quedaba con su `color` de selección (#1c1c1c)
+   sobre la banda (#232323), 1,05:1 de contraste, o sea el nombre del fichero
+   invisible en la mitad de las filas. La banda es una ayuda de lectura y
+   pierde contra todo lo que SIGNIFICA algo. */
+:where(.canvas[data-stripes="true"] .row[data-odd="true"]) {
+  background: var(--stripe-bg, transparent);
+}
+
 /* La fila bajo el PUNTERO (spec 2026-09-11, F3). Hasta ahora solo reaccionaba
    la casilla de marca, y una lista que no responde al ratón se siente muerta
    en una ventana.
@@ -1791,6 +1808,15 @@ body {
   color: var(--selection-fg);
 }
 
+/* El cursor del índice cuando el teclado está en el CUERPO (spec
+   2026-09-20): presente pero apagado, igual que el del panel sin foco. La
+   ayuda tenía foco y no lo enseñaba — las dos mitades resaltaban igual de
+   vivas, y la pantalla no decía a dónde iban las flechas. */
+.help-topics[data-focused="false"] .help-topic[aria-selected="true"] {
+  background: var(--selection-unfocused-bg);
+  color: var(--selection-unfocused-fg);
+}
+
 /* Aire alrededor de la prosa, y el scroll con el mismo aire abajo: sin
    padding, el texto tocaba el borde de la caja y la última línea quedaba
    pegada al pie. */
@@ -2026,6 +2052,20 @@ body {
   padding: 2px 8px;
   white-space: nowrap;
   cursor: pointer;
+}
+
+/* El cuerpo con el teclado: un filete de acento a la izquierda, el mismo
+   que lleva la fila del cursor en un listado (spec 2026-09-20). El índice ya
+   tenía el suyo (`border-right-color`) y el cuerpo no tenía ninguno, así que
+   al pasar el foco al cuerpo la pantalla se quedaba muda. */
+.help-body[data-focused="true"] {
+  box-shadow: inset 3px 0 0 var(--border-focus);
+}
+
+/* Y su cursor, apagado cuando el teclado está en el índice. */
+.help-body[data-focused="false"] .help-action[aria-selected="true"] {
+  background: var(--selection-unfocused-bg);
+  color: var(--selection-unfocused-fg);
 }
 
 .help-action[aria-selected="true"] {
@@ -3943,10 +3983,26 @@ body {
    ancho no puede sacar barras de scroll horizontales en la ventana. */
 .viewer-image {
   display: block;
-  max-width: 100%;
-  max-height: 100%;
+  /* El ZOOM (puente 80): `--zoom` es el porcentaje que el host lleva, ya
+     dividido entre cien, y `1` —el que hay si nadie lo pone— es AJUSTADA,
+     que es exactamente lo que estos dos topes significaban antes.
+
+     Se multiplica el TOPE y no se escala la imagen con `transform`: escalar
+     deja a la caja creyendo que la foto sigue midiendo lo de antes, así que
+     no sale barra ninguna y lo que se sale del hueco queda inalcanzable. */
+  max-width: calc(100% * var(--zoom, 1));
+  max-height: calc(100% * var(--zoom, 1));
   object-fit: contain;
   margin: auto;
+}
+
+/* La caja de una imagen AMPLIADA (puente 80). Solo existe con zoom por
+   encima del 100 %: es la que desborda y deja recorrer lo que ya no cabe. */
+.viewer-image-box {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  display: flex;
 }
 
 /* Se reconoció una imagen y esta ventana se niega a pintarla. Se DICE, en vez

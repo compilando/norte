@@ -168,15 +168,26 @@ const CHUNK_RAW_BYTES: usize = 3 * 1024;
 /// todos, no sólo en el primero. Es lo normal, porque una miniatura de
 /// verdad (hasta 1920 px de lado) no cabe nunca en un único trozo.
 ///
+/// `recorte` enseña sólo un TROZO del raster, en píxeles suyos (`x`, `y`,
+/// `w`, `h` del protocolo). Es lo que hace el zoom de acercar (spec
+/// 2026-09-20): las celdas son las mismas y lo que encoge es lo que se
+/// enseña en ellas. `None` enseña la imagen entera, que es lo de siempre.
+///
 /// ```
 /// use norte_tui::kitty_graphics::escape_colocar;
 /// use ratatui::layout::Rect;
 ///
-/// let esc = escape_colocar(7, b"PNGFALSO", Rect::new(1, 2, 40, 20));
+/// let esc = escape_colocar(7, b"PNGFALSO", Rect::new(1, 2, 40, 20), None);
 /// assert!(esc.starts_with("\x1b_G") && esc.ends_with("\x1b\\"));
+/// assert!(!esc.contains(",x="), "sin recorte no se mandan sus claves");
 /// ```
 #[must_use]
-pub fn escape_colocar(id: u32, bytes: &[u8], rect: Rect) -> String {
+pub fn escape_colocar(
+    id: u32,
+    bytes: &[u8],
+    rect: Rect,
+    recorte: Option<crate::viewer_open::Recorte>,
+) -> String {
     let engine = base64::engine::general_purpose::STANDARD;
     // `chunks` de un slice vacío no produce ningún trozo, y una miniatura de
     // cero bytes sigue necesitando UN APC (vacío) para que el terminal la
@@ -198,9 +209,17 @@ pub fn escape_colocar(id: u32, bytes: &[u8], rect: Rect) -> String {
             // `unwrap`/`expect` fuera de test, y aquí no hace falta ni eso).
             let _ = write!(
                 out,
-                "a=T,i={id},f=100,c={},r={},C=1,q=2,m={mas}",
+                "a=T,i={id},f=100,c={},r={},C=1,q=2",
                 rect.width, rect.height
             );
+            // El trozo va ANTES de `m`, que cierra la cabecera. Sus cuatro
+            // claves van juntas o no va ninguna: kitty toma las que falten
+            // por «desde el origen» y «hasta el final», y media pareja
+            // enseñaría un trozo que nadie pidió.
+            if let Some(r) = recorte {
+                let _ = write!(out, ",x={},y={},w={},h={}", r.x, r.y, r.w, r.h);
+            }
+            let _ = write!(out, ",m={mas}");
         } else {
             let _ = write!(out, "m={mas},q=2");
         }

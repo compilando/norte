@@ -136,6 +136,36 @@ Define one only when the derived value is wrong for your palette. The terminal
 ignores all ten, so a theme meant for both frontends loses nothing by setting
 them.
 
+### `stripe`, the one that is not derived
+
+`stripe` is the band under the odd rows of a listing when `[ui] row_stripes`
+is on. It is not in the eighteen and it is not in the ten: **no stylesheet
+derives it, and both frontends use it.**
+
+It is not derived because the right band is a small step away from the pane's
+background, and how small depends on the palette — a fixed step computed in
+CSS is invisible on one theme and a stripe of paint on the next. So a theme
+either says what its band is, with `bg` and never `fg`, or it gets no band at
+all and the listing looks exactly as it did.
+
+```toml
+[roles]
+stripe = { bg = "#414859" }   # nord: between nord1 and nord2
+```
+
+All ten bundled themes define it. Keep it subtle: it has to survive under the
+cursor, a marked row and the pointer, all three of which are painted over it.
+Give it a value of its own rather than reusing `hover`'s — equal, the band
+swallows the "the mouse is here" cue — and pick it relative to **both**
+`pane-background` and `pane-focus-background`, above or below the pair. A band
+between them reads lighter in the unfocused pane and darker in the focused
+one, so it inverts when you press Tab.
+
+Define `stripe` only if your theme also gives `selection` a `bg`. The
+monochrome fallback for `selection` is `reverse()`, which has no background of
+its own: over a band it swaps the band's colour into the foreground, and the
+cursor row ends up looking different on odd and even lines.
+
 ## Import a VSCode theme
 
 ```sh

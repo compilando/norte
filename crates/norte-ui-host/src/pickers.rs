@@ -91,6 +91,10 @@ const CORRESPONDENCIA: &[(&str, norte_theme::Role, bool)] = {
         ("separator", Role::Separator, false),
         ("focus-border", Role::FocusBorder, false),
         ("muted", Role::Muted, false),
+        // El pijama del listado (spec 2026-09-20). Solo FONDO: el color del
+        // nombre lo sigue poniendo `[files.ext]`, y una banda que además
+        // recolorease el nombre taparía de qué CLASE es el fichero.
+        ("stripe-bg", Role::Stripe, true),
     ]
 };
 
@@ -838,9 +842,15 @@ mod tests {
                 "error-fg",
                 "warning-fg",
                 "info-fg",
+                // El pijama SÍ lo define cada preset (spec 2026-09-20), y por
+                // eso viaja: la banda no se puede derivar en la hoja como el
+                // resto del cromo — es un salto sobre el fondo del panel que
+                // cada paleta da distinto, y uno calculado en CSS queda
+                // invisible en un tema y chillón en el siguiente.
+                "stripe-bg",
             ],
             "lo que el preset por defecto PROYECTA: calla los diez de cromo, \
-             que la hoja deriva"
+             que la hoja deriva, y dice el pijama, que no se deriva"
         );
 
         // El acuerdo con `style.css` es `nombres_de_tema`, no lo de arriba:

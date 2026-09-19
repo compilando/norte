@@ -92,6 +92,9 @@ impl Estado {
             crate::commands::EfectoVisor::Hex => v.toggle_hex(),
             crate::commands::EfectoVisor::Encoding => v.cycle_encoding(),
             crate::commands::EfectoVisor::EncodingAuto => v.reset_encoding(),
+            crate::commands::EfectoVisor::Zoom { acercar: true } => v.zoom_in(),
+            crate::commands::EfectoVisor::Zoom { acercar: false } => v.zoom_out(),
+            crate::commands::EfectoVisor::ZoomAjustar => v.zoom_fit(),
         }
         // Un PARCHE del visor. La foto entera mandaba, por cada línea de
         // scroll, las filas visibles de todos los listados que hay debajo.

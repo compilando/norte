@@ -132,6 +132,29 @@ pub enum Role {
     /// `dim` sobre `Regular` porque `dim` en un terminal es un atributo que
     /// muchos emuladores ignoran.
     Muted,
+    /// El fondo de las filas IMPARES de un listado cuando el «pijama» está
+    /// encendido (`[ui] row_stripes`). Es la banda, no la fila: la fila par
+    /// se queda con el fondo del panel, y por eso este rol se define con `bg`
+    /// y nunca con `fg` — el color del nombre lo sigue decidiendo
+    /// `[files.ext]`, que es lo que hace legible un listado.
+    ///
+    /// Pierde contra todo lo que SIGNIFICA algo: el cursor
+    /// ([`Role::Selection`]), la marca ([`Role::Mark`]) y el puntero
+    /// ([`Role::Hover`]) se pintan encima. Una banda que tapara al cursor
+    /// convertiría una ayuda de lectura en una mentira sobre dónde van las
+    /// teclas.
+    ///
+    /// «La marca» se lee distinto en cada frontend, igual que el propio
+    /// [`Role::Mark`]: la ventana pinta la fila marcada entera y tapa la
+    /// banda; el terminal solo estila el `*` del canalón, así que ahí lo que
+    /// gana a la banda es esa celda y no la fila.
+    ///
+    /// Comparte con el cromo los tres rasgos de más arriba —fuera de
+    /// [`Role::CORE`], fuera de [`Role::REQUESTABLE`], `fallback` sin color—
+    /// y por los mismos motivos, con uno propio: un pijama con un color
+    /// inventado es peor que no tener pijama, porque el listado es la
+    /// superficie que más se mira.
+    Stripe,
 }
 
 impl Role {
@@ -233,6 +256,8 @@ impl Role {
         Role::Separator,
         Role::FocusBorder,
         Role::Muted,
+        // El pijama del listado (spec 2026-09-20).
+        Role::Stripe,
     ];
 
     /// Estilo por defecto MONOCROMO del rol: reproduce el aspecto de M1
@@ -284,7 +309,11 @@ impl Role {
             | Role::ScrollbarSlider
             | Role::Separator
             | Role::FocusBorder
-            | Role::Muted => Style::new(),
+            | Role::Muted
+            // El pijama sin color es el listado de siempre: la banda solo
+            // existe si un tema la pinta. Un `dim` alterno sería peor que
+            // nada — atenúa el NOMBRE, que es lo que se viene a leer.
+            | Role::Stripe => Style::new(),
         }
     }
 
@@ -382,6 +411,7 @@ impl Role {
             Self::Separator => "separator",
             Self::FocusBorder => "focus-border",
             Self::Muted => "muted",
+            Self::Stripe => "stripe",
         }
     }
 }
@@ -449,7 +479,11 @@ mod tests {
             assert!(Role::ALL.contains(&r), "{r:?} está en CORE y no en ALL");
         }
         assert_eq!(Role::CORE.len(), 18, "CORE son los dieciocho de siempre");
-        assert_eq!(Role::ALL.len(), 28, "ALL son esos más los diez de cromo");
+        assert_eq!(
+            Role::ALL.len(),
+            29,
+            "ALL son esos más los diez de cromo y el pijama"
+        );
     }
 
     /// Lo PEDIBLE por un plugin es un subconjunto de lo que existe, y deja
@@ -467,6 +501,9 @@ mod tests {
             Role::InputBorder,
             Role::Separator,
             Role::Hover,
+            // El pijama es una ayuda de LECTURA del listado: depende de en
+            // qué fila cae la entrada, que es justo lo que un plugin no sabe.
+            Role::Stripe,
         ] {
             assert!(!Role::REQUESTABLE.contains(&r), "{r:?} es cromo");
         }

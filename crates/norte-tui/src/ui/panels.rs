@@ -203,6 +203,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // mientras el run loop se negaba a colocar píxeles encima: ni imagen ni
     // hexview.
     let hay_imagen = super::imagen_a_colocar(app, frame.area()).is_some();
+
     // #29/G3a (ADR 0037): un preview de plugin trae color, por ANSI-SGR
     // saneado (`fg` únicamente) o por WIT estructurado (`role` VALIDADO +
     // `fg` de respaldo). `role` GANA sobre `fg` cuando ambos están

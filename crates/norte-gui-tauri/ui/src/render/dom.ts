@@ -227,6 +227,11 @@ export function updateRow(
   el.setAttribute("aria-rowindex", String(index + 1));
   el.setAttribute("aria-selected", String(row.selected));
   el.dataset["marked"] = String(row.marked);
+  // La paridad de la fila PINTADA, para el pijama (spec 2026-09-20). Va
+  // siempre, encendido el ajuste o no: quien decide si se ve es el
+  // contenedor (`data-stripes`), y así una fila reciclada por el scroll no
+  // arrastra la banda de la posición que ocupaba antes.
+  el.dataset["odd"] = String(index % 2 === 1);
   el.className = `row kind-${row.kind}`;
   const name = document.createElement("span");
   name.className = row.hostile ? "cell-name hostile" : "cell-name";

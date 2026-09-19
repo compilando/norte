@@ -402,6 +402,10 @@ impl Estado {
     ) -> Vec<norte_frontend::columns::Fitted> {
         use norte_frontend::columns::fitted_columns;
         let esquema = hueco.pane.dir().scheme();
+        // El catálogo de este pane: decide si se pinta la columna de permisos
+        // que pone el listado (spec 2026-09-20). El MISMO que alimenta las
+        // cabeceras, para que ancho y cabecera no discrepen.
+        let catalogo = self.catalogo_de(hueco.pane.dir());
         let ancho = self
             .reparto
             .placements
@@ -412,9 +416,15 @@ impl Estado {
             Some(ancho) => {
                 let delante: u16 = 2 + if hueco.pane.any_icon() { 3 } else { 0 };
                 let quiere = hueco.pane.name_width_p80().saturating_add(delante);
-                fitted_columns(&self.columnas, esquema, ancho.saturating_sub(4), quiere)
+                fitted_columns(
+                    &self.columnas,
+                    esquema,
+                    ancho.saturating_sub(4),
+                    quiere,
+                    catalogo,
+                )
             }
-            None => fitted_columns(&self.columnas, esquema, u16::MAX / 2, 0),
+            None => fitted_columns(&self.columnas, esquema, u16::MAX / 2, 0, catalogo),
         }
     }
 

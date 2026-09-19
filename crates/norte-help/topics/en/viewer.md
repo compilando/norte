@@ -17,6 +17,9 @@ commands = [
     "viewer.encoding",
     "viewer.encoding-auto",
     "viewer.hex",
+    "viewer.zoom-in",
+    "viewer.zoom-out",
+    "viewer.zoom-fit",
     "pane.open",
     "pane.edit",
     "pane.edit-new",
@@ -121,6 +124,25 @@ midway would leave placed pixels nobody knows how to erase. Close it and open
 it again to see the new value.
 
 > 💡 Inside tmux, pixels do not cross the session without `allow-passthrough` turned on. The startup probe detects that and falls back to half blocks on its own, so you see no warning there either: nothing is missing, that is the correct outcome.
+
+## Getting closer to the image
+
+An image opens FITTED: the whole of it inside what there is, which is the
+first thing you want from a picture. {{cmd:viewer.zoom-in}} and
+{{cmd:viewer.zoom-out}} move it up and down a ladder — 25, 50, 75, 100, 150,
+200, 300, 400, 800 — and {{cmd:viewer.zoom-fit}} puts it back to fitted.
+
+The rungs are a ladder and not a factor you multiply, and that shows: zoom in
+and out the same number of times and you land back EXACTLY where you were,
+instead of at a 99 % you can no longer leave.
+
+Zoomed in, the image does not fit, and then the viewer's movement keys move
+what you see INSIDE it: the same ones that walk a long file
+({{cmd:viewer.up}}, {{cmd:viewer.down}}, {{cmd:viewer.left}},
+{{cmd:viewer.right}}). Fitting it again puts the walk back to zero.
+
+This belongs to the pixel path: in half blocks the image IS text in cells, so
+getting closer uncovers nothing that was not already painted.
 
 # Handing the file to another program
 

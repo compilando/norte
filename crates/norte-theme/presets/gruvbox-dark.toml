@@ -19,6 +19,7 @@ match            = { fg = "#282828", bg = "#fabd2f" }
 pane-background       = { bg = "#3c3836" } # bg1
 pane-focus-background = { bg = "#504945" } # bg2
 mark                  = { bg = "#413416" } # dark blend of bright_yellow
+stripe                = { bg = "#423e3b" } # entre bg1 y bg2
 
 [files.kind]
 dir          = { fg = "#83a598", bold = true }

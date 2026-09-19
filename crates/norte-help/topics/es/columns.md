@@ -48,6 +48,26 @@ Una columna que un backend no sabe contestar se queda **vacía**. Es el
 resultado honesto: el almacenamiento de objetos no tiene dueño ni modo, y
 pintar un `-` verosímil sería inventarse una respuesta. De eso va [[remote]].
 
+# Los permisos vienen puestos
+
+En un directorio de este disco y en un host SSH sale una columna de
+**permisos**, `drwxr-xr-x`, sin que tengas que pedirla. Es `attr:posix.mode`,
+una columna de atributo como las de arriba; lo único distinto es quién la
+puso.
+
+Y por eso se comporta distinto en un sitio: **cede**. Cuando el panel se
+estrecha es la PRIMERA que se va, antes incluso que el tipo, porque una
+columna que no pediste no puede ser la que te deje el nombre en `Cap….png`.
+Ponla tú en `[ui.columns]` y deja de ceder, como cualquier otra que hayas
+elegido.
+
+No aparece hasta que el backend dice que tiene permisos POSIX, así que no la
+verás en un bucket, dentro de un `.zip` ni en un Windows: una cabecera «Modo»
+sobre doce celdas en blanco es ancho del nombre gastado en no decir nada.
+
+Ordenar por ella todavía no se puede — como en cualquier columna de atributo,
+pulsar su cabecera no hace nada en vez de inventarse un ranking.
+
 > 💡 Una columna de plugin se rellena de forma asíncrona, con el listado ya en pantalla. Aparece un instante después en un provider lento, y si el listado cambia por debajo se descarta lo que había en vez de enseñar un valor que era del directorio anterior.
 
 # Formatos

@@ -1159,3 +1159,185 @@ pub fn content_fixtures_forced() -> Vec<ContentFixture> {
         },
     ]
 }
+
+/// A POSIX mode word and how the listing must read it ([`posix_modes`]).
+#[derive(Debug, Clone)]
+pub struct PosixMode {
+    /// Stable identifier (for test names and messages).
+    pub id: &'static str,
+    /// The mode word, as `st_mode` or an SFTP `permissions` field carries it.
+    pub mode: u64,
+    /// The ten cells the listing must paint, `ls` style.
+    pub rwx: &'static str,
+    /// The other half of a COLLIDING pair, when the hazard needs two modes.
+    ///
+    /// Like `HostileTitle::twin`: a collision is a property of a PAIR, not of
+    /// one value. `None` when the hazard lives inside a single mode.
+    pub twin: Option<u64>,
+    /// Why it is hostile (living documentation).
+    pub why: &'static str,
+}
+
+/// The canonical POSIX mode corpus.
+///
+/// It exists because the permissions column stopped being opt-in: it is now
+/// on by default wherever a provider announces POSIX permissions, so every
+/// mode word a real filesystem or a real SFTP server can produce is on
+/// screen, in the column next to the name, on every listing.
+///
+/// Every entry renders to exactly ten cells, and that is the invariant the
+/// column's `Fixed` width rests on:
+///
+/// ```
+/// for m in norte_testkit::corpus::posix_modes() {
+///     assert_eq!(m.rwx.chars().count(), 10, "{}", m.id);
+///     assert!(m.rwx.is_ascii(), "{}", m.id);
+/// }
+/// ```
+///
+/// Two of them are the point of the exercise and are worth reading before
+/// changing the formatter:
+///
+/// ```
+/// let modes = norte_testkit::corpus::posix_modes();
+/// // A mode with no type bits is NOT a regular file.
+/// let sin_clase = modes.iter().find(|m| m.id == "no_type_bits").unwrap();
+/// assert!(sin_clase.rwx.starts_with('?'));
+/// assert_eq!(sin_clase.twin, Some(0o100_644), "y su gemelo sí lo es");
+/// // Two modes whose first seven cells are identical: cut there, they lie.
+/// let par = modes.iter().find(|m| m.id == "truncation_twins").unwrap();
+/// assert!(par.twin.is_some());
+/// ```
+#[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "es una TABLA: quince modos con su porqué escrito al lado. \
+              Partirla en dos mitades solo esconde media lista"
+)]
+pub fn posix_modes() -> Vec<PosixMode> {
+    vec![
+        PosixMode {
+            id: "regular",
+            mode: 0o100_644,
+            rwx: "-rw-r--r--",
+            twin: None,
+            why: "the ordinary case, and the baseline every other entry is read against",
+        },
+        PosixMode {
+            id: "dir",
+            mode: 0o040_755,
+            rwx: "drwxr-xr-x",
+            twin: None,
+            why: "a directory: the class the icon and the trailing `/` also claim, \
+                  so a disagreement here is visible on the same row",
+        },
+        PosixMode {
+            id: "symlink",
+            mode: 0o120_777,
+            rwx: "lrwxrwxrwx",
+            twin: None,
+            why: "a symlink always reports 0777; its own permissions mean nothing, \
+                  the target's do",
+        },
+        PosixMode {
+            id: "fifo",
+            mode: 0o010_644,
+            rwx: "prw-r--r--",
+            twin: None,
+            why: "a named pipe. Painted as a regular file it invites a copy that \
+                  blocks forever on a reader that will never come",
+        },
+        PosixMode {
+            id: "chardev",
+            mode: 0o020_666,
+            rwx: "crw-rw-rw-",
+            twin: None,
+            why: "`/dev/null` and every terminal. A whole directory of these read \
+                  as ordinary files is the failure this fixture exists for",
+        },
+        PosixMode {
+            id: "blockdev",
+            mode: 0o060_660,
+            rwx: "brw-rw----",
+            twin: None,
+            why: "`/dev/sda`. Copying one is not copying a file, and the class is \
+                  the only thing on the row that says so",
+        },
+        PosixMode {
+            id: "socket",
+            mode: 0o140_755,
+            rwx: "srwxr-xr-x",
+            twin: None,
+            why: "a unix socket, which `/run` and `/tmp` are full of",
+        },
+        PosixMode {
+            id: "setuid_no_x",
+            mode: 0o104_711,
+            rwx: "-rws--x--x",
+            twin: None,
+            why: "setuid WITH execute: lowercase `s`, and a security-relevant bit \
+                  that must never render as an ordinary permission",
+        },
+        PosixMode {
+            id: "setgid_no_x",
+            mode: 0o102_745,
+            rwx: "-rwxr-Sr-x",
+            twin: None,
+            why: "setgid WITHOUT execute: capital `S`. The capital is what says the \
+                  bit is set on something that cannot use it",
+        },
+        PosixMode {
+            id: "sticky_dir",
+            mode: 0o041_777,
+            rwx: "drwxrwxrwt",
+            twin: None,
+            why: "`/tmp`: world-writable but you may only delete your own",
+        },
+        PosixMode {
+            id: "sticky_no_x",
+            mode: 0o041_776,
+            rwx: "drwxrwxrwT",
+            twin: None,
+            why: "sticky without execute for others: capital `T`, same rule as `S`",
+        },
+        PosixMode {
+            id: "no_type_bits",
+            mode: 0o644,
+            rwx: "?rw-r--r--",
+            twin: Some(0o100_644),
+            why: "an SFTP server that reports only the permission bits — Windows \
+                  OpenSSH and several appliances do — and what `MemProvider` emits \
+                  for every node. Its twin IS a regular file. Rendered `-`, the two \
+                  are indistinguishable and a directory reads as a file while the \
+                  icon beside it says otherwise. Absence of a class is not the \
+                  regular class, and `?` is the only honest cell",
+        },
+        PosixMode {
+            id: "unknown_type",
+            mode: 0o170_644,
+            rwx: "?rw-r--r--",
+            twin: None,
+            why: "a type word no `S_IFMT` defines: a forged archive, a FUSE bridge, \
+                  a future kernel. Guessing `-` for it is inventing an answer",
+        },
+        PosixMode {
+            id: "truncation_twins",
+            mode: 0o100_644,
+            rwx: "-rw-r--r--",
+            twin: Some(0o100_640),
+            why: "`-rw-r--r--` and `-rw-r-----` share their first seven cells. Cut \
+                  into a column the reader narrowed by dragging its border, \
+                  world-readable and group-only become the same string. Same demand \
+                  as `truncation_twins` over titles: the cut must be MARKED",
+        },
+        PosixMode {
+            id: "u32_max",
+            mode: u64::from(u32::MAX),
+            rwx: "?rwsrwsrwt",
+            twin: None,
+            why: "every bit set: setuid, setgid and sticky included, so the three \
+                  execute cells are `s`, `s` and `t`. Still exactly ten cells, and \
+                  still not a class the formatter recognises",
+        },
+    ]
+}

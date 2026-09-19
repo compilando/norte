@@ -167,7 +167,114 @@ pub struct ImagenColocada {
     pub id: u32,
     /// Dónde se colocó la última vez (T4 la pinta y la rellena); `None`
     /// hasta el primer frame que la coloca.
-    pub puesta_en: Option<ratatui::layout::Rect>,
+    ///
+    /// Es la COLOCACIÓN entera y no sólo el rect (spec 2026-09-20): con
+    /// zoom, dos frames pueden ocupar las mismas celdas y enseñar trozos
+    /// distintos de la imagen, y comparar sólo el rect dejaría la pantalla
+    /// quieta mientras el lector se mueve por dentro.
+    pub puesta_en: Option<Colocacion>,
+}
+
+/// Dónde va la imagen y qué parte de ella se ve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Colocacion {
+    /// Las celdas que ocupa.
+    pub rect: ratatui::layout::Rect,
+    /// El trozo del raster que se enseña, en píxeles. `None` = entero.
+    pub recorte: Option<Recorte>,
+}
+
+/// Un trozo del raster, en píxeles de la propia imagen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Recorte {
+    /// Desplazamiento desde la izquierda.
+    pub x: u32,
+    /// Desplazamiento desde arriba.
+    pub y: u32,
+    /// Ancho del trozo.
+    pub w: u32,
+    /// Alto del trozo.
+    pub h: u32,
+}
+
+/// Dónde colocar una imagen con el zoom que tiene el visor.
+///
+/// Tres regímenes, y la razón de que sean tres es que un terminal no puede
+/// pintar fuera del hueco del visor:
+///
+/// - **Ajustado** (100 %): la imagen se estira al hueco entero, que es lo
+///   que hacía siempre.
+/// - **Alejado** (< 100 %): el hueco que se le da ENCOGE, y la imagen entera
+///   sigue dentro. No se recorta nada.
+/// - **Acercado** (> 100 %): el hueco es el mismo y lo que encoge es el
+///   TROZO del raster que se enseña. Eso es magnificar, y es lo que deja que
+///   las teclas de mover el visor sirvan para pasearse por dentro.
+///
+/// `pan_x`/`pan_y` son el desplazamiento pedido, en celdas; se traducen a
+/// píxeles del raster y se acotan para que el trozo no se salga.
+#[must_use]
+pub fn colocacion(
+    zoom_pct: u16,
+    hueco: ratatui::layout::Rect,
+    ancho: u32,
+    alto: u32,
+    pan_x: usize,
+    pan_y: usize,
+) -> Colocacion {
+    use ratatui::layout::Rect;
+    if hueco.is_empty() || ancho == 0 || alto == 0 {
+        return Colocacion {
+            rect: hueco,
+            recorte: None,
+        };
+    }
+    if zoom_pct < 100 {
+        // Encoge el hueco. Nunca a cero: `c=0,r=0` significa para kitty
+        // «tamaño natural de la imagen», que sobre la pantalla entera es
+        // exactamente lo que el guardia de `imagen_a_colocar` evita.
+        let escala = |v: u16| {
+            u16::try_from(u32::from(v) * u32::from(zoom_pct) / 100)
+                .unwrap_or(u16::MAX)
+                .max(1)
+        };
+        return Colocacion {
+            rect: Rect {
+                width: escala(hueco.width),
+                height: escala(hueco.height),
+                ..hueco
+            },
+            recorte: None,
+        };
+    }
+    if zoom_pct == 100 {
+        return Colocacion {
+            rect: hueco,
+            recorte: None,
+        };
+    }
+    // Acercar: el trozo visible es el inverso del zoom, y al menos un píxel
+    // — un trozo de cero no es una imagen pequeña, es ninguna.
+    let pct = u32::from(zoom_pct);
+    let w = (ancho * 100 / pct).max(1).min(ancho);
+    let h = (alto * 100 / pct).max(1).min(alto);
+    // El paseo se pide en CELDAS y aquí se gasta en píxeles: una celda de
+    // movimiento mueve la misma fracción de imagen que ocupa una celda de
+    // hueco, que es lo que hace que moverse se sienta igual con cualquier
+    // zoom.
+    let paso_x = w / u32::from(hueco.width).max(1);
+    let paso_y = h / u32::from(hueco.height).max(1);
+    let x = u32::try_from(pan_x)
+        .unwrap_or(u32::MAX)
+        .saturating_mul(paso_x)
+        .min(ancho - w);
+    let y = u32::try_from(pan_y)
+        .unwrap_or(u32::MAX)
+        .saturating_mul(paso_y)
+        .min(alto - h);
+    Colocacion {
+        rect: hueco,
+        recorte: Some(Recorte { x, y, w, h }),
+    }
 }
 
 /// Lo que salió de pedir la miniatura de un fichero, con el MOTIVO cuando

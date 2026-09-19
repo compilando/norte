@@ -166,8 +166,13 @@ fn ev_con(kind: MouseEventKind, col: u16, row: u16, modifiers: KeyModifiers) -> 
 fn borde_de_la_segunda_columna(app: &App) -> (u16, u16, norte_frontend::columns::ColumnId, u16) {
     let g = &app.mouse.geometry().expect("hay geometría")[0];
     let (x0, interior, cabecera) = (g.x + 1, g.width - 2, g.first_list_row - 1);
-    let cols =
-        norte_frontend::columns::column_widths(&app.columns, app.panes[0].dir().scheme(), interior);
+    let scheme = app.panes[0].dir().scheme();
+    let cols = norte_frontend::columns::column_widths(
+        &app.columns,
+        scheme,
+        interior,
+        app.attr_catalog(scheme),
+    );
     assert!(cols.len() >= 2, "hay más columnas que el nombre: {cols:?}");
     (x0 + cols[0].1, cabecera, cols[1].0.clone(), cols[1].1)
 }
@@ -175,11 +180,17 @@ fn borde_de_la_segunda_columna(app: &App) -> (u16, u16, norte_frontend::columns:
 /// El ancho que el reparto le da AHORA a la columna `id` del pane izquierdo.
 fn ancho_de(app: &App, id: &norte_frontend::columns::ColumnId) -> u16 {
     let g = &app.mouse.geometry().expect("hay geometría")[0];
-    norte_frontend::columns::column_widths(&app.columns, app.panes[0].dir().scheme(), g.width - 2)
-        .into_iter()
-        .find(|(c, _)| c == id)
-        .expect("la columna sigue")
-        .1
+    let scheme = app.panes[0].dir().scheme();
+    norte_frontend::columns::column_widths(
+        &app.columns,
+        scheme,
+        g.width - 2,
+        app.attr_catalog(scheme),
+    )
+    .into_iter()
+    .find(|(c, _)| c == id)
+    .expect("la columna sigue")
+    .1
 }
 
 /// Arrastrar el borde de una columna le cambia el ancho, EN VIVO, y soltar

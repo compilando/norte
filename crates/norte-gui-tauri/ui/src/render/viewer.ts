@@ -227,7 +227,7 @@ export function pintarImagen(this: Screen, viewer: ViewerView, body: HTMLElement
     // barras dentro, la foto acabó siendo hija directa del marco y el hueco
     // se quedó sin alto. Una rama que reconstruye lo que otra solo sustituye
     // es la misma divergencia de siempre, dentro de una función.
-    body.replaceWith(this.nodoImagen(this.imagenUrl, img));
+    body.replaceWith(this.nodoImagen(this.imagenUrl, img, viewer.image_zoom));
     return;
   }
   this.soltarImagen();
@@ -242,7 +242,7 @@ export function pintarImagen(this: Screen, viewer: ViewerView, body: HTMLElement
       }
       const url = URL.createObjectURL(new Blob([bytes]));
       this.imagenUrl = url;
-      body.replaceWith(this.nodoImagen(url, img));
+      body.replaceWith(this.nodoImagen(url, img, viewer.image_zoom));
     })
     .catch(() => {
       // Sin imagen se queda la vista cruda, que es el fichero de verdad.

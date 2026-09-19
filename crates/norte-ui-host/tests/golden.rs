@@ -999,6 +999,9 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
     norte_ui_host::dto::ViewerView {
         path_display: "⟨file⟩/home/oscar/notas.txt".to_owned(),
         path_hostile: false,
+        // Un zoom que NO es el de por defecto (puente 80): con 100 el golden
+        // no distinguiría «lo manda» de «no existe el campo».
+        image_zoom: 150,
         encoding: "UTF-8".to_owned(),
         eol: "lf".to_owned(),
         hex: false,
@@ -1510,6 +1513,9 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         menu: menu_de_referencia(),
         panel_bar: barra_de_paneles_de_referencia(),
         key_bar: barra_de_teclas_de_referencia(),
+        // El pijama ENCENDIDO en la referencia (puente 80): un booleano que
+        // el golden fija a `false` no distingue «lo manda» de «no existe».
+        row_stripes: true,
         profiles: Some(perfiles_de_referencia()),
         wizard: Some(asistente_de_referencia()),
         palette: Some(norte_ui_host::dto::PaletteView {
@@ -2709,7 +2715,9 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // Puente 78: `SlotView::Timeline` (la línea de tiempo, #359).
     // Puente 79: una extensión que no cargó lleva el id con el que se
     // desinstala (`ExtensionErrorView.id`, ADR 0113).
-    const FORMA: u64 = 9_824_981_076_874_211_735;
+    // Puente 80: `View::row_stripes` (el pijama del listado) y
+    // `ViewerView::image_zoom` (el zoom de una imagen).
+    const FORMA: u64 = 13_356_512_637_820_858_921;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

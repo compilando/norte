@@ -95,6 +95,10 @@ info                  = { fg = "#59a4f9" }
 hostile-badge         = { fg = "#ffa657", bold = true }
 # Derivado: el ámbar de aviso rebajado a fondo.
 mark                  = { bg = "#4a3b14" }
+# Por ENCIMA de los dos fondos de panel (#181818 y #1f1f1f). Entre ellos la
+# banda se leía más clara en el panel sin foco y más oscura en el que lo
+# tiene: se invertía al pulsar Tab.
+stripe                = { bg = "#252525" }
 
 # Cromo de la ventana (spec 2026-09-11, F2). Los ocho presets de siempre los
 # callan y la hoja los deriva; este los dice, porque para él son el asunto.

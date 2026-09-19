@@ -426,7 +426,19 @@ use serde::{Deserialize, Serialize};
 ///   por la misma cuenta, y sobre una rota el único cambio que se atiende es
 ///   `uninstall`. ADR 0104 lo había dejado escrito como hueco: el handler la
 ///   borraba y la ventana no tenía cómo pedírselo.
-pub const BRIDGE_VERSION: u32 = 79;
+/// - 80: el «pijama» del listado (spec 2026-09-20): `View::row_stripes` dice
+///   si las filas impares van sobre una banda. Cruza como booleano y no como
+///   color porque el color ya cruza: es el rol `stripe` del tema, que viaja
+///   con los demás en `--stripe-bg`. Un renderer viejo lo ignora y pinta el
+///   listado de siempre, que es exactamente el defecto.
+///
+///   Y el ZOOM del visor de imágenes: `ViewerView::image_zoom`, el
+///   porcentaje de lo que la imagen ocuparía AJUSTADA. Porcentaje y no
+///   píxeles porque quien sabe cuánto es «ajustada» es el renderer, que es
+///   quien tiene el hueco; el host lleva la cuenta de los peldaños. Con
+///   `serde(default)` a 100, que es ajustada: un host anterior no lo manda y
+///   el renderer pinta lo que pintaba.
+pub const BRIDGE_VERSION: u32 = 80;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

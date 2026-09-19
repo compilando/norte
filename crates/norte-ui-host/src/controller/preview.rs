@@ -315,6 +315,9 @@ impl Estado {
             EfectoVisor::Hex => v.toggle_hex(),
             EfectoVisor::Encoding => v.cycle_encoding(),
             EfectoVisor::EncodingAuto => v.reset_encoding(),
+            EfectoVisor::Zoom { acercar: true } => v.zoom_in(),
+            EfectoVisor::Zoom { acercar: false } => v.zoom_out(),
+            EfectoVisor::ZoomAjustar => v.zoom_fit(),
         }
     }
 

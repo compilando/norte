@@ -275,6 +275,9 @@ pub const IMPLEMENTADOS_VISOR: &[&str] = &[
     "viewer.hex",
     "viewer.encoding",
     "viewer.encoding-auto",
+    "viewer.zoom-in",
+    "viewer.zoom-out",
+    "viewer.zoom-fit",
 ];
 
 /// Todo lo que el host implementa, en las dos pantallas.
@@ -320,6 +323,13 @@ pub enum EfectoVisor {
     Encoding,
     /// Vuelve a la detección automática.
     EncodingAuto,
+    /// Mueve el zoom de la imagen un peldaño (spec 2026-09-20).
+    Zoom {
+        /// `true` = acercar.
+        acercar: bool,
+    },
+    /// Devuelve la imagen a AJUSTADA.
+    ZoomAjustar,
 }
 
 /// Traduce un comando de la pantalla del visor a su efecto.
@@ -342,6 +352,9 @@ pub fn efecto_visor_de(command: &str, veces: u32) -> Option<EfectoVisor> {
         "viewer.hex" => EfectoVisor::Hex,
         "viewer.encoding" => EfectoVisor::Encoding,
         "viewer.encoding-auto" => EfectoVisor::EncodingAuto,
+        "viewer.zoom-in" => EfectoVisor::Zoom { acercar: true },
+        "viewer.zoom-out" => EfectoVisor::Zoom { acercar: false },
+        "viewer.zoom-fit" => EfectoVisor::ZoomAjustar,
         _ => return None,
     })
 }

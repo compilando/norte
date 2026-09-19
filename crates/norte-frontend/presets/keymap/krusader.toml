@@ -280,4 +280,10 @@ keymap = [
     { on = ["end"], run = "viewer.bottom" },
     { on = ["left"], run = "viewer.left" },
     { on = ["right"], run = "viewer.right" },
+    # Superficie propia de norte: Krusader no atesta un zoom en su visor, así
+    # que estas tres son elección nuestra y van igual en los siete presets
+    # (ver `orthodox.toml`).
+    { on = ["f5"], run = "viewer.zoom-out" },
+    { on = ["f6"], run = "viewer.zoom-in" },
+    { on = ["f7"], run = "viewer.zoom-fit" },
 ]

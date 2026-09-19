@@ -260,6 +260,35 @@ mod k2b_gate_tests {
         }
     }
 
+    /// El ZOOM de una imagen está atado en los SIETE presets (spec
+    /// 2026-09-20).
+    ///
+    /// Es una superficie propia de norte: ningún gestor de referencia atesta
+    /// un zoom en su visor, así que las tres teclas las elegimos nosotros y
+    /// la única forma de que un lector las tenga es que estén en todos. Si
+    /// no, el catálogo las anuncia, la hoja de referencia las imprime, la
+    /// paleta las ofrece y su teclado no hace nada — que es exactamente la
+    /// avería que CLAUDE.md dice que ya ha aterrizado tres veces.
+    #[test]
+    fn el_zoom_del_visor_esta_atado_en_los_siete_presets() {
+        let known = live_commands();
+        let mut faltan: Vec<String> = Vec::new();
+        for name in NAMES {
+            let eff = build(name, Screen::Viewer, &known);
+            let bound: Vec<&str> = eff.bindings().iter().map(|(_, cmd)| *cmd).collect();
+            for cmd in ["viewer.zoom-in", "viewer.zoom-out", "viewer.zoom-fit"] {
+                if !bound.contains(&cmd) {
+                    faltan.push(format!("{name}: {cmd}"));
+                }
+            }
+        }
+        assert!(
+            faltan.is_empty(),
+            "zoom sin tecla en algún preset:\n  {}",
+            faltan.join("\n  ")
+        );
+    }
+
     /// Check 4: after `dialog_from` resolution (Task 1), every preset's
     /// `[dialog]` section is non-empty — the inheritance actually landed,
     /// not just parsed without error.

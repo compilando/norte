@@ -1375,6 +1375,8 @@ pub struct UiChrome {
     pub panel_bar_style: Option<PanelBarStyle>,
     /// `[ui] pane_footer` (None = shown).
     pub pane_footer: Option<bool>,
+    /// `[ui] row_stripes` (None = off): the listing's «pyjama».
+    pub row_stripes: Option<bool>,
     /// `[ui] date_format` (None = smart), validated.
     pub date_format: Option<DateFormat>,
     /// `[ui] notice_seconds` (None = 8; 0 = until the next key), at most 600.
@@ -1480,6 +1482,11 @@ impl UiChrome {
     #[must_use]
     pub fn pane_footer(self) -> bool {
         self.pane_footer.unwrap_or(true)
+    }
+    /// Effective `row_stripes` (absent = off).
+    #[must_use]
+    pub fn row_stripes(self) -> bool {
+        self.row_stripes.unwrap_or(false)
     }
     /// Effective `date_format` (absent = smart).
     #[must_use]
@@ -1930,6 +1937,7 @@ fn merge_ui_chrome(
     };
     acc.key_bar = ui.key_bar.or(acc.key_bar);
     acc.pane_footer = ui.pane_footer.or(acc.pane_footer);
+    acc.row_stripes = ui.row_stripes.or(acc.row_stripes);
     acc.dialog_buttons = ui.dialog_buttons.or(acc.dialog_buttons);
     if let Some(raw) = &ui.panel_bar_style {
         acc.panel_bar_style = Some(match raw.as_str() {

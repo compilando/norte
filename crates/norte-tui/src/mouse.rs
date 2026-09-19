@@ -900,7 +900,14 @@ fn column_border_at(app: &App, col: u16, row: u16) -> Option<ColumnDrag> {
             continue;
         }
         let pane = app.panes.get(i)?;
-        let anchos = crate::ui::pane_columns(&app.columns, pane, g.width.saturating_sub(2));
+        // El MISMO catálogo que usa la pintura: dos respuestas distintas aquí
+        // harían que el borde que agarra el ratón fuese el de otra columna.
+        let anchos = crate::ui::pane_columns(
+            &app.columns,
+            pane,
+            g.width.saturating_sub(2),
+            app.attr_catalog(pane.dir().scheme()),
+        );
         let mut x = g.x.saturating_add(1);
         for (k, f) in anchos.iter().enumerate() {
             if k > 0 && (col == x || col.saturating_add(1) == x) {
