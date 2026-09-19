@@ -10,6 +10,16 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// Un fichero que se está creando para editarlo (#290).
+#[derive(Debug)]
+pub(super) struct Creacion {
+    /// La task que lo crea. `None` mientras se encola: el id no existe hasta
+    /// que el daemon contesta, y el gesto ya ha vuelto.
+    pub(super) task: Option<u64>,
+    /// Qué abrir cuando esa task termine BIEN.
+    path: VPath,
+}
+
 impl Estado {
     /// Crea el directorio TECLEADO dentro de este otro.
     ///

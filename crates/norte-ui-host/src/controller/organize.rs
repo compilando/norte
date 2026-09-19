@@ -15,6 +15,32 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// El plan de ORGANIZAR en revisión (fase 8).
+///
+/// El gemelo de [`super::ai::RevisionIa`] sin su campo más caro: no hay veredicto que
+/// esperar, porque el token del plan vino CON el plan. Lo demás es idéntico,
+/// y a propósito — es la misma clase de pantalla y la misma defensa.
+pub(super) struct RevisionOrganizar {
+    /// El directorio sobre el que se planeó.
+    dir: VPath,
+    /// Los movimientos, tal cual los propuso el productor. Es lo que se manda
+    /// a ejecutar, y lo que el `plan_hash` ata.
+    moves: Vec<norte_proto::methods::OrganizeMove>,
+    /// El árbol ya calculado, que es lo que se revisa.
+    lineas: Vec<norte_frontend::organize::TreeLine>,
+    /// El token que hay que devolver para aplicarlo.
+    plan_hash: norte_proto::methods::PlanHash,
+    /// Primera línea visible: la revisión es de todo el árbol, por scroll.
+    primera: usize,
+    /// Hasta dónde ha LLEGADO el lector. Aprobar lo exige.
+    visto_hasta: usize,
+    /// Ya se ha enseñado al menos una vez, así que la siguiente tecla es una
+    /// respuesta y no una tecla que iba a otro sitio.
+    reconocida: bool,
+    /// La época que la pidió.
+    epoca: u64,
+}
+
 impl Estado {
     /// Pide un plan de organizar sobre el directorio del hueco con foco.
     ///

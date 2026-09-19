@@ -10,6 +10,68 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// En qué acabó una búsqueda. El tipo y la precedencia de sus frases son del
+/// crate compartido: aquí estaban escritos aparte y ya discrepaban.
+use norte_frontend::search_status::Outcome as Desenlace;
+
+/// Una búsqueda viva y lo que lleva encontrado.
+pub(super) struct Busqueda {
+    /// Cuál de todas las búsquedas de esta ventana es.
+    ///
+    /// La identidad NO puede ser la Task: el id lo trae el daemon y llega
+    /// tarde, así que hasta entonces no habría con qué distinguir un lote de
+    /// la búsqueda anterior. La época se conoce al LANZAR, que es cuando hace
+    /// falta.
+    pub(super) epoca: u64,
+    /// La Task del daemon, en cuanto se sabe. Cero mientras no se sabe.
+    pub(super) task: norte_proto::TaskId,
+    /// La vista se cerró y lo que quede de esta búsqueda sobra.
+    ///
+    /// La comparte con su reenviador, que es quien puede cancelar antes de
+    /// que el id llegue al actor: `esc` justo tras lanzar es la ventana en la
+    /// que nadie más tiene a quién cancelar.
+    abandonada: Arc<std::sync::atomic::AtomicBool>,
+    /// Lo que se buscó, para poder decirlo.
+    query: String,
+    /// Dónde se buscó.
+    root: VPath,
+    /// Lo encontrado, en el orden en que llegó.
+    hits: Vec<Hallazgo>,
+    /// Esta búsqueda es SEMÁNTICA: se preguntó por significado contra el
+    /// índice, no por nombre contra el árbol.
+    semantica: bool,
+    /// Dónde está el cursor.
+    cursor: usize,
+    /// En qué acabó, o que sigue corriendo.
+    ///
+    /// Un `bool` decía solo si sigue viva, y entonces TODO desenlace se
+    /// pintaba «N hallazgos» — o sea que una búsqueda que falló al segundo
+    /// directorio y otra que recorrió el árbol entero se leían igual. Eso no
+    /// es una imprecisión de la interfaz: es una afirmación falsa sobre el
+    /// disco, y quien la lee deja de buscar.
+    ///
+    /// El tipo es del crate COMPARTIDO, y con él la precedencia de las
+    /// frases: los dos frontends la decidían aparte y ya discrepaban en el
+    /// par «cancelada justo en el tope» (ADR 0077).
+    pub(super) desenlace: Desenlace,
+    /// El tope que se pidió: alcanzarlo significa que hay más.
+    tope: u32,
+}
+
+/// Un hallazgo de una búsqueda, venga de donde venga.
+#[derive(Clone)]
+struct Hallazgo {
+    /// Dónde está.
+    path: VPath,
+    /// Qué es, si se sabe. `None` en un hallazgo SEMÁNTICO: el índice
+    /// devuelve rutas y parecidos, no clases, y decir «fichero» porque suele
+    /// serlo es inventarse la respuesta.
+    kind: Option<EntryKind>,
+    /// Cuánto se parece a lo que se preguntó, en `[-1, 1]`. `None` en una
+    /// búsqueda por nombre: ahí no hay grados, o casa o no casa.
+    score: Option<f64>,
+}
+
 impl Estado {
     /// Tope de resultados de UNA búsqueda.
     ///

@@ -10,6 +10,86 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// Un plan pedido cuya Task todavía no ha vuelto.
+///
+/// Existe por el id: el modelo compartido lo necesita AL NACER para poder
+/// descartar lo que venga de otro plan.
+pub(super) struct SyncPedida {
+    /// Cuál de todos los planes de esta ventana es.
+    pub(super) epoca: u64,
+    /// Se abandonó antes de que la Task volviera.
+    pub(super) abandonada: Arc<std::sync::atomic::AtomicBool>,
+    /// El modo pedido.
+    modo: norte_proto::methods::SyncMode,
+    /// Raíz origen.
+    origen: VPath,
+    /// Raíz destino.
+    destino: VPath,
+    /// Reinterpretación de nombres del ORIGEN, congelada al pedir.
+    origen_encoding: Option<norte_encoding::NameEncoding>,
+    /// La del DESTINO, que puede ser otra.
+    destino_encoding: Option<norte_encoding::NameEncoding>,
+}
+
+/// Un plan de sincronización, con su modelo COMPARTIDO dentro.
+///
+/// El modelo es `norte_frontend::sync::SyncView`, el mismo que el TUI: qué
+/// pasos hay, qué lo bloquea, si se puede aprobar y en qué estado va la Task.
+/// Aquí no se decide ni un paso ni un veredicto; el plan lo produce el core y
+/// solo él puede canjearlo.
+pub(super) struct Sincronizacion {
+    /// Cuál de todos los planes de esta ventana es.
+    pub(super) epoca: u64,
+    /// La Task del PLAN (la de aplicar es otra, y la guarda el modelo).
+    task: norte_proto::TaskId,
+    /// La vista se cerró y lo que quede sobra.
+    abandonada: Arc<std::sync::atomic::AtomicBool>,
+    /// El modelo compartido.
+    pub(super) vista: norte_frontend::sync::SyncView,
+    /// La ventana que el renderer dice estar pintando.
+    primera_visible: usize,
+    /// Cuántos pasos caben en esa ventana.
+    ventana: usize,
+    /// Su informe ya se pidió: es una RPC, y una reconexión reanuncia el
+    /// terminal.
+    informe_pedido: bool,
+    /// En qué época de CONEXIÓN vive su Task.
+    ///
+    /// Tras un relevo, el daemon nuevo reparte los ids desde 1: sin esto, una
+    /// task ajena con el mismo número cerraba la historia de esta escritura
+    /// con la prueba de otra.
+    epoca_conexion: u64,
+}
+
+/// Una comparación de dos árboles, con su panel COMPARTIDO dentro.
+///
+/// El modelo —qué filas hay, qué categorías están escondidas, cuál está
+/// seleccionada, de qué lado operan las teclas— es
+/// `norte_frontend::compare::ComparePane`, el mismo que pinta el TUI. Aquí no
+/// se vuelve a emparejar nada ni se decide ningún veredicto: eso lo hizo el
+/// core, y reproducirlo en el host sería la tercera copia.
+pub(super) struct Comparacion {
+    /// Cuál de todas las comparaciones de esta ventana es. Misma razón que la
+    /// época de una búsqueda: el id de la Task llega tarde.
+    pub(super) epoca: u64,
+    /// La Task del daemon, en cuanto se sabe. Cero mientras no se sabe.
+    pub(super) task: norte_proto::TaskId,
+    /// La vista se cerró y lo que quede de esta comparación sobra.
+    abandonada: Arc<std::sync::atomic::AtomicBool>,
+    /// El MODELO compartido: raíces, filas, filtros, selección, lado activo
+    /// y —lo que más importa— en qué estado quedó.
+    ///
+    /// Los cinco estados de `CompareState` son cómo un frontend dice si la
+    /// respuesta está COMPLETA, y en una comparación eso ES la respuesta.
+    /// Tener aquí un `bool viva` habría vuelto a perder el caso que ese enum
+    /// existe para no perder: lotes que se cayeron por el camino.
+    vista: norte_frontend::compare::CompareView,
+    /// La ventana que el renderer dice estar pintando.
+    primera_visible: usize,
+    /// Cuántas filas caben en esa ventana.
+    ventana: usize,
+}
+
 impl Estado {
     /// El desenlace de la Task de una comparación entra en el modelo.
     ///

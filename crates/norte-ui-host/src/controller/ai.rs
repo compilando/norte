@@ -10,6 +10,43 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// El plan de renombrado que un modelo propuso, mientras se revisa.
+///
+/// Guarda las PAREJAS ya validadas y no el texto que contestó el daemon: la
+/// validación es un cinturón fail-loud (`norte_frontend::validate_ai_plan`) y
+/// una sola pareja que no sea un `Segment` legal tumba el lote entero, así
+/// que lo que sobrevive hasta aquí ya es aplicable byte a byte.
+pub(super) struct RevisionIa {
+    /// El directorio sobre el que se planeó.
+    dir: VPath,
+    /// Lo que el modelo propuso, tal como lo contestó.
+    entradas: Vec<norte_proto::methods::AiRenameEntry>,
+    /// Las mismas parejas en la forma que pide el core. Es lo que se manda a
+    /// pedir el veredicto Y lo que se manda a ejecutar: los dos viajes llevan
+    /// la MISMA intención, que es lo que hace que el `plan_hash` valga.
+    parejas: Vec<norte_proto::methods::RenamePair>,
+    /// El veredicto del core. Nace `Pending` —la revisión abre y se rellena—
+    /// porque comprobarlo contra el directorio es otro viaje.
+    plan: norte_frontend::BatchPlan,
+    /// Primera pareja visible: la revisión es de todo el plan, por scroll.
+    primera: usize,
+    /// Hasta dónde ha LLEGADO el lector. Aprobar lo exige: la revisión es
+    /// toda la defensa que hay contra un plan escrito a partir de nombres que
+    /// controla quien escribe en el directorio, y con cinco parejas visibles
+    /// de doscientas cincuenta y seis esa defensa cubría el 2 %.
+    visto_hasta: usize,
+    /// Esta revisión ya se ha ENSEÑADO al menos una vez, así que la siguiente
+    /// tecla es una respuesta y no una tecla que iba a otro sitio.
+    ///
+    /// La pantalla se abre SOLA, del todo, decenas de segundos después del
+    /// gesto que la pidió, y se queda el teclado. Sin esto, la `y` de quien
+    /// estaba tecleando `yes.txt` en el filtro rápido aprobaba el renombrado
+    /// del directorio entero.
+    reconocida: bool,
+    /// La época que la pidió.
+    epoca: u64,
+}
+
 impl Estado {
     /// Abre el prompt de la instrucción para un plan de renombrado.
     ///

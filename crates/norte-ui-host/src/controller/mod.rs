@@ -831,7 +831,7 @@ enum Mensaje {
     /// Lleva el `Result` entero y no un `Option`: «fue bien» y «el daemon no
     /// sabe informar» son dos cosas distintas, y colapsarlas es justo lo que
     /// estos informes existen para no hacer.
-    Informe(Box<(u64, u64, Informe)>),
+    Informe(Box<(u64, u64, tasks::Informe)>),
     /// El `fs.stat` que se hace entre crear un fichero y abrirlo (#303): la
     /// ruta que se creó, y si lo que hay ahí sigue siendo un fichero regular.
     ///
@@ -2009,54 +2009,6 @@ struct Hueco {
     gen_adornos: u64,
 }
 
-/// Una búsqueda viva y lo que lleva encontrado.
-struct Busqueda {
-    /// Cuál de todas las búsquedas de esta ventana es.
-    ///
-    /// La identidad NO puede ser la Task: el id lo trae el daemon y llega
-    /// tarde, así que hasta entonces no habría con qué distinguir un lote de
-    /// la búsqueda anterior. La época se conoce al LANZAR, que es cuando hace
-    /// falta.
-    epoca: u64,
-    /// La Task del daemon, en cuanto se sabe. Cero mientras no se sabe.
-    task: norte_proto::TaskId,
-    /// La vista se cerró y lo que quede de esta búsqueda sobra.
-    ///
-    /// La comparte con su reenviador, que es quien puede cancelar antes de
-    /// que el id llegue al actor: `esc` justo tras lanzar es la ventana en la
-    /// que nadie más tiene a quién cancelar.
-    abandonada: Arc<std::sync::atomic::AtomicBool>,
-    /// Lo que se buscó, para poder decirlo.
-    query: String,
-    /// Dónde se buscó.
-    root: VPath,
-    /// Lo encontrado, en el orden en que llegó.
-    hits: Vec<Hallazgo>,
-    /// Esta búsqueda es SEMÁNTICA: se preguntó por significado contra el
-    /// índice, no por nombre contra el árbol.
-    semantica: bool,
-    /// Dónde está el cursor.
-    cursor: usize,
-    /// En qué acabó, o que sigue corriendo.
-    ///
-    /// Un `bool` decía solo si sigue viva, y entonces TODO desenlace se
-    /// pintaba «N hallazgos» — o sea que una búsqueda que falló al segundo
-    /// directorio y otra que recorrió el árbol entero se leían igual. Eso no
-    /// es una imprecisión de la interfaz: es una afirmación falsa sobre el
-    /// disco, y quien la lee deja de buscar.
-    ///
-    /// El tipo es del crate COMPARTIDO, y con él la precedencia de las
-    /// frases: los dos frontends la decidían aparte y ya discrepaban en el
-    /// par «cancelada justo en el tope» (ADR 0077).
-    desenlace: Desenlace,
-    /// El tope que se pidió: alcanzarlo significa que hay más.
-    tope: u32,
-}
-
-/// En qué acabó una búsqueda. El tipo y la precedencia de sus frases son del
-/// crate compartido: aquí estaban escritos aparte y ya discrepaban.
-use norte_frontend::search_status::Outcome as Desenlace;
-
 /// Un diálogo abierto y lo que hará si se confirma.
 struct Dialogo {
     id: ModalId,
@@ -2142,16 +2094,6 @@ impl Tecleado {
             Self::Secreto => "",
         }
     }
-}
-
-/// Un fichero que se está creando para editarlo (#290).
-#[derive(Debug)]
-struct Creacion {
-    /// La task que lo crea. `None` mientras se encola: el id no existe hasta
-    /// que el daemon contesta, y el gesto ya ha vuelto.
-    task: Option<u64>,
-    /// Qué abrir cuando esa task termine BIEN.
-    path: VPath,
 }
 
 /// Lo que un diálogo tiene pendiente de hacer.
@@ -2421,241 +2363,12 @@ enum Pendiente {
     },
 }
 
-/// El plan de renombrado que un modelo propuso, mientras se revisa.
-///
-/// Guarda las PAREJAS ya validadas y no el texto que contestó el daemon: la
-/// validación es un cinturón fail-loud (`norte_frontend::validate_ai_plan`) y
-/// una sola pareja que no sea un `Segment` legal tumba el lote entero, así
-/// que lo que sobrevive hasta aquí ya es aplicable byte a byte.
-struct RevisionIa {
-    /// El directorio sobre el que se planeó.
-    dir: VPath,
-    /// Lo que el modelo propuso, tal como lo contestó.
-    entradas: Vec<norte_proto::methods::AiRenameEntry>,
-    /// Las mismas parejas en la forma que pide el core. Es lo que se manda a
-    /// pedir el veredicto Y lo que se manda a ejecutar: los dos viajes llevan
-    /// la MISMA intención, que es lo que hace que el `plan_hash` valga.
-    parejas: Vec<norte_proto::methods::RenamePair>,
-    /// El veredicto del core. Nace `Pending` —la revisión abre y se rellena—
-    /// porque comprobarlo contra el directorio es otro viaje.
-    plan: norte_frontend::BatchPlan,
-    /// Primera pareja visible: la revisión es de todo el plan, por scroll.
-    primera: usize,
-    /// Hasta dónde ha LLEGADO el lector. Aprobar lo exige: la revisión es
-    /// toda la defensa que hay contra un plan escrito a partir de nombres que
-    /// controla quien escribe en el directorio, y con cinco parejas visibles
-    /// de doscientas cincuenta y seis esa defensa cubría el 2 %.
-    visto_hasta: usize,
-    /// Esta revisión ya se ha ENSEÑADO al menos una vez, así que la siguiente
-    /// tecla es una respuesta y no una tecla que iba a otro sitio.
-    ///
-    /// La pantalla se abre SOLA, del todo, decenas de segundos después del
-    /// gesto que la pidió, y se queda el teclado. Sin esto, la `y` de quien
-    /// estaba tecleando `yes.txt` en el filtro rápido aprobaba el renombrado
-    /// del directorio entero.
-    reconocida: bool,
-    /// La época que la pidió.
-    epoca: u64,
-}
-
-/// El plan de ORGANIZAR en revisión (fase 8).
-///
-/// El gemelo de [`RevisionIa`] sin su campo más caro: no hay veredicto que
-/// esperar, porque el token del plan vino CON el plan. Lo demás es idéntico,
-/// y a propósito — es la misma clase de pantalla y la misma defensa.
-struct RevisionOrganizar {
-    /// El directorio sobre el que se planeó.
-    dir: VPath,
-    /// Los movimientos, tal cual los propuso el productor. Es lo que se manda
-    /// a ejecutar, y lo que el `plan_hash` ata.
-    moves: Vec<norte_proto::methods::OrganizeMove>,
-    /// El árbol ya calculado, que es lo que se revisa.
-    lineas: Vec<norte_frontend::organize::TreeLine>,
-    /// El token que hay que devolver para aplicarlo.
-    plan_hash: norte_proto::methods::PlanHash,
-    /// Primera línea visible: la revisión es de todo el árbol, por scroll.
-    primera: usize,
-    /// Hasta dónde ha LLEGADO el lector. Aprobar lo exige.
-    visto_hasta: usize,
-    /// Ya se ha enseñado al menos una vez, así que la siguiente tecla es una
-    /// respuesta y no una tecla que iba a otro sitio.
-    reconocida: bool,
-    /// La época que la pidió.
-    epoca: u64,
-}
-
-/// El informe de una Task terminada, por clase.
-///
-/// Dos clases lo tienen —un lote de renombrado y un undo— y las dos por el
-/// mismo motivo: lo que quedó a medias no cabe en el desenlace de una Task.
-enum Informe {
-    /// El de un lote de renombrado (#272).
-    Lote(Result<norte_proto::methods::FsRenameBatchReportResult, Error>),
-    /// El de un undo de sesión.
-    Undo(Result<norte_proto::methods::PolicyUndoReportResult, Error>),
-    /// El de un empaquetado (#250). El único de los tres que cuenta algo de una
-    /// Task que salió BIEN: el archivo se escribió entero y aun así puede
-    /// llevar nombres que en otro sistema se colocan en otro sitio.
-    Empaquetado(Result<norte_proto::methods::ArchivePackReportResult, Error>),
-}
-
-/// A qué task apunta un `task.cancel`.
-///
-/// Tres casos y no dos: «no hay ninguna» y «la señalada ya terminó» se leen
-/// distinto, y colapsarlos haría que cancelar una task acabada dijera que no
-/// hay tasks mientras el tablero enseña cuatro.
-enum Objetivo {
-    /// No hay ninguna a la que pedirle que pare.
-    Ninguna,
-    /// La señalada ya es terminal.
-    Terminada,
-    /// Esta.
-    Viva(u64),
-}
-
-/// Un plan pedido cuya Task todavía no ha vuelto.
-///
-/// Existe por el id: el modelo compartido lo necesita AL NACER para poder
-/// descartar lo que venga de otro plan.
-struct SyncPedida {
-    /// Cuál de todos los planes de esta ventana es.
-    epoca: u64,
-    /// Se abandonó antes de que la Task volviera.
-    abandonada: Arc<std::sync::atomic::AtomicBool>,
-    /// El modo pedido.
-    modo: norte_proto::methods::SyncMode,
-    /// Raíz origen.
-    origen: VPath,
-    /// Raíz destino.
-    destino: VPath,
-    /// Reinterpretación de nombres del ORIGEN, congelada al pedir.
-    origen_encoding: Option<norte_encoding::NameEncoding>,
-    /// La del DESTINO, que puede ser otra.
-    destino_encoding: Option<norte_encoding::NameEncoding>,
-}
-
-/// Un plan de sincronización, con su modelo COMPARTIDO dentro.
-///
-/// El modelo es `norte_frontend::sync::SyncView`, el mismo que el TUI: qué
-/// pasos hay, qué lo bloquea, si se puede aprobar y en qué estado va la Task.
-/// Aquí no se decide ni un paso ni un veredicto; el plan lo produce el core y
-/// solo él puede canjearlo.
 /// Tope de lo que se lee de un fichero de sumas (#311): 1 MiB.
 ///
 /// Por encima se RECHAZA en vez de comprobar media lista — el mismo criterio
 /// que la terminal, y el mismo que el tope del otro extremo.
 const SUMS_MAX_BYTES: u64 = 1024 * 1024;
 
-/// Un lote de sumas en vuelo (#311).
-///
-/// La Task ya está en el tablero; lo que se espera aquí es su INFORME, que es
-/// donde viajan los digests — no caben en el desenlace de una Task ni en su
-/// progreso.
-struct SumasEnVuelo {
-    /// La Task cuyo informe se espera.
-    task: norte_proto::TaskId,
-    /// En qué época de CONEXIÓN vive esa Task: tras un relevo los ids del
-    /// daemon vuelven a empezar en 1, y un informe de otra tarea con el mismo
-    /// número contaría la comprobación de otra cosa.
-    epoca_conexion: u64,
-    /// Su informe ya se pidió: pedirlo es una RPC y una reconexión reanuncia
-    /// el desenlace.
-    informe_pedido: bool,
-    /// Lo que el fichero de sumas publicaba, si esto es una COMPROBACIÓN.
-    /// `None` = solo calcular.
-    publicado: Option<Publicado>,
-}
-
-/// Un lote de sumas ENCOLADO y todavía sin id (#311).
-///
-/// Existe entre que el `checksum` se manda y el buzón devuelve la Task. Es un
-/// tipo y no un `Option<Option<_>>` porque «no hay lote» y «hay uno que no
-/// compara contra nada» son dos cosas distintas, y anidar dos opciones para
-/// decirlo se lee mal en el sitio donde importa.
-struct SumasEncoladas {
-    /// Lo que el fichero de sumas publicaba, si esto es una comprobación.
-    publicado: Option<Publicado>,
-}
-
-/// El fichero de sumas leído, tal como hace falta para juzgarlo (#311).
-///
-/// Gemelo del de la terminal, y con los mismos tres campos por el mismo
-/// motivo: las líneas en su orden, dónde quedó cada una en la petición, y
-/// cuántas no se entendieron —que es lo que prohíbe decir «todas correctas».
-struct Publicado {
-    lines: Vec<norte_frontend::checksums::SumLine>,
-    asked: Vec<Option<usize>>,
-    refused: usize,
-}
-
-struct Sincronizacion {
-    /// Cuál de todos los planes de esta ventana es.
-    epoca: u64,
-    /// La Task del PLAN (la de aplicar es otra, y la guarda el modelo).
-    task: norte_proto::TaskId,
-    /// La vista se cerró y lo que quede sobra.
-    abandonada: Arc<std::sync::atomic::AtomicBool>,
-    /// El modelo compartido.
-    vista: norte_frontend::sync::SyncView,
-    /// La ventana que el renderer dice estar pintando.
-    primera_visible: usize,
-    /// Cuántos pasos caben en esa ventana.
-    ventana: usize,
-    /// Su informe ya se pidió: es una RPC, y una reconexión reanuncia el
-    /// terminal.
-    informe_pedido: bool,
-    /// En qué época de CONEXIÓN vive su Task.
-    ///
-    /// Tras un relevo, el daemon nuevo reparte los ids desde 1: sin esto, una
-    /// task ajena con el mismo número cerraba la historia de esta escritura
-    /// con la prueba de otra.
-    epoca_conexion: u64,
-}
-
-/// Una comparación de dos árboles, con su panel COMPARTIDO dentro.
-///
-/// El modelo —qué filas hay, qué categorías están escondidas, cuál está
-/// seleccionada, de qué lado operan las teclas— es
-/// `norte_frontend::compare::ComparePane`, el mismo que pinta el TUI. Aquí no
-/// se vuelve a emparejar nada ni se decide ningún veredicto: eso lo hizo el
-/// core, y reproducirlo en el host sería la tercera copia.
-struct Comparacion {
-    /// Cuál de todas las comparaciones de esta ventana es. Misma razón que la
-    /// época de una búsqueda: el id de la Task llega tarde.
-    epoca: u64,
-    /// La Task del daemon, en cuanto se sabe. Cero mientras no se sabe.
-    task: norte_proto::TaskId,
-    /// La vista se cerró y lo que quede de esta comparación sobra.
-    abandonada: Arc<std::sync::atomic::AtomicBool>,
-    /// El MODELO compartido: raíces, filas, filtros, selección, lado activo
-    /// y —lo que más importa— en qué estado quedó.
-    ///
-    /// Los cinco estados de `CompareState` son cómo un frontend dice si la
-    /// respuesta está COMPLETA, y en una comparación eso ES la respuesta.
-    /// Tener aquí un `bool viva` habría vuelto a perder el caso que ese enum
-    /// existe para no perder: lotes que se cayeron por el camino.
-    vista: norte_frontend::compare::CompareView,
-    /// La ventana que el renderer dice estar pintando.
-    primera_visible: usize,
-    /// Cuántas filas caben en esa ventana.
-    ventana: usize,
-}
-
-/// Un hallazgo de una búsqueda, venga de donde venga.
-#[derive(Clone)]
-struct Hallazgo {
-    /// Dónde está.
-    path: VPath,
-    /// Qué es, si se sabe. `None` en un hallazgo SEMÁNTICO: el índice
-    /// devuelve rutas y parecidos, no clases, y decir «fichero» porque suele
-    /// serlo es inventarse la respuesta.
-    kind: Option<EntryKind>,
-    /// Cuánto se parece a lo que se preguntó, en `[-1, 1]`. `None` en una
-    /// búsqueda por nombre: ahí no hay grados, o casa o no casa.
-    score: Option<f64>,
-}
-
-/// Una task viva en el tablero.
 /// Con qué se puede volver a intentar una transferencia que CHOCÓ (#274).
 ///
 /// La ventana manda siempre `CollisionPolicy::Fail`, que es el default
@@ -2683,60 +2396,6 @@ pub struct Reintento {
     enc: Option<norte_encoding::NameEncoding>,
 }
 
-/// El selector de tema abierto.
-///
-/// Mismo modelo que el del terminal: la lista, el cursor, y el que había
-/// puesto al abrir — sin el último, `Escape` dejaría puesto lo que el cursor
-/// rozó de paso, que es cambiar de tema sin querer.
-struct SeleccionDeTema {
-    /// Los presets, en el orden en que se declaran.
-    nombres: Vec<String>,
-    /// Cuál está señalado.
-    cursor: usize,
-    /// El que estaba puesto al abrir, ENTERO y no su nombre.
-    ///
-    /// Entero porque el que había puede no ser un preset —un fichero de tema
-    /// del usuario lo es igual— y volver a resolverlo por nombre lo perdería.
-    /// La lista solo ofrece presets; lo que se restaura es lo que había.
-    previo: Box<crate::pickers::HostTheme>,
-}
-
-/// Qué de un perfil NO se puede aplicar sin reiniciar ESTA VENTANA.
-///
-/// Medido, no supuesto, y distinto de la lista del terminal — por eso no se
-/// comparte. Aquí el tema SÍ se aplica: el catálogo vuelve a cruzar cuando
-/// cambia, y el renderer reenchufa sus variables CSS.
-///
-/// Las FUENTES y `reduce_motion` viajan por ese mismo catálogo y se aplican al
-/// ARRANCAR, pero no en un cambio de perfil: lo único que provoca un catálogo
-/// nuevo es el tema, y ese camino conserva la apariencia que había en vez de
-/// releerla. Hacerlas calientes es la pregunta de si esta ventana recarga su
-/// configuración en caliente, que tiene ADR propia pendiente — así que hasta
-/// entonces se DICE, que es lo que esta lista existe para hacer.
-///
-/// `[ui] lang` tampoco: `norte_i18n::force` corre una vez por proceso.
-///
-/// Un cambio que se callara esto sería un cambio que miente (ADR 0079, D8).
-fn fuera_de_alcance_en_caliente(
-    antes: &norte_config::CommonConfig,
-    despues: &norte_config::CommonConfig,
-) -> Vec<&'static str> {
-    let mut fuera = Vec::new();
-    if antes.ui_lang != despues.ui_lang {
-        fuera.push("ui.lang");
-    }
-    if antes.ui_font != despues.ui_font
-        || antes.ui_mono_font != despues.ui_mono_font
-        || antes.ui_font_size != despues.ui_font_size
-    {
-        fuera.push("ui.font");
-    }
-    if antes.ui_reduce_motion != despues.ui_reduce_motion {
-        fuera.push("ui.reduce_motion");
-    }
-    fuera
-}
-
 /// La clave Fluent de un error de io LOCAL.
 ///
 /// La CLAVE y no el texto: el host localiza con SU idioma
@@ -2749,84 +2408,6 @@ fn clave_de_io(e: &std::io::Error) -> &'static str {
         std::io::ErrorKind::PermissionDenied => "err-permission-denied",
         std::io::ErrorKind::StorageFull => "err-no-space",
         _ => "err-io",
-    }
-}
-
-struct TaskViva {
-    vista: TaskView,
-    /// El ritmo de ESTA task, estimado de sus propios snapshots (spec
-    /// 2026-09-15, ADR 0115).
-    ///
-    /// No viene del wire: `TaskProgress` dice cuánto va hecho y no a qué
-    /// velocidad. Es por task y no por tablero porque dos copias a la vez van
-    /// a velocidades distintas, y una media de las dos no describe a ninguna.
-    rate: norte_frontend::tasks::Rate,
-    /// Cómo pedirle que pare. Cancelar dos veces no es un error.
-    cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
-    /// Su informe ya se pidió. Lo llevan las clases que TIENEN informe —un
-    /// lote de renombrado y un undo— y evita pedirlo dos veces si el daemon
-    /// repite el último progreso (una reconexión reanuncia las tasks,
-    /// terminales incluidas).
-    informe_pedido: bool,
-    /// En qué época de conexión se registró. Un id repetido de OTRA época es
-    /// otra task, no la misma.
-    epoca: u64,
-    /// El progreso EN VIVO, para preguntarle si sigue corriendo.
-    ///
-    /// `vista` es una proyección que se actualiza cuando el `Mensaje::Progreso`
-    /// sale del buzón, así que decidir sobre ella qué cancelar es decidir
-    /// sobre una foto rancia: se decía «cancelando…» de algo ya terminado, y
-    /// la elección de «la última viva» podía saltarse la que de verdad corre.
-    /// El TUI pregunta al estado vivo por este mismo motivo.
-    progreso: tokio::sync::watch::Receiver<norte_proto::TaskProgress>,
-    /// Los directorios que esta task deja DISTINTOS.
-    ///
-    /// Se apuntan al encolar y no se deducen del progreso: el progreso dice
-    /// qué fichero va por dentro, no qué pantallas mienten cuando termine.
-    /// Vacío = nada que refrescar (una búsqueda, una task ajena de la que
-    /// solo se conoce el id).
-    afectados: Vec<VPath>,
-    /// Con qué reintentar si CHOCA (#274). `None` en todo lo que no es una
-    /// transferencia: un borrado o un undo no tienen otra política que ofrecer.
-    reintento: Option<Reintento>,
-}
-
-/// La cuenta de UN lote de transferencias (#271).
-///
-/// Un lote grande contra un destino poblado produce muchas filas `Failed` —
-/// `CollisionPolicy::Fail` es lo que se manda—, y el tablero las enseña una a
-/// una hasta su tope. Lo que el lector necesita no es la fila 213: es «de
-/// estas 500, 460 bien y 40 mal».
-///
-/// Y los rechazos al ENCOLAR tenían el problema gemelo: cada uno pintaba un
-/// mensaje en la barra y el siguiente lo pisaba, así que de N rechazos
-/// sobrevivía el último. Se cuentan en vez de decirse.
-///
-/// UNA sola frase, y al final: la mitad del lote no es una respuesta, es
-/// ruido que se pisa a sí mismo. El lote se cierra cuando todo lo que se pidió
-/// está resuelto — encolado o rechazado, y lo encolado, terminal.
-#[derive(Debug, Default)]
-struct Lote {
-    /// Cuántas entradas se pidieron.
-    total: usize,
-    /// Cuántas llegaron a ser task.
-    encoladas: usize,
-    /// Cuántas rechazó el daemon al encolar.
-    rechazadas: usize,
-    /// Los ids de las que se encolaron, para reconocer su desenlace. Un id que
-    /// no está aquí es de otra cosa (una búsqueda, un undo, otro cliente).
-    ids: std::collections::BTreeSet<u64>,
-    /// Desenlaces terminales BUENOS de las encoladas.
-    hechas: usize,
-    /// Desenlaces terminales malos: falló o se canceló.
-    fallidas: usize,
-}
-
-impl Lote {
-    /// Todo lo que se pidió está resuelto.
-    fn cerrado(&self) -> bool {
-        self.encoladas + self.rechazadas >= self.total
-            && self.hechas + self.fallidas >= self.encoladas
     }
 }
 
@@ -2954,7 +2535,7 @@ struct Estado {
     esquema_oscuro: bool,
     /// Se está mirando el tema por dentro.
     /// El selector de tema, si está abierto.
-    tema_elegido: Option<SeleccionDeTema>,
+    tema_elegido: Option<profiles::SeleccionDeTema>,
     /// El PERFIL activo (ADR 0079), o ninguno.
     ///
     /// `OsString` porque es un nombre de directorio: pasarlo por texto cambia
@@ -2996,7 +2577,7 @@ struct Estado {
     /// bytes van en `imagen`. `None` = el visor pinta lo suyo.
     miniatura: Option<(crate::dto::ImageView, String)>,
     /// La búsqueda abierta, si la hay.
-    busqueda: Option<Busqueda>,
+    busqueda: Option<search::Busqueda>,
     /// Cuántas búsquedas ha lanzado esta ventana. Es la identidad de la
     /// búsqueda mientras el daemon no ha dicho la suya.
     epoca_busqueda: u64,
@@ -3048,7 +2629,7 @@ struct Estado {
     ///
     /// Uno como mucho: el gesto pide un nombre, y hasta que ese diálogo se
     /// contesta no hay otro.
-    abrir_al_crear: Option<Creacion>,
+    abrir_al_crear: Option<fileops::Creacion>,
     /// El cursor del panel de procesos.
     ///
     /// El MISMO tipo que usa la TUI, con su regla dentro: se acota al LEER y
@@ -3196,7 +2777,7 @@ struct Estado {
     /// que es lo que hace que «viejo» se pueda distinguir de «actual».
     siguiente_modal: u64,
     /// El plan de renombrado en revisión, si lo hay.
-    revision_ia: Option<RevisionIa>,
+    revision_ia: Option<ai::RevisionIa>,
     /// La época de la revisión: sube en cada PETICIÓN y al abandonar una en
     /// vuelo. Una respuesta con otra época llegó tarde y se descarta en Rust.
     epoca_ia: u64,
@@ -3209,7 +2790,7 @@ struct Estado {
     /// renombrar lo que se ve, y renombraría otra cosa.
     ia_en_vuelo: Option<(u64, VPath, Vec<Vec<u8>>)>,
     /// El plan de ORGANIZAR en revisión (fase 8), si lo hay.
-    revision_organizar: Option<RevisionOrganizar>,
+    revision_organizar: Option<organize::RevisionOrganizar>,
     /// Su época: sube en cada petición, y una respuesta con otra llegó tarde.
     epoca_organizar: u64,
     /// La petición de plan de organizar EN VUELO: época, directorio y los
@@ -3221,9 +2802,9 @@ struct Estado {
     /// suyo — diciendo «nueva» de una carpeta que sí existía, o al revés.
     organizar_en_vuelo: Option<(u64, VPath, Vec<String>)>,
     /// El tablero: lo que está en marcha, por id de task.
-    tasks: std::collections::BTreeMap<u64, TaskViva>,
+    tasks: std::collections::BTreeMap<u64, tasks::TaskViva>,
     /// El lote de transferencias en curso, si lo hay (#271).
-    lote: Option<Lote>,
+    lote: Option<tasks::Lote>,
     /// La sesión de UI: qué revisión se leyó, si esta ventana es su dueña, y
     /// si el esquema que hay guardado es de una versión que este host no
     /// entiende (ADR 0059).
@@ -3252,16 +2833,16 @@ struct Estado {
     /// `None` = no ha dicho nada, o ya volvió.
     aviso_de_daemon: Option<&'static str>,
     /// La comparación abierta, si la hay.
-    comparacion: Option<Comparacion>,
+    comparacion: Option<sync::Comparacion>,
     /// El plan de sincronización abierto, si lo hay.
-    sincronizacion: Option<Sincronizacion>,
+    sincronizacion: Option<sync::Sincronizacion>,
     /// El lote de sumas en vuelo, si lo hay (#311). A lo sumo UNO: el diálogo
     /// de resultados es uno, y lanzar otro releva al anterior.
-    sumas: Option<SumasEnVuelo>,
+    sumas: Option<tasks::SumasEnVuelo>,
     /// El lote de sumas ENCOLADO y todavía sin id (#311). `None` = ninguno.
-    sumas_pendientes: Option<SumasEncoladas>,
+    sumas_pendientes: Option<sums::SumasEncoladas>,
     /// Un plan PEDIDO cuya Task todavía no ha contestado.
-    sync_pedida: Option<SyncPedida>,
+    sync_pedida: Option<sync::SyncPedida>,
     /// La consulta semántica en vuelo, para poder ABORTARLA.
     ///
     /// Abortar no es solo dejar de escuchar: el SDK manda `rpc.cancel` al

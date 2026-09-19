@@ -7,8 +7,137 @@
 // los mismos imports que el padre. Enumerarlos aquí sería una lista de
 // cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
 // el padre importa algo — `super::*` la sigue sola.
+use super::sums::Publicado;
 #[allow(clippy::wildcard_imports)]
 use super::*;
+
+/// Un lote de sumas en vuelo (#311).
+///
+/// La Task ya está en el tablero; lo que se espera aquí es su INFORME, que es
+/// donde viajan los digests — no caben en el desenlace de una Task ni en su
+/// progreso.
+pub(super) struct SumasEnVuelo {
+    /// La Task cuyo informe se espera.
+    pub(super) task: norte_proto::TaskId,
+    /// En qué época de CONEXIÓN vive esa Task: tras un relevo los ids del
+    /// daemon vuelven a empezar en 1, y un informe de otra tarea con el mismo
+    /// número contaría la comprobación de otra cosa.
+    pub(super) epoca_conexion: u64,
+    /// Su informe ya se pidió: pedirlo es una RPC y una reconexión reanuncia
+    /// el desenlace.
+    pub(super) informe_pedido: bool,
+    /// Lo que el fichero de sumas publicaba, si esto es una COMPROBACIÓN.
+    /// `None` = solo calcular.
+    pub(super) publicado: Option<Publicado>,
+}
+
+/// El informe de una Task terminada, por clase.
+///
+/// Dos clases lo tienen —un lote de renombrado y un undo— y las dos por el
+/// mismo motivo: lo que quedó a medias no cabe en el desenlace de una Task.
+pub(super) enum Informe {
+    /// El de un lote de renombrado (#272).
+    Lote(Result<norte_proto::methods::FsRenameBatchReportResult, Error>),
+    /// El de un undo de sesión.
+    Undo(Result<norte_proto::methods::PolicyUndoReportResult, Error>),
+    /// El de un empaquetado (#250). El único de los tres que cuenta algo de una
+    /// Task que salió BIEN: el archivo se escribió entero y aun así puede
+    /// llevar nombres que en otro sistema se colocan en otro sitio.
+    Empaquetado(Result<norte_proto::methods::ArchivePackReportResult, Error>),
+}
+
+/// A qué task apunta un `task.cancel`.
+///
+/// Tres casos y no dos: «no hay ninguna» y «la señalada ya terminó» se leen
+/// distinto, y colapsarlos haría que cancelar una task acabada dijera que no
+/// hay tasks mientras el tablero enseña cuatro.
+pub(super) enum Objetivo {
+    /// No hay ninguna a la que pedirle que pare.
+    Ninguna,
+    /// La señalada ya es terminal.
+    Terminada,
+    /// Esta.
+    Viva(u64),
+}
+
+/// Una task viva en el tablero.
+pub(super) struct TaskViva {
+    pub(super) vista: TaskView,
+    /// El ritmo de ESTA task, estimado de sus propios snapshots (spec
+    /// 2026-09-15, ADR 0115).
+    ///
+    /// No viene del wire: `TaskProgress` dice cuánto va hecho y no a qué
+    /// velocidad. Es por task y no por tablero porque dos copias a la vez van
+    /// a velocidades distintas, y una media de las dos no describe a ninguna.
+    rate: norte_frontend::tasks::Rate,
+    /// Cómo pedirle que pare. Cancelar dos veces no es un error.
+    pub(super) cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
+    /// Su informe ya se pidió. Lo llevan las clases que TIENEN informe —un
+    /// lote de renombrado y un undo— y evita pedirlo dos veces si el daemon
+    /// repite el último progreso (una reconexión reanuncia las tasks,
+    /// terminales incluidas).
+    informe_pedido: bool,
+    /// En qué época de conexión se registró. Un id repetido de OTRA época es
+    /// otra task, no la misma.
+    epoca: u64,
+    /// El progreso EN VIVO, para preguntarle si sigue corriendo.
+    ///
+    /// `vista` es una proyección que se actualiza cuando el `Mensaje::Progreso`
+    /// sale del buzón, así que decidir sobre ella qué cancelar es decidir
+    /// sobre una foto rancia: se decía «cancelando…» de algo ya terminado, y
+    /// la elección de «la última viva» podía saltarse la que de verdad corre.
+    /// El TUI pregunta al estado vivo por este mismo motivo.
+    pub(super) progreso: tokio::sync::watch::Receiver<norte_proto::TaskProgress>,
+    /// Los directorios que esta task deja DISTINTOS.
+    ///
+    /// Se apuntan al encolar y no se deducen del progreso: el progreso dice
+    /// qué fichero va por dentro, no qué pantallas mienten cuando termine.
+    /// Vacío = nada que refrescar (una búsqueda, una task ajena de la que
+    /// solo se conoce el id).
+    pub(super) afectados: Vec<VPath>,
+    /// Con qué reintentar si CHOCA (#274). `None` en todo lo que no es una
+    /// transferencia: un borrado o un undo no tienen otra política que ofrecer.
+    reintento: Option<Reintento>,
+}
+
+/// La cuenta de UN lote de transferencias (#271).
+///
+/// Un lote grande contra un destino poblado produce muchas filas `Failed` —
+/// `CollisionPolicy::Fail` es lo que se manda—, y el tablero las enseña una a
+/// una hasta su tope. Lo que el lector necesita no es la fila 213: es «de
+/// estas 500, 460 bien y 40 mal».
+///
+/// Y los rechazos al ENCOLAR tenían el problema gemelo: cada uno pintaba un
+/// mensaje en la barra y el siguiente lo pisaba, así que de N rechazos
+/// sobrevivía el último. Se cuentan en vez de decirse.
+///
+/// UNA sola frase, y al final: la mitad del lote no es una respuesta, es
+/// ruido que se pisa a sí mismo. El lote se cierra cuando todo lo que se pidió
+/// está resuelto — encolado o rechazado, y lo encolado, terminal.
+#[derive(Debug, Default)]
+pub(super) struct Lote {
+    /// Cuántas entradas se pidieron.
+    pub(super) total: usize,
+    /// Cuántas llegaron a ser task.
+    pub(super) encoladas: usize,
+    /// Cuántas rechazó el daemon al encolar.
+    pub(super) rechazadas: usize,
+    /// Los ids de las que se encolaron, para reconocer su desenlace. Un id que
+    /// no está aquí es de otra cosa (una búsqueda, un undo, otro cliente).
+    pub(super) ids: std::collections::BTreeSet<u64>,
+    /// Desenlaces terminales BUENOS de las encoladas.
+    pub(super) hechas: usize,
+    /// Desenlaces terminales malos: falló o se canceló.
+    pub(super) fallidas: usize,
+}
+
+impl Lote {
+    /// Todo lo que se pidió está resuelto.
+    fn cerrado(&self) -> bool {
+        self.encoladas + self.rechazadas >= self.total
+            && self.hechas + self.fallidas >= self.encoladas
+    }
+}
 
 impl Estado {
     /// Hace sitio en el tablero tirando lo más viejo TERMINADO.
