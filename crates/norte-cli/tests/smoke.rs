@@ -568,6 +568,36 @@ fn daemon_run_arranca_y_stop_lo_para() {
     assert!(fin.success(), "sale limpio: {fin:?}");
 }
 
+/// La CLI embebida lee `[archive]` como el daemon y la TUI. Antes ni lo miraba:
+/// un `norte ls` dentro de un zip usaba los límites por defecto aunque
+/// `norte.toml` fijara otros. Roto, se AVISA y se sigue — que es lo único que
+/// distingue desde fuera «lo leyó» de «ni lo miró».
+#[test]
+fn un_archive_roto_se_avisa_y_ls_sigue() {
+    let cfg = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        cfg.path().join("norte.toml"),
+        "[archive]\nmax_entries = \"muchas\"\n",
+    )
+    .expect("norte.toml");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "a").expect("a");
+    let out = Command::cargo_bin("norte")
+        .expect("binario norte compilado")
+        .env("NORTE_CONFIG_DIR", cfg.path())
+        .arg("ls")
+        .arg(dir.path())
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "ls sigue: {stderr}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("a.txt"),
+        "y lista"
+    );
+    assert!(stderr.contains("[archive]"), "avisa: {stderr}");
+}
+
 /// Un Ollama de mentira en `127.0.0.1:0` que contesta UNA petición de
 /// `/api/chat` con `contenido` como único delta, y se cierra.
 ///
@@ -663,4 +693,15 @@ fn ai_rename_aplica_un_intercambio_como_un_lote() {
         2,
         "no queda ningún temporal"
     );
+    // Un nombre por línea, como el modal de la TUI: `a → b` en una sola
+    // dejaba que un fichero llamado `x → y` fingiera la pareja entera, en la
+    // pantalla que se lee antes de contestar «sí» (`arrow_join_spoof`).
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lineas: Vec<&str> = stdout.lines().map(str::trim).collect();
+    for esperada in ["1. a.txt", "→ b.txt", "2. b.txt", "→ a.txt"] {
+        assert!(
+            lineas.contains(&esperada),
+            "falta la línea {esperada:?}: {stdout}"
+        );
+    }
 }

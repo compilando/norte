@@ -294,6 +294,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The CLI reads `[archive]`.** Commands run without `--daemon` used the
+  compiled archive limits whatever `norte.toml` said, and a broken
+  `norte.toml` went unnoticed. They now apply the same limits as the daemon
+  and the terminal, and warn when the file cannot be read.
+- **`norte daemon run` keeps its warnings when it fails to start.** A spool
+  it could not sweep or an index that did not open was only reported if the
+  daemon came up; a later failure (a broken `[archive]`, a busy socket) now
+  prints them too.
+- **In the terminal, a batch rename that is left half-done now says so.**
+  The window and the CLI already asked for the batch report when the batch
+  ended; the terminal never did, so a step that could not be put back went
+  unmentioned. It now opens the same report: what was applied and rolled
+  back, and the current name of anything stuck, on a line of its own. A
+  clean batch opens nothing.
 - **`norte daemon stop` no longer fails now and then on a daemon it did
   stop.** The daemon returned from its main loop without waiting for its
   connections, and the process could exit before the reply to `stop` was
@@ -309,7 +323,9 @@ independently through `PROTOCOL_VERSION`.
   a rollback gets stuck, it prints the same report the window shows: what
   could not be put back and its current name, on a line of its own. Asking
   the model now times out after two minutes, as it already did in the
-  terminal and the window.
+  terminal and the window. The plan it shows before asking now puts one
+  name per line, as the terminal's dialog does, so a file named `x → y`
+  cannot pass for a whole pair.
 - **`norte sync` no longer says "nothing to sync" about a plan it did not
   receive.** A plan that announced steps and delivered none was read as two
   trees already in sync, and exited 0. It now exits 2 with the integrity

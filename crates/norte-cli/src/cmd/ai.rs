@@ -3,10 +3,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anyhow::Context;
 use norte_core::backend::Backend;
-use norte_vfs::Provider;
-use norte_vfs_local::LocalProvider;
 
 use crate::cmd::compare::marcado;
 use crate::cmd::connect::vpath;
@@ -47,11 +44,27 @@ pub(crate) async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
         let (texto, hostil) = norte_frontend::display_name(bytes);
         marcado(&texto, hostil)
     };
-    for e in &plan.entries {
+    // Un nombre por línea, con las mismas claves que el modal de la TUI:
+    // `a → b` en una sola dejaba que un fichero llamado `x → y` —imprimible
+    // corriente, `display_name` no lo enmascara— fingiera la pareja entera,
+    // justo en la pantalla que se lee antes de contestar «sí».
+    for (i, e) in plan.entries.iter().enumerate() {
         println!(
-            "  {} → {}",
-            masked(e.from.as_bytes()),
-            masked(e.to.as_bytes())
+            "  {}",
+            norte_i18n::ta(
+                "modal-ai-rename-pair-from",
+                &[
+                    ("n", &(i + 1).to_string()),
+                    ("from", &masked(e.from.as_bytes()))
+                ],
+            )
+        );
+        println!(
+            "     {}",
+            norte_i18n::ta(
+                "modal-ai-rename-pair-to",
+                &[("to", &masked(e.to.as_bytes()))]
+            )
         );
     }
 
@@ -191,33 +204,51 @@ async fn informar_del_lote(
 /// también (#177): planificar es leer, y leer no le quita el journal a nadie;
 /// el lock se toma a un paso de renombrar.
 async fn backend_con_ia() -> anyhow::Result<Backend> {
-    let engine = norte_core::embedded::engine_in(&norte_core::connect::config_dir());
+    let dir = norte_core::connect::config_dir();
+    let engine = norte_core::embedded::engine_in(&dir);
     // Este brazo no pasa por `run`, así que instala el suyo — ver
     // `AvisoDeJournalPorStderr`.
     engine.set_journal_warning_sink(Arc::new(AvisoDeJournalPorStderr));
-    engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
-    engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
-        norte_core::connect::config_dir(),
-    )));
-
-    let config = tokio::task::spawn_blocking(norte_core::ai::AiConfig::load)
-        .await
-        .context("carga de [ai]")?
-        .context("[ai] inválido en norte.toml")?;
-    let Some(pcfg) = config.rename_provider_config().cloned() else {
-        anyhow::bail!(
-            "sin proveedor de IA para el rename: define [ai.providers.<n>] y \
-             rename_provider en norte.toml (ADR 0031)"
-        );
+    // Lo que lleva todo engine, IA incluida (`norte_core::equipo`). El core
+    // resuelve el secreto (env → keyring → age) y construye el proveedor; la
+    // CLI no toca norte-connect ni ve la clave (regla 10).
+    // Solo el de renombrado: el de embeddings resolvería otro secreto que este
+    // comando no usa.
+    let ia = norte_core::equipo::Ia {
+        renombrado: true,
+        embeddings: false,
     };
-    // El core resuelve el secreto (env → keyring → age) y construye el
-    // proveedor; el CLI no toca norte-connect ni ve la clave (regla 10).
-    let provider = norte_core::ai::resolve_and_build(&pcfg, norte_core::connect::config_dir())
-        .await
-        .map_err(|e| anyhow::anyhow!("proveedor de IA: {e}"))?;
-    engine.set_ai_provider(provider);
-    engine.set_ai_config(config);
-    Ok(Backend::Embedded(Arc::new(engine)))
+    let hecho = norte_core::equipo::equipar(&engine, &dir, ia).await;
+    if let Err(e) = norte_core::archive_config::aplicar(&engine).await {
+        eprintln!(
+            "{}",
+            crate::cmd::daemon::texto_del_aviso(&norte_core::equipo::Aviso::ArchivoInvalido(
+                e.to_string()
+            ))
+        );
+    }
+    if hecho.ia_renombrado {
+        return Ok(Backend::Embedded(Arc::new(engine)));
+    }
+    // Aquí la IA no es opcional: es el comando. Lo que en los demás es un
+    // aviso, aquí es el motivo de no poder hacer nada — y si hay un motivo
+    // concreto (`[ai]` roto, un secreto que no se resuelve), ESE es el error:
+    // decirle «define un proveedor» a quien ya lo definió le manda a buscar
+    // donde no está.
+    if let Some(motivo) = hecho.avisos.iter().find(|a| {
+        matches!(
+            a,
+            norte_core::equipo::Aviso::IaInvalida(_)
+                | norte_core::equipo::Aviso::IaNoCargo(_)
+                | norte_core::equipo::Aviso::IaNoDisponible(_)
+        )
+    }) {
+        anyhow::bail!("{}", crate::cmd::daemon::texto_del_aviso(motivo));
+    }
+    anyhow::bail!(
+        "sin proveedor de IA para el rename: define [ai.providers.<n>] y \
+         rename_provider en norte.toml (ADR 0031)"
+    );
 }
 
 /// Las líneas de una parte del detalle de un plan no aplicable, con el mismo

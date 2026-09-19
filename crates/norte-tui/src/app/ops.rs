@@ -15,6 +15,15 @@ impl App {
         {
             self.modal = Some(Modal::Collision { retry });
             self.abandon_shortcut_capture();
+            return;
+        }
+        // Los informes de lote, detrás: una colisión PREGUNTA algo con una
+        // copia esperando, un informe solo cuenta lo que ya pasó.
+        if self.modal.is_none()
+            && let Some(lines) = self.pending_batch_reports.pop_front()
+        {
+            self.modal = Some(Modal::BatchReport { lines });
+            self.abandon_shortcut_capture();
         }
     }
 

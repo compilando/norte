@@ -404,6 +404,9 @@ cli-warn-ai-load-failed = aviso: carga de [ai] falló ({ $error }); ai.* dará U
 cli-no-results = (sin resultados)
 cli-spool-swept = barridos { $count } planes de sync huérfanos
 cli-spool-sweep-failed = aviso: no se pudo barrer { $path }: { $error }
+cli-spool-partial = aviso: barridos { $removed } planes de sync huérfanos y { $failed } no se dejaron borrar en { $path }
+cli-warn-ai-unavailable = aviso: proveedor de IA no disponible ({ $error }); ai.* dará Unsupported
+cli-warn-archive-invalid = aviso: norte.toml no se pudo leer ({ $error }); los límites de [archive] se quedan en los de por defecto
 # Se imprime bajo un plugin instalado y NO aprobado: instalar no activa, y
 # decir solo «instalado» dejaría al lector esperando algo que no va a pasar.
 cli-plugin-unapproved = queda SIN aprobar: apruébalo y actívalo en el gestor de extensiones

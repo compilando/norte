@@ -65,6 +65,8 @@ pub(crate) use geometry::{
     body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_rect,
     visor_split,
 };
+#[cfg(test)]
+pub(crate) use modals::batch_report_text;
 use modals::draw_modal;
 pub use modals::{ModalZone, modal_zones};
 use overlays::{

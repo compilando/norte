@@ -104,10 +104,11 @@ pub fn load_rar_delegate() -> std::io::Result<Option<std::path::PathBuf>> {
 /// Aplica a `engine` los límites anti-bomba y el programa que lee RAR de
 /// `[archive]` ([`load_archive_limits`], [`load_rar_delegate`]).
 ///
-/// Fail-loud: un `norte.toml` roto aborta el arranque, mismo criterio que
-/// `policy.toml`. Lo usa el daemon ([`crate::daemon::componer()`]); antes
-/// vivía en la CLI y el daemon no podía llamarlo desde el core. Los engines
-/// embebidos de la CLI no lo aplican (tampoco lo hacían antes).
+/// Devuelve el error y es quien llama el que decide qué significa: el daemon
+/// ([`crate::daemon::componer()`]) aborta el arranque, mismo criterio que
+/// `policy.toml`; la CLI embebida avisa y sigue con los límites por defecto.
+/// Se lee el `norte.toml` ENTERO, así que cualquier sección rota lo hace
+/// fallar, no solo `[archive]`.
 ///
 /// # Errors
 /// Los de leer o validar `norte.toml`.

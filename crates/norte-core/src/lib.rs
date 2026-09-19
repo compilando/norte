@@ -17,6 +17,7 @@ pub mod connect;
 pub mod daemon;
 pub mod embedded;
 mod engine;
+pub mod equipo;
 pub mod ftp_plugin;
 mod hashing;
 pub mod hooks;

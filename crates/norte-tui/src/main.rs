@@ -25,7 +25,6 @@ use norte_tui::screens::{apply_theme, drain_places_drives};
 use norte_tui::session_push::restore_session;
 use norte_tui::shortcuts_editor::build_keymaps;
 use norte_tui::tty;
-use norte_vfs_local::LocalProvider;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -782,45 +781,21 @@ async fn make_backend(
                 .as_ref()
                 .map(std::path::PathBuf::from),
         );
-        engine.register_provider(Arc::new(LocalProvider::os_root()));
-        // Conexiones remotas (fase 6e): un path sftp://…/ftp://… navegable si
-        // la host key ya es de confianza. La CONFIRMACIÓN TOFU interactiva
-        // (modal con fingerprint) es UX pendiente — hoy un primer contacto
-        // aparece como error con la huella; confírmalo con `norte connect`.
-        engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
-            norte_core::connect::config_dir(),
-        )));
-        // IA (M4-IA): opt-in; sin [ai] el backend degrada (Unsupported).
+        // Proveedor local, conector (un path sftp://…/ftp://… navegable si la
+        // host key ya es de confianza) e IA opt-in: lo que lleva todo engine,
+        // decidido en `norte_core::equipo` y no aquí (regla 7).
         //
-        // Estos diagnósticos eran `eprintln!` y llevaban un comentario
-        // explicando que un `tracing::warn!` aquí se descartaría mudo, porque
-        // este binario no instalaba subscriber. Ya lo instala (`init_to_file`,
-        // roadmap ítem 9), así que van al log como el resto — y sin escribir en
-        // una pantalla que ratatui está a punto de tomar.
-        match tokio::task::spawn_blocking(norte_core::ai::AiConfig::load).await {
-            Ok(Ok(ai_cfg)) => {
-                if let Some(pcfg) = ai_cfg.rename_provider_config().cloned() {
-                    match norte_core::ai::resolve_and_build(
-                        &pcfg,
-                        norte_core::connect::config_dir(),
-                    )
-                    .await
-                    {
-                        Ok(provider) => engine.set_ai_provider(provider),
-                        Err(e) => tracing::warn!(error = %e, "proveedor de IA no disponible"),
-                    }
-                }
-                // Embeddings (M4-IA-2): proveedor propio, opt-in igual —
-                // future-proofing del plan: la TUI embebida aún no lleva
-                // índice (with_index es del daemon), el wiring es por paridad
-                // para cuando lo gane.
-                if let Some(w) = norte_core::ai::install_embed_provider(&engine, &ai_cfg).await {
-                    tracing::warn!(aviso = %w, "proveedor de embeddings");
-                }
-                engine.set_ai_config(ai_cfg);
-            }
-            Ok(Err(e)) => tracing::warn!(error = %e, "[ai] inválido"),
-            Err(e) => tracing::warn!(error = %e, "la carga de [ai] falló"),
+        // Los avisos van al log y no a stderr: ratatui está a punto de tomar
+        // la pantalla, y este binario ya instala subscriber (`init_to_file`,
+        // roadmap ítem 9).
+        let hecho = norte_core::equipo::equipar(
+            &engine,
+            &norte_core::connect::config_dir(),
+            norte_core::equipo::Ia::TODA,
+        )
+        .await;
+        for aviso in hecho.avisos {
+            tracing::warn!("{aviso}");
         }
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
