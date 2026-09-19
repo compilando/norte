@@ -9,6 +9,7 @@ import type {
   KeyBarView,
   PanelBarView,
   WizardView,
+  GotoView,
   PaletteView,
   TabGroupView,
   WhichKeyView,
@@ -393,6 +394,78 @@ export function paintPalette(this: Screen, palette: PaletteView | null): void {
   }
   caja.append(lista);
   this.paletteRoot.replaceChildren(caja);
+}
+
+/**
+ * «Ir a cualquier sitio» (#357, puente 77): la consulta y las líneas en
+ * orden —cabeceras de sección y filas—, con la del cursor marcada. Qué hay en
+ * cada sección y en qué orden lo decide el host con el modelo compartido; aquí
+ * solo se pinta.
+ */
+export function paintGoto(this: Screen, goto: GotoView | null): void {
+  if (goto === null) {
+    this.gotoRoot.replaceChildren();
+    this.gotoRoot.dataset["open"] = "false";
+    return;
+  }
+  this.gotoRoot.dataset["open"] = "true";
+  const caja = document.createElement("section");
+  // Las clases de la paleta: es la misma forma de pantalla —una consulta y
+  // una lista que se acota— y dos hojas de estilo para lo mismo divergen.
+  caja.className = "palette goto";
+  caja.setAttribute("role", "dialog");
+  caja.setAttribute("aria-modal", "true");
+  caja.setAttribute("aria-label", this.t("goto-title"));
+
+  const query = document.createElement("div");
+  query.className = "palette-query";
+  query.textContent = goto.query;
+  caja.append(query);
+
+  const lista = document.createElement("ul");
+  lista.className = "palette-rows";
+  lista.setAttribute("role", "listbox");
+  for (const [i, l] of goto.lines.entries()) {
+    const item = document.createElement("li");
+    if (l.line === "header") {
+      // Una cabecera no es una opción: no recibe el cursor ni se anuncia
+      // como elegible.
+      item.className = "goto-header";
+      item.setAttribute("role", "presentation");
+      item.textContent = l.title;
+      lista.append(item);
+      continue;
+    }
+    item.className = "palette-row";
+    item.id = `goto-row-${String(i)}`;
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", String(goto.cursor === i));
+    item.dataset["hostile"] = String(l.hostile);
+    const texto = document.createElement("span");
+    texto.className = "palette-text";
+    texto.textContent = l.text;
+    const desc = document.createElement("span");
+    desc.className = "palette-desc";
+    desc.textContent = l.desc;
+    item.append(texto, desc);
+    if (l.hostile) {
+      // Un nombre enmascarado en la pantalla donde se elige a dónde ir: el
+      // lector tiene que saber que no se llama así.
+      item.append(badge(this.t("hostile-name")));
+    }
+    lista.append(item);
+  }
+  if (goto.cursor !== null) {
+    lista.setAttribute("aria-activedescendant", `goto-row-${String(goto.cursor)}`);
+  }
+  if (goto.lines.length === 0) {
+    const vacio = document.createElement("li");
+    vacio.className = "empty";
+    vacio.textContent = goto.empty;
+    lista.append(vacio);
+  }
+  caja.append(lista);
+  this.gotoRoot.replaceChildren(caja);
 }
 
 /** Lo que puede seguir a un prefijo a medias. */

@@ -19,8 +19,8 @@ use crate::app::App;
 use crate::goto::MINIMO_PARA_EL_INDICE;
 use crate::jobs::{GotoIndexRun, InFlight};
 
-/// Cuántos resultados se piden.
-const TOPE: u32 = 8;
+/// Cuántos resultados se piden: el mismo número en los dos frontends.
+const TOPE: u32 = norte_frontend::goto::TOPE_DEL_INDICE;
 
 /// Pregunta al índice por lo que hay escrito ahora mismo, si vale la pena.
 ///

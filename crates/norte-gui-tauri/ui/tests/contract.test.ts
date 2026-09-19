@@ -73,6 +73,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     aiRename as HTMLElement,
     organize as HTMLElement,
     splash as HTMLElement,
+    document.createElement("div"),
     catalog,
     (a: UiAction) => enviadas.push(a),
   );
@@ -142,6 +143,7 @@ describe("el contrato con el host", () => {
       "cursor",
       "dialogs",
       "extensions",
+      "goto",
       "help",
       "key_bar",
       "layout",

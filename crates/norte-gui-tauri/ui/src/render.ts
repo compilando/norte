@@ -153,6 +153,7 @@ export class Screen {
     readonly aiRenameRoot: HTMLElement,
     readonly organizeRoot: HTMLElement,
     readonly splashRoot: HTMLElement,
+    readonly gotoRoot: HTMLElement,
     readonly catalog: HostCatalog,
     readonly send: Send,
     /**
@@ -251,6 +252,7 @@ export class Screen {
     this.paintPanelBar(view.panel_bar);
     this.paintKeyBar(view.key_bar ?? null);
     this.paintPalette(view.palette);
+    this.paintGoto(view.goto ?? null);
     this.paintWizard(view.wizard ?? null);
     this.paintWhichKey(view.whichkey);
     this.paintHelp(view.help);
@@ -285,6 +287,7 @@ export class Screen {
 
   /** En `render/menus.ts`. */
   readonly paintPalette = menus.paintPalette;
+  readonly paintGoto = menus.paintGoto;
   readonly paintWizard = menus.paintWizard;
 
   /** En `render/menus.ts`. */

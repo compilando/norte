@@ -79,13 +79,9 @@ const APLAZADOS: &[(&str, u32)] = &[
     // aquí las teclas imprimibles no llegan al host), y la sección de plugins,
     // que es informativa en los dos frontends.
     //
-    // Y vuelve a tener uno: «ir a cualquier sitio» (fase 6, ADR 0120) aterrizó
-    // en el terminal y la ventana todavía no lo pinta. Lo que falta es la
-    // superficie —fuentes sobre el estado del host, la petición asíncrona al
-    // índice, DTO y renderer—, no el modelo: las secciones, su orden, el
-    // filtro, el tope y el cursor que salta cabeceras viven en
-    // `norte_frontend::goto`, que es de los dos.
-    ("app.goto", 357),
+    // «Ir a cualquier sitio» (fase 6, ADR 0120) estuvo aquí hasta #357: ya lo
+    // pinta la ventana, con el modelo y el despacho de `norte_frontend::goto`.
+    //
     // La línea de tiempo del journal (fase 7, ADR 0121). El kind es del
     // registro compartido, así que la ventana YA enseña su botón en la barra
     // de paneles; lo que le falta es pintar el hueco y la pregunta del

@@ -59,6 +59,9 @@ pub struct ViewSnapshot {
     pub profiles: Option<ProfilePickerView>,
     /// La paleta de comandos, si está abierta.
     pub palette: Option<PaletteView>,
+    /// «Ir a cualquier sitio», si está abierto (#357). Puente 77.
+    #[serde(default)]
+    pub goto: Option<GotoView>,
     /// El asistente de primer arranque (spec 2026-09-10), si está abierto.
     /// Puente 63.
     #[serde(default)]
@@ -330,6 +333,48 @@ pub struct PaletteView {
     pub cursor: Option<u64>,
     /// Cuántas filas hay en total, para decir cuánto se está acotando.
     pub total: u64,
+}
+
+/// «Ir a cualquier sitio» abierto (#357, puente 77): la ruta tecleada, la
+/// historia del panel, los populares, los favoritos, las conexiones, los
+/// comandos y lo que el índice semántico encontró, en SECCIONES.
+///
+/// Las secciones, su orden, el filtrado y el cursor los decide
+/// `norte_frontend::goto`, el mismo modelo que la TUI; el renderer pinta las
+/// líneas en orden y marca la del cursor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GotoView {
+    /// Lo tecleado, ya acotado para pintar.
+    pub query: String,
+    /// Las líneas en orden: cabeceras de sección y filas.
+    pub lines: Vec<GotoLineView>,
+    /// El índice, en `lines`, de la fila seleccionada. Nunca una cabecera.
+    pub cursor: Option<u64>,
+    /// Lo que se pinta cuando `lines` está vacío, ya traducido: «nada casa
+    /// con eso» no es lo mismo que una pantalla en blanco.
+    pub empty: String,
+}
+
+/// Una línea de «ir a».
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "line")]
+pub enum GotoLineView {
+    /// La cabecera de una sección, YA traducida. No recibe el cursor.
+    Header {
+        /// El título de la sección.
+        title: String,
+    },
+    /// Una fila a la que se puede ir.
+    Row {
+        /// Lo que se pinta, ya enmascarado si hacía falta.
+        text: String,
+        /// La segunda línea (la ruta de un favorito o una conexión, qué hace
+        /// un comando), o vacío.
+        desc: String,
+        /// Lo pintado DIFIERE de los bytes de origen. Viaja con la fila: esta
+        /// es una pantalla donde se elige a dónde ir.
+        hostile: bool,
+    },
 }
 
 /// El asistente de primer arranque (spec 2026-09-10, puente 63): un paso,
@@ -3312,6 +3357,12 @@ pub enum ViewChange {
     Palette {
         /// La paleta, o `None` si se cerró.
         palette: Option<PaletteView>,
+    },
+    /// «Ir a cualquier sitio» se abrió, se filtró, se movió, recibió una
+    /// sección tardía (conexiones, índice) o se cerró (#357, puente 77).
+    Goto {
+        /// La pantalla, o `None` si se cerró.
+        goto: Option<GotoView>,
     },
     /// La pantalla de arranque se puso o se quitó (puente 69).
     Splash {

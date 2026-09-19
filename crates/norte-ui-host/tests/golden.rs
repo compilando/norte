@@ -1314,6 +1314,32 @@ fn slots_de_referencia() -> Vec<SlotView> {
     ]
 }
 
+/// «Ir a» (puente 77): una cabecera y dos filas, una de ellas marcada como
+/// hostil, porque el renderer pinta las tres distinto.
+fn ir_a_de_referencia() -> norte_ui_host::dto::GotoView {
+    use norte_ui_host::dto::GotoLineView;
+    norte_ui_host::dto::GotoView {
+        query: "doc".to_owned(),
+        lines: vec![
+            GotoLineView::Header {
+                title: "Historia".to_owned(),
+            },
+            GotoLineView::Row {
+                text: "/home/ana/docs".to_owned(),
+                desc: String::new(),
+                hostile: false,
+            },
+            GotoLineView::Row {
+                text: "caf\u{fffd}".to_owned(),
+                desc: "/srv/caf\u{fffd}".to_owned(),
+                hostile: true,
+            },
+        ],
+        cursor: Some(1),
+        empty: "nada casa con eso".to_owned(),
+    }
+}
+
 /// El selector de perfiles: uno activo y otro que no carga, porque las dos
 /// filas dicen cosas distintas y el renderer las pinta distinto.
 fn perfiles_de_referencia() -> norte_ui_host::dto::ProfilePickerView {
@@ -1471,6 +1497,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
             cursor: Some(0),
             total: 42,
         }),
+        goto: Some(ir_a_de_referencia()),
         whichkey: Some(norte_ui_host::dto::WhichKeyView {
             title: "ctrl+x".to_owned(),
             rows: vec![
@@ -2502,6 +2529,12 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
+            "goto",
+            ViewChange::Goto {
+                goto: Some(ir_a_de_referencia()),
+            },
+        ),
+        (
             "which_key",
             ViewChange::WhichKey {
                 whichkey: Some(norte_ui_host::dto::WhichKeyView {
@@ -2643,7 +2676,8 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // Puente 74: `MenuItemView.section` y `.role` (ADR 0125).
     // Puente 75: `HelpSpanView::Link.action`, la fila que sigue el enlace.
     // Puente 76: `HelpView.scroll`, la petición de desplazar el cuerpo.
-    const FORMA: u64 = 8_530_096_040_792_592_060;
+    // Puente 77: `GotoView` («ir a», #357) en la foto y en su cambio.
+    const FORMA: u64 = 7_418_230_142_513_937_372;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

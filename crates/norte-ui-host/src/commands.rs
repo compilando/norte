@@ -120,6 +120,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.tab-goto-9",
     "pane.columns",
     "app.palette",
+    "app.goto",
     "app.help",
     "app.settings",
     "app.extensions",
@@ -416,6 +417,8 @@ pub enum Efecto {
     Columnas,
     /// Abre la paleta de comandos.
     Paleta,
+    /// Abre «ir a cualquier sitio» (#357).
+    IrA,
     /// Abre los ajustes: se leen, se giran y se escriben.
     Ajustes,
     /// Abre el gestor de extensiones, en solo lectura.
@@ -823,6 +826,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         // que tomó el TUI.
         "pane.columns" | "pane.sort-menu" => Efecto::Columnas,
         "app.palette" => Efecto::Paleta,
+        "app.goto" => Efecto::IrA,
         "app.help" => Efecto::Ayuda,
         "app.settings" => Efecto::Ajustes,
         "app.quit" => Efecto::Salir,

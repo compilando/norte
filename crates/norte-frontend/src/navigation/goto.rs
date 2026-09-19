@@ -264,7 +264,7 @@ impl GotoSource for RutaSource {
         parece_ruta(query).map_or_else(Vec::new, |ruta| {
             vec![GotoRow {
                 section: SECCION_RUTA.id,
-                key: format!("path:{ruta}"),
+                key: format!("{K_RUTA}{ruta}"),
                 // Lo tecleado se pinta TAL CUAL. Es del propio lector, así
                 // que no hay nada que enmascarar; y cambiárselo mientras lo
                 // escribe es la peor forma de decirle que se equivocó.
@@ -525,6 +525,251 @@ pub fn parece_ruta(query: &str) -> Option<&str> {
     // aceptar `://x`, que no nombra ningún backend.
     let idx = q.find("://")?;
     (idx > 0 && q.len() > idx + 3).then_some(q)
+}
+
+// ---------------------------------------------------------------------------
+// Lo que antes decidía cada frontend por su cuenta (#357): cómo se construye
+// cada clase de fila, qué clave de despacho lleva y qué significa confirmarla.
+// La TUI lo tenía en `norte-tui/src/goto.rs`, y la ventana lo necesitaba igual;
+// dos copias de «a dónde lleva este Enter» son dos respuestas.
+// ---------------------------------------------------------------------------
+
+/// Prefijo de despacho de una fila que lleva a un `VPath` ya conocido.
+pub const K_IR: &str = "go:";
+/// Prefijo de una fila que lleva a un comando del catálogo.
+pub const K_CMD: &str = "cmd:";
+/// Prefijo de la fila de la RUTA TECLEADA, que aún hay que resolver. Lo pone
+/// [`RutaSource`].
+pub const K_RUTA: &str = "path:";
+
+/// Cuántas filas se traen de cada lista larga ANTES de filtrar.
+///
+/// No es el tope de lo que se ve —ése es [`TOPE_POR_SECCION`], y lo aplica el
+/// modelo a todas las secciones por igual— sino cuántas entradas de una lista
+/// de cientos se le ofrecen al filtro. Más holgado que el de pintado a
+/// propósito: filtrar sobre cuarenta encuentra cosas que filtrar sobre doce
+/// no, y las que sobren las recorta el modelo después.
+pub const TRAIDAS_POR_LISTA: usize = 40;
+
+/// A partir de cuántos caracteres se le pregunta al índice.
+///
+/// Con menos, la respuesta no puede ser buena —una o dos letras no son una
+/// consulta semántica— y cada pregunta es una llamada a un proveedor que
+/// cuesta tiempo y puede costar dinero.
+pub const MINIMO_PARA_EL_INDICE: usize = 3;
+
+/// Cuántos resultados se le piden al índice.
+pub const TOPE_DEL_INDICE: u32 = 8;
+
+/// Una fila hacia un directorio conocido.
+///
+/// `enc` es la reinterpretación de nombres del panel con el foco, y sólo se le
+/// pasa a las rutas que son DE ese panel —su historia—. A las demás
+/// (populares, favoritos, conexiones, índice) se les pasa `None`: son de toda
+/// la sesión, y aplicarles el encoding de un panel a rutas de otro inventa
+/// mojibake. Es la misma regla que ya escribió `popular_rows` en su sitio.
+#[must_use]
+pub fn fila_ruta(
+    section: &'static str,
+    nombre: Option<&str>,
+    path: &norte_proto::VPath,
+    enc: Option<norte_encoding::NameEncoding>,
+) -> GotoRow {
+    let (texto, hostil) = crate::path_display_with(path, enc);
+    // El nombre que puso el lector (un favorito, una conexión) va DELANTE y la
+    // ruta detrás: se busca por el nombre que uno mismo eligió, y la ruta es
+    // lo que confirma que es la que se cree.
+    let (text, desc, hostile) = match nombre {
+        Some(n) => {
+            let (nt, nh) = crate::display_name(n.as_bytes());
+            (nt, texto, nh || hostil)
+        }
+        None => (texto, String::new(), hostil),
+    };
+    GotoRow {
+        section,
+        key: format!("{K_IR}{}", path.to_wire()),
+        text,
+        desc,
+        hostile,
+    }
+}
+
+/// La fila de una conexión configurada: su nombre y su URL CRUDA de
+/// `connections.toml`, que puede no parsear.
+///
+/// Se ofrece igual y se dice al confirmar —lo mismo que hace el selector de
+/// `pane.connect`, con el mismo mensaje— en vez de desaparecer: «mi conexión
+/// no sale en ir a» es peor que un error al pulsar Enter, porque no tiene ni
+/// dónde mirar. Un FAVORITO que no parsea, en cambio, no se ofrece: la lista
+/// de sitios ya lo enseña con su error.
+#[must_use]
+pub fn fila_conexion(nombre: &str, url: &str) -> GotoRow {
+    let (texto, hostil) = norte_proto::VPath::parse(url).map_or_else(
+        |_| (norte_encoding::mask_terminal_hazards(url), true),
+        |p| crate::path_display_with(&p, None),
+    );
+    let (nt, nh) = crate::display_name(nombre.as_bytes());
+    GotoRow {
+        section: SECCION_CONEXIONES.id,
+        key: format!("{K_IR}{url}"),
+        text: nt,
+        desc: texto,
+        hostile: nh || hostil,
+    }
+}
+
+/// Las filas de COMANDOS, a partir de las de la paleta: los MISMOS que la
+/// paleta ofrece en ese contexto, porque dos listas de comandos calculadas por
+/// separado divergen.
+#[must_use]
+pub fn filas_de_comandos(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
+    rows.into_iter()
+        .map(|r| GotoRow {
+            section: SECCION_COMANDOS.id,
+            key: format!("{K_CMD}{}", r.key),
+            text: r.text,
+            desc: r.desc,
+            hostile: r.hostile,
+        })
+        .collect()
+}
+
+/// Las filas de una tanda de resultados del índice semántico.
+///
+/// Son RUTAS de ficheros que el core encontró, así que su nombre son bytes de
+/// disco y se pintan por el mismo camino enmascarado que las demás. Sin
+/// reinterpretación, como los populares: lo que devuelve el índice puede estar
+/// en cualquier sitio, no en el panel con el foco.
+#[must_use]
+pub fn filas_del_indice(hits: &[norte_proto::methods::SemanticHit]) -> Vec<GotoRow> {
+    hits.iter()
+        .map(|h| fila_ruta(SECCION_INDICE.id, None, &h.path, None))
+        .collect()
+}
+
+/// Lo que significa confirmar una fila.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Accion {
+    /// Navegar el panel con el foco a este directorio.
+    Ir(norte_proto::VPath),
+    /// Correr este comando del catálogo, como si se hubiera pulsado su tecla.
+    Comando(String),
+    /// La fila no lleva a ningún sitio que se pueda resolver — una ruta
+    /// tecleada que no parsea, sobre todo. Trae la clave del mensaje.
+    Nada(&'static str),
+}
+
+/// Qué hacer con la fila que el lector acaba de confirmar.
+///
+/// La `key` NUNCA se pinta y aquí es donde se lee: el prefijo dice de qué
+/// clase es la fila, y cada clase se resuelve por su camino. Una ruta TECLEADA
+/// es la única que puede no resolver, porque es lo único que no salió de una
+/// lista que ya existía.
+///
+/// ```
+/// use norte_frontend::goto::{Accion, accion};
+/// assert_eq!(accion("cmd:app.quit"), Accion::Comando("app.quit".to_owned()));
+/// assert!(matches!(accion("go:file:///tmp"), Accion::Ir(_)));
+/// assert!(matches!(accion("otra cosa"), Accion::Nada(_)));
+/// ```
+#[must_use]
+pub fn accion(key: &str) -> Accion {
+    if let Some(cmd) = key.strip_prefix(K_CMD) {
+        return Accion::Comando(cmd.to_owned());
+    }
+    if let Some(wire) = key.strip_prefix(K_IR) {
+        return norte_proto::VPath::parse(wire)
+            .map_or(Accion::Nada("msg-goto-bad-path"), Accion::Ir);
+    }
+    if let Some(texto) = key.strip_prefix(K_RUTA) {
+        return resolver_tecleada(texto);
+    }
+    Accion::Nada("msg-goto-bad-path")
+}
+
+/// Resuelve la ruta que el lector tecleó.
+///
+/// `~` se expande contra el HOME de este proceso, no contra el directorio del
+/// panel: «la casa» es una sola, y hacerla depender de dónde estabas sería que
+/// la misma tecla lleve a dos sitios. Una ruta absoluta se toma como local, y
+/// una con esquema se parsea tal cual — si el backend no existe lo dice el
+/// core, que es mejor que navegar a algo que no es lo que se escribió.
+fn resolver_tecleada(texto: &str) -> Accion {
+    let expandido = if texto == "~" || texto.starts_with("~/") {
+        let Some(home) = std::env::var_os("HOME") else {
+            return Accion::Nada("msg-goto-no-home");
+        };
+        let mut p = std::path::PathBuf::from(home);
+        if let Some(resto) = texto.strip_prefix("~/") {
+            p.push(resto);
+        }
+        p
+    } else if texto.starts_with('/') {
+        std::path::PathBuf::from(texto)
+    } else {
+        // Con esquema: el wire ya es un wire.
+        return norte_proto::VPath::parse(texto)
+            .map_or(Accion::Nada("msg-goto-bad-path"), Accion::Ir);
+    };
+    norte_vfs::native::vpath_from_native(&expandido)
+        .map_or(Accion::Nada("msg-goto-bad-path"), Accion::Ir)
+}
+
+#[cfg(test)]
+mod despacho_tests {
+    use super::{Accion, K_CMD, K_IR, K_RUTA, accion};
+    use norte_proto::VPath;
+
+    /// Cada prefijo de `key` va por su camino, y ninguno se confunde con
+    /// otro: la `key` no se pinta nunca, así que esto es lo único que decide
+    /// a dónde lleva un Enter.
+    #[test]
+    fn cada_prefijo_resuelve_a_lo_suyo() {
+        assert_eq!(
+            accion(&format!("{K_CMD}app.quit")),
+            Accion::Comando("app.quit".to_owned())
+        );
+        assert_eq!(
+            accion(&format!("{K_IR}file:///tmp")),
+            Accion::Ir(VPath::parse("file:///tmp").expect("wire"))
+        );
+        assert_eq!(
+            accion(&format!("{K_RUTA}/tmp")),
+            Accion::Ir(VPath::parse("file:///tmp").expect("wire"))
+        );
+    }
+
+    /// Una ruta con esquema tecleada se parsea tal cual; una que NO parsea se
+    /// dice, en vez de navegar a cualquier otra cosa. Un esquema desconocido
+    /// SÍ parsea: quien dice que no hay quien lo sirva es el core.
+    #[test]
+    fn una_ruta_tecleada_que_no_parsea_se_dice() {
+        assert!(
+            matches!(accion(&format!("{K_RUTA}sftp://h//x")), Accion::Nada(_)),
+            "un segmento vacío no es una ruta"
+        );
+        assert!(matches!(accion("otra cosa"), Accion::Nada(_)));
+        assert!(matches!(
+            accion(&format!("{K_RUTA}noexiste://h/x")),
+            Accion::Ir(_)
+        ));
+    }
+
+    /// `~` se expande contra el HOME del proceso, no contra el panel: la casa
+    /// es una sola.
+    #[test]
+    fn la_casa_no_depende_del_panel() {
+        let Accion::Ir(p) = accion(&format!("{K_RUTA}~")) else {
+            panic!("`~` tiene que resolver mientras haya HOME");
+        };
+        let home = std::env::var("HOME").expect("HOME en el entorno de test");
+        assert_eq!(
+            p,
+            norte_vfs::native::vpath_from_native(std::path::Path::new(&home))
+                .expect("el HOME es una ruta")
+        );
+    }
 }
 
 #[cfg(test)]

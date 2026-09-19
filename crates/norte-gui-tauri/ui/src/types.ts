@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 76;
+export const BRIDGE_VERSION = 77;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -739,6 +739,20 @@ export interface PaletteView {
   total: number;
 }
 
+/** Una línea de «ir a» (puente 77): cabecera de sección o fila. */
+export type GotoLineView =
+  | { line: "header"; title: string }
+  | { line: "row"; text: string; desc: string; hostile: boolean };
+
+/** «Ir a cualquier sitio» (#357, puente 77). El índice del cursor es en
+ *  `lines`, y nunca cae en una cabecera. */
+export interface GotoView {
+  query: string;
+  lines: GotoLineView[];
+  cursor: number | null;
+  empty: string;
+}
+
 export interface ProfileRowView {
   name: string;
   name_hostile: boolean;
@@ -1333,6 +1347,9 @@ export interface ViewSnapshot {
   key_bar?: KeyBarView;
   profiles: ProfilePickerView | null;
   palette: PaletteView | null;
+  /** «Ir a cualquier sitio» (puente 77), si está abierto. Opcional: un host
+   *  anterior no lo manda. */
+  goto?: GotoView | null;
   /** El asistente de primer arranque (puente 63), si está abierto. Opcional:
    *  un host anterior no lo manda. */
   wizard?: WizardView | null;
@@ -1410,6 +1427,7 @@ export type ViewChange =
   | { change: "key_bar"; key_bar: KeyBarView }
   | { change: "profiles"; profiles: ProfilePickerView | null }
   | { change: "palette"; palette: PaletteView | null }
+  | { change: "goto"; goto: GotoView | null }
   | { change: "wizard"; wizard: WizardView | null }
   | { change: "splash"; splash: SplashView | null }
   | { change: "help"; help: HelpView | null }

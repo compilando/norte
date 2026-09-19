@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window has «go anywhere»** (#357, `ctrl+g` in the default keys).
+  It is the same screen the terminal has: type a path, or pick from the
+  panel's history, the places you return to, bookmarks, connections,
+  commands, and what the semantic index finds. Both frontends now build the
+  rows and decide where Enter takes you with the same code, so the same row
+  leads to the same place in both.
+
 - **Structured logs** (ADR 0127). `[log] format = "json"` writes the log file
   as one JSON object per line, with the event's fields and the spans it
   happened in. The default stays `text`, and stderr is always text. Every

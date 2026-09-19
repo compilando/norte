@@ -34,6 +34,7 @@ mod comparar;
 mod corpus;
 mod disposiciones;
 mod gestos;
+mod ir_a;
 mod organizar;
 mod paneles;
 mod paneles_de_plugin;

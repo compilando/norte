@@ -47,6 +47,7 @@ mod effects;
 mod extensions;
 mod fileops;
 mod gestures;
+mod goto;
 mod help;
 mod input;
 mod layout;
@@ -1000,6 +1001,20 @@ enum Fondo {
     /// Los volúmenes del host, con la APERTURA del selector que los pidió.
     /// Ver [`Fondo::Catalogo`].
     Volumenes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// Las conexiones para «ir a» (#357), con la APERTURA que las pidió: una
+    /// respuesta de una apertura anterior no rellena la de ahora.
+    ConexionesDeIrA(
+        u64,
+        Result<Vec<norte_proto::methods::ConnectionEntry>, Error>,
+    ),
+    /// Lo que contestó el índice a una consulta de «ir a» (#357): la apertura
+    /// y la consulta que se preguntaron, para tirar la respuesta si ya no es
+    /// lo que hay escrito.
+    IndiceDeIrA(
+        u64,
+        String,
+        Result<Vec<norte_proto::methods::SemanticHit>, Error>,
+    ),
     /// Las conexiones configuradas, con la APERTURA que las pidió (#264).
     Conexiones(
         u64,
@@ -2439,6 +2454,16 @@ struct Estado {
     /// Es un contexto de entrada más, como el buscador incremental y el
     /// visor: mientras esté abierta, las teclas de texto son suyas.
     paleta: Option<norte_frontend::palette_state::Palette>,
+    /// «Ir a cualquier sitio», si está abierto (#357). Otro contexto de
+    /// entrada con texto libre, como la paleta.
+    ir_a: Option<norte_frontend::goto::Goto>,
+    /// Cuántas veces se ha abierto «ir a»: las conexiones y el índice que
+    /// contesten a una apertura anterior se tiran.
+    gen_ir_a: u64,
+    /// La pregunta al índice en vuelo, si la hay. Cada tecla la ABORTA y
+    /// lanza otra: escribir deprisa no deja tres preguntas vivas contra un
+    /// proveedor que cuesta tiempo y puede costar dinero.
+    ir_a_indice: Option<tokio::task::JoinHandle<()>>,
     /// El asistente de primer arranque (spec 2026-09-10), mientras está
     /// abierto. Un overlay más: se queda las teclas.
     asistente: Option<norte_frontend::wizard::Wizard>,
@@ -3102,6 +3127,9 @@ impl Estado {
             token: 0,
             locale,
             paleta: None,
+            ir_a: None,
+            gen_ir_a: 0,
+            ir_a_indice: None,
             asistente: None,
             splash: None,
             splash_hasta_ms: None,

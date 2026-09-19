@@ -179,6 +179,7 @@ impl Estado {
             // cuanto se abre, y el panel nace diciendo que planifica.
             Efecto::Sincronizar => self.pedir_sincronizacion(backend, buzon),
             Efecto::Paleta
+            | Efecto::IrA
             | Efecto::Ayuda
             | Efecto::Ajustes
             | Efecto::Extensiones
@@ -722,6 +723,7 @@ impl Estado {
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match efecto {
             Efecto::Paleta => self.abrir_paleta(backend, buzon),
+            Efecto::IrA => self.abrir_ir_a(backend, buzon),
             Efecto::Ayuda => self.abrir_ayuda(backend, buzon),
             Efecto::Ajustes => self.abrir_ajustes(),
             Efecto::Extensiones => self.abrir_extensiones(backend, buzon),
