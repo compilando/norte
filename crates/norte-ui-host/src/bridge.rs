@@ -418,7 +418,15 @@ use serde::{Deserialize, Serialize};
 ///   `TimelineSlotView` —filas ya pintables (hora, actor para el color,
 ///   verbo, ruta con su `hostile`, cola traducida), cursor, texto de vacío y
 ///   el pie con lo que se llevaría un `Enter`—. Un lote es UNA fila.
-pub const BRIDGE_VERSION: u32 = 78;
+/// - 79: una extensión que no cargó es una fila del gestor (ADR 0113; se
+///   escribió como el 69 en una rama que llegó a `main` después del 78).
+///   `ExtensionErrorView` lleva `id` —el de su directorio, si se llama como
+///   uno— y el cursor de `ExtensionsView` sigue detrás de `rows` por
+///   `errors`. `extension_select_row` y `extension_govern` nombran esas filas
+///   por la misma cuenta, y sobre una rota el único cambio que se atiende es
+///   `uninstall`. ADR 0104 lo había dejado escrito como hueco: el handler la
+///   borraba y la ventana no tenía cómo pedírselo.
+pub const BRIDGE_VERSION: u32 = 79;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

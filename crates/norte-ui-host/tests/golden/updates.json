@@ -404,6 +404,7 @@
         {
           "dir": "/home/oscar/.config/norte/plugins/roto",
           "hostile": false,
+          "id": null,
           "reason": "el manifiesto no parsea",
           "reason_hostile": false
         }

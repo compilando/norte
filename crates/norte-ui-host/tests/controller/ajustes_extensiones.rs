@@ -629,6 +629,88 @@ async fn desinstalar_pregunta_y_solo_el_si_borra() {
     );
 }
 
+/// Una extensión que NO CARGÓ es una fila más: se señala, y su único verbo es
+/// desinstalar —por la tecla y por el botón, con la misma pregunta—. ADR 0104
+/// lo dejó escrito como hueco: el handler la borraba, pero no había forma de
+/// pedírselo desde la ventana.
+#[tokio::test]
+async fn una_extension_rota_se_senala_y_solo_se_desinstala() {
+    let Ok(mut f) = Arc::try_unwrap(dos_para_gobernar()) else {
+        panic!("el doble recién hecho no está compartido");
+    };
+    f.errores_de_carga = vec![
+        ("acme.roto".to_owned(), "el manifiesto no parsea".to_owned()),
+        ("no un id".to_owned(), "el manifiesto no parsea".to_owned()),
+    ];
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let v = extensiones_cargadas(&mut sub).await;
+    // El id solo cuando el nombre lo es: es lo que el renderer necesita para
+    // ofrecer el botón, y lo que el host mira antes de preguntar.
+    assert_eq!(
+        v.errors.iter().map(|e| e.id.as_deref()).collect::<Vec<_>>(),
+        [Some("acme.roto"), None]
+    );
+
+    // Las rotas van DETRÁS de las dos cargadas: la fila 2 es la primera.
+    h.dispatch(UiAction::ExtensionSelectRow { row: 2 })
+        .await
+        .expect("host vivo");
+    let v = siguiente_extensiones(&mut sub)
+        .await
+        .expect("el cursor se pinta");
+    assert_eq!(v.cursor, 2, "una rota se señala como cualquier fila");
+
+    // Aprobarla no tiene sentido —no hay capabilities que leer— y se DICE.
+    let ack = h
+        .dispatch(UiAction::ExtensionGovern {
+            row: 2,
+            id: "acme.roto".to_owned(),
+            change: norte_ui_host::action::ExtensionChange::Approval,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "ext-broken-only-uninstall"),
+        "{ack:?}"
+    );
+
+    // La tecla sobre la señalada: la pregunta de siempre, con su id.
+    h.dispatch(tecla("d")).await.expect("host vivo");
+    let d = siguientes_dialogos(&mut sub).await;
+    let pregunta = d.last().expect("pregunta");
+    assert_eq!(pregunta.title_key, "modal-extension-uninstall-title");
+    assert_eq!(
+        pregunta.subject.as_ref().map(|s| s.text.as_str()),
+        Some("acme.roto")
+    );
+    h.dispatch(UiAction::Dialog {
+        id: pregunta.id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    let _ = siguientes_dialogos(&mut sub).await;
+    assert_eq!(
+        backend.gobierno.lock().expect("gobierno").as_slice(),
+        ["uninstall:acme.roto"]
+    );
+
+    // Y una rota cuyo directorio no se llama como un id no pregunta: no hay
+    // id que mandar, y se dice por qué.
+    h.dispatch(UiAction::ExtensionSelectRow { row: 3 })
+        .await
+        .expect("host vivo");
+    let ack = h.dispatch(tecla("d")).await.expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "ext-broken-not-id"),
+        "{ack:?}"
+    );
+}
+
 /// Encender una sin aprobar por botón se rehúsa y se dice, como con la tecla.
 #[tokio::test]
 async fn encender_una_sin_aprobar_por_boton_se_rehusa() {

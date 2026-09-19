@@ -1,6 +1,6 @@
 # 0104 — An extension is uninstalled from the manager, and the manager has buttons
 
-- Status: accepted
+- Status: accepted; its two "not done" uninstall gaps are closed by ADR 0113
 - Date: 2026-09-10
 - Decision makers: Oscar González
 - Related: ADR 0022 (plugin consent is manifest + digest), ADR 0066 (the
@@ -153,11 +153,14 @@ extension's page, which is what `F1` over the row does in the terminal.
   back: the CLI calls `plugins::uninstall` directly and the daemon does not
   watch the directory, so on THAT path the stale registry survives until the
   daemon restarts (it does, on idle). Routing the CLI through the daemon when
-  one is listening is the fix, and is out of this change's scope.
+  one is listening is the fix, and is out of this change's scope. **Closed by
+  ADR 0113: `--daemon plugin uninstall` goes through the daemon, and without
+  it the command warns.**
 - Not done, on purpose: a search box (the host has no filter model for this
   list), per-row inline buttons (the pane is where the decision is read), an
   icon per extension (manifests carry none), and uninstalling a plugin that
   failed to load from the window — the handler supports it (a broken plugin
   is in `errors`, not in the catalogue; `uninstall` deletes it and
   `forget_in_memory` drops it from `errors` too), the button does not yet
-  exist.
+  exist. **The last one is closed by ADR 0113: a broken extension is a row of
+  the manager, in both frontends.**

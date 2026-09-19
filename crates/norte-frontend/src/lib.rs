@@ -53,6 +53,7 @@ pub use view::{columns, diskmap, display, format, treemap, viewer};
 
 pub mod ansi;
 pub mod availability;
+pub mod broken_plugin;
 pub mod busy;
 pub mod cli;
 pub mod config;

@@ -77,8 +77,15 @@ screen. They leave from either side. The remove key (and, in the window, the
 button) on this screen asks first, because uninstalling deletes the
 extension's files **and its approval** — a plugin installed later under the
 same id starts from nothing. `norte plugin uninstall <id>` does the same
-without asking, and a daemon already running does not notice until it
-restarts.
+without asking. Add `--daemon` when a daemon is running: then the daemon
+does it and the extension is gone from every open window at once; without
+it the command warns that the daemon will keep listing it until it restarts.
+
+An extension that did not load is listed after the others, with why. Select
+it like any row: the only thing it offers is uninstall, with the same key,
+button and question. If its directory is not named like an extension id, or
+a loaded extension already uses that id, it cannot be uninstalled from here,
+and the screen says so — remove the directory by hand.
 
 > 💡 `norte doctor` reports what is wrong with an installed extension: a manifest that does not parse, a digest that no longer matches, a help page over the size limit.
 

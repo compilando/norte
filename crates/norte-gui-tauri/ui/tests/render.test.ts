@@ -2960,6 +2960,94 @@ describe("el gestor de extensiones", () => {
     expect(enviadas.some((a) => a.action === "extension_select_row")).toBe(false);
   });
 
+  it("una rota es una fila más: se señala y su ficha solo ofrece desinstalar", () => {
+    const { screen, enviadas } = montar();
+    const v = conExtensiones();
+    if (v.extensions !== null) {
+      v.extensions.errors = [
+        {
+          dir: "acme.roto",
+          hostile: false,
+          reason: "el manifiesto no parsea",
+          reason_hostile: false,
+          id: "acme.roto",
+        },
+        {
+          dir: "no un id",
+          hostile: false,
+          reason: "el manifiesto no parsea",
+          reason_hostile: false,
+          id: null,
+        },
+      ];
+      // Las rotas van detrás de las dos cargadas.
+      v.extensions.cursor = 2;
+    }
+    screen.paint(v);
+    const rotas = [...document.querySelectorAll(".extensions-error")];
+    expect(rotas).toHaveLength(2);
+    expect(rotas[0]?.getAttribute("aria-selected")).toBe("true");
+    (rotas[1] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "extension_select_row", row: 3 }]);
+    enviadas.length = 0;
+
+    const acciones = document.querySelector(".extensions-actions") as HTMLElement;
+    const etiquetas = [...acciones.querySelectorAll("button")].map((b) => b.textContent);
+    expect(etiquetas).toEqual([catalogoReal()["ext-uninstall"]]);
+    (acciones.querySelector(".extensions-action-uninstall") as HTMLButtonElement).click();
+    expect(enviadas).toEqual([
+      { action: "extension_govern", row: 2, id: "acme.roto", change: "uninstall" },
+    ]);
+
+    // Sin id no hay botón: se dice por qué, con la frase del host.
+    if (v.extensions !== null) {
+      v.extensions.cursor = 3;
+    }
+    screen.paint(v);
+    expect(document.querySelector(".extensions-action-uninstall")).toBeNull();
+    expect(document.querySelector(".extensions-pane")?.textContent).toContain(
+      catalogoReal()["ext-broken-not-id"],
+    );
+  });
+
+  it("las rotas son un listbox propio: el cursor sobre una se anuncia", () => {
+    const { screen } = montar();
+    const v = conExtensiones();
+    if (v.extensions !== null) {
+      v.extensions.errors = [
+        {
+          dir: "acme.roto",
+          hostile: false,
+          reason: "el manifiesto no parsea",
+          reason_hostile: false,
+          id: "acme.roto",
+        },
+      ];
+      v.extensions.cursor = 2;
+    }
+    screen.paint(v);
+    const errores = document.querySelector(".extensions-errors") as HTMLElement;
+    // Sin el `listbox` que las contiene, el `role="option"` de cada fila es
+    // ARIA inválido y un lector de pantalla no anuncia nada al llegar.
+    expect(errores.getAttribute("role")).toBe("listbox");
+    expect(errores.getAttribute("aria-activedescendant")).toBe("extension-row-2");
+    // Y la lista de cargadas suelta el suyo: el cursor ya no está ahí.
+    expect(
+      document.querySelector(".extensions-rows")?.getAttribute("aria-activedescendant"),
+    ).toBeNull();
+
+    if (v.extensions !== null) {
+      v.extensions.cursor = 0;
+    }
+    screen.paint(v);
+    expect(
+      document.querySelector(".extensions-errors")?.getAttribute("aria-activedescendant"),
+    ).toBeNull();
+    expect(
+      document.querySelector(".extensions-rows")?.getAttribute("aria-activedescendant"),
+    ).toBe("extension-row-0");
+  });
+
   it("sobre una sin aprobar, aprobar es el botón principal y encender no se ofrece", () => {
     const { screen, enviadas } = montar();
     const v = conExtensiones();
@@ -3101,6 +3189,7 @@ describe("el gestor de extensiones", () => {
           hostile: true,
           reason: "el manifiesto no parsea",
           reason_hostile: false,
+          id: null,
         },
         // El MOTIVO cita el manifiesto del plugin, así que tiene su propia
         // marca: una sola para las dos cadenas deja al lector sin saber cuál
@@ -3110,6 +3199,7 @@ describe("el gestor de extensiones", () => {
           hostile: false,
           reason: "clave desconocida: mo�do",
           reason_hostile: true,
+          id: null,
         },
       ];
     }

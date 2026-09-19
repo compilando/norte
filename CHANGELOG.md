@@ -315,6 +315,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`norte --daemon plugin uninstall` uninstalls through the running
+  daemon**, which deletes the plugin and stops listing it at once; before,
+  the files went away behind the daemon's back and it kept showing — and
+  decorating with — the plugin until it restarted. Without `--daemon` the
+  command deletes in its own config directory as before, and now warns when
+  a daemon is running. It never routes to a daemon on its own: a CLI with a
+  different `NORTE_CONFIG_DIR` would have deleted in the daemon's directory.
+- **An extension that failed to load can be uninstalled from the manager.**
+  In the window and in the terminal it is now a row like the others: select
+  it and uninstall it with the same key or button, and the same question.
+  Approving or enabling it is refused and says why. A directory whose name
+  is not an extension id cannot be uninstalled from there, and the manager
+  says so instead of offering a button that would fail (bridge 79).
 - **Two undos that picked the same changes no longer undo them twice**
   (#358). A double-click, two frontends on one daemon, or a retry after a
   timeout could start two undos over the same list. The second one reverted
