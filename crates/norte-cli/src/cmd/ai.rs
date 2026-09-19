@@ -178,8 +178,8 @@ async fn informar_del_lote(
         Ok(informe) => {
             for linea in norte_frontend::batch_report_lines(&informe, norte_i18n::active()) {
                 match linea {
-                    norte_frontend::BatchReportLine::Phrase(texto) => eprintln!("norte: {texto}"),
-                    norte_frontend::BatchReportLine::Path(p) => {
+                    norte_frontend::ReportLine::Phrase(texto) => eprintln!("norte: {texto}"),
+                    norte_frontend::ReportLine::Path(p) => {
                         let (texto, hostil) = norte_frontend::path_display(&p);
                         eprintln!("    {}", marcado(&texto, hostil));
                     }

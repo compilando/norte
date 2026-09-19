@@ -17,12 +17,12 @@ impl App {
             self.abandon_shortcut_capture();
             return;
         }
-        // Los informes de lote, detrás: una colisión PREGUNTA algo con una
-        // copia esperando, un informe solo cuenta lo que ya pasó.
+        // Los informes, detrás: una colisión PREGUNTA algo con una copia
+        // esperando, un informe solo cuenta lo que ya pasó.
         if self.modal.is_none()
-            && let Some(lines) = self.pending_batch_reports.pop_front()
+            && let Some((title_key, lines)) = self.pending_reports.pop_front()
         {
-            self.modal = Some(Modal::BatchReport { lines });
+            self.modal = Some(Modal::Report { title_key, lines });
             self.abandon_shortcut_capture();
         }
     }

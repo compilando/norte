@@ -68,14 +68,7 @@ pub async fn on_tick(
     let mut refresh = false;
     for fin in finished {
         use norte_proto::TaskState;
-        // Un lote de renombrado cuenta lo que pasó en su INFORME, y el
-        // desenlace de la Task no lo cubre: un lote `Completed` puede dejar un
-        // paso atascado, y uno `Failed` deshecho a medias deja el directorio
-        // medio renombrado. Se pide siempre, como hacen la ventana y la CLI.
-        let lote = (fin.progress.kind == norte_proto::TaskKind::RenameBatch).then_some((
-            fin.progress.task_id,
-            !matches!(fin.state, TaskState::Completed),
-        ));
+        let informe = informe_que_pedir(&fin);
         match fin.state {
             // #139: contar no muta nada, así que no recarga los paneles — y su
             // resultado ES su progreso: el último snapshot trae el total.
@@ -202,13 +195,10 @@ pub async fn on_tick(
             }
             _ => {}
         }
-        if let Some((id, fallo)) = lote {
-            // Dentro del tick, como `aviso_de_empaquetado`: contra un daemon
-            // atascado el tick ya se para en `refresh_panes`, justo detrás.
-            let resultado = backend.rename_batch_report(id).await;
-            if let Some(lines) = informe_de_lote(&resultado, fallo) {
-                app.pending_batch_reports.push_back(lines);
-            }
+        if let Some((kind, id, fallo)) = informe
+            && let Some(p) = pedir_informe(backend, kind, id, fallo).await
+        {
+            app.pending_reports.push_back(p);
         }
     }
     app.open_next_pending();
@@ -243,16 +233,91 @@ pub async fn on_tick(
 pub fn informe_de_lote(
     resultado: &Result<norte_proto::methods::FsRenameBatchReportResult, Error>,
     fallo_la_task: bool,
-) -> Option<Vec<norte_frontend::BatchReportLine>> {
+) -> Option<Vec<norte_frontend::ReportLine>> {
     match resultado {
         Ok(r) if norte_frontend::batch_report_is_clean(r) => None,
         Ok(r) => Some(norte_frontend::batch_report_lines(r, norte_i18n::active())),
         Err(_) if !fallo_la_task => None,
-        Err(e) => Some(vec![norte_frontend::BatchReportLine::Phrase(t(
+        Err(e) => Some(vec![norte_frontend::ReportLine::Phrase(t(
             if matches!(e, Error::Unsupported) {
                 "modal-batch-unsupported"
             } else {
                 "modal-batch-report-failed"
+            },
+        ))]),
+    }
+}
+
+/// Si la Task que acaba de terminar tiene un INFORME que pedir: un lote de
+/// renombrado o un undo. Los dos cuentan en él lo que el desenlace de la Task
+/// no cubre —un paso atascado, lo irreversible saltado—, así que se pide
+/// siempre, como hace la ventana. El `bool` es «la Task falló o se canceló».
+fn informe_que_pedir(
+    fin: &crate::tasks::Finished,
+) -> Option<(norte_proto::TaskKind, norte_proto::TaskId, bool)> {
+    matches!(
+        fin.progress.kind,
+        norte_proto::TaskKind::RenameBatch | norte_proto::TaskKind::Undo
+    )
+    .then_some((
+        fin.progress.kind,
+        fin.progress.task_id,
+        !matches!(fin.state, norte_proto::TaskState::Completed),
+    ))
+}
+
+/// Pide el informe de un lote o de un undo que acaba de terminar, y devuelve
+/// el diálogo que abrir (su título y sus líneas), o `None` si no hay nada que
+/// decir.
+///
+/// Se espera DENTRO del tick, como `aviso_de_empaquetado`: contra un daemon
+/// atascado el tick ya se para en `refresh_panes`, justo detrás.
+async fn pedir_informe(
+    backend: &Backend,
+    kind: norte_proto::TaskKind,
+    id: norte_proto::TaskId,
+    fallo: bool,
+) -> Option<(&'static str, Vec<norte_frontend::ReportLine>)> {
+    if kind == norte_proto::TaskKind::Undo {
+        informe_de_undo(&backend.undo_report(id).await, fallo)
+            .map(|l| (crate::app::UNDO_REPORT_TITLE, l))
+    } else {
+        informe_de_lote(&backend.rename_batch_report(id).await, fallo)
+            .map(|l| (crate::app::BATCH_REPORT_TITLE, l))
+    }
+}
+
+/// Lo que hay que enseñar del informe de un undo que acaba de terminar, o
+/// `None` si devolvió todo.
+///
+/// El mismo criterio que la ventana (`Controller::informe_de_undo`) y que
+/// [`informe_de_lote`]: lo saltado —irreversible, o una creación que se queda
+/// porque el destino no tiene papelera— cuenta como no devuelto, y se dice.
+///
+/// ```
+/// use norte_proto::methods::PolicyUndoReportResult;
+/// let informe = |saltadas| PolicyUndoReportResult {
+///     undone: 2, skipped_irreversible: saltadas, skipped_created_no_trash: 0,
+///     blocked: None, batch_stuck: None, compensations_lost: 0,
+///     denied: Vec::new(), denied_total: 0,
+/// };
+/// assert!(norte_tui::refresh::informe_de_undo(&Ok(informe(0)), false).is_none());
+/// assert!(norte_tui::refresh::informe_de_undo(&Ok(informe(1)), false).is_some());
+/// ```
+#[must_use]
+pub fn informe_de_undo(
+    resultado: &Result<norte_proto::methods::PolicyUndoReportResult, Error>,
+    fallo_la_task: bool,
+) -> Option<Vec<norte_frontend::ReportLine>> {
+    match resultado {
+        Ok(r) if norte_frontend::undo_report_is_clean(r) => None,
+        Ok(r) => Some(norte_frontend::undo_report_lines(r, norte_i18n::active())),
+        Err(_) if !fallo_la_task => None,
+        Err(e) => Some(vec![norte_frontend::ReportLine::Phrase(t(
+            if matches!(e, Error::Unsupported) {
+                "modal-undo-unsupported"
+            } else {
+                "modal-undo-report-failed"
             },
         ))]),
     }
@@ -489,18 +554,52 @@ mod tests {
         assert!(
             lineas
                 .iter()
-                .any(|l| matches!(l, norte_frontend::BatchReportLine::Path(_))),
+                .any(|l| matches!(l, norte_frontend::ReportLine::Path(_))),
             "dice dónde buscar: {lineas:?}"
         );
         app.modal = Some(Modal::ConfirmQuit);
-        app.pending_batch_reports.push_back(lineas);
+        app.pending_reports
+            .push_back((crate::app::BATCH_REPORT_TITLE, lineas));
         app.open_next_pending();
         assert!(matches!(app.modal, Some(Modal::ConfirmQuit)), "no pisa");
         app.modal = None;
         app.open_next_pending();
         assert!(
-            matches!(app.modal, Some(Modal::BatchReport { .. })),
+            matches!(app.modal, Some(Modal::Report { .. })),
             "se abre al quedar libre la pantalla"
+        );
+    }
+
+    /// Un undo que se saltó lo irreversible lo dice, con el mismo modal que el
+    /// lote pero su propio título: antes la terminal lo callaba y el lector
+    /// creía el árbol devuelto entero.
+    #[test]
+    fn un_undo_que_se_salto_algo_abre_su_informe() {
+        let informe = |saltadas| norte_proto::methods::PolicyUndoReportResult {
+            undone: 2,
+            skipped_irreversible: saltadas,
+            skipped_created_no_trash: 0,
+            blocked: None,
+            batch_stuck: None,
+            compensations_lost: 0,
+            denied: Vec::new(),
+            denied_total: 0,
+        };
+        let mut app = app_with_entries(&["a"]);
+        let lineas = informe_de_undo(&Ok(informe(1)), false).expect("hay que decirlo");
+        app.pending_reports
+            .push_back((crate::app::UNDO_REPORT_TITLE, lineas));
+        app.open_next_pending();
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Report {
+                title_key: crate::app::UNDO_REPORT_TITLE,
+                ..
+            })
+        ));
+        assert!(
+            informe_de_undo(&Ok(informe(0)), true).is_none(),
+            "un undo que devolvió todo no abre nada"
         );
     }
 
@@ -509,7 +608,7 @@ mod tests {
     #[test]
     fn la_ruta_del_informe_va_sola_en_su_linea() {
         let lineas = informe_de_lote(&Ok(atascado()), false).expect("informe");
-        let texto = crate::ui::batch_report_text(&lineas);
+        let texto = crate::ui::report_text(&lineas);
         assert!(
             texto.lines().any(|l| l.trim() == "⟨mem⟩/d/b"),
             "la ruta actual, sola: {texto}"

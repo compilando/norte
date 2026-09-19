@@ -16,7 +16,7 @@
 //! and the transfer confirmation are one page). That sharing is a decision
 //! recorded in the `match`; it is never the residue of a wildcard.
 
-use crate::app::{App, Modal};
+use crate::app::{App, Modal, UNDO_REPORT_TITLE};
 
 /// Every context id the TUI can be in.
 ///
@@ -110,9 +110,17 @@ fn modal_context(modal: &Modal) -> &'static str {
         | Modal::OrganizePlan { .. } => "dialog.ai-rename",
         // La plantilla del lote comparte página con renombrar, que es donde
         // se cuenta qué es un plan revisable y qué se puede deshacer.
-        // Y el informe del lote, también: esa página cuenta qué se puede
-        // deshacer, que es lo que quien lee un lote atascado necesita.
-        Modal::RenameBatchPattern { .. } | Modal::BatchReport { .. } => "dialog.rename",
+        Modal::RenameBatchPattern { .. } => "dialog.rename",
+        // Un informe va a la página de lo que lo produjo: el de un undo, a la
+        // de confirmar un undo (la de `ConfirmUndoAfter`); el de un lote, a la
+        // de renombrar, que cuenta qué se puede deshacer.
+        Modal::Report { title_key, .. } => {
+            if *title_key == UNDO_REPORT_TITLE {
+                "dialog.confirm"
+            } else {
+                "dialog.rename"
+            }
+        }
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
         // Las sumas comparten página con las propiedades: las dos son cuadros
         // de LECTURA sobre lo que hay bajo el cursor.
@@ -199,7 +207,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::AiRenamePlan { .. }
         // #139: se lee, no se escribe — F1 encima no le roba una tecla a nadie.
         | Modal::Properties { .. }
-        | Modal::BatchReport { .. }
+        | Modal::Report { .. }
         | Modal::Checksums { .. }
         | Modal::SemanticHits { .. } => true,
     }

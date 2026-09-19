@@ -309,6 +309,10 @@ independently through `PROTOCOL_VERSION`.
   it could not sweep or an index that did not open was only reported if the
   daemon came up; a later failure (a broken `[archive]`, a busy socket) now
   prints them too.
+- **In the terminal, an undo that did not put everything back now says so.**
+  Undoing skips what cannot be undone (an overwrite with no trash) and stops
+  at the first change it cannot safely revert; the window showed a report
+  for that, and the terminal said nothing. It now opens the same report.
 - **In the terminal, a batch rename that is left half-done now says so.**
   The window and the CLI already asked for the batch report when the batch
   ended; the terminal never did, so a step that could not be put back went

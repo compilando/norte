@@ -663,7 +663,7 @@ pub fn item_lines_with(
 /// decide aquí es que una ruta va SOLA en su línea: metida en una frase, otra
 /// ruta la puede suplantar (#273).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BatchReportLine {
+pub enum ReportLine {
     /// Una frase del informe, ya traducida. No lleva nada de nadie.
     Phrase(String),
     /// Una ruta que buscar: el nombre que lleva AHORA lo que se quedó a
@@ -701,9 +701,9 @@ pub fn batch_report_is_clean(r: &norte_proto::methods::FsRenameBatchReportResult
 pub fn batch_report_lines(
     r: &norte_proto::methods::FsRenameBatchReportResult,
     lang: norte_i18n::Lang,
-) -> Vec<BatchReportLine> {
-    let frase = |clave: &str| BatchReportLine::Phrase(norte_i18n::t_in(lang, clave));
-    let mut cuerpo = vec![BatchReportLine::Phrase(norte_i18n::ta_in(
+) -> Vec<ReportLine> {
+    let frase = |clave: &str| ReportLine::Phrase(norte_i18n::t_in(lang, clave));
+    let mut cuerpo = vec![ReportLine::Phrase(norte_i18n::ta_in(
         lang,
         "modal-batch-summary",
         &[
@@ -713,7 +713,7 @@ pub fn batch_report_lines(
     ))];
     if let Some(paso) = &r.stuck {
         cuerpo.push(frase("modal-batch-stuck"));
-        cuerpo.push(BatchReportLine::Path(paso.to.clone()));
+        cuerpo.push(ReportLine::Path(paso.to.clone()));
         cuerpo.push(frase(if paso.journalled {
             "modal-batch-stuck-journalled"
         } else {
@@ -722,10 +722,10 @@ pub fn batch_report_lines(
     }
     if let Some(paso) = &r.uncertain {
         cuerpo.push(frase("modal-batch-uncertain"));
-        cuerpo.push(BatchReportLine::Path(paso.to.clone()));
+        cuerpo.push(ReportLine::Path(paso.to.clone()));
     }
     if r.compensations_lost > 0 {
-        cuerpo.push(BatchReportLine::Phrase(norte_i18n::ta_in(
+        cuerpo.push(ReportLine::Phrase(norte_i18n::ta_in(
             lang,
             "modal-batch-compensations-lost",
             &[("n", &r.compensations_lost.to_string())],
@@ -734,9 +734,84 @@ pub fn batch_report_lines(
     cuerpo
 }
 
+/// `true` si el undo devolvió TODO lo que tocaba.
+///
+/// Lo saltado cuenta como no-limpio: una entrada irreversible o una creación
+/// que se queda porque el destino no tiene papelera son cosas que NO
+/// volvieron, y un informe que las callara diría que el árbol está como
+/// estaba.
+#[must_use]
+pub fn undo_report_is_clean(r: &norte_proto::methods::PolicyUndoReportResult) -> bool {
+    r.blocked.is_none()
+        && r.batch_stuck.is_none()
+        && r.compensations_lost == 0
+        && r.denied_total == 0
+        && r.skipped_irreversible == 0
+        && r.skipped_created_no_trash == 0
+}
+
+/// El cuerpo del informe de un undo: qué volvió y qué no. Las mismas líneas
+/// en la ventana y en la terminal.
+#[must_use]
+pub fn undo_report_lines(
+    r: &norte_proto::methods::PolicyUndoReportResult,
+    lang: norte_i18n::Lang,
+) -> Vec<ReportLine> {
+    let frase = |texto: String| ReportLine::Phrase(texto);
+    let mut cuerpo = vec![frase(norte_i18n::ta_in(
+        lang,
+        "modal-undo-summary",
+        &[
+            ("undone", &r.undone.to_string()),
+            ("skipped", &r.skipped_irreversible.to_string()),
+        ],
+    ))];
+    if r.skipped_created_no_trash > 0 {
+        cuerpo.push(frase(norte_i18n::ta_in(
+            lang,
+            "modal-undo-left-in-place",
+            &[("n", &r.skipped_created_no_trash.to_string())],
+        )));
+    }
+    if let Some(b) = &r.blocked {
+        // El `seq` es una referencia OPACA: sirve para CITAR la entrada contra
+        // el journal del server, no para interpretarla aquí.
+        cuerpo.push(frase(norte_i18n::ta_in(
+            lang,
+            "modal-undo-blocked",
+            &[
+                ("seq", &b.seq.to_string()),
+                (
+                    "error",
+                    &norte_i18n::t_in(lang, crate::error::error_key(&b.error)),
+                ),
+            ],
+        )));
+    }
+    if let Some(paso) = &r.batch_stuck {
+        cuerpo.push(frase(norte_i18n::t_in(lang, "modal-undo-batch-stuck")));
+        cuerpo.push(ReportLine::Path(paso.to.clone()));
+    }
+    if r.compensations_lost > 0 {
+        cuerpo.push(frase(norte_i18n::ta_in(
+            lang,
+            "modal-batch-compensations-lost",
+            &[("n", &r.compensations_lost.to_string())],
+        )));
+    }
+    if r.denied_total > 0 {
+        cuerpo.push(frase(norte_i18n::ta_in(
+            lang,
+            "modal-undo-denied",
+            &[("n", &r.denied_total.to_string())],
+        )));
+    }
+    cuerpo
+}
+
 #[cfg(test)]
 mod batch_report_tests {
-    use super::{BatchReportLine, batch_report_is_clean, batch_report_lines};
+    use super::{ReportLine, batch_report_is_clean, batch_report_lines};
     use norte_proto::VPath;
     use norte_proto::methods::{FsRenameBatchReportResult, RenameStuckStep};
 
@@ -768,8 +843,8 @@ mod batch_report_tests {
         let rutas: Vec<_> = lineas
             .iter()
             .filter_map(|l| match l {
-                BatchReportLine::Path(p) => Some(p.clone()),
-                BatchReportLine::Phrase(_) => None,
+                ReportLine::Path(p) => Some(p.clone()),
+                ReportLine::Phrase(_) => None,
             })
             .collect();
         assert_eq!(
@@ -782,7 +857,7 @@ mod batch_report_tests {
         assert!(
             lineas
                 .iter()
-                .any(|l| matches!(l, BatchReportLine::Phrase(t) if t.contains("compensations"))),
+                .any(|l| matches!(l, ReportLine::Phrase(t) if t.contains("compensations"))),
             "las compensaciones perdidas se dicen: {lineas:?}"
         );
     }
