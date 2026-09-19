@@ -954,7 +954,7 @@ impl Daemon {
         // «no se lee» acababa siendo «se pisa un segundo después», que es
         // justo lo contrario de lo que promete.
         let session_writer = cfg.state_dir.map(|dir| {
-            SessionWriter(Some(tokio::spawn(session_writer(
+            SessionWriter(Some(crate::blocking::spawn(session_writer(
                 Arc::clone(&shared.ui_session),
                 dir,
                 session_flush,
@@ -1666,7 +1666,9 @@ fn peer_allowed(peer_uid: u32, daemon_uid: u32) -> bool {
 }
 
 fn spawn_connection(stream: UnixStream, shared: Arc<Shared>) {
-    tokio::spawn(async move {
+    // RAÍZ: cada `rpc` de esta conexión es raíz (ADR 0127). Heredando, colgarían
+    // todos de `run`, el span de la vida entera del daemon.
+    crate::blocking::spawn_raiz(async move {
         // Auth ANTES de leer un solo byte (ADR 0011).
         let peer = match stream.peer_cred() {
             Ok(cred) => cred,
@@ -2108,7 +2110,7 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
     // BOUNDED: jamás dos frames entrelazados y jamás memoria sin límite
     // por un cliente que no lee (M1 del security-reviewer).
     let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(OUTBOX_FRAMES);
-    let writer_task = tokio::spawn(async move {
+    let writer_task = crate::blocking::spawn(async move {
         while let Some(frame) = rx.recv().await {
             if writer.write_all(&frame).await.is_err() {
                 break;
@@ -2126,7 +2128,7 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
     // frames = orden de ejecución); solo cambia QUIÉN lee.
     let peer_gone = CancellationToken::new();
     let (inbox_tx, mut inbox_rx) = mpsc::channel::<serde_json::Value>(INBOX_FRAMES);
-    let reader_task = tokio::spawn(read_frames(
+    let reader_task = crate::blocking::spawn(read_frames(
         reader,
         tx.clone(),
         inbox_tx,
@@ -5324,7 +5326,7 @@ async fn handle_fs_compare(
     // con el que compara filas recibidas contra `entries_done`, que es la
     // única forma que tiene de saber que la comparación le llegó entera.
     let feed = shared_pump.feed_guard(conn_id);
-    tokio::spawn(async move {
+    crate::blocking::spawn(async move {
         let _feed = feed;
         while let Some(rows) = rx.recv().await {
             let notif = Notification {
@@ -5465,7 +5467,7 @@ async fn handle_sync_plan(
     // mismo mecanismo, y arreglarlo en dos de tres bombas es dejarlo a medias.
     let shared_pump = Arc::clone(shared);
     let feed = shared_pump.feed_guard(conn_id);
-    tokio::spawn(async move {
+    crate::blocking::spawn(async move {
         let _feed = feed;
         while let Some(event) = rx.recv().await {
             let (method, params) = match event {
@@ -5675,7 +5677,7 @@ async fn handle_fs_search(
     // pierde frames, jamás la suscripción.
     let feed = shared_pump.feed_guard(conn_id);
 
-    tokio::spawn(async move {
+    crate::blocking::spawn(async move {
         let _feed = feed;
         while let Some(hits) = rx.recv().await {
             let notif = Notification {
@@ -6485,7 +6487,7 @@ fn register_task_id(
     }
 
     let shared_pump = Arc::clone(shared);
-    tokio::spawn(async move {
+    crate::blocking::spawn(async move {
         loop {
             let snapshot = progress.borrow_and_update().clone();
             let terminal = snapshot.state.is_terminal();

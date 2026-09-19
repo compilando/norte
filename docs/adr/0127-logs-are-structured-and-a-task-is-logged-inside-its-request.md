@@ -128,11 +128,21 @@ followed by an exit through `anyhow`. A library never ends the process.
     (M2 in `plugin_provider.rs`) it is never, alongside the thread already
     leaked there. Both are what the events inside mean, so the span is
     right; it is just open longer.
-  - **Still open:** `tokio::spawn` (and `blocking_with_deadline`'s
-    `std::thread::spawn` in `norte-vfs`) do not carry the span. The one
-    named here before, the hook dispatcher in `hooks.rs`, is not a gap: it
-    is a long-lived loop started with the daemon that serves every task, so
-    there is no single `task` for it to hang from.
+  - **`tokio::spawn` is closed too** (2026-09-19), with TWO doors in
+    `norte-core`'s `crate::blocking`: `spawn`, which carries the caller's
+    span, and `spawn_raiz`, which deliberately starts a new root. The roots
+    are two, each with its reason written where it is called: a daemon
+    CONNECTION (every `rpc` is a root; inheriting, every request of months
+    would hang from `run`, the daemon's lifetime span) and the scheduler's
+    RUNNER (it does not necessarily run the job whose `submit` spawned it).
+    A source test (`tests/spans_en_spawn.rs`) forbids a bare `tokio::spawn`
+    in the crate's code outside that module; clippy cannot, because the
+    integration tests use it everywhere.
+  - **Not done, on purpose:** `blocking_with_deadline`'s `std::thread::spawn`
+    in `norte-vfs`. Every closure passed to it is a bare syscall (`statfs`,
+    an `ioctl`, the mount table) that logs nothing, so there is no event to
+    orphan, and carrying a span would add `tracing` to a crate that has no
+    other use for it. Revisit if a caller ever logs inside one.
 - Bad: a `task` holds its parent `rpc` open until the task ends. A layer
   that timed spans on close would report a request as lasting as long as its
   longest task.

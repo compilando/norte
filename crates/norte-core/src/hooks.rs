@@ -307,7 +307,7 @@ pub fn spawn_dispatcher(
         dropped_since: Arc::new(AtomicU64::new(0)),
     };
     let dropped_since = Arc::clone(&sender.dropped_since);
-    let task = tokio::spawn(async move {
+    let task = crate::blocking::spawn(async move {
         let state = Arc::new(Mutex::new(State::default()));
         // Los plugins YA consentidos al arrancar reciben todo lo que llegue:
         // su aprobación es anterior a este proceso. Los que se aprueben

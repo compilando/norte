@@ -27,7 +27,7 @@ impl Backend {
                 // no sobrevive a la conexión que lo alimentaba.
                 let mut origen = r.take_foreign_tasks()?;
                 let (tx, rx) = mpsc::unbounded_channel();
-                tokio::spawn(async move {
+                crate::blocking::spawn(async move {
                     while let Some(t) = origen.recv().await {
                         if tx.send(TaskRef::from(t)).is_err() {
                             break;
@@ -169,7 +169,7 @@ impl Backend {
                 // la del receptor (`is_closed`), y el proceso que lo hospeda
                 // termina con él.
                 let engine = Arc::clone(engine);
-                tokio::spawn(async move {
+                crate::blocking::spawn(async move {
                     // Las reglas del humano valen también aquí (ADR 0101): el
                     // engine embebido no lleva gate, así que el despachador
                     // las mira para el actor `plugin`. Un fichero ilegible se

@@ -389,7 +389,7 @@ fn contar_el_fallo(
 }
 
 fn spawn_dial_job(job: DialJob) {
-    tokio::spawn(async move {
+    crate::blocking::spawn(async move {
         let dialed: Option<Result<crate::connect::Connected, crate::connect::DialError>> = tokio::select! {
             () = job.cancel.cancelled() => None,
             r = tokio::time::timeout(
