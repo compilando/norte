@@ -245,8 +245,12 @@ impl Scheduler {
         }
 
         // Un runner por submit; CUÁL job corre lo decide el heap (prioridad).
+        //
+        // RAÍZ (ADR 0127): el runner NO debe heredar el span de este
+        // `submit`, porque no corre necesariamente el job que este `submit`
+        // empujó. Cada job trae su propio span y se instrumenta con él abajo.
         let runner_queue = Arc::clone(&queue);
-        tokio::spawn(async move {
+        crate::blocking::spawn_raiz(async move {
             let _permit = runner_queue
                 .sem
                 .acquire()
