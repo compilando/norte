@@ -536,6 +536,33 @@ pub trait HostBackend: Send + Sync + 'static {
     /// que paró a mitad— se dice ahí y no en el desenlace de la Task.
     fn undo_session(&self, session: String) -> BoxFuture<'static, Result<HostTask, Error>>;
 
+    /// Una página del journal hacia atrás (`journal.list`, fase 7), para la
+    /// línea de tiempo (#359). `before_seq` es el cursor de la página
+    /// anterior; `None` pide la más nueva.
+    ///
+    /// Un daemon sin journal —o que no conoce el método— contesta
+    /// `Unsupported`, y eso se DICE: un panel vacío se lee como «no has hecho
+    /// nada».
+    fn journal_list(
+        &self,
+        before_seq: Option<i64>,
+        limit: u32,
+    ) -> BoxFuture<'static, Result<methods::JournalListResult, Error>>;
+
+    /// Deshace lo del HUMANO posterior a `seq` (`journal.undo_after`, fase 7).
+    /// La entrada señalada se queda.
+    ///
+    /// Es el mismo undo que [`Self::undo_session`] con otro criterio de
+    /// selección: una Task, con su progreso, su cancelación y su informe.
+    ///
+    /// `upto_seq` es el techo (0.80.0): lo más nuevo que el humano vio
+    /// contado. Nada por encima se deshace.
+    fn undo_after(
+        &self,
+        seq: i64,
+        upto_seq: Option<i64>,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
     /// Mueve UNA entrada a un destino EXACTO. Mismas reglas que
     /// [`Self::copy`].
     ///
@@ -1536,6 +1563,33 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::PolicyUndoReportResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.undo_report(task_id).await })
+    }
+
+    fn journal_list(
+        &self,
+        before_seq: Option<i64>,
+        limit: u32,
+    ) -> BoxFuture<'static, Result<methods::JournalListResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.journal_list(before_seq, limit, None).await })
+    }
+
+    fn undo_after(
+        &self,
+        seq: i64,
+        upto_seq: Option<i64>,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.undo_after(seq, upto_seq).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
     }
 
     fn archive_pack_report(

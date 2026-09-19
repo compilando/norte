@@ -409,7 +409,16 @@ use serde::{Deserialize, Serialize};
 /// - 76: `HelpView::scroll`, la petición de desplazar el cuerpo de la ayuda.
 ///   Las teclas que desplazan pasan por el keymap del lector en el host; antes
 ///   el renderer las atendía como teclas fijas y un reatado no llegaba.
-pub const BRIDGE_VERSION: u32 = 76;
+/// - 77: «ir a cualquier sitio» (#357): `ViewSnapshot::goto` y
+///   `ViewChange::Goto` con `GotoView` —consulta, líneas (cabecera de sección
+///   o fila, cada fila con su `hostile`), cursor y el texto de vacío—. Las
+///   secciones de conexiones y del índice llegan en un parche aparte cuando
+///   contestan, sin mover el cursor.
+/// - 78: la línea de tiempo del journal (#359): `SlotView::Timeline` con
+///   `TimelineSlotView` —filas ya pintables (hora, actor para el color,
+///   verbo, ruta con su `hostile`, cola traducida), cursor, texto de vacío y
+///   el pie con lo que se llevaría un `Enter`—. Un lote es UNA fila.
+pub const BRIDGE_VERSION: u32 = 78;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

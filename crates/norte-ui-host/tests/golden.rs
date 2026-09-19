@@ -1271,6 +1271,34 @@ fn slots_de_referencia() -> Vec<SlotView> {
             viewer: None,
             note: "directorio".to_owned(),
         })),
+        // La línea de tiempo (#359, puente 78): una fila del humano y un lote
+        // de agente sin vuelta con el nombre enmascarado, porque el renderer
+        // pinta las dos distinto.
+        SlotView::Timeline(Box::new(norte_ui_host::dto::TimelineSlotView {
+            slot_id: 14,
+            title: "Línea de tiempo".to_owned(),
+            rows: vec![
+                norte_ui_host::dto::TimelineRowView {
+                    time: "12:00".to_owned(),
+                    actor: "user".to_owned(),
+                    op: "renamed".to_owned(),
+                    path: "/casa/a.txt".to_owned(),
+                    hostile: false,
+                    tail: String::new(),
+                },
+                norte_ui_host::dto::TimelineRowView {
+                    time: "11:58".to_owned(),
+                    actor: "agent".to_owned(),
+                    op: "removed".to_owned(),
+                    path: "/casa/caf\u{fffd}".to_owned(),
+                    hostile: true,
+                    tail: "3 de golpe · sin vuelta".to_owned(),
+                },
+            ],
+            cursor: Some(1),
+            empty: "todavía no se ha hecho nada".to_owned(),
+            footer: "1 entradas se deshacen".to_owned(),
+        })),
         // El panel de un PLUGIN (fase 3): tramos con estilo y zonas SIN su
         // comando — el renderer dice dónde se pulsó y el host resuelve qué
         // era, así que por el cable no viaja nada ejecutable.
@@ -1312,6 +1340,32 @@ fn slots_de_referencia() -> Vec<SlotView> {
             kind_name_hostile: false,
         },
     ]
+}
+
+/// «Ir a» (puente 77): una cabecera y dos filas, una de ellas marcada como
+/// hostil, porque el renderer pinta las tres distinto.
+fn ir_a_de_referencia() -> norte_ui_host::dto::GotoView {
+    use norte_ui_host::dto::GotoLineView;
+    norte_ui_host::dto::GotoView {
+        query: "doc".to_owned(),
+        lines: vec![
+            GotoLineView::Header {
+                title: "Historia".to_owned(),
+            },
+            GotoLineView::Row {
+                text: "/home/ana/docs".to_owned(),
+                desc: String::new(),
+                hostile: false,
+            },
+            GotoLineView::Row {
+                text: "caf\u{fffd}".to_owned(),
+                desc: "/srv/caf\u{fffd}".to_owned(),
+                hostile: true,
+            },
+        ],
+        cursor: Some(1),
+        empty: "nada casa con eso".to_owned(),
+    }
 }
 
 /// El selector de perfiles: uno activo y otro que no carga, porque las dos
@@ -1471,6 +1525,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
             cursor: Some(0),
             total: 42,
         }),
+        goto: Some(ir_a_de_referencia()),
         whichkey: Some(norte_ui_host::dto::WhichKeyView {
             title: "ctrl+x".to_owned(),
             rows: vec![
@@ -2502,6 +2557,12 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
+            "goto",
+            ViewChange::Goto {
+                goto: Some(ir_a_de_referencia()),
+            },
+        ),
+        (
             "which_key",
             ViewChange::WhichKey {
                 whichkey: Some(norte_ui_host::dto::WhichKeyView {
@@ -2643,7 +2704,9 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // Puente 74: `MenuItemView.section` y `.role` (ADR 0125).
     // Puente 75: `HelpSpanView::Link.action`, la fila que sigue el enlace.
     // Puente 76: `HelpView.scroll`, la petición de desplazar el cuerpo.
-    const FORMA: u64 = 8_530_096_040_792_592_060;
+    // Puente 77: `GotoView` («ir a», #357) en la foto y en su cambio.
+    // Puente 78: `SlotView::Timeline` (la línea de tiempo, #359).
+    const FORMA: u64 = 7_846_945_752_170_644_590;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

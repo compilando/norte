@@ -54,6 +54,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const aiRenameEl = doc.getElementById("ai-rename");
   const organizeEl = doc.getElementById("organize");
   const splashEl = doc.getElementById("splash");
+  const gotoEl = doc.getElementById("goto");
   const fatalEl = doc.getElementById("fatal");
   if (
     screenEl === null ||
@@ -80,6 +81,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     aiRenameEl === null ||
     organizeEl === null ||
     splashEl === null ||
+    gotoEl === null ||
     fatalEl === null
   ) {
     throw new Error("el documento no tiene los anclajes del renderer");
@@ -161,6 +163,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     aiRenameEl,
     organizeEl,
     splashEl,
+    gotoEl,
     catalog,
     send,
     () => port.imageBytes(),

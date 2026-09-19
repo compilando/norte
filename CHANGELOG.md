@@ -9,6 +9,27 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window paints the journal timeline** (#359). Its button was already
+  in the panel bar and opened a slot the window could not draw. It now
+  lists what has been done on this machine, newest first, with a batch as
+  one row. The arrows move through it, and Enter asks before undoing back
+  to that row, saying how many entries will be undone, skipped, or left
+  alone because they are not yours. The counts, the cut and the grouping
+  are the terminal's own, from the shared model.
+- **«Undo back to here» never undoes more than it counted** (protocol
+  0.80.0). The timeline counted what it had loaded, and the undo went on to
+  whatever was done after the list was painted: with the panel open, the
+  dialog could promise three and undo five. `journal.undo_after` now takes
+  an optional ceiling, `upto_seq`, and both frontends send the newest entry
+  they counted. An older daemon ignores it and behaves as before. The
+  timeline also reloads, keeping its cursor, whenever a task finishes.
+- **The window has «go anywhere»** (#357, `ctrl+g` in the default keys).
+  It is the same screen the terminal has: type a path, or pick from the
+  panel's history, the places you return to, bookmarks, connections,
+  commands, and what the semantic index finds. Both frontends now build the
+  rows and decide where Enter takes you with the same code, so the same row
+  leads to the same place in both.
+
 - **Structured logs** (ADR 0127). `[log] format = "json"` writes the log file
   as one JSON object per line, with the event's fields and the spans it
   happened in. The default stays `text`, and stderr is always text. Every

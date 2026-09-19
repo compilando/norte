@@ -808,7 +808,7 @@ mod tests {
     #[test]
     fn el_informe_de_lote_solo_se_cierra() {
         let m = Modal::Report {
-            title_key: crate::app::BATCH_REPORT_TITLE,
+            kind: crate::app::ReportKind::Batch,
             lines: Vec::new(),
         };
         for cmd in [

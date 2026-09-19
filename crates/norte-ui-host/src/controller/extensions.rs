@@ -132,6 +132,17 @@ impl Estado {
             Fondo::Conexiones(apertura, res) => {
                 self.aplicar_conexiones(apertura, res).into_iter().collect()
             }
+            Fondo::PaginaDeLinea(slot, token, desde, res) => self
+                .aterrizar_pagina(slot, token, desde, res)
+                .into_iter()
+                .collect(),
+            Fondo::ConexionesDeIrA(apertura, res) => {
+                self.conexiones_de_ir_a(apertura, res).into_iter().collect()
+            }
+            Fondo::IndiceDeIrA(apertura, consulta, res) => self
+                .indice_de_ir_a(apertura, &consulta, res)
+                .into_iter()
+                .collect(),
             Fondo::Desconectada(slot, res, destino) => {
                 self.aplicar_desconexion(slot, res, &destino, backend, buzon)
             }

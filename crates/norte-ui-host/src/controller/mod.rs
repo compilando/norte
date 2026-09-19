@@ -47,6 +47,7 @@ mod effects;
 mod extensions;
 mod fileops;
 mod gestures;
+mod goto;
 mod help;
 mod input;
 mod layout;
@@ -71,6 +72,7 @@ mod sums;
 mod sync;
 mod tabs;
 mod tasks;
+mod timeline;
 mod transfer;
 mod tree;
 mod viewer;
@@ -1000,6 +1002,28 @@ enum Fondo {
     /// Los volúmenes del host, con la APERTURA del selector que los pidió.
     /// Ver [`Fondo::Catalogo`].
     Volumenes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// Una página de la línea de tiempo (#359): el hueco, el testigo de la
+    /// petición y desde dónde se pidió (`None` = la primera).
+    PaginaDeLinea(
+        u32,
+        RequestToken,
+        Option<i64>,
+        Result<norte_proto::methods::JournalListResult, Error>,
+    ),
+    /// Las conexiones para «ir a» (#357), con la APERTURA que las pidió: una
+    /// respuesta de una apertura anterior no rellena la de ahora.
+    ConexionesDeIrA(
+        u64,
+        Result<Vec<norte_proto::methods::ConnectionEntry>, Error>,
+    ),
+    /// Lo que contestó el índice a una consulta de «ir a» (#357): la apertura
+    /// y la consulta que se preguntaron, para tirar la respuesta si ya no es
+    /// lo que hay escrito.
+    IndiceDeIrA(
+        u64,
+        String,
+        Result<Vec<norte_proto::methods::SemanticHit>, Error>,
+    ),
     /// Las conexiones configuradas, con la APERTURA que las pidió (#264).
     Conexiones(
         u64,
@@ -1575,6 +1599,9 @@ async fn actor(
         for u in estado.sondear_mapas(&backend, &buzon) {
             let _ = updates.send(u);
         }
+        // Y la línea de tiempo (#359): la primera página cuando aparece su
+        // hueco, y la siguiente cuando el cursor llega abajo.
+        estado.sondear_lineas(&backend, &buzon);
         // Y la hoja de atributos, por lo MISMO y en el mismo sitio: también
         // sigue al cursor y tampoco tiene otro camino hasta el renderer. Va
         // después del visor para que, cuando los dos cambian a la vez, la
@@ -2204,6 +2231,15 @@ enum Pendiente {
         /// La clave OPACA con la que el core la resuelve, cruda.
         sesion: String,
     },
+    /// Deshacer lo del humano POSTERIOR a un punto de la línea de tiempo
+    /// (#359, `journal.undo_after`). La fila señalada se queda.
+    DeshacerHasta {
+        /// El corte: el `seq` más nuevo de la fila señalada.
+        seq: i64,
+        /// El techo: lo más nuevo que el recuento contó (`upto_seq`). Se
+        /// congela al PREGUNTAR, como los operandos de cualquier diálogo.
+        techo: Option<i64>,
+    },
     /// Conceder las capabilities de una extensión.
     ///
     /// Es la única de las cuatro operaciones del gestor que PREGUNTA:
@@ -2439,6 +2475,16 @@ struct Estado {
     /// Es un contexto de entrada más, como el buscador incremental y el
     /// visor: mientras esté abierta, las teclas de texto son suyas.
     paleta: Option<norte_frontend::palette_state::Palette>,
+    /// «Ir a cualquier sitio», si está abierto (#357). Otro contexto de
+    /// entrada con texto libre, como la paleta.
+    ir_a: Option<norte_frontend::goto::Goto>,
+    /// Cuántas veces se ha abierto «ir a»: las conexiones y el índice que
+    /// contesten a una apertura anterior se tiran.
+    gen_ir_a: u64,
+    /// La pregunta al índice en vuelo, si la hay. Cada tecla la ABORTA y
+    /// lanza otra: escribir deprisa no deja tres preguntas vivas contra un
+    /// proveedor que cuesta tiempo y puede costar dinero.
+    ir_a_indice: Option<tokio::task::JoinHandle<()>>,
     /// El asistente de primer arranque (spec 2026-09-10), mientras está
     /// abierto. Un overlay más: se queda las teclas.
     asistente: Option<norte_frontend::wizard::Wizard>,
@@ -2609,6 +2655,8 @@ struct Estado {
     /// usa el terminal: qué directorio describe, lo medido y cuál es el hijo
     /// elegido. Una decisión escrita dos veces diverge en silencio (ADR 0077).
     mapas: std::collections::BTreeMap<u32, diskmap::EstadoMapa>,
+    /// La línea de tiempo de cada hueco que la tiene (#359).
+    lineas: std::collections::BTreeMap<u32, timeline::EstadoLinea>,
     /// Lo ÚLTIMO que se mandó de cada hoja de atributos, por hueco.
     ///
     /// La hoja no pide nada y se calcula entera del listado, así que no tiene
@@ -3102,6 +3150,9 @@ impl Estado {
             token: 0,
             locale,
             paleta: None,
+            ir_a: None,
+            gen_ir_a: 0,
+            ir_a_indice: None,
             asistente: None,
             splash: None,
             splash_hasta_ms: None,
@@ -3141,6 +3192,7 @@ impl Estado {
             previews: std::collections::BTreeMap::new(),
             paneles: std::collections::BTreeMap::new(),
             mapas: std::collections::BTreeMap::new(),
+            lineas: std::collections::BTreeMap::new(),
             hojas: std::collections::BTreeMap::new(),
             gen_sitios: 0,
             ramas: None,

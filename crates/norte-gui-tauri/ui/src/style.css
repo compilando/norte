@@ -991,7 +991,8 @@ body {
   color: var(--selection-fg);
 }
 
-#palette[data-open="true"] {
+#palette[data-open="true"],
+#goto[data-open="true"] {
   position: fixed;
   inset: 0;
   display: flex;
@@ -1001,8 +1002,20 @@ body {
   background: rgb(0 0 0 / 45%);
 }
 
-#palette[data-open="false"] {
+#palette[data-open="false"],
+#goto[data-open="false"] {
   display: none;
+}
+
+/* «Ir a» (#357): la cabecera de cada sección. No es una fila: no se elige, y
+   se lee como el título de lo que hay debajo. */
+.goto-header {
+  padding: 0.35em 0.75em 0.15em;
+  font-size: 0.85em;
+  font-weight: 600;
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .palette {
@@ -3030,6 +3043,64 @@ body {
   flex: 1 1 auto;
   overflow: hidden;
   padding: 2px 6px;
+}
+
+/* La línea de tiempo del journal (#359): una fila por mutación, con el punto
+   del color de QUIÉN la hizo. */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.timeline-rows {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  margin: 0;
+  padding: 2px 6px;
+  list-style: none;
+}
+
+.timeline-row {
+  display: flex;
+  gap: 0.5ch;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.timeline-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.timeline-time,
+.timeline-tail {
+  color: var(--muted, var(--title-fg));
+}
+
+.timeline-dot[data-actor="user"] {
+  color: var(--fg);
+}
+
+.timeline-dot[data-actor="agent"] {
+  color: var(--warning-fg);
+}
+
+.timeline-dot[data-actor="other"] {
+  color: var(--info-fg);
+}
+
+.timeline-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.timeline-footer {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: var(--info-fg);
+  border-top: 1px solid var(--border);
 }
 
 /* `relative` porque las zonas pulsables se colocan ENCIMA de su fila, por

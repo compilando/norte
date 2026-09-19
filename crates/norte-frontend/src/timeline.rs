@@ -221,10 +221,11 @@ impl Timeline {
     /// Qué se va a llevar ese corte, contando las filas MÁS NUEVAS que la
     /// señalada.
     ///
-    /// Se cuenta sobre lo cargado y eso basta: se pagina hacia atrás desde
-    /// lo más nuevo, así que todo lo posterior al cursor está por
-    /// definición ya en memoria. Lo que puede faltar es lo de más abajo, que
-    /// un corte aquí no toca.
+    /// Se cuenta sobre lo cargado, y eso basta SOLO si el undo no pasa de lo
+    /// cargado: lo que se hizo después de pintar la lista no está aquí. Por
+    /// eso quien pide el undo manda también [`Self::techo`] (`upto_seq`,
+    /// 0.80.0), y el core no deshace nada más nuevo. Lo de más abajo del
+    /// cursor, que puede no estar cargado, un corte aquí no lo toca.
     #[must_use]
     pub fn resumen(&self) -> Corte {
         let mut c = Corte::default();
@@ -238,6 +239,16 @@ impl Timeline {
             }
         }
         c
+    }
+
+    /// El TECHO de un undo desde esta lista: el `seq` más nuevo que se ha
+    /// cargado, y por tanto lo más nuevo que [`Self::resumen`] ha podido
+    /// contar. Va como `upto_seq` en `journal.undo_after`: sin él, lo que se
+    /// hizo después de pintar la lista entraría en el undo sin haberse
+    /// contado.
+    #[must_use]
+    pub fn techo(&self) -> Option<i64> {
+        self.rows.first().map(|r| r.seq)
     }
 
     /// El cursor para pedir la página siguiente (más vieja), o `None` si ya

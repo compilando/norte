@@ -1229,7 +1229,9 @@ fn golden_methods() {
     // único que separa este plan del de renombrar— y el resultado va DOS
     // veces, con plan y con `refused`, porque la regla del receptor («con
     // motivo, el plan no cuenta») no la congela nadie si sólo se escribe una.
-    assert_eq!(fixtures.len(), 231, "[methods.json] fixtures sin caso Rust");
+    // 231 → 232 en 0.80.0: `journal.undo_after` con techo. La de sin techo se
+    // queda: es la que demuestra que el wire de 0.79 no cambió.
+    assert_eq!(fixtures.len(), 232, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -1442,7 +1444,19 @@ fn check_methods_journal(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
         "journal_undo_after_params",
-        &JournalUndoAfterParams { seq: 4_096 },
+        // Sin techo: el wire de 0.79, que no cambia.
+        &JournalUndoAfterParams {
+            seq: 4_096,
+            upto_seq: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "journal_undo_after_params_con_techo",
+        &JournalUndoAfterParams {
+            seq: 4_096,
+            upto_seq: Some(4_200),
+        },
     );
 }
 
@@ -4862,7 +4876,8 @@ fn method_names_frozen() {
     assert_eq!(methods::SESSION_RELEASE, "session.release");
     // 0.79.0: ningún método nuevo — `policy.undo_report` contesta `NotFound`
     // de la taxonomía a un id que no conoce, como `fs.rename_batch_report`.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.79.0");
+    // 0.80.0: `journal.undo_after` gana el techo opcional `upto_seq`.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.80.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

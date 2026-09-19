@@ -100,6 +100,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.processes",
     "layout.log",
     "layout.disk-map",
+    "layout.timeline",
     "layout.metadata",
     "layout.preview",
     "pane.tree",
@@ -120,6 +121,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.tab-goto-9",
     "pane.columns",
     "app.palette",
+    "app.goto",
     "app.help",
     "app.settings",
     "app.extensions",
@@ -416,6 +418,8 @@ pub enum Efecto {
     Columnas,
     /// Abre la paleta de comandos.
     Paleta,
+    /// Abre «ir a cualquier sitio» (#357).
+    IrA,
     /// Abre los ajustes: se leen, se giran y se escriben.
     Ajustes,
     /// Abre el gestor de extensiones, en solo lectura.
@@ -794,6 +798,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.processes" => Efecto::AlternarHueco { kind: "processes" },
         "layout.log" => Efecto::AlternarHueco { kind: "log" },
         "layout.disk-map" => Efecto::AlternarHueco { kind: "disk-map" },
+        "layout.timeline" => Efecto::AlternarHueco { kind: "timeline" },
         // El último de los siete de la ADR 0058 (#291): el visor acoplado.
         "layout.preview" => Efecto::AlternarHueco { kind: "viewer" },
         "pane.tree" => Efecto::AlternarHueco { kind: "tree" },
@@ -823,6 +828,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         // que tomó el TUI.
         "pane.columns" | "pane.sort-menu" => Efecto::Columnas,
         "app.palette" => Efecto::Paleta,
+        "app.goto" => Efecto::IrA,
         "app.help" => Efecto::Ayuda,
         "app.settings" => Efecto::Ajustes,
         "app.quit" => Efecto::Salir,

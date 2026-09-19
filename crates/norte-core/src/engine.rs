@@ -4311,6 +4311,11 @@ impl Engine {
     /// corte. El porqué, con la forma de la consulta, está sobre
     /// `SELECT_REVERTIBLE_AFTER`.
     ///
+    /// `upto_seq` es el TECHO (0.80.0): nada con `seq` mayor se deshace. Es lo
+    /// más nuevo que el humano tenía contado delante; sin él, lo que se hizo
+    /// después de pintar la línea de tiempo entraba en un undo que no lo
+    /// había contado. `None` = sin techo.
+    ///
     /// # Errors
     /// Las de [`Self::undo_session_for`], y [`Error::NotFound`] si `seq` no
     /// nombra ninguna entrada — un corte que no existe no se interpreta como
@@ -4321,6 +4326,7 @@ impl Engine {
     pub async fn undo_after(
         &self,
         after_seq: i64,
+        upto_seq: Option<i64>,
     ) -> Result<(TaskHandle, Arc<std::sync::Mutex<crate::UndoReport>>), Error> {
         self.journal_gate().await?;
         let journal = self.journal().await.ok_or(Error::Unsupported)?;
@@ -4344,7 +4350,7 @@ impl Engine {
         }
         let entries = journal
             .journal()
-            .revertible_for_after(&crate::journal::Actor::User, after_seq)
+            .revertible_for_after(&crate::journal::Actor::User, after_seq, upto_seq)
             .await
             .map_err(Error::from)?;
         self.undo_entries(entries, crate::journal::Actor::User)

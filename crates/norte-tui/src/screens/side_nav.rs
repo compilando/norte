@@ -246,6 +246,8 @@ pub async fn on_timeline_key(
                 a_deshacer: resumen.a_deshacer,
                 irreversibles: resumen.irreversibles,
                 ajenas: resumen.ajenas,
+                // Congelado AHORA, con el recuento que se va a enseñar.
+                techo: tl.techo(),
             });
         }
         _ => {}

@@ -94,6 +94,9 @@ impl Estado {
                 Some(super::diskmap::KIND) => {
                     slots.push(SlotView::DiskMap(Box::new(self.vista_de_mapa(id))));
                 }
+                Some(super::timeline::KIND) => {
+                    slots.push(SlotView::Timeline(Box::new(self.vista_de_linea(id))));
+                }
                 Some("processes") => slots.push(SlotView::Processes {
                     slot_id: id,
                     // Índice sobre las filas PINTADAS, que es lo que el
@@ -147,6 +150,7 @@ impl Estado {
             key_bar: self.vista_barra_de_teclas(),
             profiles: self.vista_perfiles(),
             palette: self.vista_paleta(),
+            goto: self.vista_ir_a(),
             wizard: self.vista_asistente(),
             splash: self.vista_splash(),
             whichkey: self.vista_whichkey(),

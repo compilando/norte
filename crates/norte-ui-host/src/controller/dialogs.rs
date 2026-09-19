@@ -362,6 +362,9 @@ impl Estado {
                 rehusado = motivo;
                 salidas.extend(partes);
             }
+            Some(Pendiente::DeshacerHasta { seq, techo }) => {
+                salidas.extend(self.deshacer_hasta(seq, techo, backend, buzon));
+            }
             Some(Pendiente::AprobarExtension {
                 id,
                 capabilities,

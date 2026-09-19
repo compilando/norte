@@ -127,7 +127,8 @@ fn vista_de(snap: &ViewSnapshot, kind: &str) -> Option<SlotView> {
             | ("processes", SlotView::Processes { .. })
             | ("log", SlotView::Log(_))
             | ("viewer", SlotView::Preview(_))
-            | ("disk-map", SlotView::DiskMap(_)) => true,
+            | ("disk-map", SlotView::DiskMap(_))
+            | ("timeline", SlotView::Timeline(_)) => true,
             (_, SlotView::Unsupported { kind_name, .. }) => kind_name == kind,
             _ => false,
         })

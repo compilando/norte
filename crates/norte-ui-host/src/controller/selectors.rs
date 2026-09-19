@@ -1098,6 +1098,9 @@ impl Estado {
         if matches!(ev, norte_client::ConnEvent::Restored) {
             self.aviso_de_daemon = None;
             self.epoca_conexion = self.epoca_conexion.saturating_add(1);
+            // «Ir a» (#357): lo que conteste el daemon ANTERIOR —sus conexiones,
+            // su índice— ya no es de este. Una apertura nueva lo invalida.
+            self.gen_ir_a = self.gen_ir_a.saturating_add(1);
             // Un plan pedido al daemon ANTERIOR no lo va a contestar el
             // nuevo: su id empieza otra vez en 1, y dejar la petición colgada
             // haría que el panel se abriera con la Task de otro.

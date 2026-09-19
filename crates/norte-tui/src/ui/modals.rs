@@ -623,8 +623,8 @@ fn modal_title_text(
         // El pie es el de confirmar (Enter/Esc cierran, `dialog_action`): sin
         // él nada decía cómo salir, y sin su línea de botones el ratón no
         // tenía dónde pinchar.
-        Modal::Report { title_key, lines } => (
-            t(title_key),
+        Modal::Report { kind, lines } => (
+            t(kind.title_key()),
             format!("{}\n{}", report_text(lines), hints.confirm),
         ),
         Modal::ConfirmQuit => (

@@ -665,9 +665,9 @@ pub struct App {
     /// Informes a la espera de diálogo (de un lote de renombrado o de un
     /// undo), con la misma disciplina: lo que termina mientras se contesta
     /// otra cosa no le quita la pantalla, pero tampoco se pierde. Cada uno
-    /// con la clave de su título.
+    /// con su clase.
     pub pending_reports:
-        std::collections::VecDeque<(&'static str, Vec<norte_frontend::ReportLine>)>,
+        std::collections::VecDeque<(modal::ReportKind, Vec<norte_frontend::ReportLine>)>,
     /// Aprobaciones de policy a la espera de diálogo (M3-3b T5): misma
     /// disciplina que las colisiones (jamás pisar un modal abierto), pero con
     /// PRIORIDAD sobre ellas — una aprobación tiene TTL en el daemon y una

@@ -999,7 +999,16 @@ pub async fn cargar_timeline(app: &mut App, backend: &Backend, desde: Option<i64
         Ok(page) => {
             if let Some(t) = app.panes.timeline_mut(id) {
                 if desde.is_none() {
+                    // Una RELECTURA vuelve a la fila que tenía el cursor, si
+                    // sigue: releer con el panel abierto no puede mover al
+                    // lector de donde estaba.
+                    let volver_a = t.selected().map(|r| r.seq);
                     *t = norte_frontend::timeline::Timeline::new(&page.rows, page.next_before_seq);
+                    if let Some(seq) = volver_a
+                        && let Some(i) = t.rows().iter().position(|r| r.seq == seq)
+                    {
+                        t.set_cursor(i);
+                    }
                 } else {
                     t.extend(&page.rows, page.next_before_seq);
                 }

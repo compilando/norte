@@ -59,6 +59,9 @@ pub struct ViewSnapshot {
     pub profiles: Option<ProfilePickerView>,
     /// La paleta de comandos, si está abierta.
     pub palette: Option<PaletteView>,
+    /// «Ir a cualquier sitio», si está abierto (#357). Puente 77.
+    #[serde(default)]
+    pub goto: Option<GotoView>,
     /// El asistente de primer arranque (spec 2026-09-10), si está abierto.
     /// Puente 63.
     #[serde(default)]
@@ -330,6 +333,48 @@ pub struct PaletteView {
     pub cursor: Option<u64>,
     /// Cuántas filas hay en total, para decir cuánto se está acotando.
     pub total: u64,
+}
+
+/// «Ir a cualquier sitio» abierto (#357, puente 77): la ruta tecleada, la
+/// historia del panel, los populares, los favoritos, las conexiones, los
+/// comandos y lo que el índice semántico encontró, en SECCIONES.
+///
+/// Las secciones, su orden, el filtrado y el cursor los decide
+/// `norte_frontend::goto`, el mismo modelo que la TUI; el renderer pinta las
+/// líneas en orden y marca la del cursor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GotoView {
+    /// Lo tecleado, ya acotado para pintar.
+    pub query: String,
+    /// Las líneas en orden: cabeceras de sección y filas.
+    pub lines: Vec<GotoLineView>,
+    /// El índice, en `lines`, de la fila seleccionada. Nunca una cabecera.
+    pub cursor: Option<u64>,
+    /// Lo que se pinta cuando `lines` está vacío, ya traducido: «nada casa
+    /// con eso» no es lo mismo que una pantalla en blanco.
+    pub empty: String,
+}
+
+/// Una línea de «ir a».
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "line")]
+pub enum GotoLineView {
+    /// La cabecera de una sección, YA traducida. No recibe el cursor.
+    Header {
+        /// El título de la sección.
+        title: String,
+    },
+    /// Una fila a la que se puede ir.
+    Row {
+        /// Lo que se pinta, ya enmascarado si hacía falta.
+        text: String,
+        /// La segunda línea (la ruta de un favorito o una conexión, qué hace
+        /// un comando), o vacío.
+        desc: String,
+        /// Lo pintado DIFIERE de los bytes de origen. Viaja con la fila: esta
+        /// es una pantalla donde se elige a dónde ir.
+        hostile: bool,
+    },
 }
 
 /// El asistente de primer arranque (spec 2026-09-10, puente 63): un paso,
@@ -1774,6 +1819,13 @@ pub enum SlotView {
     /// en cuanto alguien toque un redondeo (ADR 0077). Lo que cruza son las
     /// líneas ya estiladas y sus zonas, igual que un panel de plugin.
     DiskMap(Box<DiskMapSlotView>),
+    /// La línea de tiempo del journal (fase 7, #359, puente 78): lo que se ha
+    /// hecho en esta máquina, de lo más nuevo a lo más viejo, con el cursor
+    /// sobre el punto al que se volvería.
+    ///
+    /// Las filas, cómo se agrupa un lote y qué se va a llevar un corte los
+    /// decide `norte_frontend::timeline`, el mismo modelo que la TUI.
+    Timeline(Box<TimelineSlotView>),
     /// Un hueco de un tipo que este host todavía no proyecta. Se enseña
     /// vacío y con su nombre: preservar lo que no se entiende es la regla de
     /// la sesión (ADR 0059), y desaparecer sería peor que estar en gris.
@@ -1861,6 +1913,46 @@ pub struct DiskMapSlotView {
     /// Viaja porque un mapa a medias sin decirlo se lee como un directorio
     /// pequeño, que es la respuesta equivocada y encima creíble.
     pub measuring: bool,
+}
+
+/// La línea de tiempo del journal (#359, puente 78).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineSlotView {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// El título del panel, ya traducido.
+    pub title: String,
+    /// Las filas, de la más nueva a la más vieja. Un lote es UNA fila.
+    pub rows: Vec<TimelineRowView>,
+    /// La fila con el cursor: el punto al que se volvería.
+    pub cursor: Option<u64>,
+    /// Lo que se dice cuando no hay filas, ya traducido: «todavía no se ha
+    /// hecho nada» sólo cuando se ha MIRADO, «cargando» antes, y el motivo
+    /// si no hay historial que enseñar. Un panel vacío sin explicación se lee
+    /// como «no has hecho nada», que es otra cosa.
+    pub empty: String,
+    /// Lo que se llevaría un `Enter` aquí, ya traducido; vacío sin filas. Es
+    /// el único número que importa antes de pulsar.
+    pub footer: String,
+}
+
+/// Una fila de la línea de tiempo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineRowView {
+    /// La hora, ya formateada.
+    pub time: String,
+    /// Quién: `user`, `agent`, `plugin`… Para el COLOR del punto: lo que
+    /// separa es «yo» de «algo en mi nombre».
+    pub actor: String,
+    /// El verbo.
+    pub op: String,
+    /// Sobre qué, como lo pintó el servidor (ya enmascarado).
+    pub path: String,
+    /// El servidor tuvo que enmascarar `path`.
+    pub hostile: bool,
+    /// Lo que la distingue, ya traducido: cuántas entradas trae si es un
+    /// lote, y si no tiene vuelta. Vacío si nada.
+    pub tail: String,
 }
 
 /// Una zona pulsable de un panel de plugin: dónde está, y nada más.
@@ -3312,6 +3404,12 @@ pub enum ViewChange {
     Palette {
         /// La paleta, o `None` si se cerró.
         palette: Option<PaletteView>,
+    },
+    /// «Ir a cualquier sitio» se abrió, se filtró, se movió, recibió una
+    /// sección tardía (conexiones, índice) o se cerró (#357, puente 77).
+    Goto {
+        /// La pantalla, o `None` si se cerró.
+        goto: Option<GotoView>,
     },
     /// La pantalla de arranque se puso o se quitó (puente 69).
     Splash {

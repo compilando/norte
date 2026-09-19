@@ -269,7 +269,7 @@ async fn guion(b: &Backend, mem: &MemProvider) -> Vec<String> {
     assert!(!diario.rows.is_empty());
     t.push(format!("journal {ops:?}"));
     let ultima = diario.rows.iter().map(|r| r.seq).max().expect("una fila");
-    let (estado, id) = tarea(b.undo_after(ultima - 1).await).await;
+    let (estado, id) = tarea(b.undo_after(ultima - 1, None).await).await;
     assert_eq!(estado, "Completed");
     let deshecho = b.undo_report(id.expect("id")).await.expect("undo_report");
     assert_eq!(deshecho.undone, 1, "{deshecho:?}");

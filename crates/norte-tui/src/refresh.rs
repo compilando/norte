@@ -202,6 +202,13 @@ pub async fn on_tick(
         }
     }
     app.open_next_pending();
+    // La línea de tiempo abierta se relee cuando algo termina: lo que acaba
+    // de hacerse —o deshacerse— tiene que aparecer en un panel que sigue a la
+    // vista. El techo del undo ya impide pasar de lo contado; esto es para
+    // que lo contado sea lo de ahora.
+    if app.timeline_slot().is_some() {
+        crate::dispatch::cargar_timeline(app, backend, None).await;
+    }
     if refresh {
         refresh_panes(app, backend, events).await
     } else {
@@ -277,13 +284,13 @@ async fn pedir_informe(
     kind: norte_proto::TaskKind,
     id: norte_proto::TaskId,
     fallo: bool,
-) -> Option<(&'static str, Vec<norte_frontend::ReportLine>)> {
+) -> Option<(crate::app::ReportKind, Vec<norte_frontend::ReportLine>)> {
     if kind == norte_proto::TaskKind::Undo {
         informe_de_undo(&backend.undo_report(id).await, fallo)
-            .map(|l| (crate::app::UNDO_REPORT_TITLE, l))
+            .map(|l| (crate::app::ReportKind::Undo, l))
     } else {
         informe_de_lote(&backend.rename_batch_report(id).await, fallo)
-            .map(|l| (crate::app::BATCH_REPORT_TITLE, l))
+            .map(|l| (crate::app::ReportKind::Batch, l))
     }
 }
 
@@ -559,7 +566,7 @@ mod tests {
         );
         app.modal = Some(Modal::ConfirmQuit);
         app.pending_reports
-            .push_back((crate::app::BATCH_REPORT_TITLE, lineas));
+            .push_back((crate::app::ReportKind::Batch, lineas));
         app.open_next_pending();
         assert!(matches!(app.modal, Some(Modal::ConfirmQuit)), "no pisa");
         app.modal = None;
@@ -588,12 +595,12 @@ mod tests {
         let mut app = app_with_entries(&["a"]);
         let lineas = informe_de_undo(&Ok(informe(1)), false).expect("hay que decirlo");
         app.pending_reports
-            .push_back((crate::app::UNDO_REPORT_TITLE, lineas));
+            .push_back((crate::app::ReportKind::Undo, lineas));
         app.open_next_pending();
         assert!(matches!(
             app.modal,
             Some(Modal::Report {
-                title_key: crate::app::UNDO_REPORT_TITLE,
+                kind: crate::app::ReportKind::Undo,
                 ..
             })
         ));

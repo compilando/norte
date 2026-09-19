@@ -16,7 +16,7 @@
 //! and the transfer confirmation are one page). That sharing is a decision
 //! recorded in the `match`; it is never the residue of a wildcard.
 
-use crate::app::{App, Modal, UNDO_REPORT_TITLE};
+use crate::app::{App, Modal, ReportKind};
 
 /// Every context id the TUI can be in.
 ///
@@ -114,13 +114,10 @@ fn modal_context(modal: &Modal) -> &'static str {
         // Un informe va a la página de lo que lo produjo: el de un undo, a la
         // de confirmar un undo (la de `ConfirmUndoAfter`); el de un lote, a la
         // de renombrar, que cuenta qué se puede deshacer.
-        Modal::Report { title_key, .. } => {
-            if *title_key == UNDO_REPORT_TITLE {
-                "dialog.confirm"
-            } else {
-                "dialog.rename"
-            }
-        }
+        Modal::Report { kind, .. } => match kind {
+            ReportKind::Undo => "dialog.confirm",
+            ReportKind::Batch => "dialog.rename",
+        },
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
         // Las sumas comparten página con las propiedades: las dos son cuadros
         // de LECTURA sobre lo que hay bajo el cursor.

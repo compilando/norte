@@ -14,10 +14,28 @@ use norte_proto::VPath;
 /// aquí para no tocar los treinta call sites de este frontend.
 pub use norte_frontend::secret::TypedSecret;
 
-/// El título de [`Modal::Report`] cuando informa de un lote de renombrado.
-pub const BATCH_REPORT_TITLE: &str = "modal-batch-report-title";
-/// El título de [`Modal::Report`] cuando informa de un undo.
-pub const UNDO_REPORT_TITLE: &str = "modal-undo-report-title";
+/// De qué informa un [`Modal::Report`]. De aquí salen su título y su página
+/// de ayuda, por `match` exhaustivo: un tercer informe es un error de
+/// compilación en cada sitio que tiene que decidir algo, no una cadena que cae
+/// en la página equivocada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportKind {
+    /// Un lote de renombrado que dejó algo a medias.
+    Batch,
+    /// Un undo que no lo devolvió todo.
+    Undo,
+}
+
+impl ReportKind {
+    /// La clave Fluent del título.
+    #[must_use]
+    pub fn title_key(self) -> &'static str {
+        match self {
+            Self::Batch => "modal-batch-report-title",
+            Self::Undo => "modal-undo-report-title",
+        }
+    }
+}
 
 /// Tipo de transferencia pendiente de confirmación/colisión.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,8 +118,8 @@ pub enum Modal {
     /// mismas que el diálogo de la ventana: un directorio medio renombrado o
     /// medio deshecho no puede pasar inadvertido en ninguno de los dos.
     Report {
-        /// La clave Fluent del título.
-        title_key: &'static str,
+        /// De qué informa: da el título y la página de ayuda.
+        kind: ReportKind,
         /// Frases y rutas, cada ruta en su propia línea.
         lines: Vec<norte_frontend::ReportLine>,
     },
@@ -189,6 +207,10 @@ pub enum Modal {
         /// Cuántas hay por encima del corte que NO son del lector, y que por
         /// tanto este undo no toca.
         ajenas: usize,
+        /// El techo (`upto_seq`, 0.80.0): lo más nuevo que este recuento
+        /// contó. El undo no pasa de ahí, así que lo hecho después de pintar
+        /// la lista no entra sin haberse contado.
+        techo: Option<i64>,
     },
     /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
     /// papelera.

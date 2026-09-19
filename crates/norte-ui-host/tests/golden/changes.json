@@ -352,6 +352,32 @@
       ]
     }
   },
+  "goto": {
+    "change": "goto",
+    "goto": {
+      "cursor": 1,
+      "empty": "nada casa con eso",
+      "lines": [
+        {
+          "line": "header",
+          "title": "Historia"
+        },
+        {
+          "desc": "",
+          "hostile": false,
+          "line": "row",
+          "text": "/home/ana/docs"
+        },
+        {
+          "desc": "/srv/caf�",
+          "hostile": true,
+          "line": "row",
+          "text": "caf�"
+        }
+      ],
+      "query": "doc"
+    }
+  },
   "help": {
     "change": "help",
     "help": {

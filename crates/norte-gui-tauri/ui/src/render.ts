@@ -45,6 +45,7 @@ import * as help from "./render/help";
 import * as splash from "./render/splash";
 import * as log from "./render/log";
 import * as diskMap from "./render/diskmap";
+import * as timeline from "./render/timeline";
 import * as panelPlugin from "./render/panel";
 import * as search from "./render/search";
 import * as menus from "./render/menus";
@@ -153,6 +154,7 @@ export class Screen {
     readonly aiRenameRoot: HTMLElement,
     readonly organizeRoot: HTMLElement,
     readonly splashRoot: HTMLElement,
+    readonly gotoRoot: HTMLElement,
     readonly catalog: HostCatalog,
     readonly send: Send,
     /**
@@ -251,6 +253,7 @@ export class Screen {
     this.paintPanelBar(view.panel_bar);
     this.paintKeyBar(view.key_bar ?? null);
     this.paintPalette(view.palette);
+    this.paintGoto(view.goto ?? null);
     this.paintWizard(view.wizard ?? null);
     this.paintWhichKey(view.whichkey);
     this.paintHelp(view.help);
@@ -285,6 +288,7 @@ export class Screen {
 
   /** En `render/menus.ts`. */
   readonly paintPalette = menus.paintPalette;
+  readonly paintGoto = menus.paintGoto;
   readonly paintWizard = menus.paintWizard;
 
   /** En `render/menus.ts`. */
@@ -786,6 +790,10 @@ export class Screen {
       this.paintDiskMap(dom, slot);
       return;
     }
+    if (slot.kind === "timeline") {
+      this.paintTimeline(dom, slot);
+      return;
+    }
     if (slot.kind === "unsupported") {
       // El nombre del kind sale del fichero de disposición del usuario: si el
       // host lo enmascaró, se dice — el mismo criterio que el resto.
@@ -860,6 +868,8 @@ export class Screen {
 
   /** En `render/diskmap.ts`. */
   readonly paintDiskMap = diskMap.paintDiskMap;
+  /** En `render/timeline.ts`. */
+  readonly paintTimeline = timeline.paintTimeline;
 
   /** En `render/log.ts`. */
   readonly selectorDeFuente = log.selectorDeFuente;

@@ -1825,13 +1825,32 @@ impl RemoteBackend {
     /// y el mismo informe (`policy.undo_report`) que deshacer una sesión
     /// entera: es el mismo undo con otro criterio de selección.
     ///
+    /// `upto_seq` (0.80.0) es el techo: lo más nuevo que el humano vio
+    /// contado. Un daemon 0.79 no lo conoce y lo IGNORARÍA (ADR 0004), así
+    /// que deshacer con techo contra él se rehúsa con `Unsupported`, en vez
+    /// de deshacer sin techo lo que la pregunta no contó (#294).
+    ///
     /// # Errors
-    /// Lo que responda el daemon.
-    pub async fn undo_after(&self, seq: i64) -> Result<RemoteTask, Error> {
+    /// `Unsupported` con techo contra un daemon anterior a 0.80; lo que
+    /// responda el daemon.
+    pub async fn undo_after(&self, seq: i64, upto_seq: Option<i64>) -> Result<RemoteTask, Error> {
+        // Mismo criterio que el ancla de `plugins_set_approval` (#294):
+        // mandar una garantía que el peer no sabe aplicar es creerse una
+        // garantía que no se aplicó — y aquí lo que se pierde es el techo de
+        // una operación que REVIERTE trabajo. La pregunta prometió N; un
+        // daemon viejo desharía N más lo que se hizo después.
+        if upto_seq.is_some() && !self.peer_honra_el_techo() {
+            tracing::warn!(
+                peer = self.peer_protocol_version().as_deref().unwrap_or("?"),
+                "el daemon es anterior a 0.80 y no sabe poner techo a un deshacer: \
+                 se rehúsa en vez de deshacer más de lo que se contó"
+            );
+            return Err(Error::Unsupported);
+        }
         let result: methods::PolicyUndoSessionResult = self
             .call_maybe_unknown(
                 methods::JOURNAL_UNDO_AFTER,
-                &methods::JournalUndoAfterParams { seq },
+                &methods::JournalUndoAfterParams { seq, upto_seq },
             )
             .await?;
         Ok(self.own_task(result.task_id, TaskKind::Undo))
@@ -2211,6 +2230,12 @@ impl RemoteBackend {
     /// Sin versión retenida —todavía sin conectar— se contesta `true` y quien
     /// decide es el daemon: ahí no hay ninguna afirmación que hacer, y el
     /// handshake va antes que cualquier llamada.
+    /// ¿Sabe el peer poner techo a `journal.undo_after` (`upto_seq`, 0.80.0)?
+    /// Falla CERRADO como [`Self::peer_comprueba_el_ancla`], y por lo mismo.
+    fn peer_honra_el_techo(&self) -> bool {
+        techo_honrado(self.peer_protocol_version().as_deref())
+    }
+
     fn peer_comprueba_el_ancla(&self) -> bool {
         let Some(v) = self.peer_protocol_version() else {
             return true;
@@ -3033,12 +3058,34 @@ async fn pump_loop(
     }
 }
 
+/// ¿Sabe un peer con esta versión poner techo a `journal.undo_after`
+/// (`upto_seq`, 0.80.0)?
+///
+/// Pura para poder probar la promesa N-1 sin levantar un daemon viejo. Falla
+/// CERRADO como el resto de estas comprobaciones: una versión que no parsea no
+/// sabe nada. Sin versión —todavía sin handshake— decide el daemon.
+fn techo_honrado(peer: Option<&str>) -> bool {
+    peer.is_none_or(|v| methods::version_at_least(v, 0, 80))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn vpd(wire: &str) -> VPath {
         VPath::parse(wire).expect("wire válido")
+    }
+
+    /// Un daemon 0.79 ignoraría `upto_seq` y desharía sin techo: con él, el
+    /// SDK rehúsa (`undo_after` devuelve `Unsupported`) en vez de deshacer
+    /// más de lo que la pregunta contó. Una versión que no parsea, igual.
+    #[test]
+    fn el_techo_solo_se_manda_a_quien_sabe_aplicarlo() {
+        assert!(techo_honrado(Some("0.80.0")));
+        assert!(techo_honrado(Some("0.81.3")));
+        assert!(!techo_honrado(Some("0.79.9")), "N-1 no sabe");
+        assert!(!techo_honrado(Some("norte-0.80")), "no parsea: no sabe");
+        assert!(techo_honrado(None), "sin handshake decide el daemon");
     }
 
     /// Un daemon que no conoce `plugin.panel_render` deja el hueco SIN marco,

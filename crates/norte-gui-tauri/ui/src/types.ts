@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 76;
+export const BRIDGE_VERSION = 78;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -352,6 +352,31 @@ export interface DiskMapSlotView {
   measuring: boolean;
 }
 
+/** Una fila de la línea de tiempo (puente 78), ya pintable. */
+export interface TimelineRowView {
+  time: string;
+  /** `user`, `agent`, … — solo para el COLOR del punto. */
+  actor: string;
+  op: string;
+  path: string;
+  hostile: boolean;
+  /** Lote y «sin vuelta», ya traducidos; vacío si nada. */
+  tail: string;
+}
+
+/** La línea de tiempo del journal (#359, puente 78). */
+export interface TimelineSlotView {
+  kind: "timeline";
+  slot_id: number;
+  title: string;
+  rows: TimelineRowView[];
+  cursor: number | null;
+  /** Qué decir sin filas: vacío si se miró, cargando si no, o el motivo. */
+  empty: string;
+  /** Lo que se llevaría un `Enter` aquí; vacío sin filas. */
+  footer: string;
+}
+
 export interface LogSlotView {
   kind: "log";
   slot_id: number;
@@ -460,6 +485,7 @@ export type SlotView =
   | LogSlotView
   | PanelSlotView
   | DiskMapSlotView
+  | TimelineSlotView
   | UnsupportedSlotView;
 
 export interface PendingView {
@@ -737,6 +763,20 @@ export interface PaletteView {
   rows: PaletteRowView[];
   cursor: number | null;
   total: number;
+}
+
+/** Una línea de «ir a» (puente 77): cabecera de sección o fila. */
+export type GotoLineView =
+  | { line: "header"; title: string }
+  | { line: "row"; text: string; desc: string; hostile: boolean };
+
+/** «Ir a cualquier sitio» (#357, puente 77). El índice del cursor es en
+ *  `lines`, y nunca cae en una cabecera. */
+export interface GotoView {
+  query: string;
+  lines: GotoLineView[];
+  cursor: number | null;
+  empty: string;
 }
 
 export interface ProfileRowView {
@@ -1333,6 +1373,9 @@ export interface ViewSnapshot {
   key_bar?: KeyBarView;
   profiles: ProfilePickerView | null;
   palette: PaletteView | null;
+  /** «Ir a cualquier sitio» (puente 77), si está abierto. Opcional: un host
+   *  anterior no lo manda. */
+  goto?: GotoView | null;
   /** El asistente de primer arranque (puente 63), si está abierto. Opcional:
    *  un host anterior no lo manda. */
   wizard?: WizardView | null;
@@ -1410,6 +1453,7 @@ export type ViewChange =
   | { change: "key_bar"; key_bar: KeyBarView }
   | { change: "profiles"; profiles: ProfilePickerView | null }
   | { change: "palette"; palette: PaletteView | null }
+  | { change: "goto"; goto: GotoView | null }
   | { change: "wizard"; wizard: WizardView | null }
   | { change: "splash"; splash: SplashView | null }
   | { change: "help"; help: HelpView | null }

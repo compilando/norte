@@ -1348,10 +1348,12 @@ fn version_ventana_actual() {
     // vez de `INVALID_PARAMS`. Ningún tipo cambia; un cliente 0.78 que
     // distinguía el caso por el código deja de reconocerlo y lo lee como el
     // error genérico que ya sabía leer.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.79.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.78.0"), "N-1");
+    // 0.80.0: `journal.undo_after` gana `upto_seq`, opcional. Un daemon 0.79
+    // lo ignora y deshace sin techo (lo de antes); un cliente 0.79 no lo manda.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.80.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.79.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.77.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.78.9"),
         "N-2 fuera de la ventana"
     );
 }

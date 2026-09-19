@@ -367,6 +367,9 @@ impl Estado {
         if kind.as_str() == "places" {
             return self.efecto_en_sitios(efecto);
         }
+        if kind.as_str() == super::timeline::KIND {
+            return self.efecto_en_linea(efecto);
+        }
         if kind.as_str() != "processes" {
             // Otro panel que toma teclas y que este host todavía no proyecta:
             // se deja pasar, y el listado sigue respondiendo. Cuando se

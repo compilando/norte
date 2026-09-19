@@ -73,16 +73,19 @@ impl Backend {
     /// lo propio no necesita daemon. El informe se lee como el de cualquier
     /// undo.
     ///
+    /// `upto_seq` es el techo (0.80.0): lo más nuevo que el humano vio
+    /// contado. Nada por encima se deshace. `None` = sin techo.
+    ///
     /// # Errors
     /// Taxonomía del protocolo; `Unsupported` sin journal.
-    pub async fn undo_after(&self, seq: i64) -> Result<TaskRef, Error> {
+    pub async fn undo_after(&self, seq: i64, upto_seq: Option<i64>) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => {
-                let (handle, _report) = engine.undo_after(seq).await?;
+                let (handle, _report) = engine.undo_after(seq, upto_seq).await?;
                 Ok(TaskRef::from_handle(&handle))
             }
             #[cfg(unix)]
-            Self::Remote(r) => r.undo_after(seq).await.map(TaskRef::from),
+            Self::Remote(r) => r.undo_after(seq, upto_seq).await.map(TaskRef::from),
         }
     }
 

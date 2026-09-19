@@ -818,6 +818,10 @@
   "journal_undo_after_params": {
     "seq": 4096
   },
+  "journal_undo_after_params_con_techo": {
+    "seq": 4096,
+    "upto_seq": 4200
+  },
   "organize_move": {
     "current": "factura.pdf",
     "proposed_rel": "facturas/2026/marzo.pdf"

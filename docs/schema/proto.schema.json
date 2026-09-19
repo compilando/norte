@@ -3159,12 +3159,20 @@
       "type": "object"
     },
     "JournalUndoAfterParams": {
-      "description": "Params de [`JOURNAL_UNDO_AFTER`].",
+      "description": "Params de [`JOURNAL_UNDO_AFTER`].\n\n```\nuse norte_proto::methods::JournalUndoAfterParams;\n// Sin techo, el campo NO viaja: un cliente 0.79 manda exactamente esto.\nlet sin = JournalUndoAfterParams { seq: 4, upto_seq: None };\nassert_eq!(serde_json::to_string(&sin).expect(\"json\"), r#\"{\"seq\":4}\"#);\nlet con = JournalUndoAfterParams { seq: 4, upto_seq: Some(9) };\nassert_eq!(\n    serde_json::to_string(&con).expect(\"json\"),\n    r#\"{\"seq\":4,\"upto_seq\":9}\"#\n);\n```",
       "properties": {
         "seq": {
           "description": "Se deshace lo del humano con `seq` ESTRICTAMENTE mayor que éste.\n\nO sea: la entrada que se señala se queda. Es lo que un humano espera\nde «vuelve hasta aquí» señalando una fila — la fila señalada es el\nestado al que se quiere volver, no la primera víctima.",
           "format": "int64",
           "type": "integer"
+        },
+        "upto_seq": {
+          "description": "El TECHO (0.80.0): no se deshace nada con `seq` mayor que éste.\n\nEs el `seq` más nuevo que el humano tenía delante cuando se le enseñó\nel recuento. Sin techo, lo que se hizo DESPUÉS de pintar la lista —con\nel panel abierto, que es lo normal— entraba en el undo sin haberse\ncontado: la pregunta prometía tres y se deshacían cinco. `None` = sin\ntecho, que es lo que hacía 0.79.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [

@@ -162,6 +162,43 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
   };
 }
 
+describe("ir a cualquier sitio (#357)", () => {
+  it("pinta cabeceras que no se eligen y filas con el cursor y su badge", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.goto = {
+      query: "doc",
+      lines: [
+        { line: "header", title: "Historia" },
+        { line: "row", text: "/casa/docs", desc: "", hostile: false },
+        { line: "row", text: "caf�", desc: "/srv", hostile: true },
+      ],
+      cursor: 2,
+      empty: "nada casa con eso",
+    };
+    screen.paint(v);
+    const cabecera = document.querySelector(".goto-header");
+    expect(cabecera?.textContent).toBe("Historia");
+    // Una cabecera no es una opción: el lector de pantalla no la ofrece.
+    expect(cabecera?.getAttribute("role")).toBe("presentation");
+    const filas = document.querySelectorAll(".goto .palette-row");
+    expect(filas.length).toBe(2);
+    expect(filas[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(filas[1]?.getAttribute("data-hostile")).toBe("true");
+  });
+
+  it("sin líneas dice que nada casa, y cerrada no deja nada", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.goto = { query: "zzz", lines: [], cursor: null, empty: "nada casa con eso" };
+    screen.paint(v);
+    expect(document.querySelector(".goto .empty")?.textContent).toBe("nada casa con eso");
+    v.goto = null;
+    screen.paint(v);
+    expect(document.querySelector(".goto")).toBeNull();
+  });
+});
+
 describe("la pantalla de arranque", () => {
   /** Una pantalla con una sección de una fila numerada. */
   function conSplash(closeAfterMs: number | null): ViewSnapshot {
@@ -396,7 +433,9 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   const aiRename = document.createElement("div");
   const organize = document.createElement("div");
   const splash = document.createElement("div");
+  const goto = document.createElement("div");
   document.body.append(
+    goto,
     root,
     panelBar,
     menu,
@@ -445,6 +484,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     aiRename,
     organize,
     splash,
+    goto,
     catalogo(),
     (a: UiAction) => enviadas.push(a),
     opciones.imageBytes ?? (() => Promise.resolve(new ArrayBuffer(0))),

@@ -198,6 +198,9 @@ impl Estado {
                     // Desinstalar es un borrado que pregunta: misma página
                     // que el borrado.
                     | Pendiente::DesinstalarExtension { .. }
+                    // Deshacer hasta un punto es una consecuencia que se
+                    // acepta: la misma página que en la TUI.
+                    | Pendiente::DeshacerHasta { .. }
                     | Pendiente::Salir,
                 ) => "dialog.confirm",
                 Some(

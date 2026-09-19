@@ -1267,7 +1267,19 @@ use crate::{
 /// `Internal`. Solo un cliente escrito a mano que distinguiera el caso por el
 /// código `-32602` deja de reconocerlo. Un cliente 0.79 contra un daemon 0.78
 /// recibe el `INVALID_PARAMS` de siempre.
-pub const PROTOCOL_VERSION: &str = "0.79.0";
+/// # 0.80.0 — `journal.undo_after` gana un techo (`upto_seq`)
+///
+/// [`JournalUndoAfterParams::upto_seq`]: el `seq` más nuevo que el humano vio
+/// contado. El undo no pasa de ahí, así que lo que se hizo después de pintar
+/// la línea de tiempo no entra en un «deshacer hasta aquí» que no lo contó.
+///
+/// Aditivo y opcional. Un **cliente 0.80 contra un daemon 0.79**: el daemon
+/// ignoraría el campo (ADR 0004) y desharía sin techo lo que la pregunta no
+/// contó, así que el SDK NO lo manda — con techo pedido rehúsa con
+/// `Unsupported` y lo dice, como el ancla de `plugin.set_approval` (#294). Un
+/// **cliente 0.79 contra un daemon 0.80** no lo manda, y el daemon lo lee
+/// como `None`: sin techo, que es lo de 0.79.
+pub const PROTOCOL_VERSION: &str = "0.80.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -7979,6 +7991,18 @@ pub struct JournalListResult {
 }
 
 /// Params de [`JOURNAL_UNDO_AFTER`].
+///
+/// ```
+/// use norte_proto::methods::JournalUndoAfterParams;
+/// // Sin techo, el campo NO viaja: un cliente 0.79 manda exactamente esto.
+/// let sin = JournalUndoAfterParams { seq: 4, upto_seq: None };
+/// assert_eq!(serde_json::to_string(&sin).expect("json"), r#"{"seq":4}"#);
+/// let con = JournalUndoAfterParams { seq: 4, upto_seq: Some(9) };
+/// assert_eq!(
+///     serde_json::to_string(&con).expect("json"),
+///     r#"{"seq":4,"upto_seq":9}"#
+/// );
+/// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalUndoAfterParams {
@@ -7988,6 +8012,15 @@ pub struct JournalUndoAfterParams {
     /// de «vuelve hasta aquí» señalando una fila — la fila señalada es el
     /// estado al que se quiere volver, no la primera víctima.
     pub seq: i64,
+    /// El TECHO (0.80.0): no se deshace nada con `seq` mayor que éste.
+    ///
+    /// Es el `seq` más nuevo que el humano tenía delante cuando se le enseñó
+    /// el recuento. Sin techo, lo que se hizo DESPUÉS de pintar la lista —con
+    /// el panel abierto, que es lo normal— entraba en el undo sin haberse
+    /// contado: la pregunta prometía tres y se deshacían cinco. `None` = sin
+    /// techo, que es lo que hacía 0.79.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upto_seq: Option<i64>,
 }
 
 /// Params de [`POLICY_UNDO_SESSION`].

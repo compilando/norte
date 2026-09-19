@@ -184,6 +184,7 @@ impl Estado {
             || self.ajustes.is_some()
             || self.visor.is_some()
             || self.paleta.is_some()
+            || self.ir_a.is_some()
     }
 
     pub(super) fn tecla_de_un_overlay(
@@ -307,6 +308,11 @@ impl Estado {
         }
         if self.paleta.is_some() {
             return Some(self.tecla_en_paleta(k, backend, buzon));
+        }
+        // «Ir a» (#357), por lo mismo que la paleta: es un editor de texto
+        // libre, y una letra que se le escapara actuaría sobre el listado.
+        if self.ir_a.is_some() {
+            return Some(self.tecla_en_ir_a(k, backend, buzon));
         }
         if self.hueco().pane.quick().is_some() {
             return self.tecla_en_quick(k);

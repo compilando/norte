@@ -3461,7 +3461,7 @@ async fn handle_journal_undo_after(
     }
     let (handle, _report) = shared
         .engine
-        .undo_after(p.seq)
+        .undo_after(p.seq, p.upto_seq)
         .await
         .map_err(RpcError::from)?;
     let task_id = register_task_undo(shared, handle)?;
@@ -3478,6 +3478,9 @@ async fn handle_journal_undo_after(
     // llegó a existir.
     tracing::info!(
         after_seq = p.seq,
+        // El techo decide también qué se deshizo (0.80.0): sin él en la línea,
+        // cruzarla con el informe no explica por qué se quedó algo fuera.
+        upto_seq = ?p.upto_seq,
         task_id = task_id.get(),
         "undo hasta un punto pedido por el humano"
     );

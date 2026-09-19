@@ -226,6 +226,9 @@ export class Session {
       case "palette":
         s.palette = c.palette;
         return true;
+      case "goto":
+        s.goto = c.goto;
+        return true;
       case "help":
         s.help = c.help;
         return true;
