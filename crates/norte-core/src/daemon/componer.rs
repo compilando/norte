@@ -25,9 +25,12 @@ pub struct Opciones {
     pub idle_timeout: Option<Duration>,
     /// Dónde persiste la sesión de UI; `None` = no se persiste.
     pub state_dir: Option<PathBuf>,
-    /// De dónde salen el journal, el índice, los spools y las conexiones;
-    /// `None` = el del usuario (`connect::config_dir`). Existe para que un
-    /// test no toque nunca el directorio real.
+    /// De dónde salen el journal, el índice, los spools, las conexiones y los
+    /// secretos de la IA; `None` = el del usuario (`connect::config_dir`).
+    ///
+    /// NO cubre la configuración: `policy.toml`, `[ai]` y `[archive]` se
+    /// leen de las capas estándar del usuario. Un test que pase del journal
+    /// leería la config real, así que los de este módulo paran antes.
     pub config_dir: Option<PathBuf>,
 }
 
@@ -122,7 +125,11 @@ pub async fn componer(o: Opciones, avisos: &mut Vec<Aviso>) -> Result<Daemon, Er
         .map_err(ErrorDeArranque::Archivo)?;
     // Proveedor local, conector e IA (ADR 0031: opt-in, jamás aborta): lo que
     // lleva todo engine, igual que los embebidos.
-    avisos.extend(crate::equipo::equipar(&engine, &dir, true).await.avisos);
+    avisos.extend(
+        crate::equipo::equipar(&engine, &dir, crate::equipo::Ia::TODA)
+            .await
+            .avisos,
+    );
     let daemon = Daemon::bind_with_policy(
         Arc::new(engine),
         scopes,
@@ -152,6 +159,10 @@ mod tests {
     /// Es también el único camino de `componer` que se puede probar sin leer
     /// la config REAL del usuario: los pasos siguientes cargan `policy.toml`
     /// y `[ai]` por las capas estándar.
+    ///
+    /// Tarda lo que el `busy_timeout` del journal (5 s): `SQLite` reintenta el
+    /// lock antes de rendirse. Se acepta en vez de añadir una opción que solo
+    /// usaría este test — es el mismo plazo que ve el operador.
     #[tokio::test]
     async fn con_el_journal_tomado_no_arranca() {
         let dir = tempfile::tempdir().expect("tempdir");

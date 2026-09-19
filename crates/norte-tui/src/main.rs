@@ -788,8 +788,12 @@ async fn make_backend(
         // Los avisos van al log y no a stderr: ratatui está a punto de tomar
         // la pantalla, y este binario ya instala subscriber (`init_to_file`,
         // roadmap ítem 9).
-        let hecho =
-            norte_core::equipo::equipar(&engine, &norte_core::connect::config_dir(), true).await;
+        let hecho = norte_core::equipo::equipar(
+            &engine,
+            &norte_core::connect::config_dir(),
+            norte_core::equipo::Ia::TODA,
+        )
+        .await;
         for aviso in hecho.avisos {
             tracing::warn!("{aviso}");
         }

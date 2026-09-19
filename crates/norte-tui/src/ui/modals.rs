@@ -620,7 +620,13 @@ fn modal_title_text(
             size,
             size_task,
         } => properties_modal_text(entry, *size, size_task.is_some()),
-        Modal::BatchReport { lines } => (t("modal-batch-report-title"), batch_report_text(lines)),
+        // El pie es el de confirmar (Enter/Esc cierran, `dialog_action`): sin
+        // él nada decía cómo salir, y sin su línea de botones el ratón no
+        // tenía dónde pinchar.
+        Modal::BatchReport { lines } => (
+            t("modal-batch-report-title"),
+            format!("{}\n{}", batch_report_text(lines), hints.confirm),
+        ),
         Modal::ConfirmQuit => (
             t("modal-confirm-quit-title"),
             format!("{}\n{}", t("modal-confirm-quit-body"), hints.confirm),

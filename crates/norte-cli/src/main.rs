@@ -768,16 +768,20 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         norte_core::equipo::con_indice(base, &dir, &mut avisos).await
     };
     if !cli.daemon {
-        // Proveedor local, conector y —solo para los dos comandos que la
-        // usan— la IA: lo que lleva todo engine (`norte_core::equipo`). Cargar
-        // `[ai]` resuelve secretos, y eso jamás lo paga un `ls`. Con `--daemon`
-        // el dueño de todo esto es el daemon.
-        let ia = matches!(
-            cli.cmd,
-            Cmd::Index {
-                cmd: IndexCmd::Embed { .. } | IndexCmd::Semantic { .. }
-            }
-        );
+        // Proveedor local, conector y —solo para los dos comandos que los
+        // usan— los embeddings: lo que lleva todo engine
+        // (`norte_core::equipo`). Cargar `[ai]` resuelve secretos, y eso
+        // jamás lo paga un `ls`. Con `--daemon` el dueño de todo esto es el
+        // daemon.
+        let ia = norte_core::equipo::Ia {
+            renombrado: false,
+            embeddings: matches!(
+                cli.cmd,
+                Cmd::Index {
+                    cmd: IndexCmd::Embed { .. } | IndexCmd::Semantic { .. }
+                }
+            ),
+        };
         let dir = norte_core::connect::config_dir();
         avisos.extend(norte_core::equipo::equipar(&engine, &dir, ia).await.avisos);
         // `[archive]` también en embebido: sin esto un `norte ls` dentro de un

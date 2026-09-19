@@ -98,14 +98,39 @@ pub struct Equipado {
     pub ia_renombrado: bool,
 }
 
+/// Qué proveedores de IA instalar. Cada uno resuelve SU secreto (keyring,
+/// quizá con un diálogo del sistema), así que se instala solo lo que se va a
+/// usar: `norte ai rename` no tiene por qué desbloquear la clave de los
+/// embeddings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Ia {
+    /// El de renombrado (`rename_provider`).
+    pub renombrado: bool,
+    /// El de embeddings (`embed_provider`).
+    pub embeddings: bool,
+}
+
+impl Ia {
+    /// Nada: ni se lee `[ai]`.
+    pub const NADA: Self = Self {
+        renombrado: false,
+        embeddings: false,
+    };
+    /// Los dos: un engine de larga vida (el daemon, la TUI) sirve todo.
+    pub const TODA: Self = Self {
+        renombrado: true,
+        embeddings: true,
+    };
+}
+
 /// Equipa `engine` con el proveedor local, el conector de conexiones remotas
-/// y —si `ia`— el proveedor de IA de `[ai]` (renombrado y embeddings).
+/// y los proveedores de IA de `[ai]` que pida `ia`.
 ///
-/// `config_dir` es de donde salen las conexiones y los secretos. La IA es
-/// opt-in y JAMÁS falla aquí: lo que no se pudo instalar es un [`Aviso`].
-/// Cargar `[ai]` resuelve secretos (keyring), así que quien no la usa pasa
-/// `ia: false` y no lo paga.
-pub async fn equipar(engine: &Engine, config_dir: &Path, ia: bool) -> Equipado {
+/// `config_dir` es de donde salen las conexiones y los secretos de los
+/// proveedores. `[ai]` en sí se lee de las capas estándar del usuario. La IA
+/// es opt-in y JAMÁS falla aquí: lo que no se pudo instalar es un [`Aviso`].
+#[tracing::instrument(skip_all, fields(renombrado = ia.renombrado, embeddings = ia.embeddings))]
+pub async fn equipar(engine: &Engine, config_dir: &Path, ia: Ia) -> Equipado {
     let mut hecho = Equipado::default();
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::os_root()) as Arc<dyn Provider>
@@ -113,12 +138,14 @@ pub async fn equipar(engine: &Engine, config_dir: &Path, ia: bool) -> Equipado {
     engine.set_connector(Arc::new(crate::connect::ConnectionManager::new(
         config_dir.to_path_buf(),
     )));
-    if !ia {
+    if ia == Ia::NADA {
         return hecho;
     }
     match crate::blocking::spawn_blocking(crate::ai::AiConfig::load).await {
         Ok(Ok(config)) => {
-            if let Some(pcfg) = config.rename_provider_config().cloned() {
+            if ia.renombrado
+                && let Some(pcfg) = config.rename_provider_config().cloned()
+            {
                 match crate::ai::resolve_and_build(&pcfg, config_dir.to_path_buf()).await {
                     Ok(provider) => {
                         engine.set_ai_provider(provider);
@@ -127,7 +154,11 @@ pub async fn equipar(engine: &Engine, config_dir: &Path, ia: bool) -> Equipado {
                     Err(e) => hecho.avisos.push(Aviso::IaNoDisponible(e)),
                 }
             }
-            if let Some(w) = crate::ai::install_embed_provider(engine, &config).await {
+            if ia.embeddings
+                && let Some(w) =
+                    crate::ai::install_embed_provider(engine, &config, config_dir.to_path_buf())
+                        .await
+            {
                 hecho.avisos.push(Aviso::IaEmbeddings(w));
             }
             engine.set_ai_config(config);
@@ -152,7 +183,7 @@ pub async fn con_indice(engine: Engine, config_dir: &Path, avisos: &mut Vec<Avis
 
 #[cfg(test)]
 mod tests {
-    use super::{Aviso, con_indice, equipar};
+    use super::{Aviso, Ia, con_indice, equipar};
 
     /// Sin IA no se toca `[ai]`: ni aviso ni proveedor. Es lo que paga un
     /// `norte ls`, y tiene que ser nada.
@@ -160,7 +191,7 @@ mod tests {
     async fn sin_ia_no_hay_avisos_ni_proveedor() {
         let dir = tempfile::tempdir().expect("tempdir");
         let engine = crate::Engine::new();
-        let hecho = equipar(&engine, dir.path(), false).await;
+        let hecho = equipar(&engine, dir.path(), Ia::NADA).await;
         assert!(hecho.avisos.is_empty());
         assert!(!hecho.ia_renombrado);
     }

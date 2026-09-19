@@ -236,11 +236,19 @@ pub async fn resolve_and_build(
 // no dice por qué la búsqueda semántica no responde. El nombre del proveedor
 // es configuración del usuario, no bytes suyos, así que va en el span; el
 // secreto JAMÁS (regla 10).
+//
+// `config_dir` es de donde se resuelve el secreto: el MISMO que usa quien
+// equipa, y no el global, para que un engine apuntado a otro directorio (un
+// test) no llegue al keyring del usuario.
 #[tracing::instrument(skip_all, fields(provider))]
-pub async fn install_embed_provider(engine: &crate::Engine, config: &AiConfig) -> Option<String> {
+pub async fn install_embed_provider(
+    engine: &crate::Engine,
+    config: &AiConfig,
+    config_dir: std::path::PathBuf,
+) -> Option<String> {
     if let Some(pcfg) = config.embed_provider_config().cloned() {
         tracing::Span::current().record("provider", pcfg.name.as_str());
-        match resolve_and_build(&pcfg, crate::connect::config_dir()).await {
+        match resolve_and_build(&pcfg, config_dir).await {
             Ok(p) => {
                 tracing::info!("proveedor de embeddings instalado");
                 engine.set_ai_embed_provider(p);

@@ -212,7 +212,13 @@ async fn backend_con_ia() -> anyhow::Result<Backend> {
     // Lo que lleva todo engine, IA incluida (`norte_core::equipo`). El core
     // resuelve el secreto (env → keyring → age) y construye el proveedor; la
     // CLI no toca norte-connect ni ve la clave (regla 10).
-    let hecho = norte_core::equipo::equipar(&engine, &dir, true).await;
+    // Solo el de renombrado: el de embeddings resolvería otro secreto que este
+    // comando no usa.
+    let ia = norte_core::equipo::Ia {
+        renombrado: true,
+        embeddings: false,
+    };
+    let hecho = norte_core::equipo::equipar(&engine, &dir, ia).await;
     if let Err(e) = norte_core::archive_config::aplicar(&engine).await {
         eprintln!(
             "{}",
@@ -221,18 +227,28 @@ async fn backend_con_ia() -> anyhow::Result<Backend> {
             ))
         );
     }
-    // Aquí la IA no es opcional: es el comando. Lo que en los demás es un
-    // aviso, aquí es el motivo de no poder hacer nada.
-    if !hecho.ia_renombrado {
-        for aviso in &hecho.avisos {
-            eprintln!("{}", crate::cmd::daemon::texto_del_aviso(aviso));
-        }
-        anyhow::bail!(
-            "sin proveedor de IA para el rename: define [ai.providers.<n>] y \
-             rename_provider en norte.toml (ADR 0031)"
-        );
+    if hecho.ia_renombrado {
+        return Ok(Backend::Embedded(Arc::new(engine)));
     }
-    Ok(Backend::Embedded(Arc::new(engine)))
+    // Aquí la IA no es opcional: es el comando. Lo que en los demás es un
+    // aviso, aquí es el motivo de no poder hacer nada — y si hay un motivo
+    // concreto (`[ai]` roto, un secreto que no se resuelve), ESE es el error:
+    // decirle «define un proveedor» a quien ya lo definió le manda a buscar
+    // donde no está.
+    if let Some(motivo) = hecho.avisos.iter().find(|a| {
+        matches!(
+            a,
+            norte_core::equipo::Aviso::IaInvalida(_)
+                | norte_core::equipo::Aviso::IaNoCargo(_)
+                | norte_core::equipo::Aviso::IaNoDisponible(_)
+        )
+    }) {
+        anyhow::bail!("{}", crate::cmd::daemon::texto_del_aviso(motivo));
+    }
+    anyhow::bail!(
+        "sin proveedor de IA para el rename: define [ai.providers.<n>] y \
+         rename_provider en norte.toml (ADR 0031)"
+    );
 }
 
 /// Las líneas de una parte del detalle de un plan no aplicable, con el mismo

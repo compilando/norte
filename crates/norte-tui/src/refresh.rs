@@ -203,6 +203,8 @@ pub async fn on_tick(
             _ => {}
         }
         if let Some((id, fallo)) = lote {
+            // Dentro del tick, como `aviso_de_empaquetado`: contra un daemon
+            // atascado el tick ya se para en `refresh_panes`, justo detrás.
             let resultado = backend.rename_batch_report(id).await;
             if let Some(lines) = informe_de_lote(&resultado, fallo) {
                 app.pending_batch_reports.push_back(lines);
@@ -217,21 +219,6 @@ pub async fn on_tick(
     }
 }
 
-/// La intención de `pane.edit-new` SI la task que acaba de terminar es la
-/// suya, consumiéndola (#290).
-///
-/// El id se compara a propósito: entre el submit y este tick puede terminar
-/// cualquier otra task —una copia, un borrado, otra creación—, y abrir el
-/// editor con la primera que pase abriría el fichero equivocado.
-///
-/// **Solo el id, sin época de conexión, y eso descansa en una invariante del
-/// SDK**: tras un relevo del daemon los ids vuelven a empezar (la ventana sí
-/// lleva época por esto — `Controller::epoca_conexion`). Aquí es correcto
-/// porque `norte-client` sintetiza un desenlace `Failed` para toda task
-/// huérfana ANTES de que la conexión nueva reparta ids, conservando el
-/// `task_id`: la intención se consume en la conexión vieja. Si esa síntesis
-/// desapareciera, un id reciclado abriría el editor sobre un fichero que quizá
-/// no se creó — y entonces lo crearía el editor, que es el bug entero de vuelta.
 /// Lo que hay que enseñar del informe de un lote de renombrado que acaba de
 /// terminar, o `None` si no hay nada que buscar.
 ///
@@ -303,6 +290,21 @@ async fn aviso_de_empaquetado(backend: &Backend, task_id: norte_proto::TaskId) -
     Some(ta(clave, &[("risky", &riesgos.to_string())]))
 }
 
+/// La intención de `pane.edit-new` SI la task que acaba de terminar es la
+/// suya, consumiéndola (#290).
+///
+/// El id se compara a propósito: entre el submit y este tick puede terminar
+/// cualquier otra task —una copia, un borrado, otra creación—, y abrir el
+/// editor con la primera que pase abriría el fichero equivocado.
+///
+/// **Solo el id, sin época de conexión, y eso descansa en una invariante del
+/// SDK**: tras un relevo del daemon los ids vuelven a empezar (la ventana sí
+/// lleva época por esto — `Controller::epoca_conexion`). Aquí es correcto
+/// porque `norte-client` sintetiza un desenlace `Failed` para toda task
+/// huérfana ANTES de que la conexión nueva reparta ids, conservando el
+/// `task_id`: la intención se consume en la conexión vieja. Si esa síntesis
+/// desapareciera, un id reciclado abriría el editor sobre un fichero que quizá
+/// no se creó — y entonces lo crearía el editor, que es el bug entero de vuelta.
 fn tomar_creacion(app: &mut App, terminada: norte_proto::TaskId) -> Option<norte_proto::VPath> {
     match &app.pending_edit_open {
         Some((id, _)) if *id == terminada => app.pending_edit_open.take().map(|(_, p)| p),

@@ -469,11 +469,15 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // que solo entienden cancelar. Darle un «confirmar» a un cuadro de
         // solo lectura es enseñarle al lector que Enter hace algo aquí.
         Modal::Properties { .. } => (cmd == "dialog.cancel").then_some(DialogOutcome::Cancelled),
-        // El informe de un lote tampoco pregunta: ya pasó. Se cierra con
-        // cancelar Y con confirmar — Enter es lo que se pulsa para «entendido»,
-        // y aquí no hay nada que proteger con él.
+        // El informe de un lote tampoco pregunta: ya pasó. Lleva el pie de
+        // confirmar (`hints.confirm`), así que TODO lo que ese pie ofrece lo
+        // cierra — Enter es lo que se pulsa para «entendido», y aquí no hay
+        // nada que proteger con él. Un botón pintado que no hiciera nada sería
+        // peor que no pintarlo.
         Modal::BatchReport { .. } => match cmd {
-            "dialog.confirm" | "dialog.cancel" => Some(DialogOutcome::Cancelled),
+            "dialog.approve" | "dialog.confirm" | "dialog.deny" | "dialog.cancel" => {
+                Some(DialogOutcome::Cancelled)
+            }
             _ => None,
         },
         // Las sumas tampoco preguntan nada: `confirm` COPIA la lista al
@@ -797,6 +801,26 @@ mod tests {
             None,
             "fuera del allowlist de confirm: inerte"
         );
+    }
+
+    /// El informe de un lote se CIERRA con todo lo que su pie ofrece, y nunca
+    /// «confirma» nada: no hay nada que confirmar. Lo demás, inerte.
+    #[test]
+    fn el_informe_de_lote_solo_se_cierra() {
+        let m = Modal::BatchReport { lines: Vec::new() };
+        for cmd in [
+            "dialog.approve",
+            "dialog.confirm",
+            "dialog.deny",
+            "dialog.cancel",
+        ] {
+            assert_eq!(
+                dialog_action(&m, cmd),
+                Some(DialogOutcome::Cancelled),
+                "{cmd}"
+            );
+        }
+        assert_eq!(dialog_action(&m, "dialog.overwrite"), None);
     }
 
     /// S2 (`[ui] confirm_quit`): las tres combinaciones modo × trabajo en
