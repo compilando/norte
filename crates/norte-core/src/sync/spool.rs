@@ -546,7 +546,7 @@ impl Spool {
         let mut line = encode(&Record::Head(header))?;
         let dir = self.dir.clone();
         // Regla 2: `std::fs` es bloqueante y esto es un contexto async.
-        let (file, part) = tokio::task::spawn_blocking(move || {
+        let (file, part) = crate::blocking::spawn_blocking(move || {
             ensure_dir(&dir)?;
             reap_expired(&dir);
             let (mut file, part) = create_part(&dir, conn_id)?;
@@ -613,7 +613,7 @@ impl Spool {
         }
         let path = self.dir.join(file_name(conn_id, hash));
         let want = hash.clone();
-        let opened = tokio::task::spawn_blocking(move || open_blocking(&path, conn_id, &want))
+        let opened = crate::blocking::spawn_blocking(move || open_blocking(&path, conn_id, &want))
             .await
             .map_err(joined);
         // El derecho se COBRÓ arriba, y a partir de aquí hay cuatro formas de
@@ -668,7 +668,7 @@ impl Spool {
         self.claim_issued(conn_id, hash);
         self.release_applying(conn_id, hash);
         let path = self.dir.join(file_name(conn_id, hash));
-        tokio::task::spawn_blocking(move || match std::fs::remove_file(&path) {
+        crate::blocking::spawn_blocking(move || match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
             Err(e) => Err(SpoolError::Io(e)),
@@ -692,7 +692,7 @@ impl Spool {
         self.forget_issued(Some(conn_id));
         let dir = self.dir.clone();
         let prefix = format!("{conn_id}-");
-        tokio::task::spawn_blocking(move || {
+        crate::blocking::spawn_blocking(move || {
             remove_matching(&dir, |name| name.starts_with(prefix.as_bytes()))
         })
         .await
@@ -729,7 +729,7 @@ impl Spool {
     pub async fn sweep(&self) -> Result<SweepReport, SpoolError> {
         self.forget_issued(None);
         let dir = self.dir.clone();
-        tokio::task::spawn_blocking(move || remove_matching(&dir, |_| true))
+        crate::blocking::spawn_blocking(move || remove_matching(&dir, |_| true))
             .await
             .map_err(joined)?
     }
@@ -923,7 +923,7 @@ impl SpoolWriter {
             .dir
             .join(file_name(self.conn_id, &summary.plan_hash));
         let landed = target.clone();
-        tokio::task::spawn_blocking(move || {
+        crate::blocking::spawn_blocking(move || {
             // Cerrar ANTES del rename: en Windows un fichero abierto no se
             // renombra, y en unix no cuesta nada.
             drop(file);
@@ -937,7 +937,7 @@ impl SpoolWriter {
         // el lock, que es lo que decide si todavía procede — ver la nota de
         // arriba sobre las otras dos formas de no cerrar.
         if !self.spool.record_issued(self.conn_id, &summary.plan_hash) {
-            tokio::task::spawn_blocking(move || {
+            crate::blocking::spawn_blocking(move || {
                 let _ = std::fs::remove_file(&landed);
             })
             .await
@@ -965,7 +965,7 @@ impl SpoolWriter {
         let part = self.part.clone();
         self.hasher = None;
         self.finished = true;
-        let _ = tokio::task::spawn_blocking(move || {
+        let _ = crate::blocking::spawn_blocking(move || {
             drop(file);
             let _ = std::fs::remove_file(&part);
         })
@@ -984,7 +984,7 @@ impl SpoolWriter {
             SpoolError::Malformed("el spool ya está cerrado".to_owned())
         })?;
         let chunk = std::mem::take(&mut self.buf);
-        let (file, mut chunk, res) = tokio::task::spawn_blocking(move || {
+        let (file, mut chunk, res) = crate::blocking::spawn_blocking(move || {
             let res = file.write_all(&chunk);
             (file, chunk, res)
         })
@@ -1083,7 +1083,7 @@ impl SpoolReader {
                 let Some(mut reader) = state.reader.take() else {
                     return Ok(None);
                 };
-                let (reader, batch, ended) = tokio::task::spawn_blocking(move || {
+                let (reader, batch, ended) = crate::blocking::spawn_blocking(move || {
                     let mut batch = Vec::new();
                     let mut read = 0usize;
                     let mut line = Vec::new();

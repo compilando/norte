@@ -287,7 +287,7 @@ pub use norte_config::config_dir;
 /// fichero no parsea.
 pub async fn named_url(dir: &std::path::Path, name: &str) -> Result<String, Error> {
     let dir = dir.to_path_buf();
-    let file = tokio::task::spawn_blocking(move || ConnectionsFile::load(&dir))
+    let file = crate::blocking::spawn_blocking(move || ConnectionsFile::load(&dir))
         .await
         .map_err(|_| Error::Internal { panic: true })?
         .map_err(log_and_map)?;
@@ -312,7 +312,7 @@ pub async fn named_url(dir: &std::path::Path, name: &str) -> Result<String, Erro
 /// [`Error::InvalidPath`] si el fichero existe y no parsea.
 pub async fn named_connections(dir: &std::path::Path) -> Result<Vec<(String, String)>, Error> {
     let dir = dir.to_path_buf();
-    let file = tokio::task::spawn_blocking(move || ConnectionsFile::load(&dir))
+    let file = crate::blocking::spawn_blocking(move || ConnectionsFile::load(&dir))
         .await
         .map_err(|_| Error::Internal { panic: true })?
         .map_err(log_and_map)?;
@@ -370,7 +370,7 @@ impl ConnectionManager {
     /// Carga `connections.toml` (I/O síncrona → `spawn_blocking`, regla 2).
     async fn load_connections(&self) -> Result<ConnectionsFile, Error> {
         let dir = self.config_dir.clone();
-        tokio::task::spawn_blocking(move || ConnectionsFile::load(&dir))
+        crate::blocking::spawn_blocking(move || ConnectionsFile::load(&dir))
             .await
             .map_err(|_| Error::Internal { panic: true })?
             .map_err(log_and_map)
@@ -603,7 +603,7 @@ impl ConnectionManager {
         let dir = self.config_dir.clone();
         let scheme = scheme.to_owned();
         let discovered =
-            tokio::task::spawn_blocking(move || match PluginRegistry::discover(&dir) {
+            crate::blocking::spawn_blocking(move || match PluginRegistry::discover(&dir) {
                 Ok(reg) => reg.resolve_provider(&scheme),
                 Err(e) => {
                     tracing::warn!(error = %e, "el catálogo de plugins no se pudo leer");
@@ -681,7 +681,7 @@ impl ConnectionManager {
                 return Err(Error::Unsupported.into());
             };
             let host = ep.host.clone();
-            let ip = tokio::task::spawn_blocking(move || resolve_ip(&host, port))
+            let ip = crate::blocking::spawn_blocking(move || resolve_ip(&host, port))
                 .await
                 .map_err(|_| Error::Internal { panic: true })??;
             net.hosts.push(format!("{ip}:{port}"));
@@ -694,7 +694,7 @@ impl ConnectionManager {
         // Leer, hashear e instanciar (compila cranelift): todo bloqueante
         // (regla 2). El digest se compara ANTES de instanciar.
         let scheme = ep.scheme.clone();
-        let provider = tokio::task::spawn_blocking(move || {
+        let provider = crate::blocking::spawn_blocking(move || {
             let bytes = std::fs::read(&wasm).map_err(|_| Error::Unsupported)?;
             if norte_plugin_host::wasm_digest_of(&bytes) != wasm_digest {
                 tracing::warn!(plugin = %id, "el plugin.wasm no es el que se aprobó");

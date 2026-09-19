@@ -17,6 +17,8 @@ independently through `PROTOCOL_VERSION`.
   `jq` over a day's file gives everything one task did and who asked for it.
   The method and id a client sends are escaped and cut to 64 characters, so
   a newline in them cannot forge a line in the text log.
+  What the core and the archive parsers log from their blocking I/O threads
+  also carries its task now; before, those lines came out with no parent.
 
 - **Menus in sections** (ADR 0125, bridge 74), in the terminal and the window.
   Each menu is split into groups: some are separated by a plain rule, some

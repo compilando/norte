@@ -40,6 +40,10 @@ tracing.workspace = true
 norte-testkit.workspace = true
 proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+# Un subscriber de verdad para que los spans tengan id: el test de
+# `blocking::spawn_blocking` compara el span de fuera con el de dentro
+# (ADR 0127). Ya está en el workspace; el core lo usa igual.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

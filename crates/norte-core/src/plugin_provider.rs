@@ -236,7 +236,7 @@ where
     let inst = Arc::clone(inst);
     let work = async move {
         let mut guard = inst.lock_owned().await; // espera ASÍNCRONA, cancelable
-        tokio::task::spawn_blocking(move || {
+        crate::blocking::spawn_blocking(move || {
             let r = f(&mut guard);
             drop(guard); // libera el lock en este hilo tras el guest
             r
@@ -246,7 +246,9 @@ where
     let Ok(join) = tokio::time::timeout(op_timeout, work).await else {
         // El guest sigue colgado en el socket (M2): marca muerto el provider para
         // que las ops futuras no bloqueen (leak aceptado de UN hilo por socket
-        // estancado; el humano reconecta).
+        // estancado; el humano reconecta). El hilo lleva el span de su
+        // petición (ADR 0127), así que ese span tampoco se cierra: coste
+        // acotado por el mismo hilo, y lo que registre sigue diciendo de quién.
         dead.store(true, Ordering::Relaxed);
         return Err(Error::ProviderUnavailable { retryable: true });
     };

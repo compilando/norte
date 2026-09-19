@@ -1178,7 +1178,7 @@ fn puede_escribir(s: &EmbeddedSession) -> bool {
 /// El `conn` que reclama la propiedad es el mismo para todo el proceso: en
 /// embebido no hay conexiones, hay UNA superficie.
 pub async fn session_get() -> (norte_proto::methods::Session, bool) {
-    tokio::task::spawn_blocking(|| {
+    crate::blocking::spawn_blocking(|| {
         let s = ui_session_blocking();
         let dueño = s.store.claim(0) && puede_escribir(s);
         (s.store.get(), dueño)
@@ -1218,7 +1218,7 @@ pub async fn session_put(
     revision: u64,
     body: serde_json::Value,
 ) -> Result<u64, norte_proto::Error> {
-    tokio::task::spawn_blocking(move || {
+    crate::blocking::spawn_blocking(move || {
         let s = ui_session_blocking();
         // No ser quien escribe se dice ANTES de tocar la memoria, y con la
         // misma negativa que da el daemon: aceptar el `put` y devolver una

@@ -2,6 +2,9 @@
 //! provider interior, para parsers de archivo que corren en `spawn_blocking`
 //! (regla 2 / ADR 0002: el hilo blocking puede bloquear en `block_on`; el
 //! runtime jamás).
+//!
+//! También [`spawn_blocking`]: la única puerta a ese hilo, porque conserva el
+//! span de quien llama (ADR 0127).
 
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -9,6 +12,22 @@ use std::sync::Arc;
 use futures::StreamExt;
 use norte_proto::{ByteRange, VPath};
 use norte_vfs::Provider;
+
+/// Como [`tokio::task::spawn_blocking`], pero el cierre corre dentro del span
+/// que estaba activo al llamar: lo que los parsers registran sigue colgando
+/// de su tarea (ADR 0127). `clippy.toml` del crate prohíbe la llamada directa.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "el único sitio que puede llamarla: aquí se le añade el span"
+)]
+pub(crate) fn spawn_blocking<F, R>(f: F) -> tokio::task::JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || span.in_scope(f))
+}
 
 /// Tamaño de bloque de lectura: los parsers hacen ráfagas locales (headers,
 /// central directory) — un bloque amortiza los round-trips al interior.
@@ -183,6 +202,24 @@ mod tests {
         (Arc::new(mem), path)
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn el_hilo_bloqueante_corre_dentro_del_span_de_quien_llama() {
+        let dispatch = tracing::Dispatch::new(tracing_subscriber::registry());
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+        let span = tracing::info_span!("task", task_id = 7);
+        let fuera = span.id().expect("span con subscriber");
+        let dentro = {
+            let _e = span.enter();
+            let d = dispatch.clone();
+            spawn_blocking(move || {
+                tracing::dispatcher::with_default(&d, || tracing::Span::current().id())
+            })
+        }
+        .await
+        .expect("el cierre vuelve");
+        assert_eq!(dentro, Some(fuera));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn lee_con_seek_y_cruza_bloques() {
         // > BLOCK para forzar dos bloques.
@@ -191,7 +228,7 @@ mod tests {
         let handle = tokio::runtime::Handle::current();
         let len = content.len() as u64;
         let content2 = content.clone();
-        tokio::task::spawn_blocking(move || {
+        spawn_blocking(move || {
             let mut r = ProviderReader::new(handle, mem, path, len);
             // Lectura que CRUZA la frontera de bloque (256 KiB).
             r.seek(SeekFrom::Start(262_100)).expect("seek");

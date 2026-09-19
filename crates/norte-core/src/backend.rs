@@ -2322,7 +2322,7 @@ impl Backend {
                     // engine embebido no lleva gate, así que el despachador
                     // las mira para el actor `plugin`. Un fichero ilegible se
                     // dice y equivale a ninguno.
-                    let policy = tokio::task::spawn_blocking(crate::PolicyConfig::load)
+                    let policy = crate::blocking::spawn_blocking(crate::PolicyConfig::load)
                         .await
                         .ok()
                         .and_then(|r| match r {
@@ -2501,7 +2501,7 @@ impl Backend {
                 // Registro EFÍMERO por-llamada (I/O sync → spawn_blocking,
                 // regla 2). La verdad vive en el fichero de estado.
                 let dir = crate::connect::config_dir();
-                tokio::task::spawn_blocking(move || {
+                crate::blocking::spawn_blocking(move || {
                     crate::PluginRegistry::discover(&dir).map(|r| r.list())
                 })
                 .await
@@ -2538,7 +2538,7 @@ impl Backend {
                 let dir = crate::connect::config_dir();
                 let id = id.to_owned();
                 let esperado = expected_digest.map(ToOwned::to_owned);
-                let applied = tokio::task::spawn_blocking(move || {
+                let applied = crate::blocking::spawn_blocking(move || {
                     let mut reg = crate::PluginRegistry::discover(&dir)?;
                     // La comprobación de #282 importa MÁS aquí que en el
                     // daemon: éste descubre el catálogo una vez al arrancar,
@@ -2596,7 +2596,7 @@ impl Backend {
             Self::Embedded(_) => {
                 let dir = crate::connect::config_dir();
                 let id = id.to_owned();
-                let applied = tokio::task::spawn_blocking(move || {
+                let applied = crate::blocking::spawn_blocking(move || {
                     let mut reg = crate::PluginRegistry::discover(&dir)?;
                     reg.set_enabled(&id, enabled)
                 })
@@ -2635,7 +2635,7 @@ impl Backend {
                 let dir = crate::connect::config_dir();
                 let id = id.to_owned();
                 let informe =
-                    tokio::task::spawn_blocking(move || crate::plugins::uninstall(&dir, &id))
+                    crate::blocking::spawn_blocking(move || crate::plugins::uninstall(&dir, &id))
                         .await
                         .map_err(|_| Error::Internal { panic: true })?
                         .map_err(|e| {
@@ -2678,7 +2678,7 @@ impl Backend {
                 let id = id.to_owned();
                 let command = command.to_owned();
                 let arg = arg.to_owned();
-                tokio::task::spawn_blocking(move || -> Result<String, Error> {
+                crate::blocking::spawn_blocking(move || -> Result<String, Error> {
                     let reg = crate::PluginRegistry::discover(&dir)
                         .map_err(|_| Error::Io { retryable: false })?;
                     let runtime = norte_plugin_host::PluginRuntime::new()
@@ -2722,7 +2722,7 @@ impl Backend {
                 // 1) Resolver el previewer (discover = IO) en spawn_blocking.
                 let dir = crate::connect::config_dir();
                 let mime = crate::plugins::guess_mimetype(path);
-                let resolved = tokio::task::spawn_blocking(
+                let resolved = crate::blocking::spawn_blocking(
                     move || -> Result<Option<crate::plugins::ResolvedPreviewer>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
@@ -2760,7 +2760,7 @@ impl Backend {
 
                 // 3) Instanciar + renderizar (síncrono, WASM) en spawn_blocking.
                 let mime_owned = mime.to_owned();
-                let output = tokio::task::spawn_blocking(move || -> Result<String, Error> {
+                let output = crate::blocking::spawn_blocking(move || -> Result<String, Error> {
                     let runtime = norte_plugin_host::PluginRuntime::new()
                         .map_err(|_| Error::Internal { panic: false })?;
                     let mut inst = runtime
@@ -2833,7 +2833,7 @@ impl Backend {
                 // 1) Resolver el previewer (discover = IO) en spawn_blocking.
                 let dir = crate::connect::config_dir();
                 let mime = crate::plugins::guess_mimetype(path);
-                let resolved = tokio::task::spawn_blocking(
+                let resolved = crate::blocking::spawn_blocking(
                     move || -> Result<Option<crate::plugins::ResolvedPreviewer>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
@@ -2868,7 +2868,7 @@ impl Backend {
                 // spawn_blocking. Cualquier `RuntimeError` aquí (trap, guest,
                 // o tope excedido) degrada a `Ok(None)` — ver rustdoc.
                 let mime_owned = mime.to_owned();
-                let outcome = tokio::task::spawn_blocking(move || {
+                let outcome = crate::blocking::spawn_blocking(move || {
                     let runtime = norte_plugin_host::PluginRuntime::new()?;
                     let mut inst = runtime.instantiate(&wasm, caps)?;
                     inst.set_settings(settings);
@@ -2921,7 +2921,7 @@ impl Backend {
             Self::Embedded(engine) => {
                 let dir = crate::connect::config_dir();
                 let mime = crate::plugins::guess_mimetype(path);
-                let resolved = tokio::task::spawn_blocking(
+                let resolved = crate::blocking::spawn_blocking(
                     move || -> Result<Option<crate::plugins::ResolvedPreviewer>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
@@ -2948,7 +2948,7 @@ impl Backend {
                 let cap =
                     usize::try_from(crate::plugins::THUMBNAIL_MAX_BYTES).unwrap_or(usize::MAX);
                 bytes.truncate(cap.min(bytes.len()));
-                let outcome = tokio::task::spawn_blocking(move || {
+                let outcome = crate::blocking::spawn_blocking(move || {
                     let runtime = norte_plugin_host::PluginRuntime::new()?;
                     let mut inst = runtime.instantiate_thumbnail(&wasm, caps)?;
                     inst.set_settings(settings);
@@ -3016,7 +3016,7 @@ impl Backend {
                 let dir = crate::connect::config_dir();
                 let entries = crate::plugins::paths_to_entries(paths, kinds);
                 let expected_len = paths.len();
-                let plugins = tokio::task::spawn_blocking(
+                let plugins = crate::blocking::spawn_blocking(
                     move || -> Result<Vec<norte_proto::methods::PluginDecorations>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
@@ -3090,7 +3090,7 @@ impl Backend {
                 let cfg = crate::connect::config_dir();
                 let (plugin_id, renamer_id) = (plugin_id.to_owned(), renamer_id.to_owned());
                 let (dir, names) = (dir.clone(), names.to_vec());
-                tokio::task::spawn_blocking(move || {
+                crate::blocking::spawn_blocking(move || {
                     let reg = crate::PluginRegistry::discover(&cfg)
                         .map_err(|_| Error::Io { retryable: false })?;
                     let Some(resolved) = reg.resolve_renamer(&plugin_id, &renamer_id) else {
@@ -3174,7 +3174,7 @@ impl Backend {
                 let cfg = crate::connect::config_dir();
                 let (plugin_id, organizer_id) = (plugin_id.to_owned(), organizer_id.to_owned());
                 let (dir, names) = (dir.clone(), names.to_vec());
-                tokio::task::spawn_blocking(move || {
+                crate::blocking::spawn_blocking(move || {
                     let reg = crate::PluginRegistry::discover(&cfg)
                         .map_err(|_| Error::Io { retryable: false })?;
                     let Some(resolved) = reg.resolve_organizer(&plugin_id, &organizer_id) else {
@@ -3261,8 +3261,8 @@ impl Backend {
                 let location = paths.first().and_then(norte_proto::VPath::parent);
                 let column_id_owned = column_id.to_owned();
                 let plugin_id_owned = plugin_id.to_owned();
-                let values =
-                    tokio::task::spawn_blocking(move || -> Result<Vec<Option<String>>, Error> {
+                let values = crate::blocking::spawn_blocking(
+                    move || -> Result<Vec<Option<String>>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
                         // ESE plugin o ninguno (#120): dos plugins consentidos
@@ -3292,9 +3292,10 @@ impl Backend {
                             &entries,
                             expected_len,
                         ))
-                    })
-                    .await
-                    .map_err(|_| Error::Internal { panic: true })??;
+                    },
+                )
+                .await
+                .map_err(|_| Error::Internal { panic: true })??;
                 Ok(values)
             }
             #[cfg(unix)]
@@ -3333,7 +3334,7 @@ impl Backend {
         match self {
             Self::Embedded(_) => {
                 let dir_cfg = crate::connect::config_dir();
-                tokio::task::spawn_blocking(
+                crate::blocking::spawn_blocking(
                     move || -> Result<Option<norte_proto::methods::PanelFrame>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir_cfg)
                             .map_err(|_| Error::Io { retryable: false })?;
@@ -3400,7 +3401,7 @@ impl Backend {
             Self::Embedded(_) => {
                 let dir = crate::connect::config_dir();
                 let id = id.to_owned();
-                let keys = tokio::task::spawn_blocking(
+                let keys = crate::blocking::spawn_blocking(
                     move || -> Result<Vec<norte_proto::methods::PluginConfigKeyWire>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
@@ -3452,7 +3453,7 @@ impl Backend {
             Self::Embedded(_) => {
                 let dir = crate::connect::config_dir();
                 let id = id.to_owned();
-                tokio::task::spawn_blocking(
+                crate::blocking::spawn_blocking(
                     move || -> Result<norte_proto::methods::PluginHelpResult, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
@@ -3489,7 +3490,7 @@ impl Backend {
                 let id = id.to_owned();
                 let key = key.to_owned();
                 let value = value.to_owned();
-                tokio::task::spawn_blocking(move || -> Result<(), Error> {
+                crate::blocking::spawn_blocking(move || -> Result<(), Error> {
                     let mut reg = crate::PluginRegistry::discover(&dir)
                         .map_err(|_| Error::Io { retryable: false })?;
                     reg.set_config(&id, &key, &value)

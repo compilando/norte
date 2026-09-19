@@ -3446,14 +3446,16 @@ impl Engine {
         // DIRECTA (ADR 0042) que corre en el executor async. Fuera de él
         // (reglas 2 y 3): un hilo de bloqueo no puede dejar sin atender al
         // resto de conexiones del daemon.
-        tokio::task::spawn_blocking(move || crate::rename::plan_batch(&owned, &names, name_caps))
-            .await
-            .map(|plan| (crate::rename::DirPlan::bind(dir, plan), provider))
-            .map_err(|e| {
-                let panic = e.is_panic();
-                tracing::error!(error = %e, panic, "el planificador de renames no terminó");
-                Error::Internal { panic }
-            })
+        crate::blocking::spawn_blocking(move || {
+            crate::rename::plan_batch(&owned, &names, name_caps)
+        })
+        .await
+        .map(|plan| (crate::rename::DirPlan::bind(dir, plan), provider))
+        .map_err(|e| {
+            let panic = e.is_panic();
+            tracing::error!(error = %e, panic, "el planificador de renames no terminó");
+            Error::Internal { panic }
+        })
     }
 
     /// Ejecuta un lote de renames dentro de `dir` como UNA Task y UNA unidad

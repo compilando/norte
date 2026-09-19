@@ -821,10 +821,11 @@ impl Daemon {
             .plugins_dir
             .clone()
             .unwrap_or_else(crate::connect::config_dir);
-        let (listener, uid, socket_path, plugins, plugin_runtime) = tokio::task::spawn_blocking({
-            let requested = cfg.socket_path;
-            let plugins_dir = cfg.plugins_dir;
-            move || -> Result<
+        let (listener, uid, socket_path, plugins, plugin_runtime) =
+            crate::blocking::spawn_blocking({
+                let requested = cfg.socket_path;
+                let plugins_dir = cfg.plugins_dir;
+                move || -> Result<
                 (
                     std::os::unix::net::UnixListener,
                     u32,
@@ -840,10 +841,10 @@ impl Daemon {
                 let (plugins, plugin_runtime) = discover_plugins(plugins_dir)?;
                 Ok((listener, uid, socket_path, plugins, plugin_runtime))
             }
-        })
-        .await
-        // Un panic del closure NO es un problema del dir: categoría honesta.
-        .map_err(|e| DaemonError::Io(std::io::Error::other(e)))??;
+            })
+            .await
+            // Un panic del closure NO es un problema del dir: categoría honesta.
+            .map_err(|e| DaemonError::Io(std::io::Error::other(e)))??;
         listener.set_nonblocking(true)?;
         let listener = UnixListener::from_std(listener)?;
 
@@ -1118,7 +1119,8 @@ impl Daemon {
         let socket_path = self.socket_path.clone();
         let socket_para_borrar = socket_path.clone();
         // Regla 2: ni un unlink síncrono en el runtime.
-        let _ = tokio::task::spawn_blocking(move || std::fs::remove_file(socket_para_borrar)).await;
+        let _ =
+            crate::blocking::spawn_blocking(move || std::fs::remove_file(socket_para_borrar)).await;
         let mut hard_done = false;
         loop {
             if shared.hard_shutdown.is_cancelled() && !hard_done {
@@ -1169,7 +1171,7 @@ async fn open_session(
     let Some(dir) = state_dir else {
         return Ok((None, norte_proto::methods::Session::default(), false));
     };
-    tokio::task::spawn_blocking(move || {
+    crate::blocking::spawn_blocking(move || {
         // Un lock que no se puede ni intentar (permisos, disco lleno) NO
         // impide arrancar: deja al core suelto, que es la degradación que ya
         // existe para el segundo core.
@@ -1360,7 +1362,7 @@ impl EstadoEscritura {
         }
         let d = dir.to_path_buf();
         // Regla 2: el lock y la lectura son I/O de disco.
-        let intento = tokio::task::spawn_blocking(move || {
+        let intento = crate::blocking::spawn_blocking(move || {
             let Some(lock) = crate::ui_session::disk::lock(&d)? else {
                 return Ok::<_, std::io::Error>(None);
             };
@@ -1418,7 +1420,8 @@ async fn flush_session(store: &Arc<crate::ui_session::SessionStore>, dir: &Path)
     let dir = dir.to_path_buf();
     // Regla 2: la escritura es I/O de disco y va a un pool blocking.
     let escrito =
-        tokio::task::spawn_blocking(move || crate::ui_session::disk::write(&dir, &session)).await;
+        crate::blocking::spawn_blocking(move || crate::ui_session::disk::write(&dir, &session))
+            .await;
     match escrito {
         Ok(Ok(())) => {}
         // Lo sucio se lo llevó `take_dirty`, así que un fallo SIN volver a
@@ -3784,7 +3787,7 @@ async fn handle_plugin_set_approval(
             "unknown plugin id",
         ));
     }
-    tokio::task::spawn_blocking(move || crate::plugins::persist_state(&dir, &snapshot))
+    crate::blocking::spawn_blocking(move || crate::plugins::persist_state(&dir, &snapshot))
         .await
         .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "persist task panicked"))?
         .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
@@ -3829,7 +3832,7 @@ async fn handle_plugin_set_enabled(
             "unknown plugin id",
         ));
     }
-    tokio::task::spawn_blocking(move || crate::plugins::persist_state(&dir, &snapshot))
+    crate::blocking::spawn_blocking(move || crate::plugins::persist_state(&dir, &snapshot))
         .await
         .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "persist task panicked"))?
         .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
@@ -3883,7 +3886,7 @@ async fn handle_plugin_uninstall(
         .config_dir()
         .to_path_buf();
     let id = p.id.clone();
-    let informe = tokio::task::spawn_blocking(move || crate::plugins::uninstall(&dir, &id))
+    let informe = crate::blocking::spawn_blocking(move || crate::plugins::uninstall(&dir, &id))
         .await
         .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "uninstall task panicked"))?
         .map_err(|e| {
@@ -3953,7 +3956,7 @@ async fn handle_plugin_run_command(
     let runtime = Arc::clone(&shared.plugin_runtime);
     let command = p.command.clone();
     let arg = p.arg.clone();
-    let output = tokio::task::spawn_blocking(move || {
+    let output = crate::blocking::spawn_blocking(move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
         // P2 Task 4a: entrega `[config]` YA resuelto (Task 2) al guest, mismo
         // criterio que `PluginRegistry::run_command` (uso embebido).
@@ -4080,7 +4083,7 @@ async fn handle_plugin_preview(
     // `Send+Sync` pero no `Clone`: se clona el `Arc`. `mime` es `&'static` → se
     // mueve tal cual al closure.
     let runtime = Arc::clone(&shared.plugin_runtime);
-    let output = tokio::task::spawn_blocking(move || {
+    let output = crate::blocking::spawn_blocking(move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
         // P2 Task 4a: entrega `[config]` YA resuelto (Task 2) al previewer,
         // igual que `handle_plugin_run_command` ya hace para comandos.
@@ -4170,7 +4173,7 @@ async fn handle_plugin_thumbnail(
 
     let runtime = Arc::clone(&shared.plugin_runtime);
     let max_edge = p.max_edge;
-    let outcome = tokio::task::spawn_blocking(move || {
+    let outcome = crate::blocking::spawn_blocking(move || {
         let mut inst = runtime.instantiate_thumbnail(&wasm, caps)?;
         inst.set_settings(settings);
         inst.render_thumbnail(mime, &bytes, max_edge)
@@ -4254,7 +4257,7 @@ async fn handle_plugin_panel_render(
     // lectura impide.
     let dir = p.dir.clone();
     let climb = matches!(actor, Actor::User);
-    let outcome = tokio::task::spawn_blocking(move || {
+    let outcome = crate::blocking::spawn_blocking(move || {
         crate::plugins::render_panel_blocking(
             &runtime,
             resuelto,
@@ -4324,7 +4327,7 @@ async fn handle_plugin_preview_styled(
     let (content, lossy) = crate::plugins::decode_for_preview(bytes);
 
     let runtime = Arc::clone(&shared.plugin_runtime);
-    let outcome = tokio::task::spawn_blocking(move || {
+    let outcome = crate::blocking::spawn_blocking(move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
         inst.set_settings(settings);
         inst.render_styled_preview(
@@ -4413,7 +4416,7 @@ async fn handle_plugin_rename_plan(
     let runtime = Arc::clone(&shared.plugin_runtime);
     let climb = matches!(actor, Actor::User);
     let (plugin_id, renamer_id, dir, names) = (p.plugin_id, p.renamer_id, p.dir, p.names);
-    let salida = tokio::task::spawn_blocking(move || {
+    let salida = crate::blocking::spawn_blocking(move || {
         crate::plugins::run_rename_plan(&runtime, resolved, &renamer_id, Some(&dir), climb, &names)
     })
     .await
@@ -4468,7 +4471,7 @@ async fn handle_plugin_organize_plan(
     // El plan se ata a ESTE directorio, y el spawn se lleva el suyo: el token
     // tiene que salir del mismo dir que se le pasó al plugin.
     let del_plan = dir.clone();
-    let salida = tokio::task::spawn_blocking(move || {
+    let salida = crate::blocking::spawn_blocking(move || {
         crate::plugins::run_organize_plan(
             &runtime,
             resolved,
@@ -4572,7 +4575,7 @@ async fn handle_plugin_decorate(
         reg.resolve_decorators()
     };
     let runtime = Arc::clone(&shared.plugin_runtime);
-    let plugins = tokio::task::spawn_blocking(move || {
+    let plugins = crate::blocking::spawn_blocking(move || {
         let mut out = Vec::new();
         for ((id, _name, wasm, caps, settings), slot) in resolved {
             let Ok(mut inst) = runtime.instantiate_decorator(&wasm, caps) else {
@@ -4666,7 +4669,7 @@ async fn handle_plugin_column_values(
     });
     let climb = matches!(actor, Actor::User);
     let pool = Arc::clone(&shared.column_pool);
-    let values = tokio::task::spawn_blocking(move || {
+    let values = crate::blocking::spawn_blocking(move || {
         pool.column_values(
             &runtime,
             resolved,
@@ -4750,7 +4753,7 @@ async fn handle_plugin_help(
     // `HelpJob::read` es también quien TOPA la lectura (`max_bytes + 1`): un
     // `help.md` disperso de 100 GiB no puede convertir esta llamada en una
     // reserva de 100 GiB. Ver su rustdoc.
-    let page = tokio::task::spawn_blocking(move || job.read())
+    let page = crate::blocking::spawn_blocking(move || job.read())
         .await
         .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "plugin help task panicked"))?;
     to_value(&page)
@@ -4792,7 +4795,7 @@ async fn handle_plugin_set_config(
     // re-`resolve_settings` son I/O síncrona), así que el reactor async
     // nunca bloquea — solo un hilo de la pool bloqueante sostiene el lock.
     let shared = Arc::clone(shared);
-    tokio::task::spawn_blocking(move || {
+    crate::blocking::spawn_blocking(move || {
         let mut reg = shared.plugins.lock().expect("plugins lock sano");
         reg.set_config(&id, &key, &value)
     })
