@@ -294,6 +294,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`norte ai rename` can swap names.** It applied the model's plan one
+  rename at a time, so `a↔b` failed on both with "already exists". It now
+  applies the plan the way the terminal and the window do: as one batch the
+  core checks first, one undo step, and nothing touched if the directory
+  changed while you read the plan. A plan the core cannot apply is refused
+  whole, with the names that collide. Exit codes: 2 means refused and
+  nothing touched, 1 means the batch ran and failed or was rolled back. When
+  a rollback gets stuck, it prints the same report the window shows: what
+  could not be put back and its current name, on a line of its own. Asking
+  the model now times out after two minutes, as it already did in the
+  terminal and the window.
+- **`norte sync` no longer says "nothing to sync" about a plan it did not
+  receive.** A plan that announced steps and delivered none was read as two
+  trees already in sync, and exited 0. It now exits 2 with the integrity
+  error, because the CLI asks the same question the approve key asks in the
+  terminal and the window.
+
 - **In the window, the keys that scroll the help follow your keymap**
   (bridge 76). Page Up/Down, Home/End and the section keys were fixed keys
   there, so a rebind changed the terminal and not the window. And Page

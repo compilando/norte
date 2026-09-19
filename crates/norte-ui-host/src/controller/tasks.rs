@@ -1313,11 +1313,7 @@ impl Estado {
 
     /// `true` si el lote no dejó nada que buscar ni que rematar.
     pub(super) fn lote_limpio(r: &norte_proto::methods::FsRenameBatchReportResult) -> bool {
-        r.stuck.is_none()
-            && r.uncertain.is_none()
-            && r.failed_pair.is_none()
-            && r.compensations_lost == 0
-            && r.rolled_back == 0
+        norte_frontend::batch_report_is_clean(r)
     }
 
     /// El resumen de una línea que se queda en la fila del tablero.
@@ -1341,52 +1337,24 @@ impl Estado {
     /// El cuerpo del informe: qué se aplicó, qué no se pudo devolver, y CÓMO
     /// SE LLAMA AHORA lo que se quedó a medias.
     ///
-    /// El nombre de ahora es lo único accionable que hay aquí, así que va
-    /// como línea de ruta —enmascarada y marcada— y no dentro de una frase:
-    /// una ruta metida en una frase la puede suplantar otra ruta.
+    /// Las líneas las decide `norte_frontend::batch_report_lines`, que es
+    /// también lo que imprime la CLI; aquí solo se pintan. El nombre de ahora
+    /// va como línea de ruta —enmascarada y marcada—, nunca dentro de una
+    /// frase.
     pub(super) fn cuerpo_de_lote(
         &self,
         r: &norte_proto::methods::FsRenameBatchReportResult,
     ) -> Vec<crate::dto::DialogLine> {
-        let frase = |clave: &str| crate::dto::DialogLine {
-            text: clamp_display(norte_i18n::t_in(self.lang, clave)),
-            hostile: false,
-        };
-        let mut cuerpo = vec![crate::dto::DialogLine {
-            text: clamp_display(norte_i18n::ta_in(
-                self.lang,
-                "modal-batch-summary",
-                &[
-                    ("applied", &r.applied.to_string()),
-                    ("back", &r.rolled_back.to_string()),
-                ],
-            )),
-            hostile: false,
-        }];
-        if let Some(paso) = &r.stuck {
-            cuerpo.push(frase("modal-batch-stuck"));
-            cuerpo.push(Self::linea_de_ruta(&paso.to));
-            cuerpo.push(frase(if paso.journalled {
-                "modal-batch-stuck-journalled"
-            } else {
-                "modal-batch-stuck-unjournalled"
-            }));
-        }
-        if let Some(paso) = &r.uncertain {
-            cuerpo.push(frase("modal-batch-uncertain"));
-            cuerpo.push(Self::linea_de_ruta(&paso.to));
-        }
-        if r.compensations_lost > 0 {
-            cuerpo.push(crate::dto::DialogLine {
-                text: clamp_display(norte_i18n::ta_in(
-                    self.lang,
-                    "modal-batch-compensations-lost",
-                    &[("n", &r.compensations_lost.to_string())],
-                )),
-                hostile: false,
-            });
-        }
-        cuerpo
+        norte_frontend::batch_report_lines(r, self.lang)
+            .into_iter()
+            .map(|linea| match linea {
+                norte_frontend::BatchReportLine::Phrase(texto) => crate::dto::DialogLine {
+                    text: clamp_display(texto),
+                    hostile: false,
+                },
+                norte_frontend::BatchReportLine::Path(p) => Self::linea_de_ruta(&p),
+            })
+            .collect()
     }
 
     /// Apila un diálogo, con techo.

@@ -4,7 +4,6 @@
 use std::process::ExitCode;
 
 use anyhow::Context;
-use norte_core::Engine;
 use norte_core::backend::Backend;
 use norte_proto::VPath;
 
@@ -35,30 +34,6 @@ fn is_archive_url(s: &str) -> bool {
     !inner.is_empty() && !inner.contains('/')
 }
 
-/// #95: el daemon honra `[archive]` de norte.toml (capa usuario) — antes
-/// servía con los defaults compilados y ni operador ni policy podían bajar
-/// los límites anti-bomba para agentes. Fail-loud: un norte.toml roto
-/// aborta el arranque (mismo criterio que policy.toml).
-#[cfg(unix)]
-pub(crate) async fn apply_archive_limits(engine: &Engine) -> anyhow::Result<()> {
-    if let Some(limits) =
-        tokio::task::spawn_blocking(norte_core::archive_config::load_archive_limits)
-            .await
-            .context("carga de norte.toml")?
-            .context("norte.toml inválido ([archive])")?
-    {
-        engine.set_archive_limits(limits);
-    }
-    // Ítem 11 del roadmap: qué programa lee los RAR. `None` = sondear PATH.
-    engine.set_rar_delegate(
-        tokio::task::spawn_blocking(norte_core::archive_config::load_rar_delegate)
-            .await
-            .context("carga de norte.toml")?
-            .context("norte.toml inválido ([archive] rar_delegate)")?,
-    );
-    Ok(())
-}
-
 /// ¿`s` es una URL que la CLI enruta como remota? Los schemes del core, los
 /// de archivo-como-directorio, y los que declare un provider plugin
 /// INSTALADO (`plugin_schemes`): en cuanto hay quien sirve `webdav://`, un
@@ -83,6 +58,18 @@ fn plugin_schemes() -> &'static [String] {
     })
 }
 
+/// Un argumento de la línea de órdenes, como `VPath`.
+///
+/// Se queda en la CLI a propósito, y no en `norte-frontend` junto a
+/// `goto::parece_ruta`: son DOS gramáticas para dos entradas distintas. El
+/// «ir a» de la TUI y la ventana rechaza la ruta relativa (a dónde lleva no
+/// puede depender del panel) y toma cualquier `x://` como URL; un argumento
+/// de shell es relativo al cwd casi siempre, y `a://b` tiene que seguir
+/// siendo un fichero local salvo que su esquema esté en la allowlist
+/// ([`REMOTE_SCHEMES`], los de archivo y los de plugins instalados). Lo que
+/// sí es del core —rechazar un `user:pass@`, saber si un esquema tiene quien
+/// lo sirva— ya lo hacen `VPath::parse` y el conector; aquí solo se decide si
+/// un argumento es URL o ruta.
 pub(crate) fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
     // Una URL remota va por el parser wire; todo lo demás es un path NATIVO
     // local (bytes, jamás forzados a UTF-8 — un arg no-UTF8 no puede ser URL

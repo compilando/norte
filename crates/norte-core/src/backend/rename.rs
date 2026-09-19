@@ -108,7 +108,8 @@ impl Backend {
     }
 
     /// Plan de rename revisable de `dir` vía IA (M4-IA, ADR 0031). NO muta:
-    /// aplicar el plan son N [`Backend::move_`] gobernados. AMBOS brazos
+    /// aplicarlo es un lote, [`Backend::rename_batch_plan`] y después
+    /// [`Backend::rename_batch`] (así lo hacen la TUI, la ventana y la CLI). AMBOS brazos
     /// están acotados por `AI_CALL_TIMEOUT` (2 min): un endpoint de proveedor en
     /// dead-air jamás cuelga el frontend embebido ni el remoto.
     ///

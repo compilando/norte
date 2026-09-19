@@ -8,10 +8,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use norte_core::Engine;
 use norte_core::backend::Backend;
-use norte_vfs::Provider;
-use norte_vfs_local::LocalProvider;
 
-use crate::cmd::connect::apply_archive_limits;
 use crate::{DaemonCmd, McpCmd, PolicyCmd};
 
 /// Resuelve el socket del daemon y un `spawn_cmd` de autoarranque (este mismo
@@ -248,164 +245,81 @@ pub(crate) async fn daemon_cmd(
     cmd: DaemonCmd,
     anillo: Option<norte_config::logring::LogRing>,
 ) -> anyhow::Result<ExitCode> {
-    use norte_core::daemon::{
-        Client, Daemon, DaemonApprovalResolver, DaemonConfig, default_socket_path,
-    };
+    use norte_core::daemon::{Client, default_socket_path};
     match cmd {
         DaemonCmd::Run {
             socket,
             idle_timeout,
         } => {
-            // El daemon es el dueño ÚNICO del journal (spec §4, ADR 0024) y
-            // quien instala policy + approvals: los agentes MCP se gobiernan
-            // aquí, jamás en el puente.
-            let journal_path = norte_core::connect::config_dir().join("journal.db");
-            // El aviso NOMBRA la causa probable: desde #167 un frontend embebido
-            // (un `ntc` sin `--daemon`) se queda el lock exclusivo, y sin esta
-            // frase el operador recibe un texto de sqlx y ninguna pista de qué
-            // cerrar. Desde #177 ese frontend solo lo tiene si YA MUTÓ algo, así
-            // que el caso corriente —arrancar el daemon con un `ntc` abierto—
-            // volvió a funcionar.
-            let journal = norte_core::SqliteJournal::open(&journal_path)
-                .await
-                .context(
-                    "no se pudo abrir el journal (si dice «database is locked», otro \
-                     proceso norte lo tiene: ¿un `ntc` embebido, u otro daemon?)",
-                )?;
-            // Barrido de spools de sincronización (ADR 0049), junto al journal
-            // y por lo mismo: un cierre violento deja detrás ficheros que
-            // AUTORIZAN escrituras, y nadie más los va a recoger. Se llevan
-            // todos, no solo los caducados — aquí no hay ninguna conexión viva
-            // todavía, así que todo spool que exista es de una conexión muerta.
-            //
-            // Va DESPUÉS del journal a propósito: su lock exclusivo es lo que
-            // garantiza que no hay otro daemon sobre este directorio de estado
-            // al que le estemos barriendo un plan vivo.
-            //
-            // Un barrido que falla NO impide arrancar. Lo que impide aplicar un
-            // plan de un arranque anterior no es esto, es que el registro de
-            // planes emitidos vive en memoria y nace vacío; lo que queda en
-            // disco es basura, y un daemon que se niega a arrancar por un
-            // fichero que no se deja borrar es peor fallo que el que evita.
-            //
-            // El `Spool` se construye UNA vez y se clona: dos `Spool::new` son
-            // dos registros de emisión que no se ven. Este de aquí barre Y es el
-            // que se le instala al engine unas líneas más abajo, que es de donde
-            // lo saca `sync.plan` y el cierre de cada conexión.
-            let spool = norte_core::sync::Spool::new(norte_core::connect::config_dir());
-            match spool.sweep().await {
-                Ok(r) if r.removed == 0 && r.is_clean() => {}
-                Ok(r) if r.is_clean() => {
-                    eprintln!(
-                        "{}",
-                        norte_i18n::ta("cli-spool-swept", &[("count", &r.removed.to_string())])
-                    );
+            // QUÉ lleva el daemon lo decide el core (regla 7,
+            // `norte_core::daemon::componer`); aquí queda lo del binario: pintar
+            // los avisos en el idioma del operador, el anillo de registro y las
+            // señales.
+            use norte_core::daemon::componer::{Aviso, ErrorDeArranque, Opciones};
+            let compuesto = norte_core::daemon::componer(Opciones {
+                socket,
+                idle_timeout: (idle_timeout > 0)
+                    .then(|| std::time::Duration::from_secs(idle_timeout)),
+                // La sesión de UI (L2) vive en el directorio de estado. Sin él
+                // —un entorno sin HOME— el daemon sirve la pantalla y no la
+                // guarda.
+                state_dir: norte_config::dirs::state_dir(),
+            })
+            .await;
+            let (daemon, avisos) = match compuesto {
+                Ok(c) => c,
+                // El aviso NOMBRA la causa probable: desde #167 un frontend
+                // embebido (un `ntc` sin `--daemon`) se queda el lock exclusivo,
+                // y sin esta frase el operador recibe un texto de sqlx y ninguna
+                // pista de qué cerrar.
+                Err(ErrorDeArranque::Journal(causa)) => {
+                    return Err(anyhow::Error::new(causa).context(
+                        "no se pudo abrir el journal (si dice «database is locked», otro \
+                         proceso norte lo tiene: ¿un `ntc` embebido, u otro daemon?)",
+                    ));
                 }
-                Ok(r) => eprintln!(
-                    "aviso: barridos {} planes de sync huérfanos y {} no se dejaron borrar en {}",
-                    r.removed,
-                    r.failed,
-                    spool.dir().display()
-                ),
-                Err(e) => eprintln!(
-                    "{}",
-                    norte_i18n::ta(
-                        "cli-spool-sweep-failed",
-                        &[
-                            ("path", &spool.dir().display().to_string()),
-                            ("error", &e.to_string()),
-                        ]
-                    )
-                ),
-            }
-            // policy.toml: ausente = sin reglas = un agente DENTRO de scope
-            // aún deniega (fail-closed, `no-rule`). docs/policy-example.toml
-            // trae el punto de partida (`action = "ask"`).
-            let cfg = tokio::task::spawn_blocking(norte_core::PolicyConfig::load)
-                .await
-                .context("carga de policy.toml")?
-                .context("policy.toml inválido")?;
-            let scopes = norte_core::ScopeRegistry::new();
-            let approvals = std::sync::Arc::new(DaemonApprovalResolver::default());
-            let engine = Engine::with_journal(std::sync::Arc::new(journal)).with_policy(
-                std::sync::Arc::new(norte_core::ScopedPolicy::new(scopes.clone(), cfg)),
-                std::sync::Arc::clone(&approvals) as _,
-            );
-            // Índice de búsqueda (M4, ADR 0034): junto al journal en config_dir.
-            // Si no abre, se sigue sin él (index.* → Unsupported, fail-closed).
-            let index_path = norte_core::connect::config_dir().join("index.db");
-            let engine = match norte_core::Index::open(&index_path).await {
-                Ok(idx) => engine.with_index(std::sync::Arc::new(idx)),
-                Err(e) => {
-                    eprintln!(
-                        "{}",
-                        norte_i18n::ta("cli-warn-no-index", &[("error", &e.to_string())])
-                    );
-                    engine
-                }
+                Err(e) => return Err(e.into()),
             };
-            // EL spool, el mismo que acaba de barrer: sin él `sync.plan`
-            // responde `Unsupported` (un plan que no se puede retener tampoco se
-            // puede aplicar).
-            engine.set_spool(spool);
-            engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
-            apply_archive_limits(&engine).await?;
-            engine.set_connector(std::sync::Arc::new(
-                norte_core::connect::ConnectionManager::new(norte_core::connect::config_dir()),
-            ));
-            // IA (M4-IA, ADR 0031): opt-in. Sin [ai], sin proveedor o con
-            // config rota el engine degrada (ai.* → Unsupported / gate
-            // PolicyDenied); jamás aborta el arranque del daemon.
-            match tokio::task::spawn_blocking(norte_core::ai::AiConfig::load).await {
-                Ok(Ok(config)) => {
-                    if let Some(pcfg) = config.rename_provider_config().cloned() {
-                        match norte_core::ai::resolve_and_build(
-                            &pcfg,
-                            norte_core::connect::config_dir(),
+            for aviso in avisos {
+                match aviso {
+                    Aviso::SpoolsBarridos(n) => eprintln!(
+                        "{}",
+                        norte_i18n::ta("cli-spool-swept", &[("count", &n.to_string())])
+                    ),
+                    Aviso::SpoolsAMedias {
+                        removed,
+                        failed,
+                        dir,
+                    } => eprintln!(
+                        "aviso: barridos {removed} planes de sync huérfanos y {failed} no se \
+                         dejaron borrar en {}",
+                        dir.display()
+                    ),
+                    Aviso::SpoolsSinBarrer { dir, error } => eprintln!(
+                        "{}",
+                        norte_i18n::ta(
+                            "cli-spool-sweep-failed",
+                            &[("path", &dir.display().to_string()), ("error", &error)]
                         )
-                        .await
-                        {
-                            Ok(provider) => engine.set_ai_provider(provider),
-                            Err(e) => eprintln!(
-                                "aviso: proveedor de IA no disponible ({e}); ai.* dará Unsupported"
-                            ),
-                        }
-                    }
-                    // Embeddings (M4-IA-2): proveedor propio, opt-in igual.
-                    if let Some(w) = norte_core::ai::install_embed_provider(&engine, &config).await
-                    {
-                        eprintln!("{w}");
-                    }
-                    engine.set_ai_config(config);
+                    ),
+                    Aviso::SinIndice(error) => eprintln!(
+                        "{}",
+                        norte_i18n::ta("cli-warn-no-index", &[("error", &error)])
+                    ),
+                    Aviso::IaNoDisponible(e) => eprintln!(
+                        "aviso: proveedor de IA no disponible ({e}); ai.* dará Unsupported"
+                    ),
+                    Aviso::IaEmbeddings(w) => eprintln!("{w}"),
+                    Aviso::IaInvalida(error) => eprintln!(
+                        "{}",
+                        norte_i18n::ta("cli-warn-ai-invalid", &[("error", &error)])
+                    ),
+                    Aviso::IaNoCargo(error) => eprintln!(
+                        "{}",
+                        norte_i18n::ta("cli-warn-ai-load-failed", &[("error", &error)])
+                    ),
                 }
-                Ok(Err(e)) => eprintln!(
-                    "{}",
-                    norte_i18n::ta("cli-warn-ai-invalid", &[("error", &e.to_string())])
-                ),
-                Err(e) => eprintln!(
-                    "{}",
-                    norte_i18n::ta("cli-warn-ai-load-failed", &[("error", &e.to_string())])
-                ),
             }
-            let daemon = Daemon::bind_with_policy(
-                std::sync::Arc::new(engine),
-                scopes,
-                approvals,
-                DaemonConfig {
-                    socket_path: socket,
-                    idle_timeout: (idle_timeout > 0)
-                        .then(|| std::time::Duration::from_secs(idle_timeout)),
-                    // La sesión de UI (L2) vive en el directorio de estado, y
-                    // se pasa EXPLÍCITA: el default no persiste nada, para que
-                    // ningún test ni embebedor escriba el estado real por
-                    // descuido. Sin directorio de estado —un entorno sin HOME—
-                    // el daemon sirve la pantalla y no la guarda.
-                    state_dir: norte_config::dirs::state_dir(),
-                    ..DaemonConfig::default()
-                },
-            )
-            .await
-            .context("no se pudo enlazar el daemon")?;
             // El anillo se monta entre el bind y el `run`, que es donde puede
             // montarse: lo tiene el proceso (lo creó el subscriber), no la
             // config del daemon.

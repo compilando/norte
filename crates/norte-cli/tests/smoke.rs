@@ -501,3 +501,166 @@ fn paths_respeta_el_config_dir_del_entorno() {
         "`paths` no puede crear lo que dice que falta"
     );
 }
+
+/// `norte daemon run` arranca de punta a punta —journal, spool, policy,
+/// índice, `bind`— y `norte daemon stop` lo para limpio.
+///
+/// Es el test de proceso de `norte_core::daemon::componer`: la composición
+/// del daemon vivía en la CLI (regla 7) y ningún test la ejercía entera. Se
+/// espera LEYENDO la línea que dice dónde escucha, no con un `sleep`: esa
+/// línea sale después del `bind`, así que su llegada es la señal exacta.
+#[cfg(unix)]
+#[test]
+fn daemon_run_arranca_y_stop_lo_para() {
+    use std::io::BufRead as _;
+    let config = tempfile::tempdir().expect("config");
+    let estado = tempfile::tempdir().expect("estado");
+    let socket = config.path().join("d.sock");
+    let bin = assert_cmd::cargo::cargo_bin("norte");
+    let mut hijo = std::process::Command::new(&bin)
+        .env("NORTE_CONFIG_DIR", config.path())
+        .env("XDG_STATE_HOME", estado.path())
+        .args(["daemon", "run", "--idle-timeout", "0", "--socket"])
+        .arg(&socket)
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("arranca");
+    let stderr = hijo.stderr.take().expect("stderr");
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Se lee HASTA EL FINAL, no hasta la línea buscada: soltar el pipe antes
+    // haría que el siguiente `eprintln!` del daemon fallara y lo tumbara.
+    std::thread::spawn(move || {
+        for linea in std::io::BufReader::new(stderr).lines() {
+            let Ok(linea) = linea else { break };
+            let _ = tx.send(linea);
+        }
+    });
+    let mut visto = Vec::new();
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+            Ok(l) if l.contains(&socket.display().to_string()) => break,
+            Ok(l) => visto.push(l),
+            Err(e) => {
+                let _ = hijo.kill();
+                panic!("el daemon no llegó a escuchar ({e}): {visto:#?}");
+            }
+        }
+    }
+    let parada = norte()
+        .env("NORTE_CONFIG_DIR", config.path())
+        .args(["daemon", "stop", "--socket"])
+        .arg(&socket)
+        .output()
+        .expect("stop");
+    assert!(
+        parada.status.success(),
+        "stop: {}",
+        String::from_utf8_lossy(&parada.stderr)
+    );
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(hijo.wait());
+    });
+    let fin = rx
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("el daemon sale tras el stop")
+        .expect("wait");
+    assert!(fin.success(), "sale limpio: {fin:?}");
+}
+
+/// Un Ollama de mentira en `127.0.0.1:0` que contesta UNA petición de
+/// `/api/chat` con `contenido` como único delta, y se cierra.
+///
+/// Lee la petición entera (cabeceras y el `Content-Length` del cuerpo) antes
+/// de contestar: cerrar con bytes sin leer en el socket hace que el kernel
+/// mande un RST, y el cliente vería un error de conexión en vez de la
+/// respuesta.
+fn ollama_de_mentira(contenido: &str) -> std::net::SocketAddr {
+    use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind :0");
+    let addr = listener.local_addr().expect("addr");
+    let linea = serde_json::json!({ "message": { "content": contenido } }).to_string();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut lector = BufReader::new(stream.try_clone().expect("clone"));
+        let mut largo = 0usize;
+        loop {
+            let mut cabecera = String::new();
+            lector.read_line(&mut cabecera).expect("cabecera");
+            let cabecera = cabecera.trim_end();
+            if cabecera.is_empty() {
+                break;
+            }
+            if let Some((nombre, valor)) = cabecera.split_once(':')
+                && nombre.eq_ignore_ascii_case("content-length")
+            {
+                largo = valor.trim().parse().expect("content-length");
+            }
+        }
+        let mut peticion = vec![0u8; largo];
+        lector.read_exact(&mut peticion).expect("cuerpo");
+        let cuerpo = format!("{linea}\n{{\"done\":true}}\n");
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\n\
+             content-length: {}\r\nconnection: close\r\n\r\n{cuerpo}",
+            cuerpo.len()
+        )
+        .expect("respuesta");
+    });
+    addr
+}
+
+/// `norte ai rename` aplica el plan como UN lote del core, y no entrada a
+/// entrada (regla 7).
+///
+/// Un intercambio `a↔b` es el caso que lo distingue: el planificador de lotes
+/// lo rompe con un temporal; un bucle de `move_` intenta `a → b` con `b`
+/// todavía ahí y, o falla, o pisa `b` antes de moverlo. Es lo que la TUI y la
+/// ventana ya hacían; la CLI era el único camino que no.
+#[test]
+fn ai_rename_aplica_un_intercambio_como_un_lote() {
+    let plan = r#"[{"from":"a.txt","to":"b.txt"},{"from":"b.txt","to":"a.txt"}]"#;
+    let addr = ollama_de_mentira(plan);
+    let cfg = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        cfg.path().join("norte.toml"),
+        format!(
+            "[ai]\nenabled = true\nrename_provider = \"loc\"\n\n\
+             [ai.providers.loc]\nkind = \"ollama\"\nmodel = \"m\"\n\
+             base_url = \"http://{addr}\"\n"
+        ),
+    )
+    .expect("norte.toml");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "era a").expect("a");
+    std::fs::write(dir.path().join("b.txt"), "era b").expect("b");
+
+    let out = Command::cargo_bin("norte")
+        .expect("binario norte compilado")
+        .env("NORTE_CONFIG_DIR", cfg.path())
+        .env("NORTE_SECRET_AI_LOC", "x")
+        .args(["ai", "rename"])
+        .arg(dir.path())
+        .args(["intercambia", "--yes"])
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "el intercambio se aplica: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
+        "era b"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("b.txt")).expect("b"),
+        "era a"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path()).expect("ls").count(),
+        2,
+        "no queda ningún temporal"
+    );
+}

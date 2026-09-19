@@ -656,6 +656,138 @@ pub fn item_lines_with(
     lines
 }
 
+/// Una línea del informe de un lote de renombrado (`fs.rename_batch_report`).
+///
+/// Las frases van traducidas; las rutas NO se convierten en texto aquí,
+/// porque cada frontend las pinta con su saneado y su badge. Lo que sí se
+/// decide aquí es que una ruta va SOLA en su línea: metida en una frase, otra
+/// ruta la puede suplantar (#273).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchReportLine {
+    /// Una frase del informe, ya traducida. No lleva nada de nadie.
+    Phrase(String),
+    /// Una ruta que buscar: el nombre que lleva AHORA lo que se quedó a
+    /// medias.
+    Path(norte_proto::VPath),
+}
+
+/// `true` si el lote no dejó nada que buscar ni que rematar.
+///
+/// ```
+/// use norte_proto::methods::FsRenameBatchReportResult;
+/// let r = FsRenameBatchReportResult {
+///     applied: 2, rolled_back: 0, failed_pair: None, stuck: None,
+///     uncertain: None, compensations_lost: 0,
+/// };
+/// assert!(norte_frontend::batch_report_is_clean(&r));
+/// ```
+#[must_use]
+pub fn batch_report_is_clean(r: &norte_proto::methods::FsRenameBatchReportResult) -> bool {
+    r.stuck.is_none()
+        && r.uncertain.is_none()
+        && r.failed_pair.is_none()
+        && r.compensations_lost == 0
+        && r.rolled_back == 0
+}
+
+/// El cuerpo del informe de un lote: qué se aplicó, qué no se pudo devolver,
+/// y CÓMO SE LLAMA AHORA lo que se quedó a medias.
+///
+/// `stuck` y `uncertain` pueden venir LOS DOS, y dicen cosas distintas: uno
+/// es «no se pudo devolver», el otro «no se sabe si surtió efecto». Las
+/// compensaciones perdidas son el único aviso de que un undo de sesión se
+/// parará ahí.
+#[must_use]
+pub fn batch_report_lines(
+    r: &norte_proto::methods::FsRenameBatchReportResult,
+    lang: norte_i18n::Lang,
+) -> Vec<BatchReportLine> {
+    let frase = |clave: &str| BatchReportLine::Phrase(norte_i18n::t_in(lang, clave));
+    let mut cuerpo = vec![BatchReportLine::Phrase(norte_i18n::ta_in(
+        lang,
+        "modal-batch-summary",
+        &[
+            ("applied", &r.applied.to_string()),
+            ("back", &r.rolled_back.to_string()),
+        ],
+    ))];
+    if let Some(paso) = &r.stuck {
+        cuerpo.push(frase("modal-batch-stuck"));
+        cuerpo.push(BatchReportLine::Path(paso.to.clone()));
+        cuerpo.push(frase(if paso.journalled {
+            "modal-batch-stuck-journalled"
+        } else {
+            "modal-batch-stuck-unjournalled"
+        }));
+    }
+    if let Some(paso) = &r.uncertain {
+        cuerpo.push(frase("modal-batch-uncertain"));
+        cuerpo.push(BatchReportLine::Path(paso.to.clone()));
+    }
+    if r.compensations_lost > 0 {
+        cuerpo.push(BatchReportLine::Phrase(norte_i18n::ta_in(
+            lang,
+            "modal-batch-compensations-lost",
+            &[("n", &r.compensations_lost.to_string())],
+        )));
+    }
+    cuerpo
+}
+
+#[cfg(test)]
+mod batch_report_tests {
+    use super::{BatchReportLine, batch_report_is_clean, batch_report_lines};
+    use norte_proto::VPath;
+    use norte_proto::methods::{FsRenameBatchReportResult, RenameStuckStep};
+
+    fn paso(to: &str) -> RenameStuckStep {
+        RenameStuckStep {
+            from: VPath::parse("mem:///d/.norte-rename-1").expect("vpath"),
+            to: VPath::parse(to).expect("vpath"),
+            pair_index: 0,
+            error: norte_proto::Error::Io { retryable: false },
+            journalled: true,
+            still_applied: 1,
+        }
+    }
+
+    /// Con `stuck` Y `uncertain`, salen los dos, cada uno con su frase y su
+    /// ruta en una línea propia.
+    #[test]
+    fn stuck_and_uncertain_both_show_each_path_on_its_own_line() {
+        let r = FsRenameBatchReportResult {
+            applied: 1,
+            rolled_back: 1,
+            failed_pair: Some(1),
+            stuck: Some(paso("mem:///d/a")),
+            uncertain: Some(paso("mem:///d/b")),
+            compensations_lost: 2,
+        };
+        assert!(!batch_report_is_clean(&r));
+        let lineas = batch_report_lines(&r, norte_i18n::Lang::En);
+        let rutas: Vec<_> = lineas
+            .iter()
+            .filter_map(|l| match l {
+                BatchReportLine::Path(p) => Some(p.clone()),
+                BatchReportLine::Phrase(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            rutas,
+            vec![
+                VPath::parse("mem:///d/a").expect("vpath"),
+                VPath::parse("mem:///d/b").expect("vpath")
+            ]
+        );
+        assert!(
+            lineas
+                .iter()
+                .any(|l| matches!(l, BatchReportLine::Phrase(t) if t.contains("compensations"))),
+            "las compensaciones perdidas se dicen: {lineas:?}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod ai_plan_tests {
     use super::validate_ai_plan;
