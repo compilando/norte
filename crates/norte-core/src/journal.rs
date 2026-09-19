@@ -225,7 +225,16 @@ const SELECT_REVERTIBLE_AFTER: &str = "SELECT seq, ts_ms, entry_hash, actor_kind
        AND (batch_id IS NULL OR batch_id NOT IN ( \
          SELECT b.batch_id FROM journal b WHERE b.batch_id IS NOT NULL AND b.seq <= ?3 \
        )) \
+       AND (?4 IS NULL OR seq <= ?4) \
+       AND (?4 IS NULL OR batch_id IS NULL OR batch_id NOT IN ( \
+         SELECT b.batch_id FROM journal b WHERE b.batch_id IS NOT NULL AND b.seq > ?4 \
+       )) \
      ORDER BY seq DESC";
+// El TECHO (`?4`, 0.80.0) es el espejo exacto del corte: nada por encima, y
+// ningún lote con una entrada por encima — mirado contra el journal ENTERO,
+// igual que el corte, y no contra lo ya seleccionado. Revertir la mitad
+// contada de un lote que seguía creciendo es revertir media unidad
+// creyéndola entera. `NULL` = sin techo, que es lo de 0.79.
 const SELECT_REVERTIBLE_AFTER_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, NULL \
      FROM journal \
      WHERE seq >= 1 AND seq > ?3 AND undoes_seq IS NULL AND actor_kind = ?1 AND actor_id IS ?2 \
@@ -234,6 +243,7 @@ const SELECT_REVERTIBLE_AFTER_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, a
          WHERE c.undoes_seq IS NOT NULL \
            AND c.seq NOT IN (SELECT d.undoes_seq FROM journal d WHERE d.undoes_seq IS NOT NULL) \
        ) \
+       AND (?4 IS NULL OR seq <= ?4) \
      ORDER BY seq DESC";
 
 /// Errores del journal.
@@ -1791,7 +1801,8 @@ impl Journal {
     /// (fase 7, base de [`crate::Engine::undo_after`]).
     ///
     /// La entrada `after_seq` NO entra: es el punto al que se quiere volver,
-    /// no la primera víctima.
+    /// no la primera víctima. `upto_seq` es el techo (0.80.0): nada por
+    /// encima, ni ningún lote con una entrada por encima. `None` = sin techo.
     ///
     /// # Errors
     /// [`JournalError::Sqlx`].
@@ -1799,6 +1810,7 @@ impl Journal {
         &self,
         actor: &Actor,
         after_seq: i64,
+        upto_seq: Option<i64>,
     ) -> Result<Vec<JournalEntry>, JournalError> {
         let (actor_kind, actor_id) = actor.parts();
         let rows =
@@ -1806,6 +1818,7 @@ impl Journal {
                 .bind(actor_kind)
                 .bind(actor_id)
                 .bind(after_seq)
+                .bind(upto_seq)
                 .fetch_all(&self.pool)
                 .await?;
         rows.iter().map(row_to_entry).collect()
@@ -4176,7 +4189,7 @@ CREATE TABLE IF NOT EXISTS journal (
         let seqs = del_humano(&j, 4).await;
 
         let desde_la_segunda = j
-            .revertible_for_after(&Actor::User, seqs[1])
+            .revertible_for_after(&Actor::User, seqs[1], None)
             .await
             .expect("revertible");
 
@@ -4235,7 +4248,7 @@ CREATE TABLE IF NOT EXISTS journal (
 
         // Corte EN MEDIO del lote: la de en medio.
         let elegidas = j
-            .revertible_for_after(&Actor::User, seqs[1])
+            .revertible_for_after(&Actor::User, seqs[1], None)
             .await
             .expect("revertible");
 
@@ -4278,12 +4291,77 @@ CREATE TABLE IF NOT EXISTS journal (
         }
 
         let elegidas = j
-            .revertible_for_after(&Actor::User, corte)
+            .revertible_for_after(&Actor::User, corte, None)
             .await
             .expect("revertible");
 
         assert_eq!(elegidas.len(), 2, "el lote entero: {elegidas:?}");
         assert!(elegidas.iter().all(|e| e.batch_id == Some(lote)));
+    }
+
+    /// El TECHO (0.80.0) es el espejo del corte: lo más nuevo se queda, y un
+    /// LOTE con una entrada por encima se queda ENTERO — aunque la de arriba
+    /// no sea revertible, porque la regla mira el journal entero y no la
+    /// selección. Un techo por debajo del corte no selecciona nada.
+    #[tokio::test]
+    async fn el_techo_deja_fuera_lo_nuevo_y_el_lote_que_parte() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let seqs = del_humano(&j, 1).await;
+        let corte = seqs[0];
+        let lote = j.alloc_batch().await.expect("batch");
+        let mut del_lote = Vec::new();
+        for i in 0..2 {
+            del_lote.push(
+                j.record_entry(&NewEntry {
+                    op: "renamed",
+                    path: format!("file:///a/{i}").as_bytes(),
+                    path_to: Some(format!("file:///a/viejo{i}").as_bytes()),
+                    reversal: Reversal::RenameBack,
+                    reversal_ref: None,
+                    actor: &Actor::User,
+                    undoes_seq: None,
+                    batch_id: Some(lote),
+                })
+                .await
+                .expect("record"),
+            );
+        }
+        let suelta = j
+            .record(
+                "created",
+                b"file:///a/suelta",
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User,
+            )
+            .await
+            .expect("record");
+
+        let seqs_de = |v: Vec<JournalEntry>| v.into_iter().map(|e| e.seq).collect::<Vec<_>>();
+        // Techo justo en la primera del lote: lo parte, así que fuera entero.
+        let partido = j
+            .revertible_for_after(&Actor::User, corte, Some(del_lote[0]))
+            .await
+            .expect("revertible");
+        assert!(partido.is_empty(), "el lote partido no entra: {partido:?}");
+        // Techo en la última del lote: entra entero, y la suelta de después no.
+        let entero = j
+            .revertible_for_after(&Actor::User, corte, Some(del_lote[1]))
+            .await
+            .expect("revertible");
+        assert_eq!(seqs_de(entero), vec![del_lote[1], del_lote[0]]);
+        // Sin techo, todo; con un techo por debajo del corte, nada.
+        let todo = j
+            .revertible_for_after(&Actor::User, corte, None)
+            .await
+            .expect("revertible");
+        assert_eq!(seqs_de(todo), vec![suelta, del_lote[1], del_lote[0]]);
+        let nada = j
+            .revertible_for_after(&Actor::User, corte, Some(corte - 1))
+            .await
+            .expect("revertible");
+        assert!(nada.is_empty());
     }
 
     /// Y sólo mira al actor que se le pide: lo que hizo un agente no entra en
@@ -4306,7 +4384,7 @@ CREATE TABLE IF NOT EXISTS journal (
         .expect("record");
 
         let del_humano = j
-            .revertible_for_after(&Actor::User, seqs[0])
+            .revertible_for_after(&Actor::User, seqs[0], None)
             .await
             .expect("revertible");
 

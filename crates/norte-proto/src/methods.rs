@@ -1274,9 +1274,11 @@ use crate::{
 /// la línea de tiempo no entra en un «deshacer hasta aquí» que no lo contó.
 ///
 /// Aditivo y opcional. Un **cliente 0.80 contra un daemon 0.79**: el daemon
-/// ignora el campo que no conoce y deshace sin techo, que es lo de antes. Un
+/// ignoraría el campo (ADR 0004) y desharía sin techo lo que la pregunta no
+/// contó, así que el SDK NO lo manda — con techo pedido rehúsa con
+/// `Unsupported` y lo dice, como el ancla de `plugin.set_approval` (#294). Un
 /// **cliente 0.79 contra un daemon 0.80** no lo manda, y el daemon lo lee
-/// como `None`: sin techo.
+/// como `None`: sin techo, que es lo de 0.79.
 pub const PROTOCOL_VERSION: &str = "0.80.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método

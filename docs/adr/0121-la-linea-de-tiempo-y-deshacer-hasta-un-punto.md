@@ -117,3 +117,27 @@ and from the View menu.
   is the last served `seq`, never `seq - 1`) lives in one function that both
   the daemon and the embedded backend call. It was written twice and tested
   zero times until the review said so.
+
+## Addendum (2026-09-19): the ceiling, protocol 0.80.0
+
+The count shown before confirming is computed over the rows that are
+LOADED. `journal.undo_after {seq}` had no upper bound, so anything done after
+the list was painted went into the undo without being counted. With the panel
+open, which is the normal case for a side slot, the dialog could promise three
+entries and undo five.
+
+`JournalUndoAfterParams` gains an optional `upto_seq`: the newest `seq` the
+client counted (`Timeline::techo()`). The server undoes nothing above it, and
+leaves out whole any batch with an entry above it. This is the same rule as
+the lower cut, checked against the whole journal and not against the
+selection.
+
+- A 0.79 client does not send it, and gets the 0.79 behaviour (no ceiling).
+- A 0.79 daemon would ignore it. So the SDK refuses a ceilinged undo against
+  a peer older than 0.80, with `Unsupported` and a warning, instead of
+  undoing more than was counted. This follows the #294 precedent for
+  `plugin.set_approval`'s anchor.
+- Both frontends also reload an open timeline when a task finishes, and keep
+  the cursor on the same row.
+- The window now paints the timeline (#359), and #358 is closed: undos are
+  serialized and re-check the journal before each unit.

@@ -3478,6 +3478,9 @@ async fn handle_journal_undo_after(
     // llegó a existir.
     tracing::info!(
         after_seq = p.seq,
+        // El techo decide también qué se deshizo (0.80.0): sin él en la línea,
+        // cruzarla con el informe no explica por qué se quedó algo fuera.
+        upto_seq = ?p.upto_seq,
         task_id = task_id.get(),
         "undo hasta un punto pedido por el humano"
     );

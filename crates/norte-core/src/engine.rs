@@ -4350,10 +4350,9 @@ impl Engine {
         }
         let entries = journal
             .journal()
-            .revertible_for_after(&crate::journal::Actor::User, after_seq)
+            .revertible_for_after(&crate::journal::Actor::User, after_seq, upto_seq)
             .await
             .map_err(Error::from)?;
-        let entries = bajo_el_techo(entries, upto_seq);
         self.undo_entries(entries, crate::journal::Actor::User)
             .await
     }
@@ -5344,31 +5343,6 @@ fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<Und
     Ok(Some(UndoGates { gates }))
 }
 
-/// Lo que queda de una selección de `undo_after` bajo su TECHO (0.80.0).
-///
-/// Se quita todo lo más nuevo que `upto`, y además cualquier LOTE que tenga
-/// alguna entrada por encima: un lote que el techo parte se queda fuera
-/// entero, por la misma regla con la que el corte de abajo deja fuera el lote
-/// en el que cae. Revertir la mitad que se vio de un lote que seguía creciendo
-/// es revertir media unidad creyéndola entera.
-fn bajo_el_techo(
-    entries: Vec<crate::journal::JournalEntry>,
-    upto: Option<i64>,
-) -> Vec<crate::journal::JournalEntry> {
-    let Some(upto) = upto else {
-        return entries;
-    };
-    let partidos: std::collections::HashSet<i64> = entries
-        .iter()
-        .filter(|e| e.seq > upto)
-        .filter_map(|e| e.batch_id)
-        .collect();
-    entries
-        .into_iter()
-        .filter(|e| e.seq <= upto && e.batch_id.is_none_or(|b| !partidos.contains(&b)))
-        .collect()
-}
-
 /// Pregunta a la policy por UNA unidad del undo, y devuelve el motivo si la
 /// deniega (#171).
 ///
@@ -5547,42 +5521,6 @@ mod tests {
             size: None,
             mtime_ms: None,
         }
-    }
-
-    fn entrada(seq: i64, batch_id: Option<i64>) -> crate::journal::JournalEntry {
-        crate::journal::JournalEntry {
-            seq,
-            ts_ms: 0,
-            entry_hash: Vec::new(),
-            actor_kind: "user".to_owned(),
-            actor_id: None,
-            op: "renamed".to_owned(),
-            path: Vec::new(),
-            path_to: None,
-            reversal: "rename_back".to_owned(),
-            reversal_ref: None,
-            undoes_seq: None,
-            batch_id,
-        }
-    }
-
-    /// El techo quita lo más nuevo, y un LOTE que parte se queda fuera ENTERO:
-    /// revertir la mitad vista de un lote que seguía creciendo es revertir
-    /// media unidad creyéndola entera. Sin techo, todo sigue.
-    #[test]
-    fn el_techo_deja_fuera_entero_el_lote_que_parte() {
-        let sel = vec![
-            entrada(9, None),
-            entrada(8, Some(1)),
-            entrada(7, Some(1)),
-            entrada(6, None),
-            entrada(5, Some(2)),
-        ];
-        let seqs =
-            |v: Vec<crate::journal::JournalEntry>| v.iter().map(|e| e.seq).collect::<Vec<_>>();
-        assert_eq!(seqs(bajo_el_techo(sel.clone(), Some(7))), vec![6, 5]);
-        assert_eq!(seqs(bajo_el_techo(sel.clone(), Some(8))), vec![8, 7, 6, 5]);
-        assert_eq!(seqs(bajo_el_techo(sel, None)), vec![9, 8, 7, 6, 5]);
     }
 
     /// #165: el índice lo construye el humano y puede contener el directorio
