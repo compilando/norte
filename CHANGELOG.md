@@ -294,6 +294,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **An unknown undo report is "not found", not an internal error**
+  (protocol 0.79.0). `policy.undo_report` answered an id it did not know with
+  a bare `INVALID_PARAMS`, which a client read as `Internal`; it now answers
+  `NotFound`, like `fs.rename_batch_report` and like the in-process core. The
+  report of an undo whose id never reached the client (the daemon answered
+  OVERLOADED) is no longer kept.
+
 - **The help reads like a document, in the terminal and in the window.**
   - The arrows scroll the text line by line until an action is in view,
     Page Down moves a screen instead of ten lines, and Home/End go to the

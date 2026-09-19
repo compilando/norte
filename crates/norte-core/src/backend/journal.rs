@@ -91,8 +91,9 @@ impl Backend {
     /// definitivo cuando la Task es terminal.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; [`Error::NotFound`] en embebido si ese id no
-    /// fue un undo o el anillo ya lo desalojó.
+    /// Taxonomía del protocolo; [`Error::NotFound`], por los dos brazos (el
+    /// daemon desde 0.79.0), si ese id no fue un undo o el anillo ya lo
+    /// desalojó.
     pub async fn undo_report(
         &self,
         task_id: TaskId,

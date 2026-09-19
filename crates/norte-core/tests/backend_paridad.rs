@@ -274,17 +274,13 @@ async fn guion(b: &Backend, mem: &MemProvider) -> Vec<String> {
     let deshecho = b.undo_report(id.expect("id")).await.expect("undo_report");
     assert_eq!(deshecho.undone, 1, "{deshecho:?}");
     t.push(format!("undo_after {estado} {deshecho:?}"));
-    // Un id que existe pero no fue un undo. Divergencia de WIRE, no deseada:
-    // el daemon contesta `INVALID_PARAMS` (que el cliente lee como `Internal`)
-    // donde su gemelo `fs.rename_batch_report` contesta `NotFound`, que es lo
-    // que da el embebido. Igualarlo cambia un código de error del protocolo,
-    // así que va con su versión y sus goldens, no aquí. Se fija para que el
-    // día que se iguale, este test lo diga.
-    let ajeno = resultado(&b.undo_report(lote).await);
-    match b {
-        Backend::Embedded(_) => assert_eq!(ajeno, "NotFound"),
-        Backend::Remote(_) => assert_eq!(ajeno, "Internal"),
-    }
+    // Un id que existe pero no fue un undo: `NotFound` por los dos brazos
+    // desde 0.79.0. Hasta entonces el daemon contestaba `INVALID_PARAMS`, que
+    // el cliente leía como `Internal`, y este test lo fijaba por brazo.
+    t.push(format!(
+        "undo_report ajeno {}",
+        resultado(&b.undo_report(lote).await)
+    ));
     // Divergencia documentada, y a propósito: la sesión que se deshace
     // es de un agente, y los agentes viven en el daemon. Se afirma por brazo
     // y no entra en el transcrito.

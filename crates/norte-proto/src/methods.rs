@@ -1253,7 +1253,21 @@ use crate::{
 /// relevo se degrada a lo honesto: no se suelta nada, así que no se lanza al
 /// otro frontend a reclamar algo que no va a poder tener. Un cliente 0.77
 /// contra un daemon 0.78 no lo pide.
-pub const PROTOCOL_VERSION: &str = "0.78.0";
+/// # 0.79.0 — `policy.undo_report` contesta `NotFound` a un id que no conoce
+///
+/// Ningún tipo cambia: cambia la RESPUESTA de error de un método. Un
+/// `task_id` que nunca fue un undo o que el anillo ya desalojó contesta
+/// `Error::NotFound` de la taxonomía, lo mismo que su gemelo
+/// `fs.rename_batch_report` y que el brazo embebido del SDK. Hasta 0.78 era
+/// `INVALID_PARAMS` sin `data`, que un cliente leía como `Internal` — la
+/// respuesta de un provider que panica.
+///
+/// Un **cliente 0.78 hecho con el SDK contra un daemon 0.79** sale ganando:
+/// el SDK entrega el `data` tal cual, así que lee `NotFound` donde leía
+/// `Internal`. Solo un cliente escrito a mano que distinguiera el caso por el
+/// código `-32602` deja de reconocerlo. Un cliente 0.79 contra un daemon 0.78
+/// recibe el `INVALID_PARAMS` de siempre.
+pub const PROTOCOL_VERSION: &str = "0.79.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2197,7 +2211,8 @@ pub const POLICY_UNDO_SESSION: &str = "policy.undo_session";
 /// primer bloqueo del LIFO si lo hubo. Es un SNAPSHOT: definitivo cuando la
 /// Task es terminal ([`TASK_PROGRESS`]/[`TASK_LIST`]); antes, parcial. El
 /// server retiene los informes de las últimas Tasks de undo (anillo acotado,
-/// mejor esfuerzo): un `task_id` desconocido o expulsado es `INVALID_PARAMS`.
+/// mejor esfuerzo): un `task_id` desconocido o expulsado es `Error::NotFound`
+/// de la taxonomía (desde 0.79.0; antes, `INVALID_PARAMS` pelado).
 /// SOLO conexiones User (misma barrera que el undo que lo genera).
 pub const POLICY_UNDO_REPORT: &str = "policy.undo_report";
 /// `journal.list` — las entradas del journal, de la más nueva hacia atrás

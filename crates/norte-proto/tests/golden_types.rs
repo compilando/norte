@@ -4860,7 +4860,9 @@ fn method_names_frozen() {
     // pasaba al DESCONECTAR, así que el que se iba tenía que morirse antes de
     // que el que llegaba pudiera reclamar.
     assert_eq!(methods::SESSION_RELEASE, "session.release");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.78.0");
+    // 0.79.0: ningún método nuevo — `policy.undo_report` contesta `NotFound`
+    // de la taxonomía a un id que no conoce, como `fs.rename_batch_report`.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.79.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,
