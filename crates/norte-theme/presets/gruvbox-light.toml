@@ -21,6 +21,7 @@ match            = { fg = "#fbf1c7", bg = "#b57614" }
 pane-background       = { bg = "#f2e5bc" } # light0_soft
 pane-focus-background = { bg = "#ebdbb2" } # light1
 mark                  = { bg = "#ead9a0" } # gold tint, visibly distinct from light0_soft/light1
+stripe                = { bg = "#ece0b6" } # un punto bajo light0_soft
 
 [files.kind]
 dir          = { fg = "#076678", bold = true }

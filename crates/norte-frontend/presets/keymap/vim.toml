@@ -184,6 +184,11 @@ keymap = [
     { on = ["l"], run = "viewer.right" },
     { on = ["g", "g"], run = "viewer.top" },
     { on = ["G"], run = "viewer.bottom" },
+    # Superficie propia: mismas tres teclas en los siete presets (ver
+    # `orthodox.toml`).
+    { on = ["f5"], run = "viewer.zoom-out" },
+    { on = ["f6"], run = "viewer.zoom-in" },
+    { on = ["f7"], run = "viewer.zoom-fit" },
 ]
 
 [dialog]

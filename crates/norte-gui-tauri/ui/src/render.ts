@@ -385,6 +385,7 @@ export class Screen {
   nodoImagen(
     url: string,
     img: { format: string; width: number; height: number },
+    zoom = 100,
   ): HTMLElement {
     const el = document.createElement("img");
     el.className = "viewer-image";
@@ -394,7 +395,25 @@ export class Screen {
     el.width = img.width;
     el.height = img.height;
     el.alt = img.format;
-    return el;
+    // El ZOOM (puente 80). Es un porcentaje de lo AJUSTADO, y ajustado lo
+    // decide la hoja (`max-width/max-height: 100%`), así que aquí solo se
+    // multiplica el tope: `--zoom: 1.5` deja que la imagen llegue al 150 %
+    // del hueco, y el hueco se encarga de dejarla desbordar y desplazarse.
+    //
+    // Como variable y no como `transform: scale()`: escalar deja el hueco
+    // creyendo que la imagen sigue midiendo lo de antes, así que no aparece
+    // barra ninguna y lo que se sale queda inalcanzable.
+    el.style.setProperty("--zoom", String(zoom / 100));
+    if (zoom <= 100) {
+      return el;
+    }
+    // Ampliada, la imagen no cabe, y sin una caja que desborde lo que se sale
+    // no está en ninguna parte. La caja solo existe cuando hace falta: a
+    // tamaño ajustado es un nodo de más entre el hueco y la foto.
+    const caja = document.createElement("div");
+    caja.className = "viewer-image-box";
+    caja.append(el);
+    return caja;
   }
 
   /**
@@ -1164,6 +1183,10 @@ export class Screen {
       return;
     }
 
+    // El «pijama» (puente 80): lo enciende el CONTENEDOR, no la fila. Cada
+    // fila lleva siempre su paridad, así que una fila reciclada por el
+    // desplazamiento no arrastra la banda del sitio donde estaba.
+    dom.canvas.dataset["stripes"] = String(this.ultimaVista?.row_stripes ?? false);
     const wanted = new Set<number>();
     // La columna de iconos la abre el HOST para el listado entero (puente
     // 62): con o sin icono, todas las filas llevan la celda. Deducirlo aquí

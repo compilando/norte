@@ -289,7 +289,7 @@ pub(crate) fn styled_columns(
     norte_frontend::columns::ColumnStyle,
 )> {
     let scheme = pane.dir().scheme();
-    pane_columns(settings, pane, inner_w)
+    pane_columns(settings, pane, inner_w, catalog)
         .into_iter()
         .map(|f| {
             let s = settings
@@ -311,12 +311,15 @@ pub(crate) fn pane_columns(
     settings: &norte_frontend::columns::ColumnsSettings,
     pane: &Pane,
     inner_w: u16,
+    // El catálogo del scheme de este pane, si ya llegó: decide si se pinta la
+    // columna de permisos que pone el listado (spec 2026-09-20).
+    catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<norte_frontend::columns::Fitted> {
     let delante = 3 + if pane.any_icon() { ICON_GUTTER } else { 0 };
     let quiere = pane
         .name_width_p80()
         .saturating_add(u16::try_from(delante).unwrap_or(u16::MAX));
-    norte_frontend::columns::fitted_columns(settings, pane.dir().scheme(), inner_w, quiere)
+    norte_frontend::columns::fitted_columns(settings, pane.dir().scheme(), inner_w, quiere, catalog)
 }
 
 /// El título del borde del pane: dónde está, qué le pasa y a dónde va.
@@ -417,10 +420,49 @@ fn pane_title(
 // entre las dos. Lo que queda es secuencia de pintado sin juntas naturales —
 // bloque, cabecera, listado—, y trocearla más para ganar una línea sería
 // partirla por donde no se parte.
+/// El texto de una celda dentro de `content` celdas, con el corte MARCADO.
+///
+/// Un corte se ve (auditoría de codificación, 2026-09-20). Antes se recortaba
+/// a secas y el resultado seguía pareciendo un valor entero: estrechando la
+/// columna de permisos con el ratón, `-rw-r--r--` y `-rw-r-----` se quedaban
+/// los dos en `-rw-r--`, y «lo lee todo el mundo» y «solo el grupo» pasaban a
+/// ser la misma celda sin que nada dijera que faltaba texto. Es la regla que
+/// el corpus llama `truncation_twins` y que `sanitize_cell` ya cumplía para
+/// el texto de un plugin.
+///
+/// La marca gasta una celda de las que HAY, no una de más: pasarse del
+/// presupuesto correría la columna siguiente.
+fn celda_cortada(cell: String, content: usize) -> String {
+    if cell.width() <= content {
+        return cell;
+    }
+    let mut s = take_width(&cell, content.saturating_sub(1));
+    if content > 0 {
+        s.push('…');
+    }
+    s
+}
+
+/// Pone la banda del pijama bajo una fila IMPAR, y deja la par como estaba.
+///
+/// `banda` viene ya resuelta contra el tema: `None` es el pijama apagado o un
+/// tema que no lo define, y las dos cosas significan lo mismo para quien
+/// pinta — ninguna banda.
+///
+/// La paridad es la de la fila PINTADA. Como estilo BASE del `ListItem`, de
+/// modo que los spans de la fila se pintan encima y `highlight_style` —el
+/// cursor— gana por ir después.
+fn raya(banda: Option<ratatui::style::Style>, fila: usize, item: ListItem<'_>) -> ListItem<'_> {
+    match banda {
+        Some(style) if fila % 2 == 1 => item.style(style),
+        _ => item,
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     clippy::too_many_lines,
-    reason = "cableado del render de un pane; lo extraíble ya salió a ventana_del_pane y estado_de_lista"
+    reason = "cableado del render de un pane; lo extraíble ya salió a ventana_del_pane, estado_de_lista, celda_cortada y raya"
 )]
 pub(crate) fn draw_pane(
     frame: &mut Frame<'_>,
@@ -443,6 +485,10 @@ pub(crate) fn draw_pane(
     // carpetas. Llega la CLAVE y no el booleano porque `auto` depende de algo
     // que solo se sabe aquí: si este listado abrió la columna de iconos.
     dir_indicator: norte_config::load::DirIndicator,
+    // `[ui] row_stripes` (spec 2026-09-20): el «pijama». La paridad es la de
+    // la fila PINTADA, no la del índice de la entrada — un listado filtrado
+    // por la búsqueda rápida sigue alternando, que es de lo que va la banda.
+    stripes: bool,
 ) {
     let border_style = if focused {
         theme.role(Role::BorderFocus)
@@ -504,25 +550,35 @@ pub(crate) fn draw_pane(
     let icons = pane.any_icon();
     let dir_slash = pinta_barra(dir_indicator, icons);
     let ventana = ventana_del_pane(pane, area, tabs.is_some(), painted_len);
+    // La banda de las filas impares. Se resuelve UNA vez por pintada: el rol
+    // sin color (el tema no lo define) deja el listado exactamente como
+    // estaba, así que el ajuste encendido sobre un tema mudo no es un fallo,
+    // es un listado normal.
+    let banda = stripes.then(|| theme.role(Role::Stripe));
     let items: Vec<ListItem<'_>> = match pane.quick_visible() {
         Some(vis) => vis
             .iter()
+            .enumerate()
             .skip(ventana.start)
             .take(ventana.len())
-            .filter_map(|&i| pane.entries().get(i).map(|e| (i, e)))
-            .map(|(i, e)| {
-                entry_item(
-                    e,
-                    theme,
-                    reinterpret,
-                    pane.decoration_for(&e.path),
-                    pane.is_marked(e),
-                    cols,
-                    Some(pane),
-                    now_ms,
-                    pane.is_parent_row(i),
-                    icons,
-                    dir_slash,
+            .filter_map(|(fila, &i)| pane.entries().get(i).map(|e| (fila, i, e)))
+            .map(|(fila, i, e)| {
+                raya(
+                    banda,
+                    fila,
+                    entry_item(
+                        e,
+                        theme,
+                        reinterpret,
+                        pane.decoration_for(&e.path),
+                        pane.is_marked(e),
+                        cols,
+                        Some(pane),
+                        now_ms,
+                        pane.is_parent_row(i),
+                        icons,
+                        dir_slash,
+                    ),
                 )
             })
             .collect(),
@@ -533,18 +589,22 @@ pub(crate) fn draw_pane(
             .skip(ventana.start)
             .take(ventana.len())
             .map(|(i, e)| {
-                entry_item(
-                    e,
-                    theme,
-                    reinterpret,
-                    pane.decoration_for(&e.path),
-                    pane.is_marked(e),
-                    cols,
-                    Some(pane),
-                    now_ms,
-                    pane.is_parent_row(i),
-                    icons,
-                    dir_slash,
+                raya(
+                    banda,
+                    i,
+                    entry_item(
+                        e,
+                        theme,
+                        reinterpret,
+                        pane.decoration_for(&e.path),
+                        pane.is_marked(e),
+                        cols,
+                        Some(pane),
+                        now_ms,
+                        pane.is_parent_row(i),
+                        icons,
+                        dir_slash,
+                    ),
                 )
             })
             .collect(),
@@ -770,12 +830,7 @@ pub(crate) fn entry_item<'a>(
             // misma cuenta, invertida.
             let w = usize::from(*w);
             let content = w.saturating_sub(1);
-            let cw = cell.width();
-            let truncated: String = if cw > content {
-                take_width(&cell, content)
-            } else {
-                cell
-            };
+            let truncated = celda_cortada(cell, content);
             let text = match style.align {
                 norte_frontend::columns::Align::Right => {
                     let pad = w.saturating_sub(truncated.width());
@@ -985,6 +1040,7 @@ mod draw_pane_attr_tests {
                     None,
                     None,
                     norte_config::load::DirIndicator::default(),
+                    false,
                 );
             })
             .expect("draw");
@@ -1066,6 +1122,7 @@ mod draw_pane_attr_tests {
                     None,
                     None,
                     norte_config::load::DirIndicator::default(),
+                    false,
                 );
             })
             .expect("draw");
@@ -1127,6 +1184,7 @@ mod draw_pane_attr_tests {
                         busy,
                         None,
                         norte_config::load::DirIndicator::default(),
+                        false,
                     );
                 })
                 .expect("draw");
@@ -1215,6 +1273,7 @@ mod draw_pane_attr_tests {
                     Some(&busy),
                     None,
                     norte_config::load::DirIndicator::default(),
+                    false,
                 );
             })
             .expect("draw");
@@ -1264,6 +1323,7 @@ mod draw_pane_attr_tests {
                     Some(&busy),
                     None,
                     norte_config::load::DirIndicator::default(),
+                    false,
                 );
             })
             .expect("draw");
@@ -1275,6 +1335,98 @@ mod draw_pane_attr_tests {
         assert!(
             pintado.contains("carpeta"),
             "se perdió la COLA, que es qué carpeta es: {pintado}"
+        );
+    }
+
+    /// Pinta un listado con el pijama encendido y devuelve el fondo de cada
+    /// fila, de arriba abajo. `filtro` teclea una búsqueda rápida.
+    fn fondos_con_pijama(nombres: &[&str], filtro: Option<&str>) -> Vec<ratatui::style::Color> {
+        use norte_theme::{Role, Style, Theme};
+        let dir = VPath::parse("mem:///d").expect("vpath");
+        let entradas: Vec<_> = nombres.iter().map(|n| entry(&dir, n)).collect();
+        let mut pane = Pane::new(dir, entradas);
+        if let Some(f) = filtro {
+            pane.quick_start(crate::nav::Mode::Filter);
+            for c in f.chars() {
+                pane.quick_char(c);
+            }
+        }
+        // Un tema que SÍ define la banda: sin color, el rol cae al monocromo
+        // y el test no distinguiría «apagado» de «sin tema».
+        let mut theme = Theme::preset_default();
+        theme.roles.insert(
+            Role::Stripe,
+            Style::new().bg(norte_theme::Color::rgb(0x33, 0x33, 0x33)),
+        );
+        let theme = TuiTheme::new(theme, norte_theme::ColorDepth::Truecolor);
+        let settings = norte_frontend::columns::ColumnsSettings::default();
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).expect("terminal de test");
+        terminal
+            .draw(|f| {
+                draw_pane(
+                    f,
+                    f.area(),
+                    &pane,
+                    true,
+                    &theme,
+                    0,
+                    &settings,
+                    None,
+                    None,
+                    false,
+                    None,
+                    None,
+                    norte_config::load::DirIndicator::default(),
+                    true,
+                );
+            })
+            .expect("draw");
+        let buf = terminal.backend().buffer().clone();
+        // La primera fila del listado va tras el borde y la cabecera.
+        (0..4).map(|i| buf[(2, 2 + i)].bg).collect()
+    }
+
+    /// El pijama pinta las filas IMPARES y deja las pares como estaban
+    /// (spec 2026-09-20).
+    ///
+    /// La fila 0 es la del CURSOR, y por eso el test empieza en la 1: que no
+    /// lleve ni la banda ni el fondo llano es la otra mitad de lo que hay
+    /// que comprobar, y está abajo.
+    #[test]
+    fn el_pijama_alterna_las_filas() {
+        let fondos = fondos_con_pijama(&["a0", "a1", "a2", "a3"], None);
+        let banda = ratatui::style::Color::Rgb(0x33, 0x33, 0x33);
+        assert_eq!(fondos[1], banda, "la 1 es impar: banda");
+        assert_eq!(fondos[3], banda, "la 3 también");
+        assert_ne!(fondos[2], fondos[1], "la 2 es par: sin banda");
+    }
+
+    /// El cursor se pinta ENCIMA de la banda: es lo que la ADR, el rol y los
+    /// dos temas de ayuda prometen, y lo que convierte el pijama en una
+    /// ayuda de lectura en vez de una mentira sobre a dónde van las teclas.
+    #[test]
+    fn el_cursor_gana_a_la_banda() {
+        // Con el cursor en una fila IMPAR, que es donde la banda estaría.
+        let fondos = fondos_con_pijama(&["a0", "a1", "a2", "a3"], None);
+        let banda = ratatui::style::Color::Rgb(0x33, 0x33, 0x33);
+        assert_ne!(fondos[0], banda, "la fila del cursor no lleva banda");
+        assert_ne!(fondos[0], fondos[2], "ni el fondo llano de las pares");
+    }
+
+    /// La paridad es la de la fila PINTADA, no la del índice de la entrada.
+    ///
+    /// Es la parte sutil: con la búsqueda rápida filtrando, un listado que
+    /// alternara por índice de entrada enseñaría dos bandas seguidas en
+    /// cuanto el filtro se saltara una fila — que es exactamente cuando el
+    /// pijama sirve para algo.
+    #[test]
+    fn la_banda_alterna_lo_que_se_ve_y_no_lo_que_hay() {
+        // `b` cae en los índices 1 y 3 del listado entero; filtradas, son
+        // las filas pintadas 0 y 1, así que tienen que salir DISTINTAS.
+        let fondos = fondos_con_pijama(&["a0", "b0", "a1", "b1"], Some("b"));
+        assert_ne!(
+            fondos[0], fondos[1],
+            "dos filas seguidas del listado filtrado con la misma banda"
         );
     }
 }

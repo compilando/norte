@@ -233,6 +233,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
                 app.busy.as_ref().filter(|b| b.visible() && b.affects(i)),
                 pane_footer(app, pane, rect.width).as_deref(),
                 app.chrome.dir_indicator(),
+                app.chrome.row_stripes(),
             );
         }
     }
@@ -623,14 +624,27 @@ pub fn algo_encima_del_visor(app: &App) -> bool {
 /// dos preguntas resueltas por la MISMA función, divergir así deja de ser
 /// posible (memoria `funcion-compartida-no-basta`).
 #[must_use]
-pub fn imagen_a_colocar(app: &App, area: Rect) -> Option<Rect> {
+pub fn imagen_a_colocar(app: &App, area: Rect) -> Option<crate::viewer_open::Colocacion> {
     let viewer = app.viewer.as_ref()?;
     let imagen = app.viewer_imagen.as_ref()?;
     if imagen.path != viewer.path || algo_encima_del_visor(app) {
         return None;
     }
     let rect = rect_del_visor(app, area);
-    (!rect.is_empty()).then_some(rect)
+    if rect.is_empty() {
+        return None;
+    }
+    // El zoom (spec 2026-09-20). El paseo son las teclas de mover el visor,
+    // que con una imagen no tienen otra cosa que mover: `scroll` baja por
+    // ella y `hscroll` la recorre.
+    Some(crate::viewer_open::colocacion(
+        viewer.zoom_pct(),
+        rect,
+        imagen.width,
+        imagen.height,
+        viewer.hscroll(),
+        viewer.scroll,
+    ))
 }
 
 /// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto

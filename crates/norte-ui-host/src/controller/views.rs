@@ -148,6 +148,10 @@ impl Estado {
             menu: self.vista_menu(),
             panel_bar: self.vista_barra_de_paneles(),
             key_bar: self.vista_barra_de_teclas(),
+            // El pijama (spec 2026-09-20). Va en la vista ENTERA y no en un
+            // parche: es configuración, y la recarga en caliente reconstruye
+            // la vista.
+            row_stripes: self.config.common.ui_chrome.row_stripes(),
             profiles: self.vista_perfiles(),
             palette: self.vista_paleta(),
             goto: self.vista_ir_a(),
@@ -618,6 +622,9 @@ impl Estado {
                 }
                 _ => String::new(),
             },
+            // El zoom (puente 80). Es estado del visor, igual que el
+            // hexadecimal o el encoding forzado, así que sale de él.
+            image_zoom: v.zoom_pct(),
             // Los fragmentos con estilo de la MISMA ventana de filas que
             // `lines` (mismo `alto`, mismo `scroll`): una entrada por fila.
             // El texto ya llegó enmascarado del modelo compartido; se acota

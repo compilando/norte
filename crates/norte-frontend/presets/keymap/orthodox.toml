@@ -229,6 +229,13 @@ keymap = [
     { on = ["e"], run = "viewer.encoding" },
     { on = ["E"], run = "viewer.encoding-auto" },
     { on = ["x"], run = "viewer.hex" },
+    # El zoom de una imagen. Teclas de función porque son las que la barra
+    # del visor NOMBRA: un zoom que no se ve en ningún sitio es un zoom que
+    # nadie encuentra. Ningún gestor de referencia atesta estas tres, así
+    # que la elección es nuestra y va igual en los siete presets.
+    { on = ["f5"], run = "viewer.zoom-out" },
+    { on = ["f6"], run = "viewer.zoom-in" },
+    { on = ["f7"], run = "viewer.zoom-fit" },
 ]
 
 [dialog]

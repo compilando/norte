@@ -861,6 +861,19 @@ pub(super) async fn ejecutar_por_paleta(
     );
 }
 
+/// Tira todo lo que el host ya había publicado y nadie ha leído.
+///
+/// No espera: lo que no está ahora no estaba pendiente. Un plazo de cero no
+/// vale —`recv` necesita un turno para ver lo que ya está encolado—, así que
+/// se le da un milisegundo, que es tiempo de sobra para lo ya publicado y
+/// demasiado poco para esperar a lo que aún no ha ocurrido.
+async fn drenar_fotos(sub: &mut norte_ui_host::controller::UiSubscription) {
+    while tokio::time::timeout(std::time::Duration::from_millis(1), sub.recv())
+        .await
+        .is_ok()
+    {}
+}
+
 /// Como [`ejecutar_por_paleta`], pero devolviendo el ACUSE: lo que se
 /// comprueba a veces es el rechazo.
 pub(super) async fn ejecutar_por_paleta_ack(
@@ -877,6 +890,17 @@ pub(super) async fn ejecutar_por_paleta_ack(
         h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
     }
     for _ in 0..40 {
+        // Lo PENDIENTE se tira antes de pedir la foto. Este bucle es un
+        // paseo con estado —lee el cursor, pulsa abajo, vuelve a leer—, así
+        // que una foto vieja le hace contar dos veces el mismo escalón y
+        // aterrizar en el comando de al lado: se vio con `pane.edit`, que
+        // acabó ejecutando `pane.edit-new`, un diálogo en vez de un efecto.
+        //
+        // Cualquier cosa que publique una foto por su cuenta lo dispara: la
+        // respuesta a un catálogo de atributos, un volumen, una capacidad.
+        // Tirarlas es correcto porque la única que importa es la de después
+        // del `Resync`, que es por definición la más nueva.
+        drenar_fotos(sub).await;
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let p = siguiente_foto(sub)
             .await

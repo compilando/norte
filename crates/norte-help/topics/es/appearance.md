@@ -39,6 +39,24 @@ directorio. Cuando el borde se queda corto cae primero el espacio libre y
 después la cuenta: lo que acabas de marcar es lo último en ceder.
 `pane_footer = false` deja el borde limpio.
 
+Filas a rayas
+-------------
+
+`row_stripes = true` pinta las filas impares del listado sobre una banda
+propia — el «pijama», que es lo que te deja seguir una fila ancha desde el
+nombre hasta la fecha. Viene apagado: la banda se gana el sitio en un panel
+ancho y estorba en uno estrecho.
+
+El color lo pone el TEMA (`stripe`), no norte: una banda calculada a partir
+del fondo sale invisible en una paleta y como un brochazo en la siguiente.
+Los diez temas de serie la traen. Un tema que la calle no pinta banda
+ninguna, y el listado es el de siempre.
+
+La banda no tapa nunca nada que SIGNIFIQUE algo. Encima se pintan el cursor,
+la fila marcada y —en la ventana— la fila bajo el puntero, en ese orden. Un
+pijama que escondiera el cursor convertiría una ayuda de lectura en una
+mentira sobre a dónde van las teclas.
+
 Fechas
 ------
 

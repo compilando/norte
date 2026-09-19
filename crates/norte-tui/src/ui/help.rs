@@ -273,19 +273,33 @@ pub fn draw_help(
     // seleccionable (nunca en una cabecera); con el filtro sin resultados no
     // hay fila alguna que resaltar.
     list_state.select(painted.get(state.cursor()).copied());
+    // Cuál de las dos mitades recibe las teclas, dicho como lo dicen los dos
+    // paneles del listado (spec 2026-09-10): el cursor de la que NO tiene el
+    // foco se queda apagado. Antes las dos resaltaban igual de vivas y la
+    // pantalla no decía a dónde iban las flechas.
+    //
+    // Es el rol y no un borde porque la ayuda es UN marco: partirlo en dos
+    // se comería una columna de los títulos, que es la que hace que un
+    // índice se lea. Y sin tema el apagado sigue viéndose, porque el
+    // `fallback` de `SelectionUnfocused` es `reverse().dim()`.
+    let (rol_indice, rol_cuerpo) = if state.focus() == Focus::Topics {
+        (Role::Selection, Role::SelectionUnfocused)
+    } else {
+        (Role::SelectionUnfocused, Role::Selection)
+    };
     frame.render_stateful_widget(
-        List::new(items).highlight_style(theme.role(Role::Selection)),
+        List::new(items).highlight_style(theme.role(rol_indice)),
         sidebar,
         &mut list_state,
     );
 
     let (lines, action_lines) = help.body();
-    // La línea de la acción con foco. Con el foco en la lateral no se resalta
-    // ninguna: el cursor del cuerpo existe, pero no es el que mueven las
-    // flechas, y resaltarlo diría lo contrario.
-    let focused = (state.focus() == Focus::Body)
-        .then(|| action_lines.get(state.action_cursor()).copied())
-        .flatten();
+    // La línea de la acción bajo el cursor del cuerpo. Se resalta SIEMPRE que
+    // exista, con el foco puesto aquí o no — lo que cambia es el rol. Antes
+    // desaparecía al irse el foco, y entonces la mitad sin foco no era «un
+    // cursor apagado» sino «ningún cursor»: volver con Tab no decía a qué
+    // línea volvías.
+    let focused = action_lines.get(state.action_cursor()).copied();
     let body: Vec<Line<'_>> = lines
         .iter()
         .enumerate()
@@ -293,7 +307,7 @@ pub fn draw_help(
         .take(usize::from(body_area.height))
         .map(|(i, line)| {
             if Some(i) == focused {
-                line.clone().style(theme.role(Role::Selection))
+                line.clone().style(theme.role(rol_cuerpo))
             } else {
                 line.clone()
             }

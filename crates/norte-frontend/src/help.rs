@@ -1517,13 +1517,28 @@ mod tests {
         let mut s = state();
         s.open(&TopicId::new("copying"));
         s.start_filter();
+        // What the body shows the moment BEFORE the filter empties the
+        // sidebar — which is not necessarily what was open when the filter
+        // started. A prefix that still matches something moves the cursor to
+        // the first survivor and the body follows it, deliberately; this
+        // test is about the step after that, where nothing survives and
+        // there is nowhere to follow to.
+        //
+        // It is read from the state rather than written down because the
+        // corpus decides it: this used to hard-code `copying` and went red
+        // the day a page documented a command with a `z` in it, which made
+        // `z` a matching prefix. The invariant never involved that word.
+        let mut ultimo_vivo = s.current().clone();
         for c in "zzzz".chars() {
+            if !s.rows().is_empty() {
+                ultimo_vivo = s.current().clone();
+            }
             s.push_char(c);
         }
         assert!(s.rows().is_empty(), "nothing matched");
         assert_eq!(
-            s.current().as_str(),
-            "copying",
+            s.current(),
+            &ultimo_vivo,
             "the body keeps showing what the reader was reading"
         );
     }

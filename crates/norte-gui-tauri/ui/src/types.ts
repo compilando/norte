@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 79;
+export const BRIDGE_VERSION = 80;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -702,6 +702,11 @@ export interface ViewerView {
   /** Por qué NO se pinta una imagen reconocida, ya traducido. */
   image_refused: string;
   /**
+   * El zoom de la imagen, en PORCENTAJE de lo que ocuparía ajustada
+   * (puente 80). `100` = ajustada, que es como se abre.
+   */
+  image_zoom: number;
+  /**
    * Las líneas visibles CON ESTILO cuando lo que se enseña lo produjo un
    * previewer (puente 49): una entrada por fila de `lines`. Vacío en la
    * vista cruda, y entonces se pinta `lines`.
@@ -1373,6 +1378,9 @@ export interface ViewSnapshot {
   panel_bar: PanelBarView;
   /** Opcional: un host anterior al puente 63 no la manda. */
   key_bar?: KeyBarView;
+  /** `[ui] row_stripes` (puente 80): el «pijama» del listado. Opcional: un
+   *  host anterior no lo manda, y entonces no hay banda. */
+  row_stripes?: boolean;
   profiles: ProfilePickerView | null;
   palette: PaletteView | null;
   /** «Ir a cualquier sitio» (puente 77), si está abierto. Opcional: un host

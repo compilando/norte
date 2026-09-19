@@ -55,6 +55,14 @@ pub struct ViewSnapshot {
     pub panel_bar: PanelBarView,
     /// La barra de teclas de función (spec 2026-09-10). Puente 63.
     pub key_bar: KeyBarView,
+    /// `[ui] row_stripes` (spec 2026-09-20): si las filas impares de un
+    /// listado van sobre una banda. Puente 80.
+    ///
+    /// Viaja el INTERRUPTOR y no el color: el color es el rol `stripe` del
+    /// tema y ya cruza con los demás, en `--stripe-bg`. La paridad la pone
+    /// el renderer, que es quien sabe qué fila acabó pintando dónde.
+    #[serde(default)]
+    pub row_stripes: bool,
     /// El selector de perfiles, si está abierto.
     pub profiles: Option<ProfilePickerView>,
     /// La paleta de comandos, si está abierta.
@@ -1614,6 +1622,18 @@ pub struct ViewerView {
     /// usuario sabe que es una foto y que aparece como bytes sin una palabra
     /// parece norte roto, no norte prudente.
     pub image_refused: String,
+    /// El ZOOM de la imagen, en porcentaje de lo que ocuparía AJUSTADA
+    /// (puente 80). `100` = ajustada, que es como se abre.
+    ///
+    /// Un porcentaje y no un tamaño en píxeles porque quien sabe cuánto es
+    /// «ajustada» es el renderer, que es quien tiene el hueco. El host lleva
+    /// la cuenta de los peldaños y se la dice; la multiplicación es de la
+    /// hoja de estilos.
+    ///
+    /// Un renderer anterior al puente 80 no lo lee y pinta la imagen
+    /// ajustada siempre, que es lo que hacía.
+    #[serde(default = "zoom_ajustado")]
+    pub image_zoom: u16,
     /// Las líneas visibles CON ESTILO cuando lo que se enseña lo produjo un
     /// previewer (puente 49): una entrada por fila de [`Self::lines`], cada
     /// una la lista ordenada de sus fragmentos. Vacío en la vista cruda.
@@ -1622,6 +1642,13 @@ pub struct ViewerView {
     /// lo pintaba desde el primer día y la ventana lo aplanaba. Un renderer
     /// que no pinte fragmentos sigue con `lines` y no pierde nada.
     pub styled: Vec<Vec<SpanView>>,
+}
+
+/// El zoom que significa AJUSTADA, para el `serde(default)` de
+/// [`ViewerView::image_zoom`]: un host anterior al puente 80 no manda el
+/// campo, y lo que hacía era pintar ajustado.
+const fn zoom_ajustado() -> u16 {
+    100
 }
 
 /// Un fragmento de una línea de preview con estilo (ADR 0037).

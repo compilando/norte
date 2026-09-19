@@ -470,9 +470,10 @@ pub async fn run(
             // Se calcula ANTES de tomar prestado `app.viewer_imagen` en modo
             // mutable: mira el `App` entero, y un préstamo mutable de un
             // campo suyo ya vivo se lo impediría.
-            let rect = ui::imagen_a_colocar(app, painted_area);
-            match (&mut app.viewer_imagen, rect) {
-                (Some(imagen), Some(rect)) => {
+            let puesta = ui::imagen_a_colocar(app, painted_area);
+            match (&mut app.viewer_imagen, puesta) {
+                (Some(imagen), Some(puesta)) => {
+                    let rect = puesta.rect;
                     // IMPORTANTE 4: sin este atajo, un visor QUIETO
                     // retransmitía el PNG entero (hasta 1920 px de lado, en
                     // base64) en cada frame — y el bucle gira aunque nadie
@@ -481,12 +482,16 @@ pub async fn run(
                     // es el colocado Y el rect no cambió, no hay nada que
                     // rehacer.
                     let ya_puesta = crate::kitty_graphics::ya_colocada(imagen.id)
-                        && imagen.puesta_en == Some(rect);
+                        && imagen.puesta_en == Some(puesta);
                     if !ya_puesta {
                         let out = terminal.backend_mut();
                         crate::kitty_graphics::borrar_colocada(out);
-                        let esc =
-                            crate::kitty_graphics::escape_colocar(imagen.id, &imagen.bytes, rect);
+                        let esc = crate::kitty_graphics::escape_colocar(
+                            imagen.id,
+                            &imagen.bytes,
+                            rect,
+                            puesta.recorte,
+                        );
                         // CRÍTICO 1: `a=T` coloca en la posición del CURSOR,
                         // y tras `terminal.draw` el cursor queda donde acabó
                         // la última tirada de celdas repintadas — arbitrario,
@@ -502,7 +507,7 @@ pub async fn run(
                         match escrito {
                             Ok(()) => {
                                 crate::kitty_graphics::marcar_colocada(imagen.id);
-                                imagen.puesta_en = Some(rect);
+                                imagen.puesta_en = Some(puesta);
                             }
                             Err(e) => {
                                 // MENOR 7: un fallo a medio escribir el APC

@@ -25,6 +25,7 @@ match            = { fg = "#100c04", bg = "#ffd070" }
 pane-background       = { bg = "#141006" }
 pane-focus-background = { bg = "#1d1708" }
 mark                  = { bg = "#3a2e10" }
+stripe                = { bg = "#1a1509" }
 
 [files.kind]
 dir          = { fg = "#ffd070", bold = true }

@@ -17,6 +17,9 @@ commands = [
     "viewer.encoding",
     "viewer.encoding-auto",
     "viewer.hex",
+    "viewer.zoom-in",
+    "viewer.zoom-out",
+    "viewer.zoom-fit",
     "pane.open",
     "pane.edit",
     "pane.edit-new",
@@ -122,6 +125,25 @@ píxeles colocados que ya nadie sabe borrar. Ciérralo y vuelve a abrirlo para v
 el valor nuevo.
 
 > 💡 Dentro de tmux los píxeles no atraviesan la sesión sin `allow-passthrough` activado. La sonda del arranque lo detecta y cae a medios bloques por su cuenta, así que ahí no ves ningún aviso: no falta nada, es lo correcto.
+
+## Acercarse a la imagen
+
+Una imagen se abre AJUSTADA: entera dentro de lo que hay, que es lo primero
+que quieres ver de ella. {{cmd:viewer.zoom-in}} y {{cmd:viewer.zoom-out}} la
+acercan y la alejan por peldaños —25, 50, 75, 100, 150, 200, 300, 400, 800—
+y {{cmd:viewer.zoom-fit}} la devuelve a ajustada.
+
+Los peldaños no son un factor que se multiplica, y eso se nota: acercar y
+alejar el mismo número de veces te deja EXACTAMENTE donde estabas, en vez de
+en un 99 % del que ya no se sale.
+
+Acercada, la imagen no cabe, y entonces las teclas de mover el visor mueven
+lo que se ve DENTRO de ella: las mismas que recorren un fichero largo
+({{cmd:viewer.up}}, {{cmd:viewer.down}}, {{cmd:viewer.left}},
+{{cmd:viewer.right}}). Ajustar vuelve a poner el paseo a cero.
+
+Esto es del camino de píxeles: en medios bloques la imagen ES texto en
+celdas, así que acercarse no descubre nada que no estuviera ya pintado.
 
 # Darle el fichero a otro programa
 

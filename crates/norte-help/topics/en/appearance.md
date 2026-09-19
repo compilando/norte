@@ -39,6 +39,24 @@ directory lives on. When the border is too short the free space goes first
 and the count second: what you just marked is the last thing to give way.
 `pane_footer = false` leaves the border bare.
 
+Striped rows
+------------
+
+`row_stripes = true` paints the odd rows of a listing on a band of their
+own — the «pyjama» that lets you follow a wide row from its name all the way
+to its date. It is off by default, because the band earns its keep on a wide
+pane and gets in the way on a narrow one.
+
+The colour is the theme's (`stripe`), not a shade norte picks: a band
+computed from the background reads as invisible in one palette and as a
+stripe of paint in the next. Every bundled theme defines one. A theme that
+does not simply paints no band, and the listing is the one you already know.
+
+The band never covers anything that MEANS something. The cursor, a marked
+row and — in the window — the row under the pointer are painted over it, in
+that order. A pyjama that hid the cursor would turn a reading aid into a lie
+about where the keys are going.
+
 Dates
 -----
 

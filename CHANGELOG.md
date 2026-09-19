@@ -9,6 +9,32 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Listings can read in bands** (`[ui] row_stripes`, ADR 0128). The odd
+  rows of a listing get a band of their own — the pyjama — so a wide row is
+  easy to follow from its name to its date. Off by default, and the colour
+  is the theme's (`stripe`), not a shade norte picks: the ten bundled themes
+  define one, and a theme that does not simply paints no band. The band
+  never covers the cursor, a marked row, or the row under the pointer. Both
+  frontends, and a row in the settings screen.
+- **The permissions column comes switched on** where there are permissions
+  (ADR 0128). A directory on this disk or an SSH host now shows
+  `drwxr-xr-x` without anyone asking: it is the `attr:posix.mode` column
+  that already existed, put into the default set. It appears only once the
+  provider says it has POSIX permissions — never in a bucket, inside a
+  `.zip` or on Windows — and it is the first column to give way when the
+  pane narrows, because a column nobody asked for must not be the one that
+  leaves the name unreadable. Write it into `[ui.columns]` yourself and it
+  stops giving way, like any column you chose.
+
+### Fixed
+
+- **The system help says which of its two halves has the keys** (ADR 0128).
+  The topic list and the page both drew their cursor the same way, so
+  pressing Tab moved the keys and changed nothing on screen. Both cursors
+  are now always drawn, and the one without the keyboard is dimmed — the
+  same rule the two file panes have followed since they got it. In the
+  window the page also takes the accent edge the cursor row has.
+
 - **The window paints the journal timeline** (#359). Its button was already
   in the panel bar and opened a slot the window could not draw. It now
   lists what has been done on this machine, newest first, with a batch as

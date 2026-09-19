@@ -273,6 +273,12 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
+        id: "ui.row-stripes",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
         id: "ui.date-format",
         section: Section::General,
         kind: SettingKind::Enum(&["smart", "relative", "iso"]),
@@ -456,6 +462,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         "ui.key-bar" => cfg.common.ui_chrome.key_bar().to_string(),
         "ui.panel-bar-style" => cfg.common.ui_chrome.panel_bar_style().as_str().to_owned(),
         "ui.pane-footer" => cfg.common.ui_chrome.pane_footer().to_string(),
+        "ui.row-stripes" => cfg.common.ui_chrome.row_stripes().to_string(),
         "ui.date-format" => cfg.common.ui_chrome.date_format().as_str().to_owned(),
         "ui.notice-seconds" => cfg.common.ui_chrome.notice_seconds().to_string(),
         "ui.history-size" => cfg.common.ui_chrome.history_size().to_string(),

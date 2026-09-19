@@ -683,6 +683,14 @@
             "null"
           ]
         },
+        "row_stripes": {
+          "default": null,
+          "description": "Whether a listing paints its odd rows on a band of their own — the\n«pyjama» that makes a wide row easy to follow from its name to its\ndate. Absent = `false`.\n\nIt is off by default because the band is a READING aid whose worth\ndepends on the pane being wide, and because the colour is the theme's:\na theme that does not define the `stripe` role paints nothing, and a\nsetting that looks broken on half the themes is worse than one the\nreader turns on. Every bundled preset defines it.\n\nThe band never covers what MEANS something: the cursor, a marked row\nand the pointer are painted over it.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "show_hidden": {
           "default": null,
           "description": "Whether panes show hidden entries at startup (#107): unix dot-entries,\ndecided on the raw bytes of the last path segment. Absent = `true`\n(show everything — the conservative default: nothing the provider\nlists silently disappears until the user asks). `pane.toggle-hidden`\n(Ctrl+H) flips it per pane at runtime; this key only seeds the\ninitial state.",

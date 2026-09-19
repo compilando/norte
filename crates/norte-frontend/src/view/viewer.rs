@@ -257,6 +257,14 @@ pub struct Viewer {
     /// haría que el tope cambiara al bajar, y el texto saltaría de lado sin
     /// que nadie hubiera pulsado nada.
     max_cols_texto: usize,
+    /// El zoom de la IMAGEN, en porcentaje de lo que ocuparía ajustada.
+    /// `None` = ajustar, y es como se abre siempre: lo primero que se quiere
+    /// de una imagen es verla entera.
+    ///
+    /// [`Viewer::ZOOM_ACTUAL`] es el centinela de «tamaño real». Vive aquí y
+    /// no en el frontend porque los dos lo necesitan igual y porque es
+    /// estado del visor, como el hexadecimal o el encoding forzado.
+    zoom: Option<u16>,
     /// Preview de un plugin (M4-P5): si está, REEMPLAZA la vista cruda y la
     /// decodificación (bytes/encoding se ignoran; `lines` ya enmascaradas).
     plugin_preview: Option<PluginPreviewView>,
@@ -281,6 +289,9 @@ impl Viewer {
             scroll: 0,
             hscroll: 0,
             max_cols_texto: 0,
+            // Una imagen se abre AJUSTADA: lo primero que se quiere de ella
+            // es verla entera.
+            zoom: None,
             plugin_preview: None,
             text: String::new(),
             encoding_name: "",
@@ -691,6 +702,68 @@ impl Viewer {
     #[must_use]
     pub fn image_bytes(&self) -> Option<&[u8]> {
         self.is_image().then_some(self.bytes.as_slice())
+    }
+
+    /// El zoom de la imagen: `None` = AJUSTAR, que es como se abre.
+    ///
+    /// Un porcentaje y no un factor porque es lo que se enseña en la barra de
+    /// estado, y porque el ciclo de peldaños se escribe en porcentajes.
+    #[must_use]
+    pub fn zoom(&self) -> Option<u16> {
+        self.zoom
+    }
+
+    /// El zoom en porcentaje contra el tamaño AJUSTADO, ya resuelto: lo que
+    /// multiplica el sitio que la imagen ocuparía sola.
+    ///
+    /// Ajustar es el 100 %, así que quien pinta multiplica siempre y no tiene
+    /// que saber que `None` significa algo.
+    #[must_use]
+    pub fn zoom_pct(&self) -> u16 {
+        self.zoom.unwrap_or(100)
+    }
+
+    /// Acercar un peldaño.
+    pub fn zoom_in(&mut self) {
+        self.zoom = Some(Self::escalon_arriba(self.zoom_pct()));
+    }
+
+    /// Alejar un peldaño.
+    pub fn zoom_out(&mut self) {
+        self.zoom = Some(Self::escalon_abajo(self.zoom_pct()));
+    }
+
+    /// Volver a AJUSTAR: la imagen entera dentro de lo que hay.
+    pub fn zoom_fit(&mut self) {
+        self.zoom = None;
+        self.scroll = 0;
+        self.hscroll = 0;
+    }
+
+    /// Cota de acercamiento, en porcentaje del ajustado.
+    pub const ZOOM_MAX: u16 = 800;
+    /// Cota de alejamiento. Por debajo, la imagen deja de decir nada.
+    pub const ZOOM_MIN: u16 = 25;
+
+    /// Los peldaños. Se sube y se baja por ellos y no multiplicando, para que
+    /// acercar y alejar la misma cantidad de veces devuelva al MISMO sitio:
+    /// con un factor, `100 × 1.25 ÷ 1.25` es 99 o 101 según redondeo, y el
+    /// lector acaba en un zoom que no pidió y del que no puede salir.
+    const ESCALONES: [u16; 9] = [25, 50, 75, 100, 150, 200, 300, 400, 800];
+
+    fn escalon_arriba(pct: u16) -> u16 {
+        Self::ESCALONES
+            .into_iter()
+            .find(|&e| e > pct)
+            .unwrap_or(Self::ZOOM_MAX)
+    }
+
+    fn escalon_abajo(pct: u16) -> u16 {
+        Self::ESCALONES
+            .into_iter()
+            .rev()
+            .find(|&e| e < pct)
+            .unwrap_or(Self::ZOOM_MIN)
     }
 }
 

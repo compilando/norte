@@ -48,6 +48,26 @@ A column a backend cannot answer is left **empty**. That is the honest
 outcome: object storage has no owner and no mode, and painting a plausible `-`
 would be inventing an answer. See [[remote]].
 
+# Permissions come switched on
+
+In a directory on this disk, and on an SSH host, a **permissions** column —
+`drwxr-xr-x` — shows up without your asking. It is `attr:posix.mode`, an
+attribute column like the ones above; the only difference is who put it
+there.
+
+Which is why it behaves differently in one respect: it **gives way**. As the
+pane narrows it is the FIRST to go, ahead of even the type, because a column
+you did not ask for must not be the one that leaves the name reading
+`Scre….png`. Name it yourself in `[ui.columns]` and it stops giving way, like
+any other column you chose.
+
+It does not appear until the backend says it has POSIX permissions, so you
+will not see it in a bucket, inside a `.zip`, or on Windows: a "Mode" header
+over twelve blank cells is name width spent saying nothing.
+
+Sorting by it is not possible yet — as with any attribute column, clicking
+its header does nothing rather than inventing a ranking.
+
 > 💡 A plugin column is filled asynchronously, after the listing is already on screen. It appears a moment later on a slow provider, and a listing that changes underneath it drops what it had rather than showing a value that belongs to the previous directory.
 
 # Formats

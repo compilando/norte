@@ -810,12 +810,43 @@ pub fn format_mode_octal(mode: u32) -> String {
 }
 
 /// Modo POSIX estilo `ls` (`-rw-r--r--`).
+///
+/// La primera letra es la CLASE del nodo, con las siete que define `S_IFMT`
+/// y una octava que no la define: `?`.
+///
+/// El `?` es el hallazgo de la auditoría de codificación, y es el que
+/// importa. Un modo cuyos bits de tipo son cero —lo que manda un servidor
+/// SFTP que solo reporta los permisos, y lo que emite `MemProvider`— no es
+/// un fichero regular: es un modo que no dice de qué clase es. Pintarlo `-`
+/// enseñaba un directorio como fichero en la misma fila en la que el icono y
+/// la `/` decían que era un directorio, y de dos superficies que se
+/// contradicen la que mentía era ésta. `?` es una pregunta sobre la que el
+/// lector puede actuar; `-` era una respuesta equivocada.
+///
+/// ```
+/// use norte_frontend::columns::format_mode_rwx;
+/// assert_eq!(format_mode_rwx(0o100_644), "-rw-r--r--");
+/// assert_eq!(format_mode_rwx(0o040_755), "drwxr-xr-x");
+/// assert_eq!(format_mode_rwx(0o010_644), "prw-r--r--", "fifo");
+/// assert_eq!(format_mode_rwx(0o020_666), "crw-rw-rw-", "dispositivo de caracteres");
+/// assert_eq!(format_mode_rwx(0o060_660), "brw-rw----", "dispositivo de bloques");
+/// assert_eq!(format_mode_rwx(0o140_755), "srwxr-xr-x", "socket");
+/// // Sin bits de clase: NO es un fichero regular, es un modo que no lo dice.
+/// assert_eq!(format_mode_rwx(0o644), "?rw-r--r--");
+/// // Y siempre diez celdas, sea cual sea la entrada.
+/// assert_eq!(format_mode_rwx(u32::MAX).chars().count(), 10);
+/// ```
 #[must_use]
 pub fn format_mode_rwx(mode: u32) -> String {
     let tipo = match mode & 0o170_000 {
-        0o040_000 => 'd',
+        0o140_000 => 's',
         0o120_000 => 'l',
-        _ => '-',
+        0o100_000 => '-',
+        0o060_000 => 'b',
+        0o040_000 => 'd',
+        0o020_000 => 'c',
+        0o010_000 => 'p',
+        _ => '?',
     };
     let mut out = String::with_capacity(10);
     out.push(tipo);
@@ -848,14 +879,16 @@ mod settings_tests {
     #[test]
     fn column_widths_conjunto_default_a_80_celdas() {
         let s = ColumnsSettings::default();
-        let w = column_widths(&s, "file", 80);
+        // Sin catálogo no hay columna de permisos: la pone el listado, y el
+        // listado no la enseña hasta saber que el backend la contesta.
+        let w = column_widths(&s, "file", 80, None);
         let cols: Vec<ColumnId> = w.iter().map(|(id, _)| id.clone()).collect();
         assert_eq!(
             cols,
             vec![
                 ColumnId::Builtin(Builtin::Name),
                 ColumnId::Builtin(Builtin::Size),
-                ColumnId::Builtin(Builtin::Mtime)
+                ColumnId::Builtin(Builtin::Mtime),
             ]
         );
         // El nombre absorbe el resto: suma == disponible.
@@ -865,7 +898,7 @@ mod settings_tests {
     #[test]
     fn column_widths_estrecho_solo_nombre() {
         let s = ColumnsSettings::default();
-        let w = column_widths(&s, "file", 12);
+        let w = column_widths(&s, "file", 12, None);
         assert_eq!(
             w.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
             vec![ColumnId::Builtin(Builtin::Name)]
@@ -965,7 +998,10 @@ mod settings_tests {
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         assert_eq!(st.sort_for("file"), crate::sort::SortSpec::default());
         let items = st.layout_items_for("file");
-        assert_eq!(items.len(), 3, "name+size+mtime");
+        assert_eq!(items.len(), 4, "name+size+mtime+permisos");
+        // Y en un scheme sin permisos POSIX, las tres de siempre: la cuarta
+        // no se pone donde el backend no la puede contestar.
+        assert_eq!(st.layout_items_for("s3").len(), 3, "name+size+mtime");
         assert!(st.invalid.is_empty() && st.plugins_over_cap.is_empty());
     }
 }
@@ -1102,6 +1138,38 @@ mod model_tests {
         assert_eq!(format_mode_rwx(0o102_745), "-rwxr-Sr-x");
         assert_eq!(format_mode_rwx(0o041_775), "drwxrwxr-t");
         assert_eq!(format_mode_rwx(0o041_774), "drwxrwxr-T");
+    }
+
+    /// El corpus canónico de modos, contra el formateador (spec 2026-09-20).
+    ///
+    /// Vive en `norte-testkit` y no aquí porque la columna dejó de ser
+    /// opcional: el mismo corpus lo tienen que poder gastar los tests del
+    /// provider local y los de la ventana, y una tabla copiada en tres
+    /// sitios se separa en el primer modo nuevo.
+    #[test]
+    fn el_corpus_de_modos_se_pinta_entero() {
+        for m in norte_testkit::corpus::posix_modes() {
+            let pintado = format_mode_rwx(u32::try_from(m.mode).expect("cabe en u32"));
+            assert_eq!(pintado, m.rwx, "{}: {}", m.id, m.why);
+            assert_eq!(pintado.chars().count(), 10, "{} no mide diez", m.id);
+        }
+    }
+
+    /// El gemelo de `no_type_bits` SÍ es un fichero regular, y los dos se
+    /// tienen que poder distinguir. Era el fallo: los dos pintaban `-`.
+    #[test]
+    fn un_modo_sin_clase_no_se_confunde_con_un_fichero() {
+        let corpus = norte_testkit::corpus::posix_modes();
+        let sin = corpus
+            .iter()
+            .find(|m| m.id == "no_type_bits")
+            .expect("el corpus lo trae");
+        let gemelo = sin.twin.expect("la colisión necesita dos");
+        let a = format_mode_rwx(u32::try_from(sin.mode).expect("cabe"));
+        let b = format_mode_rwx(u32::try_from(gemelo).expect("cabe"));
+        assert_ne!(a, b, "un directorio por SFTP se leía como fichero regular");
+        assert!(a.starts_with('?'), "la clase que falta se PREGUNTA: {a}");
+        assert!(b.starts_with('-'), "la que está se afirma: {b}");
     }
 
     /// Review m3: available=0 → el nombre recibe 1 (impintable a 0), la
@@ -1261,6 +1329,23 @@ pub fn default_layout_items() -> Vec<(Builtin, LayoutItem)> {
         ),
     ]
 }
+
+/// El atributo que lleva el modo POSIX de una entrada, y que la columna de
+/// PERMISOS pinta como `drwxr-xr-x` (spec 2026-09-20).
+///
+/// Es el mismo id que anuncian `norte-vfs-local` y `norte-vfs-sftp` en su
+/// catálogo de atributos; aquí está escrito una vez para que la columna por
+/// defecto y su peldaño de la escalera nombren lo MISMO.
+pub const POSIX_MODE_ATTR: &str = "posix.mode";
+
+/// Los schemes cuyo listado enseña la columna de permisos SIN que nadie la
+/// pida (spec 2026-09-20): los dos que tienen permisos POSIX de verdad.
+///
+/// La lista es corta y explícita a propósito. Lo alternativo —enseñarla
+/// siempre y dejarla vacía donde el backend no contesta— gasta ancho del
+/// nombre en un bucket de objetos o dentro de un `.zip` para no decir nada,
+/// que es justo lo que ADR 0124 vino a arreglar.
+const SCHEMES_CON_PERMISOS: &[&str] = &["file", "sftp"];
 
 /// Tope de una cabecera custom (#108 7b), en caracteres TRAS enmascarar.
 pub const HEADER_MAX_CHARS: usize = 24;
@@ -1782,6 +1867,32 @@ impl ColumnsSettings {
         self.spec_field(scheme, id, |s| s.width.is_some())
     }
 
+    /// La lista de columnas que alguien ESCRIBIÓ para `scheme`, si la hay:
+    /// la del scheme si la tiene, y si no la global.
+    ///
+    /// Fuente única de una pregunta que se hacía en dos sitios con la misma
+    /// expresión copiada (`layout_items_for` y el predicado de abajo). Dos
+    /// copias que hoy coinciden son una invariante sostenida por un
+    /// pegado, y la primera que se toque las separa.
+    fn configured_ids(&self, scheme: &str) -> Option<&Vec<ColumnId>> {
+        self.schemes
+            .get(scheme)
+            .and_then(|(c, _)| c.as_ref())
+            .or(self.default_set.as_ref())
+    }
+
+    /// ¿Pinta este scheme una lista de columnas que ESCRIBIÓ alguien, en vez
+    /// del set por defecto? (spec 2026-09-20)
+    ///
+    /// Lo preguntan la escalera de [`fitted_columns`] —la columna de
+    /// permisos cede sitio cuando la puso norte y no cuando la puso el
+    /// usuario— y el selector de columnas, que necesita saber si enseñarla
+    /// encendida.
+    #[must_use]
+    pub fn has_user_columns(&self, scheme: &str) -> bool {
+        self.configured_ids(scheme).is_some()
+    }
+
     /// ¿Tiene `id` un `format` en algún spec (global o del scheme)? Quien
     /// eligió un formato no quiere que se lo cambien por el corto.
     #[must_use]
@@ -1871,16 +1982,25 @@ impl ColumnsSettings {
     /// siguen ganando.
     #[must_use]
     pub fn layout_items_for(&self, scheme: &str) -> Vec<(ColumnId, LayoutItem)> {
-        let ids = self
-            .schemes
-            .get(scheme)
-            .and_then(|(c, _)| c.as_ref())
-            .or(self.default_set.as_ref());
+        let ids = self.configured_ids(scheme);
         let mut out = match ids {
-            None => default_layout_items()
-                .into_iter()
-                .map(|(b, it)| (ColumnId::Builtin(b), it))
-                .collect::<Vec<_>>(),
+            None => {
+                let mut v: Vec<(ColumnId, LayoutItem)> = default_layout_items()
+                    .into_iter()
+                    .map(|(b, it)| (ColumnId::Builtin(b), it))
+                    .collect();
+                // La columna de PERMISOS, donde hay permisos (spec
+                // 2026-09-20). Va solo en el set por defecto: en cuanto
+                // alguien escribe sus columnas manda su lista, y si no la
+                // nombró es que no la quiere.
+                if SCHEMES_CON_PERMISOS.contains(&scheme) {
+                    v.push((
+                        ColumnId::Attr(POSIX_MODE_ATTR.to_owned()),
+                        attr_layout_item(),
+                    ));
+                }
+                v
+            }
             Some(ids) => {
                 let mut out: Vec<(ColumnId, LayoutItem)> = Vec::new();
                 for id in ids {
@@ -2177,6 +2297,59 @@ fn map_sort(s: Option<&norte_config::SortChoice>) -> crate::sort::SortSpec {
     }
 }
 
+/// ¿Pone este listado la columna de permisos por su cuenta?
+///
+/// Tres condiciones, y las tres son necesarias:
+///
+/// 1. nadie escribió sus propias columnas para este scheme — si lo hizo,
+///    manda su lista, y si no la nombró es que no la quiere;
+/// 2. el scheme es de los que tienen permisos POSIX;
+/// 3. el provider CONTESTÓ y dice que tiene `posix.mode`, con el hint que
+///    dice que es un modo. `None` —aún no ha contestado— es que no.
+///
+/// La tercera exige el hint y no solo el id porque el id es un nombre que
+/// cualquier provider puede usar para lo que quiera: sin comprobarlo, norte
+/// pondría su cabecera traducida «Modo» encima de una cadena ajena que nadie
+/// pidió ver. La cabecera es de norte, así que el valor tiene que serlo
+/// también.
+///
+/// Es pública porque la respuesta la necesitan DOS superficies y tiene que
+/// ser la misma: el listado, que la pinta, y el selector de columnas, que
+/// tiene que enseñarla encendida — decir que está apagada mientras se pinta
+/// convierte confirmar el diálogo en borrarla sin avisar.
+#[must_use]
+pub fn pone_los_permisos(
+    settings: &ColumnsSettings,
+    scheme: &str,
+    catalog: Option<&norte_proto::AttrCatalog>,
+) -> bool {
+    !settings.has_user_columns(scheme)
+        && SCHEMES_CON_PERMISOS.contains(&scheme)
+        && catalog.is_some_and(|c| {
+            c.iter()
+                .any(|a| a.id == POSIX_MODE_ATTR && a.hint == norte_proto::AttrHint::Mode)
+        })
+}
+
+/// Las columnas que este listado va a PINTAR: las configuradas, menos la de
+/// permisos que puso norte si el backend no la puede contestar.
+///
+/// Un único sitio donde se decide, porque lo preguntan dos funciones y la
+/// respuesta tiene que ser la misma en las dos (spec 2026-09-20).
+fn items_pintables(
+    settings: &ColumnsSettings,
+    scheme: &str,
+    catalog: Option<&norte_proto::AttrCatalog>,
+) -> Vec<(ColumnId, LayoutItem)> {
+    let mut set = settings.layout_items_for(scheme);
+    // Una columna que pidió el usuario se queda aunque salga vacía: es su
+    // elección, y borrársela sería contestarle que no.
+    if !settings.has_user_columns(scheme) && !pone_los_permisos(settings, scheme, catalog) {
+        set.retain(|(id, _)| !matches!(id, ColumnId::Attr(a) if a == POSIX_MODE_ATTR));
+    }
+    set
+}
+
 /// Anchos de las columnas (#108) para un ancho interior en CELDAS:
 /// `(id, ancho)` de las columnas VIVAS de `settings` para `scheme`,
 /// en orden de pintado — una columna sin sitio no aparece. Compartido
@@ -2186,8 +2359,12 @@ pub fn column_widths(
     settings: &ColumnsSettings,
     scheme: &str,
     inner_width: u16,
+    // Lo mismo que en [`fitted_columns`], y por la misma razón: dos
+    // respuestas distintas a «¿qué columnas hay?» dejarían el borde que
+    // arrastra el ratón agarrando la columna de al lado.
+    catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<(ColumnId, u16)> {
-    let set = settings.layout_items_for(scheme);
+    let set = items_pintables(settings, scheme, catalog);
     let items: Vec<_> = set.iter().map(|(_, it)| *it).collect();
     let placed = layout(inner_width, &items);
     set.into_iter()
@@ -2219,15 +2396,43 @@ enum Peldano {
     Compactar,
 }
 
+/// A qué columna apunta un peldaño. Existe porque desde la spec 2026-09-20
+/// la escalera tiene un peldaño que NO es un builtin: la columna de permisos
+/// que el listado pone por su cuenta.
+#[derive(Debug, Clone, Copy)]
+enum Cede {
+    Builtin(Builtin),
+    /// Un atributo, nombrado por su id. Solo el que el propio listado añade
+    /// por defecto: uno que el usuario pidió sigue exento (ADR 0124).
+    PorDefecto(&'static str),
+}
+
+impl Cede {
+    fn id(self) -> ColumnId {
+        match self {
+            Self::Builtin(b) => ColumnId::Builtin(b),
+            Self::PorDefecto(a) => ColumnId::Attr(a.to_owned()),
+        }
+    }
+}
+
 /// El orden en que las columnas ceden sitio al nombre. Primero lo que ya se
 /// dice de otra forma —la clase la cuentan el icono, el color y la `/`—,
 /// luego lo que se puede decir más corto, y solo al final lo que se pierde.
-const ESCALERA: [(Builtin, Peldano); 5] = [
-    (Builtin::Kind, Peldano::Ocultar),
-    (Builtin::Mtime, Peldano::Compactar),
-    (Builtin::Size, Peldano::Compactar),
-    (Builtin::Mtime, Peldano::Ocultar),
-    (Builtin::Size, Peldano::Ocultar),
+///
+/// Los permisos van los PRIMEROS de todos, y no por ser menos útiles: son la
+/// columna que el listado pone sin que nadie la pida, así que es la primera
+/// que tiene que irse cuando el sitio no da. ADR 0124 exime a las columnas
+/// `attr:` de la escalera «porque las pidió alguien a propósito»; ésta no la
+/// pidió nadie, y por eso la excepción no la alcanza (ver
+/// [`ColumnsSettings::pone_sus_columnas`]).
+const ESCALERA: [(Cede, Peldano); 6] = [
+    (Cede::PorDefecto(POSIX_MODE_ATTR), Peldano::Ocultar),
+    (Cede::Builtin(Builtin::Kind), Peldano::Ocultar),
+    (Cede::Builtin(Builtin::Mtime), Peldano::Compactar),
+    (Cede::Builtin(Builtin::Size), Peldano::Compactar),
+    (Cede::Builtin(Builtin::Mtime), Peldano::Ocultar),
+    (Cede::Builtin(Builtin::Size), Peldano::Ocultar),
 ];
 
 /// Anchos que dan prioridad a LEER el nombre.
@@ -2251,12 +2456,25 @@ pub fn fitted_columns(
     scheme: &str,
     inner_width: u16,
     name_wanted: u16,
+    // El catálogo de atributos del provider conectado, si ya se sabe (spec
+    // 2026-09-20). Solo decide una cosa: si se pinta la columna de permisos
+    // que pone el propio listado.
+    //
+    // `None` —todavía no contestó— es NO. La columna la puso norte, así que
+    // norte es quien tiene que no enseñarla vacía: una cabecera «Modo» sobre
+    // doce celdas en blanco es exactamente el ancho de nombre que ADR 0124
+    // vino a recuperar. Aparecer un fotograma tarde es barato; estar ahí sin
+    // poder decir nada, no.
+    //
+    // Y no es hipotético: `file` en Windows no anuncia `posix.mode`, y ese
+    // listado no lo anunciará nunca.
+    catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<Fitted> {
     let nombre = ColumnId::Builtin(Builtin::Name);
     let techo = u16::try_from(u32::from(inner_width) * 3 / 5).unwrap_or(u16::MAX);
     let objetivo = name_wanted.min(techo).max(NAME_MIN);
     let libre = !settings.width_pinned(scheme, &nombre);
-    let mut set = settings.layout_items_for(scheme);
+    let mut set = items_pintables(settings, scheme, catalog);
     let mut vivas = vec![true; set.len()];
     let mut cortas = vec![false; set.len()];
     let mut escalera = ESCALERA.iter();
@@ -2287,10 +2505,16 @@ pub fn fitted_columns(
         // El siguiente peldaño que se PUEDE dar; sin ninguno, esto es lo
         // mejor que cabe.
         loop {
-            let Some(&(b, peldano)) = escalera.next() else {
+            let Some(&(cede, peldano)) = escalera.next() else {
                 return out;
             };
-            let id = ColumnId::Builtin(b);
+            // Un peldaño que apunta a una columna por defecto no se da si
+            // este listado pinta las columnas que alguien escribió: allí esa
+            // columna la pidió una persona, y ADR 0124 la deja quieta.
+            if matches!(cede, Cede::PorDefecto(_)) && settings.has_user_columns(scheme) {
+                continue;
+            }
+            let id = cede.id();
             let Some(i) = set.iter().position(|(c, _)| *c == id) else {
                 continue;
             };
@@ -2931,9 +3155,91 @@ mod attr_funnel_tests {
         };
         let st = ColumnsSettings::resolve(&cfg);
         assert_eq!(st.attr_ids_for("file"), vec!["mem.mode".to_owned()]);
-        // sin attrs configurados → vacío (no se paga el wire).
+        // Sin configurar, el único attr que se pide es el modo POSIX, y solo
+        // donde hay permisos (spec 2026-09-20): la columna la pone el propio
+        // listado, así que el listado también paga su hueco del `fs.list`.
         let st2 = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
-        assert!(st2.attr_ids_for("file").is_empty());
+        assert_eq!(st2.attr_ids_for("file"), vec![POSIX_MODE_ATTR.to_owned()]);
+        assert_eq!(st2.attr_ids_for("sftp"), vec![POSIX_MODE_ATTR.to_owned()]);
+        // Y donde no los hay no se pide nada: una columna que el backend no
+        // sabe contestar es ancho del nombre gastado en un hueco en blanco.
+        assert!(st2.attr_ids_for("s3").is_empty());
+        assert!(st2.attr_ids_for("zip").is_empty());
+    }
+
+    /// La columna de permisos que pone norte CEDE sitio al nombre, y la que
+    /// pide el usuario no (spec 2026-09-20, enmienda de ADR 0124).
+    ///
+    /// Es la diferencia entera entre las dos: la escalera existe para que un
+    /// panel estrecho siga dejando leer el nombre, y una columna que nadie
+    /// pidió no puede ser la que lo impida. Una pedida a mano sí, porque
+    /// quitarla sería desobedecer.
+    /// Un catálogo que SÍ anuncia el modo POSIX, como el del provider local.
+    fn catalogo_con_modo() -> norte_proto::AttrCatalog {
+        use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
+        norte_proto::AttrCatalog::new(vec![AttrInfo {
+            id: POSIX_MODE_ATTR.into(),
+            label: "Mode".into(),
+            ty: AttrType::Uint,
+            hint: AttrHint::Mode,
+        }])
+    }
+
+    #[test]
+    fn los_permisos_por_defecto_ceden_y_los_pedidos_no() {
+        let modo = ColumnId::Attr(POSIX_MODE_ATTR.to_owned());
+        let cat = catalogo_con_modo();
+        // Por defecto: en un panel ancho está, y en uno estrecho se va.
+        let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        let ancho = fitted_columns(&st, "file", 100, 30, Some(&cat));
+        assert!(ancho.iter().any(|f| f.id == modo), "cabe: se enseña");
+        let estrecho = fitted_columns(&st, "file", 40, 30, Some(&cat));
+        assert!(
+            !estrecho.iter().any(|f| f.id == modo),
+            "no cabe: la primera que cede es la que nadie pidió"
+        );
+        // Pedida a mano: se queda, aunque apriete.
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec![
+                "name".into(),
+                "size".into(),
+                "mtime".into(),
+                format!("attr:{POSIX_MODE_ATTR}"),
+            ]),
+            ..Default::default()
+        };
+        let suyo = ColumnsSettings::resolve(&cfg);
+        let estrecho = fitted_columns(&suyo, "file", 40, 30, Some(&cat));
+        assert!(
+            estrecho.iter().any(|f| f.id == modo),
+            "la pidió alguien a propósito (ADR 0124)"
+        );
+    }
+
+    /// Un backend que no anuncia permisos no gasta ancho del nombre en una
+    /// columna «Modo» en blanco — ni siquiera mientras no ha contestado.
+    ///
+    /// Es la mitad honesta del automatismo: poner la columna por el scheme es
+    /// una apuesta, y `file` en Windows la pierde siempre.
+    #[test]
+    fn sin_catalogo_o_sin_modo_no_se_pone_la_columna() {
+        let modo = ColumnId::Attr(POSIX_MODE_ATTR.to_owned());
+        let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        // Todavía no contestó.
+        let f = fitted_columns(&st, "file", 100, 30, None);
+        assert!(!f.iter().any(|x| x.id == modo));
+        // Contestó, y no tiene permisos POSIX.
+        let vacio = norte_proto::AttrCatalog::new(vec![]);
+        let f = fitted_columns(&st, "file", 100, 30, Some(&vacio));
+        assert!(!f.iter().any(|x| x.id == modo));
+        // Pero si la pidió el usuario, se queda: vacía es SU respuesta.
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec!["name".into(), format!("attr:{POSIX_MODE_ATTR}")]),
+            ..Default::default()
+        };
+        let suyo = ColumnsSettings::resolve(&cfg);
+        let f = fitted_columns(&suyo, "file", 100, 30, Some(&vacio));
+        assert!(f.iter().any(|x| x.id == modo));
     }
 
     /// #117 encoding-audit M1: un `attr:` que parsea pero no es un id
@@ -3367,7 +3673,7 @@ mod fit_tests {
     /// ya dicen el icono y la `/`— y nada más.
     #[test]
     fn la_clase_cede_primero_y_basta() {
-        let f = fitted_columns(&con_clase(), "file", 46, 20);
+        let f = fitted_columns(&con_clase(), "file", 46, 20, None);
         assert_eq!(resumen(&f), ["name", "size", "mtime"]);
         assert!(nombre(&f) >= 20, "{f:?}");
     }
@@ -3376,7 +3682,7 @@ mod fit_tests {
     /// fecha, y se para en cuanto el nombre llega a su objetivo acotado.
     #[test]
     fn nombres_largos_compactan_la_fecha() {
-        let f = fitted_columns(&con_clase(), "file", 46, 40);
+        let f = fitted_columns(&con_clase(), "file", 46, 40, None);
         assert_eq!(resumen(&f), ["name", "size", "mtime~"]);
         // Objetivo acotado a 3/5 de 46 = 27.
         assert!(nombre(&f) >= 27, "{f:?}");
@@ -3385,7 +3691,7 @@ mod fit_tests {
     /// Un panel ancho no pierde nada: la escalera solo se sube si hace falta.
     #[test]
     fn ancho_de_sobra_no_toca_nada() {
-        let f = fitted_columns(&con_clase(), "file", 120, 30);
+        let f = fitted_columns(&con_clase(), "file", 120, 30, None);
         assert_eq!(resumen(&f), ["name", "size", "mtime", "kind"]);
     }
 
@@ -3400,7 +3706,7 @@ mod fit_tests {
                 ..Default::default()
             },
         );
-        let f = fitted_columns(&s, "file", 46, 20);
+        let f = fitted_columns(&s, "file", 46, 20, None);
         assert_eq!(resumen(&f), ["name", "size", "mtime~", "kind"]);
     }
 
@@ -3414,7 +3720,7 @@ mod fit_tests {
                 ..Default::default()
             },
         );
-        let f = fitted_columns(&s, "file", 46, 40);
+        let f = fitted_columns(&s, "file", 46, 40, None);
         assert_eq!(resumen(&f), ["name", "size~", "mtime"]);
     }
 
@@ -3429,8 +3735,8 @@ mod fit_tests {
                 ..Default::default()
             },
         );
-        let f = fitted_columns(&s, "file", 46, 40);
-        let antes: Vec<_> = column_widths(&s, "file", 46)
+        let f = fitted_columns(&s, "file", 46, 40, None);
+        let antes: Vec<_> = column_widths(&s, "file", 46, None)
             .into_iter()
             .map(|(id, width)| Fitted {
                 id,

@@ -21,6 +21,7 @@ match            = { fg = "#eff1f5", bg = "#df8e1d" }
 pane-background       = { bg = "#e6e9ef" } # mantle
 pane-focus-background = { bg = "#dce0e8" } # crust
 mark                  = { bg = "#f0e0b2" } # yellow tint, visibly distinct from mantle/crust
+stripe                = { bg = "#dee2ea" } # un punto bajo mantle: la banda del pijama
 
 [files.kind]
 dir          = { fg = "#1e66f5", bold = true }

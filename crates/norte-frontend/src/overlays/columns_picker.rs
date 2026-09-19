@@ -108,6 +108,9 @@ pub struct ColumnsPicker {
     scheme_override: bool,
 }
 
+/// El id de la columna de permisos, como se escribe en `[ui.columns]`.
+const PERMISOS_ID: &str = "attr:posix.mode";
+
 impl ColumnsPicker {
     /// Construye el picker para el pane en `scheme` con su orden actual,
     /// sin catálogo de provider ([`Self::open_with_catalog`] con `None`).
@@ -167,6 +170,27 @@ impl ColumnsPicker {
                     catalog,
                 ),
             );
+        }
+        // La columna de PERMISOS que pone el propio listado (spec
+        // 2026-09-20), como fila ENCENDIDA.
+        //
+        // `raw_ids_for` no la trae —no hay catálogo donde él mira—, y sin
+        // esto el picker decía que está apagada mientras el listado la
+        // pintaba, y confirmar sin tocar nada la borraba para siempre:
+        // escribir la lista explícita hace que el set por defecto no vuelva a
+        // correr nunca. Un diálogo que borra lo que enseñaba encendido es
+        // peor que uno que no ofrece la columna.
+        if crate::columns::pone_los_permisos(settings, scheme, catalog)
+            && !rows.iter().any(|r| r.id == PERMISOS_ID)
+        {
+            rows.push(make_row(
+                PERMISOS_ID.to_owned(),
+                None,
+                true,
+                settings,
+                scheme,
+                catalog,
+            ));
         }
         // Catálogo restante, deshabilitado, en orden canónico.
         for b in [Builtin::Size, Builtin::Mtime, Builtin::Kind] {
@@ -366,6 +390,60 @@ mod tests {
 
     fn settings_vacios() -> ColumnsSettings {
         ColumnsSettings::resolve(&norte_config::ColumnsConfig::default())
+    }
+
+    /// Un catálogo como el del provider local: anuncia el modo POSIX con su
+    /// hint.
+    fn catalogo_con_modo() -> norte_proto::AttrCatalog {
+        use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
+        norte_proto::AttrCatalog::new(vec![AttrInfo {
+            id: "posix.mode".into(),
+            label: "Mode".into(),
+            ty: AttrType::Uint,
+            hint: AttrHint::Mode,
+        }])
+    }
+
+    /// Abrir el selector y confirmarlo SIN tocar nada no cambia el listado
+    /// (spec 2026-09-20).
+    ///
+    /// Es el fallo que encontró la revisión, y es de los caros: la columna
+    /// de permisos la pone el listado, no la configuración, así que el
+    /// selector no la veía y la enseñaba apagada. Confirmar escribe la lista
+    /// explícita de lo encendido, y a partir de ahí el set por defecto no
+    /// vuelve a correr NUNCA. O sea que entrar a encender «tipo» borraba los
+    /// permisos para siempre y sin decir nada.
+    #[test]
+    fn confirmar_sin_tocar_nada_no_borra_los_permisos() {
+        let s = settings_vacios();
+        let cat = catalogo_con_modo();
+        let p = ColumnsPicker::open_with_catalog(&s, "file", SortSpec::default(), Some(&cat), &[]);
+        assert!(
+            p.rows()
+                .iter()
+                .any(|r| r.id == "attr:posix.mode" && r.enabled),
+            "el selector la enseña ENCENDIDA, que es como está: {:?}",
+            p.rows()
+                .iter()
+                .map(|r| (&r.id, r.enabled))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            p.finish().ids.iter().any(|id| id == "attr:posix.mode"),
+            "y confirmar la conserva"
+        );
+    }
+
+    /// Donde el provider NO tiene permisos POSIX, el selector la ofrece
+    /// apagada, como cualquier otro atributo que no esté puesto.
+    #[test]
+    fn sin_catalogo_no_se_enciende_sola() {
+        let s = settings_vacios();
+        let p = ColumnsPicker::open_with_catalog(&s, "file", SortSpec::default(), None, &[]);
+        assert!(
+            !p.finish().ids.iter().any(|id| id == "attr:posix.mode"),
+            "no la pinta el listado, así que el selector tampoco la da por puesta"
+        );
     }
 
     #[test]

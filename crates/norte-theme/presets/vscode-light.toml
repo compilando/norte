@@ -69,6 +69,9 @@ warning               = { fg = "#9a6d00" }
 hostile-badge         = { fg = "#a83a00", bold = true }
 info                  = { fg = "#0063d3" }
 mark                  = { bg = "#fff4ce" }
+# Un punto por debajo de `pane-background` y distinto de `hover` (#f2f2f2):
+# iguales, la banda se comía el aviso de «el ratón está aquí».
+stripe                = { bg = "#ececec" }
 
 # Cromo de la ventana (spec 2026-09-11, F2).
 hover                 = { bg = "#f2f2f2" }

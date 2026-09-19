@@ -141,7 +141,7 @@ fn un_previewer_de_plugin_no_esconde_que_los_bytes_son_imagen() {
 /// normalidad.
 #[test]
 fn colocar_lleva_el_id_el_tamano_y_base64() {
-    let esc = escape_colocar(7, b"PNGFALSO", Rect::new(1, 2, 40, 20));
+    let esc = escape_colocar(7, b"PNGFALSO", Rect::new(1, 2, 40, 20), None);
     assert!(esc.starts_with("\x1b_G"), "empieza por APC: {esc}");
     assert!(esc.contains("i=7"), "lleva el id: {esc}");
     assert!(
@@ -228,7 +228,7 @@ fn una_miniatura_png_se_coloca() {
 #[test]
 fn un_contenido_grande_se_trocea() {
     let grande = vec![0u8; 12 * 1024];
-    let esc = escape_colocar(7, &grande, Rect::new(1, 2, 40, 20));
+    let esc = escape_colocar(7, &grande, Rect::new(1, 2, 40, 20), None);
     let trozos: Vec<&str> = esc.split("\x1b_G").skip(1).collect();
     assert!(
         trozos.len() > 1,
