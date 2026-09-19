@@ -10,6 +10,8 @@ commands = [
     "dialog.down",
     "dialog.page-up",
     "dialog.page-down",
+    "dialog.top",
+    "dialog.bottom",
     "app.quit",
 ]
 context = ["dialog.quit"]
@@ -21,6 +23,10 @@ the same six verbs:
 - {{cmd:dialog.cancel}} closes it, changing nothing
 - {{cmd:dialog.up}} and {{cmd:dialog.down}} move through it
 - {{cmd:dialog.page-up}} and {{cmd:dialog.page-down}} move a screen at a time
+
+In this help, {{cmd:dialog.top}} and {{cmd:dialog.bottom}} also go to the start
+and the end of the index or the page, and in the text the arrows scroll it a
+line at a time until an action is in view.
 
 Each dialog supports the subset that means something in it, and the footer is
 GENERATED from that subset rather than written by hand. What the footer offers

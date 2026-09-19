@@ -118,6 +118,9 @@ async fn main() -> Result<()> {
         norte_i18n::Lang::from_env()
     };
     let _ = norte_i18n::force(lang);
+    // Las teclas se NOMBRAN en el mismo idioma que el resto de la pantalla:
+    // «[Retroceso] atrás», no «[Backspace] atrás» en una interfaz en español.
+    let _ = norte_frontend::keymap::set_chord_lang(lang);
     // Roadmap ítem 9: el log va al FICHERO y solo al fichero. Hasta aquí este
     // binario no instalaba subscriber ninguno y lo decía en un comentario más
     // abajo: un `fmt` a stderr pelea con la pantalla alternativa, así que cada

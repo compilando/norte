@@ -32,8 +32,37 @@ dónde voy siempre.
 ## Atrás y adelante
 
 {{cmd:nav.back}} devuelve el panel al directorio del que venía, y
-{{cmd:nav.forward}} deshace ese paso. Es un rastro como el de un navegador:
-si vuelves atrás y te vas a otro sitio, la rama de delante se pierde.
+{{cmd:nav.forward}} deshace ese paso. Cada panel recorre su propio rastro, y
+ninguna de las dos teclas mueve el foco.
+
+Es un RASTRO, no una lista. De un directorio a un segundo y de ahí a un
+tercero, dos veces atrás llega al primero. Una lista de los últimos visitados,
+recorrida como si fuera un rastro, oscilaría entre los dos más recientes para
+siempre; por eso «dónde estaba hace un momento» y «por dónde ha pasado este
+panel» son dos preguntas distintas: la segunda es el popup de
+{{cmd:pane.history}}, y volver atrás nunca le añade nada.
+
+Navegar a un sitio nuevo desde la mitad del rastro olvida la rama de la que te
+saliste, igual que en un navegador. Ofrecer un «adelante» hacia una historia
+que ya has abandonado es el fallo que todo el mundo conoce.
+
+Un paso que no llega se rebobina: no te fuiste, así que el rastro se queda como
+estaba. Vale tanto para el paso que **falla** como para el que **abandonas**
+con Esc mientras lista: en los dos casos el panel sigue enseñando lo mismo, y
+un rastro que diera el paso por bueno te mandaría «adelante» al directorio que
+ya está en pantalla. Cuando el motivo es que el directorio **ya no está**,
+además sale del rastro, de la rama de delante y del popup de historial, de modo
+que la tecla no puede dejarte atrapado en un directorio que se ha demostrado
+que no existe. Cualquier otro fallo lo conserva: un host caído o un directorio
+que no puedes leer siguen siendo sitios, y pueden responder al siguiente
+intento.
+
+El paso que se para a preguntar por la clave desconocida de un host es el único
+que ESPERA: ni se da ni se deshace hasta que respondes, porque confiar en la
+clave reanuda esa misma navegación. Si confías, el paso se termina; si deniegas,
+o si el paso reanudado falla, se rebobina como cualquier otro que no llegó.
+
+> 💡 Cuando ya no queda rastro hacia atrás, la tecla lo dice. Una tecla que se calla es indistinguible de una rota.
 
 ## La lista
 
@@ -78,6 +107,8 @@ al volver a abrir norte. Cuántos directorios recuerda cada panel lo decide
 
 Los favoritos ({{cmd:pane.hotlist}}) son otra cosa: los eliges tú y viven en
 tu configuración.
+
+> 💡 Un directorio al que vuelves a menudo merece un favorito: el panel recuerda por dónde ha pasado, y los favoritos son comunes a los dos paneles.
 
 En la ventana, los botones laterales del ratón son atrás y adelante. Un
 terminal no recibe esos botones.

@@ -2,7 +2,7 @@
 id = "panes"
 title = "Two panes, one destination"
 tags = ["basics"]
-see_also = ["selection", "copying", "history"]
+see_also = ["selection", "copying", "history", "compare", "sync", "profiles"]
 commands = [
     "pane.switch",
     "cursor.up",
@@ -18,14 +18,9 @@ commands = [
     "pane.mirror-target",
     "pane.pull",
     "pane.swap",
-    "nav.back",
-    "nav.forward",
     "pane.select-drive",
     "pane.select-drive-left",
     "pane.select-drive-right",
-    "pane.compare-dirs",
-    "pane.compare-files",
-    "pane.sync-dirs",
     "layout.split-h",
     "layout.split-v",
     "layout.focus-next",
@@ -43,11 +38,6 @@ commands = [
     "layout.disk-map",
     "layout.timeline",
     "layout.pick",
-
-    "profile.pick",
-    "profile.next",
-    "profile.prev",
-    "profile.save-as",
 
     "pane.tree",]
 context = ["browse"]
@@ -133,39 +123,6 @@ so the gesture is refused and says why rather than guessing. Only the pane the
 location comes **from** is vetoed. Sending a location onto a results pane is
 fine — the listing that arrives is a real one, and it ends the search.
 
-# Going back
-
-{{cmd:nav.back}} returns the focused pane to where it was, and
-{{cmd:nav.forward}} undoes that. Each pane walks its own trail, and neither key
-moves the focus.
-
-It is a TRAIL, not a list. From one directory to a second and then a third,
-back twice reaches the first. A most-recently-used list walked as if it were a
-trail would bounce between the two most recent directories forever, which is
-why "where was I a moment ago" and "where has this pane been" are two different
-questions here: the second one is the popup behind {{cmd:pane.history}}, and
-stepping back never adds to it.
-
-Navigating somewhere new from the middle of the trail forgets the branch you
-stepped off, exactly as a browser does. A way forward into a history you have
-already abandoned is the bug everyone has met.
-
-A step that does not arrive is rewound — you never left, so the trail is put
-back as it was. That covers the step that **fails** and the one you **abandon**
-with Esc while it is still listing: either way the pane is showing what
-it was showing, and a trail that counted the step would send you "forward" into
-the directory already on screen. When the reason is that the directory is
-**gone**, it also leaves the trail, the forward branch and the history popup, so
-the key can never trap you on a directory that has proved not to be there. Any
-other failure keeps it: a host that was down and a directory you may not read
-are both still places, and either may answer next time.
-
-A step that stops to ask about an unknown host key is the one case that waits:
-it is neither taken nor put back until you answer, because trusting the key
-resumes that very navigation. Trust it and the step finishes; deny it, or let
-the resumed step fail, and the step is rewound like any other that never
-arrived.
-
 # Picking a drive
 
 {{cmd:pane.select-drive}} opens a picker of the host's volumes for the
@@ -186,100 +143,7 @@ inside the picker toggles between the everyday list and every mount the host
 has, system filesystems included, and the footer says which one you are
 looking at.
 
-# Comparing the two panes
-
-{{cmd:pane.compare-dirs}} answers the question an orthodox file manager exists
-to answer: **are these two trees the same?** It walks both panes at once and
-opens a diff pane where every row is one name, seen from both sides.
-
-Nothing is written. This key produces an answer and only an answer — no copy,
-no delete, no plan. It is also the honest way to check a transfer you have just
-finished, which is the question people actually ask after every copy.
-
-Each row carries two marks, and the second is the one worth learning. The first
-says WHAT was decided: `=` same, `#` different, `<` only on the left, `>` only
-on the right, `T` two different kinds under one name, `A` an ambiguous pairing,
-`E` a row that could not be read at all. The second says HOW MUCH that verdict
-is worth: `!` proved it, `~` suggests it, `?` means the location could not say.
-
-That second mark is not decoration. A row marked `= ~` was called *the same*
-because the two dates match, and two files with the same date can still hold
-different bytes; a row marked `= !` was proved by a hash, or by a size that
-settled it. An archive has no date you should trust, and it answers `?` rather
-than having something invented for it — which is a real answer, not a failure.
-
-Comparison never reads file contents unless you ask it to. Names, kinds, sizes
-and dates are enough for almost every question, and hashing a terabyte over
-SFTP because you pressed a key would not be.
-
-`Tab` swaps which side you are looking from, and the footer says which one that
-is. Nothing is ever inferred from the row: a row that exists only on the left,
-seen from the right, has nothing to go to and says so rather than quietly
-taking you to the other side. Today the side governs where `Enter` lands;
-acting on a row without leaving the diff — viewing it, copying it, deleting it
-— is the next spec's work, and until then the way to do any of those is to
-press `Enter` and use the keys you already know once you are there. Digits `1`
-to `5` hide and show whole categories — same, different, only left, only right, and everything that went
-wrong — and hiding a category never moves what is selected. `Enter` leaves the
-diff and takes you to where the selected row really lives, which is how you
-open a directory that exists on one side only: the walk reports it as one row
-rather than enumerating a subtree it already knows the answer for. `Esc`
-cancels a comparison that is still running, and closes the pane once it is not.
-
-# Comparing two FILES
-
-{{cmd:pane.compare-files}} is the other question: **how do these two files
-differ?** It acts on two marked in the focused pane, or on the one under the
-cursor here and the one under the cursor over there. Two, and it is not
-guessed: with three marked, with one, or with a folder among them, it SAYS so
-rather than comparing something you did not choose.
-
-Another program shows the difference — the one you name in `[ui] diff`
-(`meld %F`, `vimdiff %F`, whatever you use). With nothing configured it is
-`diff -u`, and its output stays on screen until you press a key. Both files
-must be on this system: an external program cannot be handed an `sftp://`, and
-that is said out loud, as it is for opening and editing.
-
-# Synchronising the two panes
-
-{{cmd:pane.sync-dirs}} is the half that writes. It plans a one-way
-synchronisation — this pane onto the other one — shows you every step it would
-take, and does nothing at all until you approve it. Inside the diff pane the
-same thing is `s`, and `m` plans a **mirror**, which also deletes from the
-destination anything the source does not have. There the direction is the diff
-pane's own active side, the one `Tab` flips and the footer names — not the
-focused pane. Either way the plan's title spells it out with an arrow before
-you approve anything. Plain letters on purpose: a
-function key with a modifier does not survive a `tmux` session, and a
-documented shortcut that never arrives is worse than none.
-
-Nothing is planned twice and nothing is executed from the screen. What you
-approve is a plan the daemon is holding, named by its own digest, so the thing
-that runs is byte for byte the thing you read.
-
-The plan leads with what the undo could give back, and that is a fact about the
-DESTINATION and not about the steps. The same list of copies reverts entirely
-against a destination whose trash records where it buried things, and reverts
-nothing against one with no trash at all — so the summary says which of those
-you are looking at before it says anything else. A `mirror` that deletes trees,
-or any plan the undo does not cover, asks a second question with the number in
-it.
-
-Each step carries three marks: what it does, how sure the comparison behind it
-was, and whether the undo brings it back. The third is the one that needed the
-daemon to say something new, and it is never read off the step alone.
-
-Mark rows with `Ins` in the diff pane to synchronise only those; a marked
-directory takes its whole subtree with it. With nothing marked the plan covers
-both trees.
-
-This needs norte running against the daemon. Synchronising deletes and
-overwrites, so it has to be journalled and undoable, and the in-process engine
-has no journal — the key says so rather than failing halfway.
-
-> 💡 A directory you visit often is worth a favourite: the pane remembers where it has been, and favourites are shared by both panes.
-
-> 💡 When there is nothing further back, the key says so. A key that goes quiet is indistinguishable from a broken one.
+# Arranging the screen
 
 Panels can be resized and closed. {{cmd:layout.grow}} and
 {{cmd:layout.shrink}} give the focused panel room or take it away, and
@@ -439,71 +303,6 @@ that the coincidence is a convenience and not a trap.
 A file of yours wins over the factory layout of the same name: `layouts/simple.toml`
 is what `simple` loads. Delete the file to get the original back. `--layout <name>`
 picks one for a single run without touching your config.
-
-# Profiles
-
-A layout arranges the screen. A **profile** is the whole workspace: its layout,
-its keymap, its theme, its columns, its favourites, and where every panel was
-standing when you left it. `photos` and `servers` and the tree you are working
-in want different answers to all of those, and a profile is how you keep them
-apart instead of rearranging the same screen by hand every time you change
-task.
-
-A profile is a directory inside `profiles/` in your config directory, with the
-same shape as your configuration itself — a `norte.toml`, and optionally its
-own `keymap.toml`, `openers.toml` and `layouts/`. Copying a profile between
-machines is copying a directory.
-
-{{cmd:profile.pick}} lists them and marks the one you are in.
-{{cmd:profile.next}} and {{cmd:profile.prev}} cycle without opening anything,
-which is what you want when you keep two. `--profile <name>` starts in one for
-a single run. Otherwise norte remembers the one you were last in.
-
-{{cmd:profile.save-as}} saves **what you are looking at** as a profile: the
-arrangement as it stands and each panel's directory, so that its first start
-puts you back where you left off. If you were in a profile, the new one takes
-its `keymap.toml` too — save-as produces something that behaves like what you
-had. The name becomes a directory, so it is checked before anything is written,
-and saving over an existing profile rewrites those pieces and leaves its other
-files alone.
-
-What a profile sets overrides your own configuration — that is what choosing it
-is for — and a project's `.norte` still overrides the profile. What a profile
-**cannot** do is change where the daemon listens, turn the AI on, decide where
-logs are written, raise the archive limits, or run an `init.lua`: a profile
-declares, it does not execute. Anything of that kind inside one is ignored and
-said out loud rather than quietly honoured.
-
-If a profile you named does not load, norte says which file and refuses to
-start — you asked for that one. If it was merely the profile you were last in,
-it starts without it and tells you, so you are never locked out of the program
-by a typo in a directory you were only trying out.
-
-# The session: where every panel was
-
-On closing, norte saves the screen — the layout, which panels are open, each
-one's directory and history — and puts you back there the next time. That is
-the **session**, and **one window** keeps it: the first to connect to the
-daemon takes it, and any later one starts with the same screen and goes its own
-way from there, writing nothing. Two windows writing the same session would
-overwrite each other in turns, and neither would put you back where you left
-off.
-
-A window that is not saving says so with a discreet indicator in the status
-bar: `session not saved`. Clicking it opens this page. It means that **when
-this window closes its screen will not be remembered**; your files have nothing
-to do with it and are at no risk. It happens in three cases. Usually another
-norte window was already open — the terminal or the graphical one, it does not
-matter — and that one is saving; once you close it, the next window to ask
-takes the session over. It also happens while the daemon is being handed over
-(an update): the session is free for a moment and this window asks for it
-again on its own. And it happens when the saved session was written by a NEWER
-norte than this one: it is left alone so it is not damaged, and this window
-starts from its configuration.
-
-The indicator goes away by itself as soon as the window is the one saving
-again. What a profile says about where each panel opens is a seed for the
-panels the session does not know about; what the session remembers wins.
 
 # The directory tree
 

@@ -457,6 +457,44 @@ impl HelpState {
         self.body_scroll = self.body_scroll.min(total.saturating_sub(1));
     }
 
+    /// Clamps the scroll so that the LAST screen is a full one: the body
+    /// never scrolls past `total - height`.
+    ///
+    /// The sibling of [`clamp_scroll`](Self::clamp_scroll) for a renderer
+    /// that knows its window as well as its line count. Clamping to the last
+    /// LINE lets a reader page on until one line of text sits over a box of
+    /// blank rows, and it is what makes [`bottom`](Self::bottom) land on the
+    /// end of the page rather than past it.
+    pub fn clamp_scroll_window(&mut self, total: usize, height: usize) {
+        self.body_scroll = self.body_scroll.min(total.saturating_sub(height));
+    }
+
+    /// The first page of the sidebar, or the top of the body — `Home`.
+    ///
+    /// In the body it moves the SCROLL, like [`page_up`](Self::page_up): going
+    /// to the top of a page is reading it, not choosing one of its rows.
+    pub fn top(&mut self) {
+        self.action_follows_view = true;
+        match self.focus {
+            Focus::Topics => self.move_sidebar(false, self.rows.len()),
+            Focus::Body => self.body_scroll = 0,
+        }
+    }
+
+    /// The last page of the sidebar, or the end of the body — `End`.
+    ///
+    /// The body end is unbounded here and bounded by the painter
+    /// ([`clamp_scroll_window`](Self::clamp_scroll_window)), for the reason
+    /// [`clamp_scroll`](Self::clamp_scroll) gives: only the renderer knows how
+    /// many lines the page wrapped into.
+    pub fn bottom(&mut self) {
+        self.action_follows_view = true;
+        match self.focus {
+            Focus::Topics => self.move_sidebar(true, self.rows.len()),
+            Focus::Body => self.body_scroll = usize::MAX,
+        }
+    }
+
     /// Whether typed characters are going into the filter.
     #[must_use]
     pub fn filtering(&self) -> bool {
@@ -719,6 +757,7 @@ impl HelpState {
     /// [`clamp_scroll`](Self::clamp_scroll) once the painter knows how many
     /// lines there are.
     pub fn scroll_body_to(&mut self, line: usize) {
+        self.action_follows_view = true;
         self.body_scroll = line;
     }
 
@@ -729,7 +768,12 @@ impl HelpState {
     /// already follow (`mouse`'s own help page says so). Saturating at zero;
     /// the far end is clamped by [`clamp_scroll`](Self::clamp_scroll) once the
     /// painter knows how many lines there are.
+    ///
+    /// Like paging, it hands the lead to the VIEW: with the action cursor
+    /// leading, the painter would reveal the cursor's line again on the next
+    /// frame and undo the turn of the wheel.
     pub fn scroll_body(&mut self, lines: isize) {
+        self.action_follows_view = true;
         self.body_scroll = if lines < 0 {
             self.body_scroll.saturating_sub(lines.unsigned_abs())
         } else {
@@ -737,14 +781,18 @@ impl HelpState {
         };
     }
 
-    /// Hands the focus to the other half. Focusing a body with nothing
-    /// runnable on it (the keyboard page, a topic with neither commands nor
-    /// `see_also`) is a no-op: a focus the arrow keys cannot move is a dead
-    /// end the reader has to guess their way out of.
+    /// Hands the focus to the other half.
+    ///
+    /// A body with nothing runnable on it (the keyboard page, a topic with
+    /// neither commands nor `see_also`) takes the focus too. It used to
+    /// refuse, on the grounds that the arrow keys could not move it — but the
+    /// page keys CAN, and with the focus refused they walked the sidebar, so
+    /// the keyboard page, the longest one, could not be read past its first
+    /// screen. In the body the arrows scroll the text when no action is in
+    /// view, so the focus there is never a dead end.
     pub fn toggle_focus(&mut self) {
         self.focus = match self.focus {
             Focus::Body => Focus::Topics,
-            Focus::Topics if self.actions.is_empty() => Focus::Topics,
             Focus::Topics => {
                 // El cursor va a donde está el lector, no al revés.
                 self.action_follows_view = true;
@@ -1596,11 +1644,91 @@ mod tests {
         );
         assert_eq!(
             s.focus(),
-            Focus::Topics,
-            "so the focus REFUSED to move: a body the arrow keys cannot move \
-             is a dead end"
+            Focus::Body,
+            "but the focus still MOVES: the keyboard page is the longest one, \
+             and with the focus refused the page keys walked the sidebar \
+             instead, so the cheatsheet could not be read past its first screen"
         );
         assert_eq!(s.action(), None);
+    }
+
+    #[test]
+    fn top_and_bottom_go_to_the_ends_of_whichever_half_has_the_focus() {
+        let mut s = state();
+        s.open(&TopicId::new("copying"));
+        // Sidebar: the first and the last PAGE, never a group header.
+        s.bottom();
+        let last = s.cursor();
+        assert!(
+            matches!(s.rows().get(last), Some(SidebarRow::Topic { .. })),
+            "lands on a page"
+        );
+        assert!(
+            s.rows()[last + 1..]
+                .iter()
+                .all(|r| !matches!(r, SidebarRow::Topic { .. })),
+            "and it is the LAST page"
+        );
+        s.top();
+        assert!(matches!(
+            s.rows().get(s.cursor()),
+            Some(SidebarRow::Topic { .. })
+        ));
+        assert!(
+            s.rows()[..s.cursor()]
+                .iter()
+                .all(|r| !matches!(r, SidebarRow::Topic { .. })),
+            "and it is the FIRST page"
+        );
+
+        // Body: the scroll, not the action cursor — reading, not choosing.
+        s.open(&TopicId::new("copying"));
+        s.toggle_focus();
+        s.bottom();
+        s.clamp_scroll_window(100, 20);
+        assert_eq!(
+            s.body_scroll(),
+            80,
+            "the last FULL screen, not the last line"
+        );
+        assert!(s.action_follows_view(), "the view leads after a jump");
+        s.top();
+        assert_eq!(s.body_scroll(), 0);
+    }
+
+    #[test]
+    fn the_last_screen_is_full_and_a_short_page_does_not_scroll() {
+        let mut s = state();
+        s.scroll_body_to(95);
+        s.clamp_scroll_window(100, 20);
+        assert_eq!(
+            s.body_scroll(),
+            80,
+            "clamping to the last LINE left a screen of blank rows under it"
+        );
+        s.clamp_scroll_window(12, 20);
+        assert_eq!(
+            s.body_scroll(),
+            0,
+            "a page shorter than the box has nowhere to go"
+        );
+    }
+
+    #[test]
+    fn scrolling_the_body_hands_the_lead_to_the_view() {
+        // A wheel turn that the next refresh undid: with the action cursor
+        // leading, the painter revealed its line again and snapped the page
+        // back to it.
+        let mut s = state();
+        s.open(&TopicId::new("copying"));
+        s.toggle_focus();
+        s.down();
+        assert!(!s.action_follows_view());
+        s.scroll_body(3);
+        assert!(s.action_follows_view());
+        s.down();
+        s.scroll_body_to(0);
+        assert!(s.action_follows_view());
     }
 
     fn nodo(id: &str) -> PluginNode {

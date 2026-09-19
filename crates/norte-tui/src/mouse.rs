@@ -255,6 +255,9 @@ pub struct MouseState {
     /// Las filas y los botones del gestor de extensiones del último frame.
     /// Vacío = gestor cerrado.
     extension_zones: Vec<crate::ui::ExtensionZone>,
+    /// La lateral, el cuerpo y las páginas pulsables de la ayuda del último
+    /// frame. `None` = ayuda cerrada.
+    help_zones: Option<crate::ui::HelpZones>,
     /// El indicador de sesión suelta de la barra de estado del último frame.
     /// `None` = la ventana es la dueña, o la barra estaba diciendo otra cosa.
     session_zone: Option<crate::ui::SessionZone>,
@@ -373,6 +376,8 @@ pub struct FrameZones {
     pub tree: Vec<crate::ui::TreeZone>,
     /// Las filas y los botones del gestor de extensiones, si está abierto.
     pub extensions: Vec<crate::ui::ExtensionZone>,
+    /// Las zonas de la ayuda, si está abierta.
+    pub help: Option<crate::ui::HelpZones>,
     /// El indicador de sesión suelta de la barra de estado, si se pintó.
     pub session: Option<crate::ui::SessionZone>,
     /// La insignia de avisos sin leer de la barra de estado, si se pintó
@@ -410,6 +415,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
         places: places_zones,
         tree: tree_zones,
         extensions: extension_zones,
+        help: help_zones,
         session: session_zone,
         notices: notices_zone,
         borders,
@@ -438,6 +444,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     app.mouse.places_zones = places_zones;
     app.mouse.tree_zones = tree_zones;
     app.mouse.extension_zones = extension_zones;
+    app.mouse.help_zones = help_zones;
     app.mouse.session_zone = session_zone;
     app.mouse.notices_zone = notices_zone;
     app.mouse.borders = borders;
@@ -476,12 +483,15 @@ fn pulsa_indicador_de_sesion(app: &App, ev: MouseEvent) -> bool {
 }
 
 /// La página de la ayuda que explica el indicador de sesión suelta: la de
-/// los paneles, que es donde vive la sesión (dónde estaba cada uno).
+/// perfiles y sesión, que es donde se cuenta dónde estaba cada panel. Vivió
+/// en `panes` hasta que esa página se partió.
 ///
 /// Un id del corpus y no un contexto: el indicador no es una pantalla en la
 /// que el lector esté, es un hecho sobre esta ventana, y su página es fija.
-/// El test del corpus de abajo ata el id a una página real en ambos idiomas.
-pub const SESSION_HELP_TOPIC: &str = "panes";
+/// El test del ratón ata el id a una página real en ambos idiomas, y a que
+/// esa página HABLE de la sesión: que exista no bastaba —al partir `panes`,
+/// la página seguía existiendo sin una línea sobre la sesión—.
+pub const SESSION_HELP_TOPIC: &str = "profiles";
 
 /// Qué debe hacer el run loop tras un evento de ratón. Todo lo que se puede
 /// hacer sobre el modelo ya está hecho al volver; esto es solo lo que
@@ -1016,6 +1026,11 @@ fn por_encima_de_los_paneles(app: &mut App, ev: MouseEvent) -> Option<After> {
         app.pending_key = Some(crossterm::event::KeyEvent::new(code, mods));
         return Some(After::SynthKey);
     }
+    // La ayuda ANTES que el visor: se pinta por encima de todo, visor
+    // incluido, así que lo que hay bajo el puntero es ella.
+    if raton_en_la_ayuda(app, ev) {
+        return Some(After::Nothing);
+    }
     if rueda_en_el_visor(app, ev) {
         return Some(After::Nothing);
     }
@@ -1372,6 +1387,63 @@ fn rueda_en_el_visor(app: &mut App, ev: MouseEvent) -> bool {
         MouseEventKind::ScrollDown => v.scroll_down(WHEEL_ROWS),
         MouseEventKind::ScrollLeft => v.scroll_left(WHEEL_ROWS),
         MouseEventKind::ScrollRight => v.scroll_right(WHEEL_ROWS),
+        _ => {}
+    }
+    true
+}
+
+/// El ratón con la ayuda abierta: la rueda desplaza lo que hay debajo del
+/// puntero —la lateral pasa de página, el cuerpo baja— y un clic elige una
+/// página o una acción, lo mismo que en la ventana.
+///
+/// Hasta ahora la ayuda era un overlay más para el cerrojo de
+/// [`overlay_open`], o sea que con ella abierta el ratón no existía: ni la
+/// rueda bajaba por el texto. `true` siempre que la ayuda esté abierta, porque
+/// con ella delante ningún otro gesto tiene dueño.
+///
+/// El clic en una acción la SELECCIONA y no la ejecuta: correr un comando que
+/// toca ficheros por un clic en un texto que se está leyendo es demasiado
+/// fácil de hacer sin querer. `Enter` la corre, como con el teclado.
+fn raton_en_la_ayuda(app: &mut App, ev: MouseEvent) -> bool {
+    if app.help.is_none() {
+        return false;
+    }
+    let zonas = app.mouse.help_zones.clone();
+    let (Some(help), Some(z)) = (app.help.as_mut(), zonas) else {
+        return true;
+    };
+    let dentro = |r: ratatui::layout::Rect| {
+        ev.column >= r.x
+            && ev.column < r.x.saturating_add(r.width)
+            && ev.row >= r.y
+            && ev.row < r.y.saturating_add(r.height)
+    };
+    match ev.kind {
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            let abajo = matches!(ev.kind, MouseEventKind::ScrollDown);
+            if dentro(z.sidebar) {
+                if abajo {
+                    help.state.down();
+                } else {
+                    help.state.up();
+                }
+            } else if dentro(z.body) {
+                let filas = isize::try_from(WHEEL_ROWS).unwrap_or(1);
+                help.state.scroll_body(if abajo { filas } else { -filas });
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            if dentro(z.sidebar) {
+                if let Some(&(_, fila)) = z.rows.iter().find(|(y, _)| *y == ev.row) {
+                    help.state.click_row(fila);
+                }
+            } else if dentro(z.body) {
+                let linea = help.state.body_scroll() + usize::from(ev.row - z.body.y);
+                if let Some(i) = help.body().1.iter().position(|&l| l == linea) {
+                    help.state.click_action(i);
+                }
+            }
+        }
         _ => {}
     }
     true

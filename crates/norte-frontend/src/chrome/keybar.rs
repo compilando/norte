@@ -149,6 +149,17 @@ pub fn cell_text(cell: &KeyCell, width: usize) -> String {
         label.push(c);
         used += w;
     }
+    // Cortada, y con una palabra ENTERA antes del corte: se queda en esa.
+    // `7 Crear di` o `9 Barra de` pegados al número de la celda siguiente se
+    // leían como palabras rotas; `7 Crear` deja el hueco que separa las dos
+    // celdas. Sin palabra entera que conservar, el corte de siempre
+    // (`7 Renomb`): el principio de la palabra dice más que nada.
+    if label.len() < capitalized.len()
+        && let Some(espacio) = label.rfind(' ')
+    {
+        label.truncate(espacio);
+        used = crate::display::cells(&label);
+    }
     format!("{num}{label}{}", " ".repeat(room - used))
 }
 
@@ -158,6 +169,25 @@ mod tests {
 
     /// La fila se reparte entera y en orden; con menos de diez celdas, las
     /// que caben; y el texto de una celda mide exactamente su ancho.
+    /// Una etiqueta que no cabe se corta en la última palabra ENTERA si hay
+    /// una: `7 Crear di` pegado a `8 Borrar` se leía como una sola palabra
+    /// rota; `7 Crear` deja el hueco que separa las dos celdas.
+    #[test]
+    fn el_corte_respeta_la_ultima_palabra_entera() {
+        let c = |label: &str| KeyCell {
+            key: 7,
+            label: label.into(),
+            command: Some("pane.mkdir".into()),
+        };
+        assert_eq!(cell_text(&c("crear directorio"), 10), "7 Crear   ");
+        assert_eq!(cell_text(&c("barra de teclas"), 10), "7 Barra   ");
+        // Sin una palabra entera que conservar, el corte de siempre: el
+        // principio de la palabra dice más que nada.
+        assert_eq!(cell_text(&c("renombrar"), 8), "7 Renomb");
+        // Y lo que cabe, cabe entero.
+        assert_eq!(cell_text(&c("ver"), 8), "7 Ver   ");
+    }
+
     #[test]
     fn el_reparto_cubre_la_fila_y_el_texto_mide_su_celda() {
         let l = layout(83);

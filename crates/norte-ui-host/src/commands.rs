@@ -222,13 +222,13 @@ pub const IMPLEMENTADOS_DIALOGO: &[&str] = &[
     "dialog.skip",
     "dialog.rename",
     "dialog.newer",
-    // Andar por una lista modal. `Home`/`End` no están porque el catálogo
-    // compartido no tiene verbo para «al principio» dentro de un diálogo:
-    // siguen siendo teclas fijas, y eso se ve aquí por su ausencia.
+    // Andar por una lista modal, y sus dos extremos (`dialog.top`/`bottom`).
     "dialog.up",
     "dialog.down",
     "dialog.page-up",
     "dialog.page-down",
+    "dialog.top",
+    "dialog.bottom",
     // El selector de columnas y el gestor de extensiones.
     "dialog.toggle-enabled",
     "dialog.move-up",

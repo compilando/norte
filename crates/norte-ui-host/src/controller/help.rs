@@ -516,6 +516,16 @@ impl Estado {
             {
                 a.estado.page_up(PAGINA_DE_AYUDA);
             }
+            // Los extremos, por lo mismo: en la lateral, del modelo; en el
+            // cuerpo los consume el renderer antes de mandarlos.
+            (Some("dialog.top"), _) if a.estado.focus() == norte_frontend::help::Focus::Topics => {
+                a.estado.top();
+            }
+            (Some("dialog.bottom"), _)
+                if a.estado.focus() == norte_frontend::help::Focus::Topics =>
+            {
+                a.estado.bottom();
+            }
             (Some("dialog.back"), _) | (None, "Backspace" | "backspace") => {
                 if a.estado.filtering() {
                     a.estado.backspace();

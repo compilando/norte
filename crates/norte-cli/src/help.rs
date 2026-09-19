@@ -837,6 +837,8 @@ fn echo(arg: &str) -> String {
 /// matched", on stderr, with stdout left empty so a pipeline sees no page.
 pub fn run(topic: Option<&str>, list: bool, search: Option<&str>, json: bool) -> ExitCode {
     let lang = norte_i18n::active();
+    // Las teclas en el idioma de la página, como en el TUI y la ventana.
+    let _ = norte_frontend::keymap::set_chord_lang(lang);
     let chords = CliChords::from_config(lang);
 
     if let Some(query) = search {

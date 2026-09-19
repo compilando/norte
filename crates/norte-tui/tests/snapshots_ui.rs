@@ -1960,10 +1960,11 @@ fn la_lateral_de_la_ayuda_se_dimensiona_a_sus_titulos() {
     );
 
     // Y el cuerpo tiene medida tipográfica: la prosa no crece con el terminal
-    // más allá de lo que se lee de un vistazo. Una celda menos que la medida:
-    // la última columna del cuerpo es su barra de scroll.
+    // más allá de lo que se lee de un vistazo. Dos celdas menos que la medida:
+    // la última columna del cuerpo es su barra de scroll, y la anterior el
+    // margen que separa la prosa de ella.
     let (body, _) = ui::help_body_size(Rect::new(0, 0, 200, 40), Lang::Es);
-    assert_eq!(body, 71, "la prosa se corta en su medida, no en el borde");
+    assert_eq!(body, 70, "la prosa se corta en su medida, no en el borde");
 }
 
 /// …y con sitio, NINGÚN título sale recortado.
@@ -2006,8 +2007,9 @@ fn con_sitio_ningun_titulo_de_la_ayuda_sale_recortado() {
     );
 }
 
-/// El pie dice DÓNDE está el lector, con el mismo idioma que el visor
-/// (`{primera visible}/{total}`), y se calla cuando la página cabe entera.
+/// El pie dice DÓNDE está el lector, en porcentaje LEÍDO hasta el pie de la
+/// ventana (`17 %`, como `less`), y se calla cuando la página cabe entera. Un
+/// `11/663` en líneas no le decía a nadie cuánto quedaba.
 ///
 /// No es adorno: las filas ejecutables de un tema se pintan DETRÁS de toda su
 /// prosa, así que en una página larga no entran en el primer render y sin el
@@ -2033,9 +2035,10 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
         .expect("el pie cae dentro del frame");
     // Pegado al borde derecho de la caja: el volcado del backend entrecomilla
     // cada fila, así que el ancla es el `│` de la caja y no el fin de línea.
+    let pct = |scroll: usize| (scroll + height).min(total) * 100 / total;
     assert!(
-        footer.contains(&format!("1/{total} │")),
-        "el pie sitúa al lector en la primera línea, a la DERECHA: {footer:?}"
+        footer.contains(&format!("{} % │", pct(0))),
+        "el pie sitúa al lector en la primera pantalla, a la DERECHA: {footer:?}"
     );
 
     // Y sigue al scroll. El foco entra en el cuerpo para que `page_down`
@@ -2053,7 +2056,7 @@ fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
         .nth(help_footer_row(80, 16))
         .expect("el pie cae dentro del frame");
     assert!(
-        footer.contains(&format!("{}/{total} │", scroll + 1)),
+        footer.contains(&format!("{} % │", pct(scroll))),
         "el indicador va con el scroll ({scroll}): {footer:?}"
     );
 

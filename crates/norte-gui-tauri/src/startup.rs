@@ -410,6 +410,8 @@ fn idioma(pedido: Option<&str>) -> Lang {
     let explicito = std::env::var("NORTE_LANG").ok().filter(|v| !v.is_empty());
     let lang = elegir_idioma(explicito.as_deref(), pedido, Lang::from_env());
     let _ = norte_i18n::force(lang);
+    // Las teclas se nombran en el idioma de la ventana (ver el TUI).
+    let _ = norte_frontend::keymap::set_chord_lang(lang);
     lang
 }
 

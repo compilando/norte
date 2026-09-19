@@ -22,7 +22,8 @@ mod resolve;
 
 pub use catalogue::{CATALOGUE, CommandDef, Effect, Status};
 pub use chord::{
-    Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_mod_key, unpaint_chord,
+    Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_chord_lang, set_mod_key,
+    unpaint_chord,
 };
 pub use effective::{Availability, Continuation, Effective, LUA_HOST, valid_lua_name};
 // Not public API: the spelling a sequence has IN THE FILE, which the keyboard

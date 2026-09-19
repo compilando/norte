@@ -1746,14 +1746,23 @@ body {
   list-style: none;
 }
 
+/* Una cabecera de grupo se lee como tal y no como una página más: versalitas
+   pequeñas y aire encima, que es lo que separa un grupo del anterior. */
 .help-group {
-  padding: 6px 6px 0;
+  padding: 12px 8px 2px;
   color: var(--title-fg);
   opacity: 0.85;
+  font-size: 0.8em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.help-group:first-child {
+  padding-top: 6px;
 }
 
 .help-topic {
-  padding: 0 6px 0 14px;
+  padding: 1px 8px 1px 16px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1769,17 +1778,47 @@ body {
   color: var(--selection-fg);
 }
 
+/* Aire alrededor de la prosa, y el scroll con el mismo aire abajo: sin
+   padding, el texto tocaba el borde de la caja y la última línea quedaba
+   pegada al pie. */
 .help-body {
   grid-row: 1;
-  padding: 0 12px;
+  padding: 12px 24px 24px;
   overflow: auto;
+  line-height: 1.5;
   unicode-bidi: isolate;
 }
 
+/* Medida de lectura: la prosa no crece con la ventana. 72 caracteres es lo
+   mismo que el terminal (`HELP_MEASURE`); más ancho, el ojo pierde la línea
+   al volver. Las tablas y el código pueden ir más allá si lo necesitan. */
+.help-body > p,
+.help-body > .help-bullets,
+.help-body > .help-callout,
+.help-body > h1,
+.help-body > h2,
+.help-body > h3,
+.help-body > h4 {
+  max-width: 72ch;
+}
+
+/* UN ritmo vertical para todos los bloques. Antes los párrafos llevaban el
+   margen del navegador y las listas, el código y las tablas cero, así que
+   una lista quedaba pegada a la frase que la presenta. */
+.help-body > p,
+.help-body > .help-bullets,
+.help-body > .help-code,
+.help-body > .help-table,
+.help-body > .help-keys,
+.help-body > .help-callout {
+  margin: 0 0 0.8em;
+}
+
 .help-body h1 {
-  margin-bottom: 2px;
-  padding-bottom: 4px;
+  margin: 0 0 0.8em;
+  padding-bottom: 6px;
   font-size: 1.35em;
+  line-height: 1.25;
   color: var(--title-fg);
   border-bottom: 1px solid var(--separator, var(--border));
 }
@@ -1787,8 +1826,15 @@ body {
 .help-body h2,
 .help-body h3,
 .help-body h4 {
-  font-size: 1em;
+  margin: 1.4em 0 0.5em;
+  font-size: 1.05em;
+  line-height: 1.3;
   color: var(--title-fg);
+}
+
+.help-body h3,
+.help-body h4 {
+  font-size: 1em;
 }
 
 .help-badge {
@@ -1796,22 +1842,36 @@ body {
 }
 
 .help-bullets {
-  margin: 0;
-  padding-left: 2ch;
+  padding-left: 3ch;
+}
+
+.help-bullets > li + li {
+  margin-top: 0.2em;
 }
 
 .help-code {
-  margin: 0;
-  padding: 4px 6px;
+  padding: 6px 10px;
   overflow-x: auto;
+  line-height: 1.35;
   background: var(--bg);
   border-left: 2px solid var(--border);
 }
 
 .help-table,
 .help-keys {
-  margin: 6px 0;
   border-collapse: collapse;
+}
+
+/* La tabla del corpus con cabecera que se lee como cabecera, y filas con
+   aire: con `padding: 0` las celdas se tocaban y la tabla se leía como un
+   párrafo con huecos. */
+.help-table th {
+  color: var(--title-fg);
+  border-bottom: 1px solid var(--separator, var(--border));
+}
+
+.help-table tbody tr + tr td {
+  border-top: 1px solid var(--separator, var(--border));
 }
 
 /* Sin esto, una tabla del corpus y la hoja de teclado que va debajo se leen
@@ -1824,7 +1884,7 @@ body {
 .help-table td,
 .help-keys th,
 .help-keys td {
-  padding: 0 8px 0 0;
+  padding: 3px 16px 3px 0;
   text-align: left;
   vertical-align: top;
 }
@@ -1889,9 +1949,9 @@ body {
 
 .help-callout {
   display: block;
-  margin: 4px 0;
-  padding: 0 8px;
-  border-left: 2px solid var(--border-focus);
+  padding: 6px 12px;
+  background: var(--bg);
+  border-left: 3px solid var(--border-focus);
 }
 
 .help-callout[data-kind="warn"] {
@@ -1905,8 +1965,8 @@ body {
 }
 
 .help-actions {
-  margin: 8px 0 0;
-  padding: 0;
+  margin: 1.2em 0 0;
+  padding: 6px 0 0;
   list-style: none;
   border-top: 1px solid var(--separator, var(--border));
 }
@@ -1914,7 +1974,7 @@ body {
 .help-action {
   display: flex;
   gap: 12px;
-  padding: 0 6px;
+  padding: 2px 8px;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -1947,7 +2007,7 @@ body {
 
 .help-hint {
   grid-column: 1 / -1;
-  padding: 0 6px;
+  padding: 3px 10px;
   background: var(--status-bg);
   border-top: 1px solid var(--separator, var(--border));
   white-space: nowrap;

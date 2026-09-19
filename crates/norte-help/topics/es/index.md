@@ -16,6 +16,9 @@ directorios locales.
 # Por dónde seguir
 
 - [[panes]] — los dos paneles, el foco y por qué el otro es el destino
+- [[compare]] — ¿son iguales estos dos árboles?, ¿en qué se diferencian estos dos ficheros?
+- [[sync]] — un plan de un sentido que apruebas antes de que se escriba nada
+- [[profiles]] — un espacio de trabajo entero al que cambiar, y la sesión guardada
 - [[tabs]] — varias pestañas en un panel, cada una con su directorio y su cursor
 - [[history]] — atrás y adelante, la lista de historia, los populares y el punto de salto
 - [[selection]] — marcar sobre qué van a actuar los comandos
