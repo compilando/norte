@@ -322,13 +322,9 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     if (esParaElCampo(k, e.target instanceof HTMLInputElement)) {
       return;
     }
-    // Con la ayuda leyendo su CUERPO, las teclas que desplazan son del
-    // renderer y no del host: el cuerpo de una página cruza entero y quien
-    // sabe lo que mide es su caja. Ver `desplazarAyuda`.
-    if (screen.helpBodyScrolls() && screen.desplazarAyuda(k.key)) {
-      e.preventDefault();
-      return;
-    }
+    // Las teclas que desplazan la ayuda también van al host (puente 76): él
+    // las resuelve con el keymap del lector y contesta con una petición que
+    // el renderer aplica. Ver `desplazarAyuda`.
     e.preventDefault();
     pending ??= { at: performance.now(), what: "key" };
     send(keyAction(k));

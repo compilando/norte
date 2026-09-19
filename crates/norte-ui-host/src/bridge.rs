@@ -406,7 +406,10 @@ use serde::{Deserialize, Serialize};
 ///   `HelpView::actions` que lo sigue: un `[[enlace]]` de la prosa se pulsa.
 ///   Un índice y no el id del tema, que es una clave que el renderer no
 ///   necesita.
-pub const BRIDGE_VERSION: u32 = 75;
+/// - 76: `HelpView::scroll`, la petición de desplazar el cuerpo de la ayuda.
+///   Las teclas que desplazan pasan por el keymap del lector en el host; antes
+///   el renderer las atendía como teclas fijas y un reatado no llegaba.
+pub const BRIDGE_VERSION: u32 = 76;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

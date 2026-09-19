@@ -116,8 +116,13 @@ fn nombre_canonico(key: &str) -> Option<String> {
         "insert" | "ins" => "insert",
         "home" => "home",
         "end" => "end",
-        "pageup" | "pgup" => "pageup",
-        "pagedown" | "pgdn" => "pagedown",
+        // `pgup`/`pgdn` y no `pageup`/`pagedown`: son los nombres que entiende
+        // `parse_chord`. Con los largos la tecla no se resolvía, y en esta
+        // ventana `AvPág`/`RePág` no llegaban nunca al keymap — no se notaba
+        // porque el renderer desplazaba el cuerpo por su cuenta, y en la
+        // lateral de la ayuda sencillamente no hacían nada.
+        "pageup" | "pgup" => "pgup",
+        "pagedown" | "pgdn" => "pgdn",
         " " | "space" | "spacebar" => "space",
         otro => {
             // Teclas de función y caracteres sueltos. Un nombre largo que no
@@ -333,6 +338,27 @@ mod tests {
             k.to_chord().expect("chord"),
             Chord::new(Mods::default(), KeyCode::Down)
         );
+    }
+
+    /// `PageUp`/`PageDown` del navegador son teclas del keymap. Se traducían a
+    /// `pageup`/`pagedown`, que `parse_chord` no entiende, así que en la
+    /// ventana no resolvían nunca.
+    #[test]
+    fn las_teclas_de_pagina_se_resuelven() {
+        for (dom, esperada) in [("PageUp", KeyCode::PageUp), ("PageDown", KeyCode::PageDown)] {
+            let k = KeyInput {
+                key: dom.to_owned(),
+                ctrl: false,
+                alt: false,
+                shift: false,
+                meta: false,
+            };
+            assert_eq!(
+                k.to_chord().expect(dom),
+                Chord::new(Mods::default(), esperada),
+                "{dom}"
+            );
+        }
     }
 
     #[test]

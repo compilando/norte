@@ -610,6 +610,43 @@ async fn con_el_visor_abierto_la_ayuda_se_queda_las_teclas() {
     assert!(foto.viewer.is_some(), "y el visor sigue donde estaba");
 }
 
+/// Las teclas que desplazan el CUERPO las resuelve el host con el keymap del
+/// lector y viajan como PETICIÓN (puente 76), numerada: el renderer mide y
+/// desplaza una vez. Antes el renderer las atendía como teclas fijas, y un
+/// reatado no llegaba a la ventana.
+#[tokio::test]
+async fn las_teclas_de_desplazar_el_cuerpo_viajan_como_peticion() {
+    use norte_ui_host::dto::{HelpFocusView, HelpScrollTo};
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F1")).await.expect("host vivo");
+    let ayuda = siguiente_ayuda(&mut sub).await.expect("la ayuda abre");
+    assert_eq!(ayuda.scroll, None, "recién abierta, nada que desplazar");
+
+    // En la LATERAL, la página mueve el índice: no hay petición.
+    h.dispatch(tecla("PageDown")).await.expect("host vivo");
+    let ayuda = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    assert_eq!(ayuda.scroll, None);
+
+    h.dispatch(tecla("Tab")).await.expect("host vivo");
+    let ayuda = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    assert_eq!(ayuda.focus, HelpFocusView::Body);
+
+    h.dispatch(tecla("PageDown")).await.expect("host vivo");
+    let ayuda = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    let pedida = ayuda.scroll.expect("una petición");
+    assert_eq!(pedida.to, HelpScrollTo::PageDown);
+
+    h.dispatch(tecla("]")).await.expect("host vivo");
+    let ayuda = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    let siguiente = ayuda.scroll.expect("otra petición");
+    assert_eq!(siguiente.to, HelpScrollTo::SectionNext);
+    assert!(
+        siguiente.seq > pedida.seq,
+        "numeradas: se aplica cada una una vez"
+    );
+}
+
 /// Sobre un diálogo que se está TECLEANDO, `F1` no abre nada.
 ///
 /// La ayuda se queda el teclado, así que abrirla encima de un campo de texto

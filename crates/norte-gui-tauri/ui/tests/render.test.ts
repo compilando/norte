@@ -2007,6 +2007,7 @@ describe("el scroll de la ayuda", () => {
       action_cursor: 0,
       badge: null,
       can_back: false,
+      scroll: null,
       filter: "",
       filtering: false,
       focus: "body",
@@ -2405,6 +2406,7 @@ describe("la ayuda", () => {
       filter: "",
       filtering: false,
       can_back: false,
+      scroll: null,
     };
     return v;
   }
@@ -2582,20 +2584,34 @@ describe("la ayuda", () => {
     expect(enviadas).toEqual([]);
   });
 
-  it("las teclas de desplazar mueven el CUERPO sin depender del foco del DOM", () => {
-    // El cuerpo se reconstruye en cada parche y nadie le devolvía el foco del
-    // documento, así que el scroll nativo de `PgDn` no hacía nada hasta un
-    // clic dentro. Ahora las consume el renderer.
+  it("la petición de desplazar del host se aplica UNA vez por número", () => {
+    // Puente 76: qué tecla desplaza lo decide el host con el keymap del
+    // lector; el renderer mide y desplaza. Un parche que repinta la ayuda por
+    // otro motivo trae la misma petición y no la repite.
+    const { screen } = montar();
+    const v = conAyuda();
+    screen.paint(v);
+    const cuerpo = () => document.querySelector(".help-body") as HTMLElement;
+    cuerpo().scrollTop = 50;
+    if (v.help !== null) {
+      v.help.scroll = { to: "top", seq: 1 };
+    }
+    screen.paint(v);
+    expect(cuerpo().scrollTop, "aplicada").toBe(0);
+    cuerpo().scrollTop = 40;
+    screen.paint(v);
+    expect(cuerpo().scrollTop, "la misma petición no se repite").toBe(40);
+    // Y una apertura NUEVA vuelve a numerar desde 1.
+    screen.paint(vista({}));
+    screen.paint(v);
+    expect(cuerpo().scrollTop, "otra apertura, otra cuenta").toBe(0);
+  });
+
+  it("las teclas ya no las consume el renderer: van al host", () => {
     const { screen } = montar();
     screen.paint(conAyuda());
-    const cuerpo = document.querySelector(".help-body") as HTMLElement;
-    for (const tecla of ["PageDown", "PageUp", "Home", "End"]) {
-      expect(screen.desplazarAyuda(tecla), tecla).toBe(true);
-    }
-    cuerpo.scrollTop = 50;
-    screen.desplazarAyuda("Home");
-    expect(cuerpo.scrollTop).toBe(0);
-    expect(screen.desplazarAyuda("x"), "una letra no es suya").toBe(false);
+    // No queda ninguna ruta que atienda `PageDown` sin preguntar al keymap.
+    expect("helpBodyScrolls" in screen).toBe(false);
   });
 
   it("una página con tres secciones o más lleva su índice arriba", () => {
@@ -2612,9 +2628,6 @@ describe("la ayuda", () => {
       (b) => b.textContent,
     );
     expect(botones).toEqual(["Uno", "Dos", "Tres"]);
-    // `[`/`]` son teclas de desplazar: el renderer las consume.
-    expect(screen.desplazarAyuda("]")).toBe(true);
-    expect(screen.desplazarAyuda("[")).toBe(true);
   });
 
   it("con menos de tres secciones no hay índice de página", () => {
@@ -2625,21 +2638,6 @@ describe("la ayuda", () => {
     }
     screen.paint(v);
     expect(document.querySelector(".help-toc")).toBeNull();
-  });
-
-  it("las flechas desplazan solo una página SIN acciones", () => {
-    // Con acciones, las flechas eligen una y son del host; sin ellas (la hoja
-    // de teclado) son la única forma de leer línea a línea.
-    const { screen } = montar();
-    const v = conAyuda();
-    screen.paint(v);
-    const conFilas = document.querySelector(".help-actions") !== null;
-    expect(screen.desplazarAyuda("ArrowDown")).toBe(!conFilas);
-    if (v.help !== null) {
-      v.help.actions = [];
-    }
-    screen.paint(v);
-    expect(screen.desplazarAyuda("ArrowDown")).toBe(true);
   });
 
   it("un click en la lateral pide ESA página", () => {

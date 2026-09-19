@@ -453,6 +453,10 @@
       "filter": "cop",
       "filtering": true,
       "focus": "body",
+      "scroll": {
+        "seq": 3,
+        "to": "page_down"
+      },
       "sidebar": [
         {
           "label": "Lo básico",

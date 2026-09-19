@@ -39,8 +39,6 @@ advertises and ignores.
 
 Rebind any of them and every overlay follows, including this page. The keys
 in this help are looked up in your keymap as the page is drawn; see [[help]].
-One exception, in the window: the keys that scroll the text of this help
-(page, start and end, sections) stay the default ones there.
 
 # The rule that matters
 

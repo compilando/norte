@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 75;
+export const BRIDGE_VERSION = 76;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -891,6 +891,25 @@ export interface HelpView {
   filter: string;
   filtering: boolean;
   can_back: boolean;
+  /** La última petición de desplazar el cuerpo (puente 76). */
+  scroll: HelpScrollView | null;
+}
+
+/** Hacia dónde desplazar el cuerpo de la ayuda. */
+export type HelpScrollTo =
+  | "line_up"
+  | "line_down"
+  | "page_up"
+  | "page_down"
+  | "top"
+  | "bottom"
+  | "section_prev"
+  | "section_next";
+
+/** Una petición de desplazar, numerada para aplicarla una sola vez. */
+export interface HelpScrollView {
+  to: HelpScrollTo;
+  seq: number;
 }
 
 export interface SettingRowView {

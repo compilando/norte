@@ -78,6 +78,8 @@ export class Screen {
   pendingLogRows: number | null = null;
   /// La página de ayuda que se pintó, para conservar su scroll.
   helpPintada: string | null = null;
+  /// La última petición de desplazar la ayuda que ya se aplicó (puente 76).
+  helpScrollSeq = 0;
 
   /**
    * El plazo del modo `brief`, si hay uno armado.
@@ -160,14 +162,6 @@ export class Screen {
     readonly fetchImage: () => Promise<ArrayBuffer> = () =>
       Promise.resolve(new ArrayBuffer(0)),
   ) {}
-
-  /**
-   * La ayuda está abierta y su cuerpo tiene el foco, así que las teclas de
-   * página son del scroll del DOM y no del host.
-   */
-  helpBodyScrolls(): boolean {
-    return this.helpBodyFocused;
-  }
 
   /**
    * ¿Cambió lo que la barra de menús reserva desde la última vez que se

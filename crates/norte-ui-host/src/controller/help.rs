@@ -9,6 +9,7 @@
 // el padre importa algo — `super::*` la sigue sola.
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use crate::dto::HelpScrollTo;
 
 impl Estado {
     /// Abre la ayuda sobre la página del CONTEXTO donde está el lector.
@@ -491,41 +492,56 @@ impl Estado {
                 }
             }
             (Some("dialog.pane"), _) => a.estado.toggle_focus(),
+            // Las teclas que DESPLAZAN, resueltas por el keymap del lector —
+            // antes el renderer atendía `AvPág`, `Inicio`, `[`… como teclas
+            // fijas, y reatarlas cambiaba el terminal y no esta ventana—.
+            //
+            // En la LATERAL las aplica el modelo: la página camina por los
+            // temas y enseña uno. En el CUERPO, no: el cuerpo cruza el puente
+            // entero y quien lo desplaza es el DOM, que es el que sabe lo que
+            // mide; moverlo aquí crearía una SEGUNDA verdad sobre por dónde va
+            // la ayuda (#267). Así que el host solo PIDE —«una página abajo»—
+            // y el renderer mide y desplaza (`HelpView::scroll`, puente 76).
+            // Las flechas desplazan el cuerpo solo si no hay nada ejecutable:
+            // con acciones, eligen una, como en el terminal.
+            (Some(verbo @ ("dialog.down" | "dialog.up")), _)
+                if a.estado.focus() == norte_frontend::help::Focus::Body
+                    && a.estado.actions().is_empty() =>
+            {
+                a.desplazar(if verbo == "dialog.down" {
+                    HelpScrollTo::LineDown
+                } else {
+                    HelpScrollTo::LineUp
+                });
+            }
             (Some("dialog.down"), _) => a.estado.down(),
             (Some("dialog.up"), _) => a.estado.up(),
-            // La página la da el MODELO, que sabe lo que significa en la
-            // LATERAL: camina por los temas y enseña uno, en vez de diez
-            // transiciones de página por tecla.
-            //
-            // En el CUERPO no. El cuerpo de una página cruza el puente
-            // entero y quien lo desplaza es el DOM, que es lo que un
-            // renderer con scroll nativo hace bien y sin preguntar; el
-            // renderer ni siquiera manda estas teclas cuando el cuerpo tiene
-            // el foco. Moverlo aquí crearía una SEGUNDA verdad sobre por
-            // dónde va la ayuda —el `scrollTop` del DOM y el `body_scroll`
-            // del modelo— y solo una de las dos se pinta (#267). El modelo
-            // conserva su paginación de cuerpo porque el TUI la usa: ahí no
-            // hay scroll nativo que delegar.
-            (Some("dialog.page-down"), _)
-                if a.estado.focus() == norte_frontend::help::Focus::Topics =>
-            {
-                a.estado.page_down(PAGINA_DE_AYUDA);
+            (
+                Some(
+                    verbo
+                    @ ("dialog.page-down" | "dialog.page-up" | "dialog.top" | "dialog.bottom"),
+                ),
+                _,
+            ) => {
+                if a.estado.focus() == norte_frontend::help::Focus::Topics {
+                    match verbo {
+                        "dialog.page-down" => a.estado.page_down(PAGINA_DE_AYUDA),
+                        "dialog.page-up" => a.estado.page_up(PAGINA_DE_AYUDA),
+                        "dialog.top" => a.estado.top(),
+                        _ => a.estado.bottom(),
+                    }
+                } else {
+                    a.desplazar(match verbo {
+                        "dialog.page-down" => HelpScrollTo::PageDown,
+                        "dialog.page-up" => HelpScrollTo::PageUp,
+                        "dialog.top" => HelpScrollTo::Top,
+                        _ => HelpScrollTo::Bottom,
+                    });
+                }
             }
-            (Some("dialog.page-up"), _)
-                if a.estado.focus() == norte_frontend::help::Focus::Topics =>
-            {
-                a.estado.page_up(PAGINA_DE_AYUDA);
-            }
-            // Los extremos, por lo mismo: en la lateral, del modelo; en el
-            // cuerpo los consume el renderer antes de mandarlos.
-            (Some("dialog.top"), _) if a.estado.focus() == norte_frontend::help::Focus::Topics => {
-                a.estado.top();
-            }
-            (Some("dialog.bottom"), _)
-                if a.estado.focus() == norte_frontend::help::Focus::Topics =>
-            {
-                a.estado.bottom();
-            }
+            // Las secciones son del CUERPO tenga quien tenga el foco.
+            (Some("dialog.section-prev"), _) => a.desplazar(HelpScrollTo::SectionPrev),
+            (Some("dialog.section-next"), _) => a.desplazar(HelpScrollTo::SectionNext),
             (Some("dialog.back"), _) | (None, "Backspace" | "backspace") => {
                 if a.estado.filtering() {
                     a.estado.backspace();

@@ -60,9 +60,19 @@ pub(crate) struct Ayuda {
     /// una pregunta de SONDEO, y sin esta memoria un daemon muerto se
     /// re-preguntaría en cada proyección.
     pedidas: HashSet<String>,
+    /// La última petición de desplazar el cuerpo, con su número (puente 76).
+    /// Ver [`crate::dto::HelpView::scroll`].
+    desplazamiento: Option<crate::dto::HelpScrollView>,
 }
 
 impl Ayuda {
+    /// Pide al renderer que desplace el cuerpo. Cada petición lleva un número
+    /// mayor que la anterior, para que un repintado no la aplique dos veces.
+    pub(crate) fn desplazar(&mut self, to: crate::dto::HelpScrollTo) {
+        let seq = self.desplazamiento.map_or(1, |d| d.seq + 1);
+        self.desplazamiento = Some(crate::dto::HelpScrollView { to, seq });
+    }
+
     /// Abre la ayuda sobre la página del CONTEXTO donde está el lector, o
     /// sobre el índice si ese contexto no tiene página.
     ///
@@ -89,6 +99,7 @@ impl Ayuda {
             estado,
             publicadores: HashMap::new(),
             pedidas: HashSet::new(),
+            desplazamiento: None,
             // DOS pantallas y no tres: los diálogos de esta ventana los
             // contesta el renderer con sus propios botones, así que no hay
             // mapa `dialog` en el que resolver un verbo suyo y ponerle una
@@ -181,6 +192,7 @@ impl Ayuda {
             filter: clamp_display(self.estado.filter_display()),
             filtering: self.estado.filtering(),
             can_back: self.estado.can_back(),
+            scroll: self.desplazamiento,
         }
     }
 
