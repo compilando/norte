@@ -501,3 +501,69 @@ fn paths_respeta_el_config_dir_del_entorno() {
         "`paths` no puede crear lo que dice que falta"
     );
 }
+
+/// `norte daemon run` arranca de punta a punta —journal, spool, policy,
+/// índice, `bind`— y `norte daemon stop` lo para limpio.
+///
+/// Es el test de proceso de `norte_core::daemon::componer`: la composición
+/// del daemon vivía en la CLI (regla 7) y ningún test la ejercía entera. Se
+/// espera LEYENDO la línea que dice dónde escucha, no con un `sleep`: esa
+/// línea sale después del `bind`, así que su llegada es la señal exacta.
+#[cfg(unix)]
+#[test]
+fn daemon_run_arranca_y_stop_lo_para() {
+    use std::io::BufRead as _;
+    let config = tempfile::tempdir().expect("config");
+    let estado = tempfile::tempdir().expect("estado");
+    let socket = config.path().join("d.sock");
+    let bin = assert_cmd::cargo::cargo_bin("norte");
+    let mut hijo = std::process::Command::new(&bin)
+        .env("NORTE_CONFIG_DIR", config.path())
+        .env("XDG_STATE_HOME", estado.path())
+        .args(["daemon", "run", "--idle-timeout", "0", "--socket"])
+        .arg(&socket)
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("arranca");
+    let stderr = hijo.stderr.take().expect("stderr");
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Se lee HASTA EL FINAL, no hasta la línea buscada: soltar el pipe antes
+    // haría que el siguiente `eprintln!` del daemon fallara y lo tumbara.
+    std::thread::spawn(move || {
+        for linea in std::io::BufReader::new(stderr).lines() {
+            let Ok(linea) = linea else { break };
+            let _ = tx.send(linea);
+        }
+    });
+    let mut visto = Vec::new();
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+            Ok(l) if l.contains(&socket.display().to_string()) => break,
+            Ok(l) => visto.push(l),
+            Err(e) => {
+                let _ = hijo.kill();
+                panic!("el daemon no llegó a escuchar ({e}): {visto:#?}");
+            }
+        }
+    }
+    let parada = norte()
+        .env("NORTE_CONFIG_DIR", config.path())
+        .args(["daemon", "stop", "--socket"])
+        .arg(&socket)
+        .output()
+        .expect("stop");
+    assert!(
+        parada.status.success(),
+        "stop: {}",
+        String::from_utf8_lossy(&parada.stderr)
+    );
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(hijo.wait());
+    });
+    let fin = rx
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("el daemon sale tras el stop")
+        .expect("wait");
+    assert!(fin.success(), "sale limpio: {fin:?}");
+}

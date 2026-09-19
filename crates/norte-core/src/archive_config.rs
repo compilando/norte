@@ -101,6 +101,31 @@ pub fn load_rar_delegate() -> std::io::Result<Option<std::path::PathBuf>> {
     load_rar_delegate_from(&norte_config::standard_layers_no_project())
 }
 
+/// Aplica a `engine` los límites anti-bomba y el programa que lee RAR de
+/// `[archive]` ([`load_archive_limits`], [`load_rar_delegate`]).
+///
+/// Fail-loud: un `norte.toml` roto aborta el arranque, mismo criterio que
+/// `policy.toml`. Lo usan el daemon ([`crate::daemon::componer()`]) y los
+/// comandos de la CLI que montan un engine propio; antes vivía en la CLI y el
+/// daemon no podía llamarlo desde el core.
+///
+/// # Errors
+/// Los de leer o validar `norte.toml`.
+pub async fn aplicar(engine: &crate::Engine) -> std::io::Result<()> {
+    let limites = crate::blocking::spawn_blocking(load_archive_limits)
+        .await
+        .map_err(std::io::Error::other)??;
+    if let Some(limites) = limites {
+        engine.set_archive_limits(limites);
+    }
+    // Ítem 11 del roadmap: qué programa lee los RAR. `None` = sondear PATH.
+    let delegado = crate::blocking::spawn_blocking(load_rar_delegate)
+        .await
+        .map_err(std::io::Error::other)??;
+    engine.set_rar_delegate(delegado);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

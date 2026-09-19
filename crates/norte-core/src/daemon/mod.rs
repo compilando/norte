@@ -9,9 +9,11 @@
 //!   `connect_or_spawn`).
 
 pub mod approvals;
+pub mod componer;
 mod server;
 
 pub use approvals::DaemonApprovalResolver;
+pub use componer::componer;
 pub use server::{Daemon, DaemonConfig};
 
 // El lado CLIENTE vive en `norte-client` desde ADR 0066: el SDK no puede
