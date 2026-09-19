@@ -201,6 +201,16 @@ pub struct Engine {
     /// paso al último: dos undos que eligieron la misma pila (un doble clic,
     /// dos frontends, un reintento) no se pisan, y el segundo, al entrar,
     /// re-mira el journal y se salta lo que el primero ya devolvió.
+    ///
+    /// Dos límites, escritos para que nadie los dé por cerrados:
+    /// - El rollback de un `fs.rename_batch` EN MARCHA también escribe
+    ///   compensaciones y no toma este turno. Un undo que elija entradas de un
+    ///   lote que aún corre puede cruzarse con él; lo acotan `is_free` y el
+    ///   rename sin reemplazo, como antes de #358.
+    /// - Un undo de agente cuya puerta de policy pregunta (`ask`) retiene el
+    ///   turno mientras espera la aprobación (30 s en el daemon). Un undo
+    ///   humano espera detrás. No hay interbloqueo —aprobar no pasa por un
+    ///   undo—, solo espera.
     undo_en_curso: Arc<tokio::sync::Mutex<()>>,
     /// Anillo ACOTADO de informes de `archive.pack`, por `task_id`
     /// ([`Engine::archive_pack_report`]).
@@ -4452,15 +4462,37 @@ impl Engine {
                         g = en_curso.lock() => g,
                         () = ctx.cancel.cancelled() => return Err(Error::Cancelled),
                     };
+                    // #358: lo elegido pudo deshacerlo otro undo entretanto. Se
+                    // pregunta una vez, ya con el turno: desde aquí solo esta
+                    // Task escribe compensaciones de undo.
+                    let seqs: Vec<i64> = plan
+                        .iter()
+                        .flat_map(|(u, _)| u.iter().map(|e| e.seq))
+                        .collect();
+                    let deshechas = crate::undo::deshechas(&journal, &seqs).await?;
                     for (unit, provider) in plan {
                         if ctx.cancel.is_cancelled() {
                             return Err(Error::Cancelled);
                         }
-                        // #358: lo elegido pudo deshacerlo otro undo entretanto.
-                        if crate::undo::ya_deshecha(&journal, &unit).await? {
-                            ctx.progress.update(|p| p.entries_done += 1);
-                            continue;
-                        }
+                        let unit = match crate::undo::vigencia(unit, &deshechas) {
+                            crate::undo::Vigencia::Entera(u)
+                            | crate::undo::Vigencia::EnParte(u) => u,
+                            crate::undo::Vigencia::Deshecha => {
+                                tracing::info!(
+                                    %task_id,
+                                    "unidad ya deshecha por otro undo; se salta"
+                                );
+                                ctx.progress.update(|p| p.entries_done += 1);
+                                continue;
+                            }
+                            // Un lote a medio deshacer por otro undo: ni se
+                            // sigue ni se salta — se para, como en un drift.
+                            crate::undo::Vigencia::Parada(seq) => {
+                                report_task.lock().expect("undo report lock").blocked =
+                                    Some((seq, Error::PlanStale));
+                                break;
+                            }
+                        };
                         // La puerta, AQUÍ y por unidad (#171). Dos cosas
                         // cambian respecto a preguntarla toda por adelantado:
                         // el trabajo de parsear va dentro de la Task, y el

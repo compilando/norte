@@ -1198,6 +1198,73 @@ async fn revert_mode_batch(
     Ok(bloqueada.unwrap_or(Reverted::Accounted))
 }
 
+/// Las entradas de `seqs` que están YA deshechas según el journal de AHORA
+/// (#358): lo que se eligió al pedir un undo pudo deshacerlo otro entretanto.
+///
+/// Se pregunta UNA vez, por todo el plan, en cuanto la Task tiene su turno
+/// (`Engine::undo_en_curso`): desde ahí solo ella escribe compensaciones de
+/// undo, así que la respuesta no caduca mientras corre. Preguntar por unidad
+/// costaría un recorrido del journal por cada una.
+///
+/// # Errors
+/// El del journal, como [`Error`].
+pub(crate) async fn deshechas(
+    journal: &SqliteJournal,
+    seqs: &[i64],
+) -> Result<HashSet<i64>, Error> {
+    Ok(journal
+        .journal()
+        .undone_among(seqs)
+        .await
+        .map_err(Error::from)?
+        .into_iter()
+        .collect())
+}
+
+/// En qué estado está AHORA una unidad que se eligió para deshacer (#358).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Vigencia {
+    /// Nada de ella está deshecho: se revierte tal como se eligió.
+    Entera(Vec<JournalEntry>),
+    /// Ya está deshecha entera: no queda nada que hacer con ella.
+    Deshecha,
+    /// Una parte ya volvió, en una unidad que sabe revertirse a trozos
+    /// (sincronización, organizar, permisos): se sigue con el RESTO, que es
+    /// exactamente lo que elegiría un undo nuevo.
+    EnParte(Vec<JournalEntry>),
+    /// Una parte ya volvió, en una unidad que es todo o nada (un lote de
+    /// renombrado): no se puede ni seguir ni saltar. Seguir revertiría medio
+    /// lote; saltarla dejaría al LIFO atravesar una unidad a medias y revertir
+    /// lo de debajo. El undo PARA, como en cualquier otro bloqueo. El `seq` es
+    /// el de su primera entrada.
+    Parada(i64),
+}
+
+/// Clasifica `unit` contra las entradas ya deshechas (ver [`Vigencia`]).
+///
+/// Por qué no basta con «saltar si algo está deshecho»: un undo que se paró
+/// a mitad de una unidad de sincronización (un bloqueo, una cancelación) deja
+/// esa unidad a medias, y el undo que esperaba detrás, saltándola, seguiría
+/// por las unidades MÁS VIEJAS — por debajo de algo a medio devolver, que es
+/// justo lo que el LIFO estricto existe para impedir.
+pub(crate) fn vigencia(unit: Vec<JournalEntry>, deshechas: &HashSet<i64>) -> Vigencia {
+    let cuantas = unit.iter().filter(|e| deshechas.contains(&e.seq)).count();
+    if cuantas == 0 {
+        return Vigencia::Entera(unit);
+    }
+    if cuantas == unit.len() {
+        return Vigencia::Deshecha;
+    }
+    if is_sync_unit(&unit) || is_organize_unit(&unit) || is_mode_unit(&unit) {
+        return Vigencia::EnParte(
+            unit.into_iter()
+                .filter(|e| !deshechas.contains(&e.seq))
+                .collect(),
+        );
+    }
+    Vigencia::Parada(unit.first().map_or(0, |e| e.seq))
+}
+
 /// Revierte UNA unidad de undo, sea de la clase que sea.
 ///
 /// El único sitio donde se decide qué undo le toca a una unidad, y vive aquí
@@ -1210,32 +1277,6 @@ async fn revert_mode_batch(
 /// # Errors
 /// Las de [`revert_entry`], [`revert_batch`] y [`revert_sync_batch`]: la
 /// cancelación (regla 3) y el fallo al persistir una compensación (regla 4).
-/// Si alguna entrada de `unit` está YA deshecha según el journal de AHORA
-/// (#358).
-///
-/// Lo que se eligió al pedir el undo pudo deshacerlo, entretanto, otro undo:
-/// un doble clic, dos frontends contra un daemon, un reintento tras timeout.
-/// La verdad ya no es la selección sino el journal, y quien llama salta la
-/// unidad ENTERA si esto dice que sí. Entera porque un lote es todo o nada, y
-/// porque saltarla es la dirección segura: revertir dos veces puede renombrar
-/// encima de algo que el humano volvió a crear, y un undo nuevo la elegirá
-/// bien si queda algo por deshacer.
-///
-/// # Errors
-/// El del journal, como [`Error`].
-pub(crate) async fn ya_deshecha(
-    journal: &SqliteJournal,
-    unit: &[JournalEntry],
-) -> Result<bool, Error> {
-    let seqs: Vec<i64> = unit.iter().map(|e| e.seq).collect();
-    Ok(!journal
-        .journal()
-        .undone_among(&seqs)
-        .await
-        .map_err(Error::from)?
-        .is_empty())
-}
-
 pub(crate) async fn revert_unit(
     provider: &dyn Provider,
     journal: &Arc<SqliteJournal>,
@@ -1663,6 +1704,35 @@ mod tests {
             sync_entry(1, Some(7), "trashed", "restore_trash"),
         ];
         assert!(is_sync_unit(&unit));
+    }
+
+    /// #358: la vigencia de una unidad contra lo que otro undo ya devolvió.
+    /// Nada → entera; todo → deshecha; parte de una unidad que se revierte a
+    /// trozos → el RESTO; parte de un lote todo-o-nada → para.
+    #[test]
+    fn la_vigencia_de_una_unidad_segun_lo_ya_deshecho() {
+        let sync = || {
+            vec![
+                sync_entry(3, Some(7), "created", "delete"),
+                sync_entry(2, Some(7), "created", "delete"),
+            ]
+        };
+        let lote = || vec![entry(5, Some(9)), entry(4, Some(9))];
+        let nada = HashSet::new();
+        assert!(matches!(vigencia(sync(), &nada), Vigencia::Entera(u) if u.len() == 2));
+        assert_eq!(vigencia(sync(), &HashSet::from([3, 2])), Vigencia::Deshecha);
+        match vigencia(sync(), &HashSet::from([3])) {
+            Vigencia::EnParte(resto) => {
+                assert_eq!(resto.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![2]);
+            }
+            otra => panic!("una unidad de sync a medias sigue con el resto: {otra:?}"),
+        }
+        assert_eq!(
+            vigencia(lote(), &HashSet::from([4])),
+            Vigencia::Parada(5),
+            "un lote de renombrado a medias PARA el LIFO: ni se sigue ni se salta"
+        );
+        assert_eq!(vigencia(lote(), &HashSet::from([4, 5])), Vigencia::Deshecha);
     }
 
     /// Una unidad MIXTA no es de sincronización: quien colara un `created` en

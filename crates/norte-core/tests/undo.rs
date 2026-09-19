@@ -853,6 +853,60 @@ async fn deshacer_hasta_un_punto_no_toca_lo_de_un_agente() {
     );
 }
 
+/// **Un undo en cola detrás de otro se cancela limpio** (#358, regla 3).
+///
+/// El turno de undo es una espera nueva, y toda espera de una Task tiene que
+/// atender su token: un undo que el humano cancela mientras espera detrás de
+/// otro largo acaba `Cancelled` sin tocar nada, y el de delante termina lo
+/// suyo.
+#[tokio::test]
+async fn un_undo_en_cola_se_cancela_limpio() {
+    let (engine, mem, journal) = setup().await;
+    write_file(&mem, "mem:///a.txt", b"a").await;
+    let h = engine
+        .copy(&vp("mem:///a.txt"), &vp("mem:///ancla.txt"))
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let corte = journal
+        .journal()
+        .page(None, 50, Some("user"))
+        .await
+        .expect("page")
+        .first()
+        .expect("la copia")
+        .entry
+        .seq;
+    let h = engine
+        .move_(&vp("mem:///a.txt"), &vp("mem:///b.txt"))
+        .await
+        .expect("mv");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    // El primero, lento: tiene el turno mientras el segundo espera.
+    mem.faults()
+        .set_latency_per_op(Some(std::time::Duration::from_millis(300)));
+    let (h1, _r1) = engine.undo_after(corte).await.expect("primer undo");
+    let (h2, r2) = engine.undo_after(corte).await.expect("segundo undo");
+    h2.cancel();
+    assert_eq!(
+        h2.join().await,
+        TaskState::Cancelled,
+        "cancelado en la cola"
+    );
+    assert_eq!(
+        h1.join().await,
+        TaskState::Completed,
+        "el de delante termina"
+    );
+    assert_eq!(
+        r2.lock().expect("lock").undone,
+        0,
+        "y el cancelado no tocó nada"
+    );
+    assert!(mem.stat(&vp("mem:///a.txt")).await.is_ok());
+}
+
 /// **Dos undos que eligieron lo mismo no lo deshacen dos veces** (#358).
 ///
 /// Elegir y ejecutar están separados: las entradas se escogen al pedir el
