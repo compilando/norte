@@ -10,7 +10,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tokio::task::spawn_blocking;
+use crate::blocking::spawn_blocking;
 
 use super::{Error, Volume, VolumeKind, is_pseudo};
 

@@ -317,7 +317,7 @@ pub fn spawn_dispatcher(
         {
             let dir = config_dir.clone();
             let st = Arc::clone(&state);
-            let seeded = tokio::task::spawn_blocking(move || {
+            let seeded = crate::blocking::spawn_blocking(move || {
                 let ids = consented_hook_ids(&dir);
                 let mut guard = st.lock().unwrap_or_else(PoisonError::into_inner);
                 for id in ids {
@@ -360,7 +360,7 @@ pub fn spawn_dispatcher(
             let dir = config_dir.clone();
             let rt = Arc::clone(&runtime);
             let st = Arc::clone(&state);
-            let work = tokio::task::spawn_blocking(move || {
+            let work = crate::blocking::spawn_blocking(move || {
                 let mut guard = st.lock().unwrap_or_else(PoisonError::into_inner);
                 dispatch_batch(&dir, &rt, &mut guard, &batch, dropped)
             });

@@ -536,7 +536,7 @@ async fn una_pieza(
             escritos = escritos.saturating_add(n);
             // Comprimir y drenar, los dos en el pool: `take` sin `data` sería
             // un viaje de ida y vuelta por nada.
-            let (devuelto, salida, res) = tokio::task::spawn_blocking(move || {
+            let (devuelto, salida, res) = crate::blocking::spawn_blocking(move || {
                 let res = w.data(&chunk);
                 let salida = w.take();
                 (w, salida, res)
@@ -565,7 +565,7 @@ async fn una_pieza(
     }
     // El cierre de una entrada vacía el buffer del compresor, así que también
     // es trabajo de CPU: al pool, como el resto.
-    let (w, salida, res) = tokio::task::spawn_blocking(move || {
+    let (w, salida, res) = crate::blocking::spawn_blocking(move || {
         let res = w.end();
         let salida = w.take();
         (w, salida, res)

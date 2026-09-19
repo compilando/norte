@@ -103,7 +103,7 @@ pub async fn connect_ftp_plugin(
     base: &str,
 ) -> Result<PluginProvider, Error> {
     let host_owned = host.to_string();
-    let ip = tokio::task::spawn_blocking(move || resolve_ip(&host_owned, port))
+    let ip = crate::blocking::spawn_blocking(move || resolve_ip(&host_owned, port))
         .await
         .map_err(|_| Error::Internal { panic: true })??;
     let endpoint = format!("{}:{port}", fmt_ip(ip));
@@ -112,7 +112,7 @@ pub async fn connect_ftp_plugin(
 
     // Instanciar el componente (compila cranelift) es bloqueante → spawn_blocking
     // (regla 2). El PluginProvider se construye desde los BYTES embebidos.
-    let provider = tokio::task::spawn_blocking(move || {
+    let provider = crate::blocking::spawn_blocking(move || {
         let runtime = PluginRuntime::new().map_err(|e| map_runtime_error(&e))?;
         PluginProvider::from_bytes(runtime, FTP_PROVIDER_WASM, caps, "ftp")
             .map_err(|e| map_runtime_error(&e))

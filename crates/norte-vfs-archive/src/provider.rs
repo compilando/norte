@@ -456,7 +456,7 @@ impl ArchiveProvider {
         // flag y el hilo blocking corta en la siguiente entrada del loop.
         let cancel = Arc::new(AtomicBool::new(false));
         let mut guard = CancelOnDrop::new(Arc::clone(&cancel));
-        let joined = tokio::task::spawn_blocking(move || match format {
+        let joined = crate::blocking::spawn_blocking(move || match format {
             Format::Tar => {
                 crate::tar_format::build_index(reader, container_len, generation, &limits, &cancel)
             }
@@ -524,7 +524,7 @@ impl ArchiveProvider {
         // el canal, no el caller — el huérfano tras un drop está acotado por
         // el canal (4 chunks) en la fase de entrega Y por el chequeo de
         // canal cerrado en la fase de descarte.
-        drop(tokio::task::spawn_blocking(move || {
+        drop(crate::blocking::spawn_blocking(move || {
             let _permit = permit; // se libera cuando el hilo termina
             let reader = ProviderReader::new(handle, inner, outer_path, outer_len);
             crate::zip_format::read_entry(reader, &plan, &tx);
@@ -572,7 +572,7 @@ impl ArchiveProvider {
                     let spool_len = s.len;
                     drop(slot);
                     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-                    drop(tokio::task::spawn_blocking(move || {
+                    drop(crate::blocking::spawn_blocking(move || {
                         serve_from_spool(&file, spool_len, start, req_len, &tx);
                     }));
                     return Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed());
@@ -632,12 +632,12 @@ impl ArchiveProvider {
                 len: req_len,
                 container: aref.outer.display_lossy(),
             };
-            drop(tokio::task::spawn_blocking(move || {
+            drop(crate::blocking::spawn_blocking(move || {
                 let _permit = permit; // se libera cuando el hilo termina
                 build_spool_and_serve(job, reader, &tx);
             }));
         } else {
-            drop(tokio::task::spawn_blocking(move || {
+            drop(crate::blocking::spawn_blocking(move || {
                 let _permit = permit; // se libera cuando el hilo termina
                 crate::targz_format::read_entry_gz(reader, start, req_len, &tx);
             }));

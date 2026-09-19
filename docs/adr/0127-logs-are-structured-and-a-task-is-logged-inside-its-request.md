@@ -113,12 +113,26 @@ followed by an exit through `anyhow`. A library never ends the process.
   boundaries and emits events as it already did.
 - Bad: one more transitive crate (`tracing-serde`).
 - Bad: a `tokio::spawn` or `spawn_blocking` inside a task body loses the
-  `task` span unless it is `.instrument(Span::current())`-ed, and **many
-  already do**: every `spawn_blocking` in `norte-vfs-local`,
-  `norte-vfs-archive`, `sync/spool.rs` and `pack.rs`, plus `hooks.rs`.
-  Events emitted inside those closures still have no parent. The async code
-  around them keeps it. Two tests pin the boundaries (the scheduler's, and
-  one through the daemon's socket). They cannot pin every spawn.
+  `task` span unless it carries it explicitly. Two tests pin the boundaries
+  (the scheduler's, and one through the daemon's socket). They cannot pin
+  every spawn.
+  - **`spawn_blocking` is closed** (2026-09-19). `norte-core` and
+    `norte-vfs-archive` each have one door, `crate::blocking::spawn_blocking`,
+    which enters the caller's span inside the closure; a `clippy.toml` in
+    each crate denies the direct call (`disallowed-methods`), and a unit
+    test pins that an event in the closure hangs from its `task`.
+    `norte-vfs-local` has no such door because it emits no events at all.
+    The price, accepted: a span now lives as long as the blocking thread
+    that carries it. For a detached archive read that is the life of the
+    stream, not of the request; for a plugin guest hung past its timeout
+    (M2 in `plugin_provider.rs`) it is never, alongside the thread already
+    leaked there. Both are what the events inside mean, so the span is
+    right; it is just open longer.
+  - **Still open:** `tokio::spawn` (and `blocking_with_deadline`'s
+    `std::thread::spawn` in `norte-vfs`) do not carry the span. The one
+    named here before, the hook dispatcher in `hooks.rs`, is not a gap: it
+    is a long-lived loop started with the daemon that serves every task, so
+    there is no single `task` for it to hang from.
 - Bad: a `task` holds its parent `rpc` open until the task ends. A layer
   that timed spans on close would report a request as lasting as long as its
   longest task.

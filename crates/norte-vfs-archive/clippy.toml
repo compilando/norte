@@ -1,0 +1,11 @@
+# ADR 0127: `spawn_blocking` no hereda el span, y lo que los parsers
+# registran dentro del cierre sale sin su `task`. La puerta es
+# `crate::blocking::spawn_blocking`, que lo conserva.
+#
+# Clippy NO fusiona configuraciones: usa el primer clippy.toml que encuentra
+# subiendo desde el crate. Si algún día hay uno en la raíz, sus reglas hay que
+# copiarlas aquí y en crates/norte-core/clippy.toml, o no se aplican.
+disallowed-methods = [
+    { path = "tokio::task::spawn_blocking", reason = "pierde el span; usa crate::blocking::spawn_blocking (ADR 0127)" },
+    { path = "tokio::runtime::Handle::spawn_blocking", reason = "pierde el span; usa crate::blocking::spawn_blocking (ADR 0127)" },
+]
