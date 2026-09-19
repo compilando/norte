@@ -724,7 +724,7 @@ help-topic-keys = Keyboard
 # context and routes these keys by hardcoded GPUI names (`help_view::on_key`),
 # so a generated hint would have nothing to generate from. Rebinding does not
 # change these keys, and this string must change if `on_key` does.
-help-hint-gui = ⇥ pane · ⏎ run · / filter · ⌫ back · Ctrl+P palette · Esc close
+help-hint-gui = ⇥ index ↔ text · ⏎ run · / filter · ⌫ back · Ctrl+P palette · Esc close
 help-cmd-app-quit = quit norte
 help-cmd-app-help = this help
 help-cmd-app-theme = choose theme
@@ -1121,7 +1121,9 @@ wizard-ask-theme = Pick a theme. What you see while you move is what you are cho
 wizard-ask-icons = Can you see three icons here: 📁 🖼 ⚙ ? If they show as boxes, your terminal font has no emoji.
 wizard-icons-yes = Yes, I see them — use icons
 wizard-icons-no = No — plain ASCII badges
-wizard-hint = [Enter] next · [Backspace] back · [Esc] keep defaults and never ask again
+# Fits WHOLE in the wizard box (66 cells): cut in the middle, it lost exactly
+# `[Esc]`, the one key that says how not to answer.
+wizard-hint = [Enter] next · [Backspace] back · [Esc] keep defaults, never ask
 wizard-preset-orthodox = mc-style: F-keys, Tab between panes. The default.
 wizard-preset-vim = hjkl, counts, : for the palette.
 wizard-preset-cua = Ctrl+C/X/V and Windows-style keys.
@@ -1366,6 +1368,8 @@ help-cmd-pane-history-right = directory history of the right panel
 help-cmd-pane-popular = most visited directories
 help-cmd-dialog-confirm-other = open in the other panel
 help-cmd-dialog-clear = clear the list
+help-cmd-dialog-top = go to the start of the list or text
+help-cmd-dialog-bottom = go to the end of the list or text
 help-cmd-nav-forward = forward again
 help-cmd-pane-mirror = send this location to the other pane
 help-cmd-pane-mirror-target = send the folder under the cursor to the other pane
@@ -1941,6 +1945,8 @@ dialog-cmd-up = up
 dialog-cmd-down = down
 dialog-cmd-page-up = pg up
 dialog-cmd-page-down = pg dn
+dialog-cmd-top = home
+dialog-cmd-bottom = end
 dialog-cmd-add = add
 dialog-cmd-toggle-enabled = toggle
 dialog-cmd-remove = remove

@@ -294,6 +294,34 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The help reads like a document, in the terminal and in the window.**
+  - The arrows scroll the text line by line until an action is in view,
+    Page Down moves a screen instead of ten lines, and Home/End go to the
+    start and end of the index or the page (`dialog.top`/`dialog.bottom`,
+    in every preset; `G` too in vim).
+  - The keyboard page, the longest one, could not be scrolled past its
+    first screen: the focus refused to enter a page with nothing to run.
+  - In the terminal, the mouse works over the help: the wheel scrolls
+    what is under it and a click picks a page or an action.
+  - In the window, the page keys scroll the text without having to click
+    into it first.
+  - The footer says how much has been read (`40 %`) instead of a line
+    count, and the text no longer touches the scrollbar.
+  - In the window, the help has room to breathe: margins, one vertical
+    rhythm, a reading measure, styled tables and group headers, and the
+    full title of a truncated page on hover.
+  - The page "Two panes, one destination" was 663 lines: comparing,
+    synchronising and profiles now have their own pages.
+- **Keys are named in the language of the screen.** In Spanish, `AvPág`,
+  `Retroceso`, `Intro`, `Inicio`, `Supr` and arrows instead of `PgDn`,
+  `Backspace`, `Enter`… in the key bar, the palette, the help and the
+  cheatsheet. English is unchanged.
+- **The welcome wizard's footer no longer hides `Esc`**, the one key that
+  says how to skip it; it was cut in the middle at 100 columns.
+- **The key bar cuts a long label at a whole word** (`7 Crear`, not
+  `7 Crear di`), which also leaves the gap that separates it from the next
+  key.
+
 - **A profile that asks for a log format now says it was ignored.** A
   profile cannot change where or how this process logs, and asking for it
   is reported, but only `[log] dir` and `retain` were checked. A profile

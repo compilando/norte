@@ -59,6 +59,60 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
   }
 }
 
+/**
+ * Desplaza el cuerpo de la ayuda con una tecla, si es de las que lo mueven.
+ * Devuelve si la consumió.
+ *
+ * Lo hace el renderer y no el DOM «por su cuenta»: el scroll nativo de
+ * teclado necesita que la caja tenga el foco del documento, y el cuerpo se
+ * reconstruye en cada parche —nadie le devolvía el foco—, así que `PgDn`
+ * solo desplazaba después de un clic dentro. Tampoco el host: el cuerpo
+ * cruza entero y quien sabe lo que mide es esta caja (#267).
+ *
+ * Las flechas solo cuando la página no tiene nada ejecutable (la hoja de
+ * teclado, la más larga): con acciones, las flechas eligen una y son del
+ * host, que la revela.
+ */
+export function desplazarAyuda(this: Screen, key: string): boolean {
+  const cuerpo = this.helpRoot.querySelector(".help-body");
+  if (!(cuerpo instanceof HTMLElement)) {
+    return false;
+  }
+  // Una línea de prosa, y una página con dos líneas de solape para no
+  // perder el sitio en el salto.
+  const linea = parseFloat(getComputedStyle(cuerpo).lineHeight) || 16;
+  const pagina = Math.max(linea, cuerpo.clientHeight - 2 * linea);
+  const sinAcciones = cuerpo.querySelector(".help-actions") === null;
+  switch (key) {
+    case "PageDown":
+      cuerpo.scrollTop += pagina;
+      return true;
+    case "PageUp":
+      cuerpo.scrollTop -= pagina;
+      return true;
+    case "Home":
+      cuerpo.scrollTop = 0;
+      return true;
+    case "End":
+      cuerpo.scrollTop = cuerpo.scrollHeight;
+      return true;
+    case "ArrowDown":
+      if (sinAcciones) {
+        cuerpo.scrollTop += linea;
+        return true;
+      }
+      return false;
+    case "ArrowUp":
+      if (sinAcciones) {
+        cuerpo.scrollTop -= linea;
+        return true;
+      }
+      return false;
+    default:
+      return false;
+  }
+}
+
 /** La lateral: cabeceras de grupo y páginas. */
 export function helpSidebar(this: Screen, help: HelpView): HTMLElement {
   const nav = document.createElement("nav");
@@ -88,6 +142,9 @@ export function helpSidebar(this: Screen, help: HelpView): HTMLElement {
       fila.setAttribute("aria-selected", String(help.cursor === i));
       fila.dataset["current"] = String(r.current);
       fila.textContent = r.title;
+      // La lateral corta con elipsis los títulos largos; el completo, al
+      // pasar por encima. `title` es texto: no se interpreta como marcado.
+      fila.title = r.title;
       fila.addEventListener("click", () => {
         this.send({ action: "help_select_topic", row: i });
       });

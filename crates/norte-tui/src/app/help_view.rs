@@ -137,6 +137,11 @@ pub struct HelpView {
     /// approval lets its TTL expire, which DENIES the agent: fail-closed, which
     /// is the direction to fail in.
     pub over_modal: bool,
+    /// Height of the body window at the last [`refresh`](Self::refresh), in
+    /// lines. What a page means ([`page`](Self::page)) and where an arrow key
+    /// stops walking actions and starts scrolling ([`line_down`](Self::line_down))
+    /// both depend on it, and only the layout knows it.
+    height: usize,
 }
 
 impl HelpView {
@@ -165,6 +170,103 @@ impl HelpView {
             asked: std::collections::BTreeSet::new(),
             publishers: std::collections::BTreeMap::new(),
             over_modal: false,
+            height: 0,
+        }
+    }
+
+    /// Lines a page moves in the body: the window less two lines of overlap,
+    /// so the reader keeps their place across the jump. Never zero.
+    #[must_use]
+    pub fn page(&self) -> usize {
+        self.height.saturating_sub(2).max(1)
+    }
+
+    /// Down arrow: one topic in the sidebar; in the body, the next action if
+    /// it is on screen, and otherwise one line of prose.
+    pub fn line_down(&mut self) {
+        self.step(true);
+    }
+
+    /// Up arrow: see [`line_down`](Self::line_down).
+    pub fn line_up(&mut self) {
+        self.step(false);
+    }
+
+    /// The body half of the arrows. The actions sit AFTER all the prose, so
+    /// an arrow that always walked them jumped a long page to its end before
+    /// the reader had read it; one that always scrolled could never reach
+    /// them. So: walk the actions while they are in view, scroll otherwise.
+    fn step(&mut self, down: bool) {
+        if self.state.focus() != norte_frontend::help::Focus::Body {
+            if down {
+                self.state.down();
+            } else {
+                self.state.up();
+            }
+            return;
+        }
+        let height = self.height.max(1);
+        let scroll = self.state.body_scroll();
+        let window = scroll..scroll.saturating_add(height);
+        let lines = &self.body.action_lines;
+        let visible = |i: usize| lines.get(i).is_some_and(|l| window.contains(l));
+        let cur = self.state.action_cursor();
+        if visible(cur) {
+            let next = if down {
+                cur.checked_add(1)
+            } else {
+                cur.checked_sub(1)
+            };
+            if next.is_some_and(visible) {
+                if down {
+                    self.state.down();
+                } else {
+                    self.state.up();
+                }
+                return;
+            }
+        } else {
+            // The cursor is off screen: the arrow lands on the nearest action
+            // that is on it, in the direction of travel, before any scroll.
+            let mut en_vista = (0..lines.len()).filter(|&i| visible(i));
+            let hit = if down {
+                en_vista.next()
+            } else {
+                en_vista.next_back()
+            };
+            if let Some(i) = hit {
+                self.state.settle_action_cursor(i);
+                return;
+            }
+        }
+        let max = self.body.lines.len().saturating_sub(height);
+        if down && scroll < max {
+            self.state.scroll_body(1);
+        } else if !down && scroll > 0 {
+            self.state.scroll_body(-1);
+        } else {
+            // Nothing left to scroll that way (or nothing laid out yet): the
+            // arrow walks the actions, as it always did. An arrow that does
+            // NOTHING at the end of a page is a key the reader reads as broken.
+            if down {
+                self.state.down();
+            } else {
+                self.state.up();
+            }
+            return;
+        }
+        // Scrolling hands the lead to the view (`scroll_body`); an action the
+        // cursor was on that is STILL on screen keeps it, instead of the
+        // cursor jumping to the first action in the window.
+        let scroll = self.state.body_scroll();
+        let window = scroll..scroll.saturating_add(height);
+        if self
+            .body
+            .action_lines
+            .get(cur)
+            .is_some_and(|l| window.contains(l))
+        {
+            self.state.settle_action_cursor(cur);
         }
     }
 
@@ -285,7 +387,11 @@ impl HelpView {
                 action_lines: Vec::new(),
             }
         };
-        self.state.clamp_scroll(self.body.lines.len());
+        self.height = height;
+        // The LAST screen is a full one: clamping to the last line let a
+        // reader page on until one line sat over a box of blank rows.
+        self.state
+            .clamp_scroll_window(self.body.lines.len(), height.max(1));
         if self.state.focus() != norte_frontend::help::Focus::Body {
             return;
         }
@@ -605,6 +711,83 @@ mod help_view_tests {
              cannot see what Enter would run",
             first + height
         );
+    }
+
+    /// Down in the body READS: with no action in view it scrolls the prose one
+    /// line, instead of jumping to the first action behind all of it — which
+    /// on a long page is the end of the page.
+    #[test]
+    fn down_in_the_body_scrolls_the_prose_when_no_action_is_in_view() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        view.state.open(&TopicId::new("copying"));
+        view.state.toggle_focus();
+        refresh(&mut view, 60, 6);
+        let (_, action_lines) = view.body();
+        assert!(
+            action_lines[0] >= 6,
+            "copying opens on prose, not on an action"
+        );
+        view.line_down();
+        refresh(&mut view, 60, 6);
+        assert_eq!(view.state.body_scroll(), 1, "one line, not a jump");
+        view.line_up();
+        refresh(&mut view, 60, 6);
+        assert_eq!(view.state.body_scroll(), 0);
+    }
+
+    /// Once the actions are on screen, Down walks them — and walking off the
+    /// last one in view scrolls instead of dragging the cursor out of sight.
+    #[test]
+    fn down_walks_the_actions_that_are_in_view() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        view.state.open(&TopicId::new("copying"));
+        view.state.toggle_focus();
+        view.state.bottom();
+        refresh(&mut view, 60, 6);
+        let first = view.state.action_cursor();
+        view.line_down();
+        refresh(&mut view, 60, 6);
+        assert_eq!(view.state.action_cursor(), first + 1, "the next action");
+    }
+
+    /// A page is the WINDOW, less two lines of overlap, not a fixed ten.
+    #[test]
+    fn a_page_is_the_window_less_its_overlap() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        view.state.open(&TopicId::new("copying"));
+        refresh(&mut view, 60, 20);
+        assert_eq!(view.page(), 18);
+        refresh(&mut view, 60, 2);
+        assert_eq!(view.page(), 1, "never zero: a key that does nothing");
+    }
+
+    /// `End` lands on the last FULL screen, not on a lone last line.
+    #[test]
+    fn bottom_fills_the_last_screen() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        view.state.open(&TopicId::new("copying"));
+        view.state.toggle_focus();
+        view.state.bottom();
+        refresh(&mut view, 60, 6);
+        let total = view.body().0.len();
+        assert_eq!(view.state.body_scroll(), total - 6);
+    }
+
+    /// The keyboard page, the longest, can now be read: the focus reaches its
+    /// body and the arrows scroll it.
+    #[test]
+    fn the_keys_page_scrolls_with_the_arrows() {
+        let keys: Vec<ratatui::text::Line<'static>> = (0..40)
+            .map(|i| ratatui::text::Line::raw(format!("fila {i}")))
+            .collect();
+        let mut view = HelpView::new(Lang::En, keys);
+        view.state.open(&TopicId::new(KEYS_ID));
+        view.state.toggle_focus();
+        assert_eq!(view.state.focus(), Focus::Body);
+        refresh(&mut view, 60, 10);
+        view.line_down();
+        refresh(&mut view, 60, 10);
+        assert_eq!(view.state.body_scroll(), 1);
     }
 
     #[test]

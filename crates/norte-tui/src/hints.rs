@@ -24,6 +24,8 @@ const NAVIGATION_HINT_EXCLUDED: &[&str] = &[
     "dialog.down",
     "dialog.page-up",
     "dialog.page-down",
+    "dialog.top",
+    "dialog.bottom",
 ];
 
 /// Filters a SUPPORTED allowlist down to the commands worth spelling out in
@@ -660,12 +662,17 @@ mod tests {
         use crate::app::{ALLOW_HELP, help_action};
         // La paginación SÍ se imprime en esta pantalla (ver
         // `HELP_HINT_PRIORITY`): lo único que no gasta ancho aquí son las
-        // flechas, que mueven el cursor entre filas ejecutables y se
-        // descubren solas.
+        // flechas y los extremos (Inicio, Fin), que se descubren solos — y
+        // con ellos el pie no cabía entero ni a 124 columnas.
         let printable: Vec<&str> = ALLOW_HELP
             .iter()
             .copied()
-            .filter(|c| !matches!(*c, "dialog.up" | "dialog.down"))
+            .filter(|c| {
+                !matches!(
+                    *c,
+                    "dialog.up" | "dialog.down" | "dialog.top" | "dialog.bottom"
+                )
+            })
             .collect();
         for cmd in &printable {
             assert!(

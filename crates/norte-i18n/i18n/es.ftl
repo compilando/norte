@@ -730,7 +730,7 @@ help-topic-keys = Teclado
 # y rutea estas teclas por nombre GPUI hardcodeado (`help_view::on_key`), así
 # que un hint generado no tendría de qué generarse. Redefinir teclas no cambia
 # estas, y esta cadena debe cambiar si cambia `on_key`.
-help-hint-gui = ⇥ panel · ⏎ ejecutar · / filtrar · ⌫ atrás · Ctrl+P paleta · Esc cerrar
+help-hint-gui = ⇥ índice ↔ texto · ⏎ ejecutar · / filtrar · ⌫ atrás · Ctrl+P paleta · Esc cerrar
 help-cmd-app-quit = salir de norte
 help-cmd-app-help = esta ayuda
 help-cmd-app-theme = elegir tema
@@ -1069,7 +1069,9 @@ wizard-ask-theme = Elige un tema. Lo que ves mientras te mueves es lo que eliges
 wizard-ask-icons = ¿Ves aquí tres iconos: 📁 🖼 ⚙ ? Si salen como cuadros, la fuente del terminal no tiene emoji.
 wizard-icons-yes = Sí, los veo — usar iconos
 wizard-icons-no = No — insignias ASCII
-wizard-hint = [Intro] siguiente · [Retroceso] atrás · [Esc] dejar lo de serie y no volver a preguntar
+# Cabe ENTERO en la caja del asistente (66 celdas): recortado por la mitad se
+# perdía justo `[Esc]`, la única tecla que dice cómo no contestar.
+wizard-hint = [Intro] siguiente · [Retroceso] atrás · [Esc] no preguntar más
 wizard-preset-orthodox = estilo mc: teclas F, Tab entre paneles. El de serie.
 wizard-preset-vim = hjkl, contadores, : para la paleta.
 wizard-preset-cua = Ctrl+C/X/V y teclas al estilo Windows.
@@ -1316,6 +1318,8 @@ help-cmd-pane-history-right = historial de directorios del panel derecho
 help-cmd-pane-popular = directorios más visitados
 help-cmd-dialog-confirm-other = abrir en el otro panel
 help-cmd-dialog-clear = vaciar la lista
+help-cmd-dialog-top = ir al principio de la lista o del texto
+help-cmd-dialog-bottom = ir al final de la lista o del texto
 help-cmd-nav-forward = avanzar otra vez
 help-cmd-pane-mirror = mandar esta ubicación al otro pane
 help-cmd-pane-mirror-target = mandar al otro pane la carpeta bajo el cursor
@@ -1898,6 +1902,8 @@ dialog-cmd-up = arriba
 dialog-cmd-down = abajo
 dialog-cmd-page-up = re pág
 dialog-cmd-page-down = av pág
+dialog-cmd-top = inicio
+dialog-cmd-bottom = fin
 dialog-cmd-add = añadir
 dialog-cmd-toggle-enabled = activar
 dialog-cmd-remove = quitar

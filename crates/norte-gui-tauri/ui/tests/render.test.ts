@@ -2564,6 +2564,37 @@ describe("la ayuda", () => {
     expect(enlace?.getAttribute("data-topic")).toBeNull();
   });
 
+  it("las teclas de desplazar mueven el CUERPO sin depender del foco del DOM", () => {
+    // El cuerpo se reconstruye en cada parche y nadie le devolvía el foco del
+    // documento, así que el scroll nativo de `PgDn` no hacía nada hasta un
+    // clic dentro. Ahora las consume el renderer.
+    const { screen } = montar();
+    screen.paint(conAyuda());
+    const cuerpo = document.querySelector(".help-body") as HTMLElement;
+    for (const tecla of ["PageDown", "PageUp", "Home", "End"]) {
+      expect(screen.desplazarAyuda(tecla), tecla).toBe(true);
+    }
+    cuerpo.scrollTop = 50;
+    screen.desplazarAyuda("Home");
+    expect(cuerpo.scrollTop).toBe(0);
+    expect(screen.desplazarAyuda("x"), "una letra no es suya").toBe(false);
+  });
+
+  it("las flechas desplazan solo una página SIN acciones", () => {
+    // Con acciones, las flechas eligen una y son del host; sin ellas (la hoja
+    // de teclado) son la única forma de leer línea a línea.
+    const { screen } = montar();
+    const v = conAyuda();
+    screen.paint(v);
+    const conFilas = document.querySelector(".help-actions") !== null;
+    expect(screen.desplazarAyuda("ArrowDown")).toBe(!conFilas);
+    if (v.help !== null) {
+      v.help.actions = [];
+    }
+    screen.paint(v);
+    expect(screen.desplazarAyuda("ArrowDown")).toBe(true);
+  });
+
   it("un click en la lateral pide ESA página", () => {
     const { screen, enviadas } = montar();
     screen.paint(conAyuda());

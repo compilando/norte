@@ -1471,6 +1471,26 @@ pub fn draw_shortcuts(frame: &mut Frame<'_>, sc: &crate::app::Shortcuts, theme: 
 }
 
 #[cfg(test)]
+mod wizard_hint_tests {
+    /// El pie del asistente cabe ENTERO en su caja (70 de ancho, 66 dentro,
+    /// uno de margen), en los dos idiomas. Recortado por la mitad —con
+    /// `middle_ellipsis`— se perdía justo `[Esc]`: la única tecla que dice cómo
+    /// saltarse las preguntas, en la primera pantalla que ve alguien nuevo.
+    #[test]
+    fn el_pie_del_asistente_cabe_entero() {
+        for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+            let hint = norte_i18n::t_in(lang, "wizard-hint");
+            let ancho = unicode_width::UnicodeWidthStr::width(hint.as_str());
+            assert!(
+                ancho <= 65,
+                "{lang:?}: {ancho} celdas no caben en 65: {hint}"
+            );
+            assert!(hint.contains("[Esc]"), "{lang:?}: {hint}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod plugin_description_line_tests {
     use super::plugin_description_line;
     use crate::theme::TuiTheme;

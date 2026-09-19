@@ -415,6 +415,9 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("dialog.down", false, Inert),
     live("dialog.page-up", false, Inert),
     live("dialog.page-down", false, Inert),
+    // The two ends. Same count rule as the movers above: no overlay repeats.
+    live("dialog.top", false, Inert),
+    live("dialog.bottom", false, Inert),
     live("dialog.add", false, Inert),
     live("dialog.toggle-enabled", false, Inert),
     live("dialog.remove", false, Inert),

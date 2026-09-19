@@ -22,6 +22,28 @@ use norte_i18n::{t, ta};
 use crate::app::{App, HelpOutcome, PAGE, Palette, detail_for_bar, error_message};
 use crate::keymap::{Command, Resolution, Resolver, chord_from_crossterm, parse_plugin_key};
 
+/// Las seis teclas que MUEVEN, en la lateral o en el cuerpo.
+///
+/// Una página, en la lateral, son diez temas; en el cuerpo es la ventana que
+/// se ve, que es lo que un lector entiende por «una pantalla» — con diez
+/// fijas, `PgDn` bajaba media pantalla en un terminal alto.
+fn desplazar(help: &mut crate::app::HelpView, mover: HelpOutcome) {
+    let pagina = if help.state.focus() == norte_frontend::help::Focus::Body {
+        help.page()
+    } else {
+        PAGE
+    };
+    match mover {
+        HelpOutcome::Up => help.line_up(),
+        HelpOutcome::Down => help.line_down(),
+        HelpOutcome::PageUp => help.state.page_up(pagina),
+        HelpOutcome::PageDown => help.state.page_down(pagina),
+        HelpOutcome::Top => help.state.top(),
+        HelpOutcome::Bottom => help.state.bottom(),
+        _ => {}
+    }
+}
+
 /// What [`on_help_key`] hands the run loop to execute.
 ///
 /// Two variants because a help row can name two different KINDS of thing, and
@@ -199,10 +221,6 @@ pub fn on_help_key(
     // mano (asigna `app.message`, que reclama el préstamo de vuelta).
     let over_modal = help.over_modal;
     match outcome {
-        HelpOutcome::Up => help.state.up(),
-        HelpOutcome::Down => help.state.down(),
-        HelpOutcome::PageUp => help.state.page_up(PAGE),
-        HelpOutcome::PageDown => help.state.page_down(PAGE),
         HelpOutcome::TogglePane => help.state.toggle_focus(),
         HelpOutcome::StartFilter => help.state.start_filter(),
         // Con historial, vuelve; SIN historial, cierra. Es lo que convierte
@@ -293,6 +311,9 @@ pub fn on_help_key(
                 }
             }
         },
+        // Lo que queda son las seis teclas que desplazan (flechas, página,
+        // extremos): todas las demás variantes tienen su brazo arriba.
+        mover => desplazar(help, mover),
     }
     None
 }

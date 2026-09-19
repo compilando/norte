@@ -104,6 +104,7 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
             places: ui::places_zones(app, frame.area),
             tree: ui::tree_zones(app, frame.area),
             extensions: ui::extension_zones(app, frame.area),
+            help: ui::help_zones(app, frame.area),
             session: ui::session_zone(app, frame.area),
             notices: ui::notices_zone(app, frame.area),
             borders: ui::resize_borders(app, frame.area),
@@ -290,10 +291,21 @@ fn pulsar_el_indicador_de_sesion_pide_la_ayuda() {
     );
     // La página existe en el corpus, en los dos idiomas: la constante no
     // puede apuntar a una página borrada sin que esto se ponga rojo.
-    for lang in [norte_help::Lang::Es, norte_help::Lang::En] {
+    for (lang, sesion) in [
+        (norte_help::Lang::Es, "sesión"),
+        (norte_help::Lang::En, "session"),
+    ] {
+        let pagina = norte_help::topic(lang, mouse::SESSION_HELP_TOPIC).unwrap_or_else(|| {
+            panic!("la página {} existe en {lang:?}", mouse::SESSION_HELP_TOPIC)
+        });
+        // Y HABLA de la sesión: existir no bastaba. Al partir `panes`, la
+        // constante seguía apuntando a una página real que ya no la contaba.
+        let habla = pagina.blocks.iter().any(|b| {
+            matches!(b, norte_help::Block::Heading { text, .. } if text.to_lowercase().contains(sesion))
+        });
         assert!(
-            norte_help::topic(lang, mouse::SESSION_HELP_TOPIC).is_some(),
-            "la página {} existe en {lang:?}",
+            habla,
+            "{lang:?}: la página {} no tiene una sección sobre la {sesion}",
             mouse::SESSION_HELP_TOPIC
         );
     }
@@ -1638,5 +1650,58 @@ fn en_estrecho_las_filas_se_pulsan_y_la_descripcion_no() {
         app.extensions.as_ref().unwrap().cursor,
         1,
         "una cabecera no elige nada"
+    );
+}
+
+/// Con la ayuda abierta el ratón EXISTE: la rueda baja por el texto y un clic
+/// en el índice elige esa página. Hasta ahora la ayuda era un overlay más
+/// para el cerrojo de `overlay_open`, y los dos gestos se tiraban enteros.
+#[test]
+fn la_rueda_baja_por_la_ayuda_y_un_clic_elige_pagina() {
+    let (w, h) = (100u16, 30u16);
+    let area = ratatui::layout::Rect::new(0, 0, w, h);
+    let mut app = app_pintada(3);
+    norte_tui::overlays::open_help_topic(&mut app, norte_help::Lang::Es, &[], "copying");
+    let refrescar = |app: &mut App| {
+        let (ancho, alto) = ui::help_body_size(area, norte_help::Lang::Es);
+        app.refresh_help(ancho, alto);
+        let _ = pintar_en(app, w, h);
+    };
+    refrescar(&mut app);
+    let z = ui::help_zones(&app, area).expect("la ayuda está abierta");
+
+    // La rueda sobre el CUERPO lo desplaza.
+    let antes = app.help.as_ref().expect("abierta").state.body_scroll();
+    let _ = mouse::handle(
+        &mut app,
+        ev(MouseEventKind::ScrollDown, z.body.x + 2, z.body.y + 2),
+    );
+    refrescar(&mut app);
+    let despues = app.help.as_ref().expect("abierta").state.body_scroll();
+    assert!(
+        despues > antes,
+        "la rueda bajó el texto: {antes} → {despues}"
+    );
+
+    // Un clic en una página VISIBLE del índice que no es la abierta la elige.
+    let z = ui::help_zones(&app, area).expect("la ayuda está abierta");
+    let cursor = app.help.as_ref().expect("abierta").state.cursor();
+    let &(fila, modelo) = z
+        .rows
+        .iter()
+        .find(|(_, m)| *m != cursor)
+        .expect("hay otra página a la vista");
+    let _ = mouse::handle(&mut app, ev(ABAJO, z.sidebar.x + 3, fila));
+    assert_eq!(
+        app.help.as_ref().expect("abierta").state.cursor(),
+        modelo,
+        "el clic eligió la página de ESA fila"
+    );
+
+    // Y nada de esto llega a los paneles de debajo.
+    assert_eq!(
+        mouse::handle(&mut app, ev(ABAJO, 0, 0)),
+        After::Nothing,
+        "con la ayuda delante, un clic fuera de ella no hace nada"
     );
 }

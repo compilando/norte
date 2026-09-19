@@ -314,6 +314,8 @@ pub const DIALOG_COMMANDS: &[&str] = &[
     "dialog.down",
     "dialog.page-up",
     "dialog.page-down",
+    "dialog.top",
+    "dialog.bottom",
     "dialog.add",
     "dialog.toggle-enabled",
     "dialog.remove",

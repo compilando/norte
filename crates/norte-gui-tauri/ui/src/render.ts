@@ -303,6 +303,9 @@ export class Screen {
   readonly paintHelp = help.paintHelp;
 
   /** En `render/help.ts`. */
+  readonly desplazarAyuda = help.desplazarAyuda;
+
+  /** En `render/help.ts`. */
   readonly helpSidebar = help.helpSidebar;
 
   /** En `render/help.ts`. */

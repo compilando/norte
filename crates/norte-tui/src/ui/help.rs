@@ -44,6 +44,11 @@ pub(crate) const HELP_GUTTER: u16 = 2;
 /// cuando no cabe.
 pub(crate) const HELP_SCROLLBAR: u16 = 1;
 
+/// Cells of air between the prose and the body's scrollbar. Without it a line
+/// wrapped to the full width ends against the bar (`bajo el cursor║`) and the
+/// last letter reads as part of it.
+pub(crate) const HELP_BODY_PAD: u16 = 1;
+
 /// Typographic measure of the body in CELLS. Prose is read at 60–72 cells; at
 /// 90 the eye loses the line on the return sweep, and the surplus is exactly
 /// what the sidebar needs to stop truncating its titles.
@@ -177,7 +182,7 @@ pub fn help_body_size(base: Rect, lang: norte_help::Lang) -> (usize, usize) {
     // maqueta la página es el run loop, y una anchura que no case con la
     // pintada parte las líneas por donde no toca.
     (
-        usize::from(body.width.saturating_sub(HELP_SCROLLBAR)),
+        usize::from(body.width.saturating_sub(HELP_SCROLLBAR + HELP_BODY_PAD)),
         usize::from(body.height),
     )
 }
@@ -205,7 +210,7 @@ pub fn draw_help(
     hint: &str,
     version_line: &str,
 ) {
-    use norte_frontend::help::{Focus, SidebarRow};
+    use norte_frontend::help::Focus;
 
     let (area, sidebar, body_area, footer_area) =
         help_layout(frame.area(), help_sidebar_desired(help.state.lang()));
@@ -236,53 +241,29 @@ pub fn draw_help(
     // El canalón es una COLUMNA propia del layout, así que la lateral puede
     // gastarse su ancho entero en el título.
     let side_w = usize::from(sidebar.width);
-    // Las filas pintadas NO son las del modelo: entre grupo y grupo va una
-    // línea en blanco. Va aquí y no en `HelpState::rows`, que es la lista
-    // NAVEGABLE — sus índices son los que direcciona `cursor()`, y meter
-    // separadores ahí rompería el cursor y de paso la GUI hermana. Por eso se
-    // lleva el mapa fila→ítem: es lo que traduce el cursor del modelo al
-    // índice del widget.
-    let mut items: Vec<ListItem<'_>> = Vec::with_capacity(state.rows().len() + 4);
-    let mut painted: Vec<usize> = Vec::with_capacity(state.rows().len());
-    for (i, row) in state.rows().iter().enumerate() {
-        match row {
+    let (filas, painted) = lateral_pintada(state.rows());
+    let items: Vec<ListItem<'_>> = filas
+        .into_iter()
+        .map(|fila| match fila {
+            FilaLateral::Blanco => ListItem::new(Line::default()),
             // El modelo entrega TAGS, no texto: la traducción es cosa del
             // frontend (una misma fila se llama distinto en la TUI y en la
             // GUI). Un tag sin entrada Fluent pintaría su propia clave, que
             // es lo que la suite de i18n impide.
-            SidebarRow::Group { tag } => {
-                if keys_only_group(state.rows(), i) {
-                    // Una cabecera que se llama igual que su única entrada no
-                    // informa de nada y cuesta una fila. Se apunta el ítem que
-                    // vendrá — el cursor jamás se apoya en una cabecera, así
-                    // que el mapa solo tiene que quedar bien formado.
-                    painted.push(items.len());
-                    continue;
-                }
-                // Aire entre grupos, menos antes del primero: un blanco
-                // arriba del todo se lee como una lateral descuadrada.
-                if !items.is_empty() {
-                    items.push(ListItem::new(Line::default()));
-                }
-                painted.push(items.len());
-                items.push(ListItem::new(Line::styled(
-                    right_ellipsis(&t(&format!("help-group-{tag}")), side_w),
-                    theme.role(Role::Title),
-                )));
-            }
+            FilaLateral::Grupo(tag) => ListItem::new(Line::styled(
+                right_ellipsis(&t(&format!("help-group-{tag}")), side_w),
+                theme.role(Role::Title),
+            )),
             // El título de la entrada sintética `keys` es la etiqueta que
             // `HelpView::new` le dio al modelo (`help-topic-keys`), así que
             // aquí no hay caso especial: la lateral pinta lo mismo que el
             // filtro busca.
-            SidebarRow::Topic { title, .. } => {
-                painted.push(items.len());
-                items.push(ListItem::new(Line::raw(right_ellipsis(
-                    &format!("{}{title}", " ".repeat(HELP_ROW_INDENT)),
-                    side_w,
-                ))));
-            }
-        }
-    }
+            FilaLateral::Tema(title) => ListItem::new(Line::raw(right_ellipsis(
+                &format!("{}{title}", " ".repeat(HELP_ROW_INDENT)),
+                side_w,
+            ))),
+        })
+        .collect();
     // Cuántas filas tiene el índice PINTADO (con sus separadores): es el
     // total contra el que se dimensiona su barra, y hay que leerlo antes de
     // que el widget se lleve la lista.
@@ -320,7 +301,7 @@ pub fn draw_help(
         .collect();
     // La última columna del cuerpo es su barra: la prosa ya viene envuelta a
     // una celda menos (`help_body_size`), así que aquí solo se reparte.
-    let (text_area, body_bar) = split_scrollbar(body_area);
+    let (text_area, body_bar) = split_body(body_area);
     frame.render_widget(Paragraph::new(body), text_area);
     // Las DOS columnas dicen por dónde van. Hasta ahora ninguna lo decía: el
     // `N/M` del pie habla solo del cuerpo y solo cuando no cabe, así que en el
@@ -371,12 +352,15 @@ pub(crate) fn draw_help_footer(
     // `Enter` para el que existe este overlay — se pintan DETRÁS de toda la
     // prosa, así que en una página larga no se ven en el primer render y sin
     // esto nada dice que estén ahí.
-    let pos = (total > usize::from(body_height)).then(|| {
-        format!(
-            " {}/{} ",
-            (state.body_scroll() + 1).min(total.max(1)),
-            total.max(1)
-        )
+    //
+    // En PORCENTAJE LEÍDO, hasta el pie de la ventana, y no en líneas: un
+    // `11/663` no le dice a nadie cuánto queda, porque 663 no es un número
+    // que el lector tenga en la cabeza. «17 %» sí; «100 %» es que ya ha visto
+    // el final. Lo mismo que enseña `less`.
+    let height = usize::from(body_height);
+    let pos = (total > height).then(|| {
+        let leido = state.body_scroll().saturating_add(height).min(total);
+        format!(" {} % ", leido.saturating_mul(100) / total.max(1))
     });
     let pos = pos.unwrap_or_default();
     // El indicador se lleva su trozo del pie ANTES de recortar el hint: a la
@@ -402,6 +386,126 @@ pub(crate) fn draw_help_footer(
         Paragraph::new(footer).style(theme.role(Role::BorderUnfocused)),
         footer_area,
     );
+}
+
+/// Una fila PINTADA de la lateral de la ayuda.
+enum FilaLateral<'a> {
+    /// El aire entre dos grupos.
+    Blanco,
+    /// Una cabecera de grupo, por su tag.
+    Grupo(&'a str),
+    /// Una página, por su título.
+    Tema(&'a str),
+}
+
+/// Lo que pinta la lateral y, para cada fila del MODELO, en qué fila pintada
+/// cae.
+///
+/// Las filas pintadas NO son las del modelo: entre grupo y grupo va una línea
+/// en blanco. Va aquí y no en `HelpState::rows`, que es la lista NAVEGABLE —
+/// sus índices son los que direcciona `cursor()`, y meter separadores ahí
+/// rompería el cursor y de paso la GUI hermana. Por eso se lleva el mapa
+/// fila→ítem: traduce el cursor del modelo al índice del widget, y un clic de
+/// vuelta. Lo usan el pintor y [`help_zones`]: lo pulsable sale de lo pintado.
+fn lateral_pintada(
+    rows: &[norte_frontend::help::SidebarRow],
+) -> (Vec<FilaLateral<'_>>, Vec<usize>) {
+    use norte_frontend::help::SidebarRow;
+    let mut filas: Vec<FilaLateral<'_>> = Vec::with_capacity(rows.len() + 4);
+    let mut painted: Vec<usize> = Vec::with_capacity(rows.len());
+    for (i, row) in rows.iter().enumerate() {
+        match row {
+            SidebarRow::Group { tag } => {
+                if keys_only_group(rows, i) {
+                    // Una cabecera que se llama igual que su única entrada no
+                    // informa de nada y cuesta una fila. Se apunta el ítem que
+                    // vendrá — el cursor jamás se apoya en una cabecera, así
+                    // que el mapa solo tiene que quedar bien formado.
+                    painted.push(filas.len());
+                    continue;
+                }
+                // Aire entre grupos, menos antes del primero: un blanco
+                // arriba del todo se lee como una lateral descuadrada.
+                if !filas.is_empty() {
+                    filas.push(FilaLateral::Blanco);
+                }
+                painted.push(filas.len());
+                filas.push(FilaLateral::Grupo(tag));
+            }
+            SidebarRow::Topic { title, .. } => {
+                painted.push(filas.len());
+                filas.push(FilaLateral::Tema(title));
+            }
+        }
+    }
+    (filas, painted)
+}
+
+/// Dónde cae cada cosa de la ayuda en el frame pintado, para el ratón.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HelpZones {
+    /// La lateral de temas.
+    pub sidebar: Rect,
+    /// El cuerpo, con su barra de scroll.
+    pub body: Rect,
+    /// Cada página VISIBLE de la lateral: `(fila de pantalla, fila del modelo)`.
+    /// Las cabeceras y el aire no están: no se pulsan.
+    pub rows: Vec<(u16, usize)>,
+}
+
+/// Las zonas de la ayuda en el frame de `area`, o nada si no está abierta.
+///
+/// La ayuda de la TUI nació muda al ratón —con ella abierta, la rueda y los
+/// clics se tiraban enteros—, y la forma de que no vuelva a pasar es la de
+/// [`super::extension_zones`]: las zonas salen del MISMO reparto que pinta
+/// ([`help_layout`] y el de las filas de la lateral, `lateral_pintada`).
+///
+/// El desplazamiento de la lista es el que aplica `ratatui` a un `ListState`
+/// recién hecho, que es lo que usa el pintor: cero mientras el cursor quepa, y
+/// si no, el que deja el cursor en la última fila.
+#[must_use]
+pub fn help_zones(app: &crate::app::App, area: Rect) -> Option<HelpZones> {
+    let help = app.help.as_ref()?;
+    let (_, sidebar, body, _) = help_layout(area, help_sidebar_desired(help.state.lang()));
+    let rows = help.state.rows();
+    let (_, painted) = lateral_pintada(rows);
+    let alto = usize::from(sidebar.height);
+    let offset = painted
+        .get(help.state.cursor())
+        .map_or(0, |&sel| (sel + 1).saturating_sub(alto));
+    let visibles = painted
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| {
+            matches!(
+                rows.get(*i),
+                Some(norte_frontend::help::SidebarRow::Topic { .. })
+            )
+        })
+        .filter_map(|(i, &item)| {
+            let fila = item.checked_sub(offset)?;
+            let fila = u16::try_from(fila).ok().filter(|f| *f < sidebar.height)?;
+            Some((sidebar.y.saturating_add(fila), i))
+        })
+        .collect();
+    Some(HelpZones {
+        sidebar,
+        body,
+        rows: visibles,
+    })
+}
+
+/// El cuerpo de la ayuda en (texto, barra): [`split_scrollbar`] y, además,
+/// el margen entre la prosa y la barra ([`HELP_BODY_PAD`]). Sale del área de
+/// texto, no de la barra: la prosa ya viene envuelta a ese ancho
+/// (`help_body_size`).
+fn split_body(area: Rect) -> (Rect, Rect) {
+    let (text, bar) = split_scrollbar(area);
+    let text = Rect {
+        width: text.width.saturating_sub(HELP_BODY_PAD),
+        ..text
+    };
+    (text, bar)
 }
 
 /// Parte un área en (contenido, barra de scroll): la ÚLTIMA columna es la

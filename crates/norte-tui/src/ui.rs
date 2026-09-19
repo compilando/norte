@@ -37,7 +37,10 @@ pub use geometry::{
     before_frame, pane_geometry, pane_list_rows, panel_slots, rect_del_visor, resize_borders,
     resolved_for, tab_strip_for,
 };
-pub use help::{draw_help, help_body_size, help_group_is_painted, help_layout, help_sidebar_width};
+pub use help::{
+    HelpZones, draw_help, help_body_size, help_group_is_painted, help_layout, help_sidebar_width,
+    help_zones,
+};
 pub use overlays::{
     ExtensionHit, ExtensionZone, draw_shortcuts, draw_which_key, extension_zones,
     plugin_description_line,
