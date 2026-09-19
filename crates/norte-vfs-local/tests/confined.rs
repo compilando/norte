@@ -811,3 +811,115 @@ async fn un_staging_propio_si_se_reanuda_tras_la_comprobacion() {
         .expect("reabre lo suyo");
     assert_eq!(ya, 3, "el nuestro pasa la comprobación y se continúa");
 }
+
+// ---------------------------------------------------------------------------
+// El digest del parcial, POR EL DESCRIPTOR (#297 revisión).
+//
+// Es la única verificación de los bytes que se reanudan (`VerifyPolicy::Hash`),
+// así que tiene que mirar el MISMO fichero que `open_resumable` continuaría y
+// con las mismas comprobaciones. Un digest de otro fichero no verifica nada.
+// ---------------------------------------------------------------------------
+
+/// SHA-256 de `bytes`, para comparar con lo que contesta la raíz.
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    Sha256::digest(bytes).into()
+}
+
+/// El parcial que dejamos nosotros da el digest de sus primeros `len` bytes.
+#[tokio::test]
+async fn el_digest_del_parcial_propio_es_el_de_su_prefijo() {
+    let (p, raiz, _dentro, _fuera) = escenario();
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let (mut sink, _) = root
+        .open_resumable(&[seg(b"grande.bin")])
+        .await
+        .expect("abre");
+    sink.write(Bytes::from_static(b"abcdef"))
+        .await
+        .expect("mitad");
+    sink.keep().await.expect("conserva");
+
+    let d = root
+        .partial_digest(&[seg(b"grande.bin")], 3)
+        .await
+        .expect("digest");
+    assert_eq!(d, Some(sha256(b"abc")));
+}
+
+/// Sin parcial no hay digest, y no es un error: el caller degrada a `Length`.
+#[tokio::test]
+async fn sin_parcial_no_hay_digest() {
+    let (p, raiz, _dentro, _fuera) = escenario();
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let d = root
+        .partial_digest(&[seg(b"grande.bin")], 3)
+        .await
+        .expect("no es un error");
+    assert_eq!(d, None);
+}
+
+/// Pedir más bytes de los que tiene el parcial no es un digest de ese
+/// prefijo: sería el de uno más corto, y compararlo daría un falso «igual».
+#[tokio::test]
+async fn un_parcial_mas_corto_que_lo_pedido_no_da_digest() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    std::fs::write(dentro.join(nombre_de_staging(b"grande.bin")), b"ab").expect("parcial");
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let d = root
+        .partial_digest(&[seg(b"grande.bin")], 3)
+        .await
+        .expect("digest");
+    assert_eq!(d, None);
+}
+
+/// Un symlink con el nombre del staging no se sigue: su digest sería el del
+/// fichero al que apunta, que puede estar fuera de la raíz.
+#[tokio::test]
+async fn el_digest_no_sigue_un_symlink_con_el_nombre_del_staging() {
+    let (p, raiz, dentro, fuera) = escenario();
+    let victima = fuera.join("secreto");
+    std::fs::write(&victima, b"abcdef").expect("víctima");
+    std::os::unix::fs::symlink(&victima, dentro.join(nombre_de_staging(b"grande.bin")))
+        .expect("symlink hostil");
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let d = root.partial_digest(&[seg(b"grande.bin")], 3).await;
+    assert!(
+        !matches!(d, Ok(Some(_))),
+        "el digest de lo que hay al otro lado no se devuelve: {d:?}"
+    );
+}
+
+/// Un inodo con otro nombre (hardlink) no es un parcial nuestro: es la misma
+/// comprobación de un solo enlace que hace `open_resumable`.
+#[tokio::test]
+async fn el_digest_de_un_parcial_con_otro_enlace_no_se_devuelve() {
+    let (p, raiz, dentro, fuera) = escenario();
+    let ajeno = fuera.join("ajeno");
+    std::fs::write(&ajeno, b"abcdef").expect("ajeno");
+    std::fs::hard_link(&ajeno, dentro.join(nombre_de_staging(b"grande.bin"))).expect("hardlink");
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let d = root
+        .partial_digest(&[seg(b"grande.bin")], 3)
+        .await
+        .expect("no es un error");
+    assert_eq!(d, None);
+}
+
+/// Un componente intermedio que es un symlink hacia fuera no da el digest del
+/// parcial que haya al otro lado: es el caso que motivó hacerlo por
+/// descriptor.
+#[tokio::test]
+async fn el_digest_no_cruza_un_symlink_intermedio() {
+    let (p, raiz, dentro, fuera) = escenario();
+    std::fs::write(fuera.join(nombre_de_staging(b"grande.bin")), b"abcdef").expect("parcial fuera");
+    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let d = root
+        .partial_digest(&[seg(b"sub"), seg(b"grande.bin")], 3)
+        .await;
+    assert!(
+        !matches!(d, Ok(Some(_))),
+        "el parcial de fuera no se verifica como si fuera el nuestro: {d:?}"
+    );
+}
