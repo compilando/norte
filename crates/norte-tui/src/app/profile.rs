@@ -197,16 +197,12 @@ mod tests {
             ui_font_size: _,
             ui_reduce_motion: _,
             // — Un perfil NO puede fijarlos (ADR 0079, D2), así que un cambio
-            //   de perfil no los mueve por construcción.
-            daemon_mode: _,
-            daemon_socket: _,
-            archive_max_entries: _,
-            archive_max_decompressed_bytes: _,
-            archive_max_nesting: _,
-            archive_rar_delegate: _,
-            log_dir: _,
-            log_retain: _,
-            log_format: _,
+            //   de perfil no los mueve por construcción. Por SECCIÓN entera:
+            //   el recorte es de la sección, así que una clave nueva dentro
+            //   de ellas hereda la respuesta sin pasar por aquí.
+            daemon: _,
+            archive: _,
+            log: _,
             ai: _,
             // — Diagnóstico de la carga, no ajustes.
             sources: _,

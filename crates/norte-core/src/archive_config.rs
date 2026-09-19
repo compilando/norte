@@ -52,9 +52,9 @@ pub fn load_archive_limits_from(layers: &norte_config::Layers) -> std::io::Resul
     let cfg = norte_config::load(layers)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     Ok(limits_from_overrides(
-        cfg.archive_max_entries,
-        cfg.archive_max_decompressed_bytes,
-        cfg.archive_max_nesting,
+        cfg.archive.max_entries,
+        cfg.archive.max_decompressed_bytes,
+        cfg.archive.max_nesting,
     ))
 }
 
@@ -74,7 +74,7 @@ pub fn load_rar_delegate_from(
 ) -> std::io::Result<Option<std::path::PathBuf>> {
     let cfg = norte_config::load(layers)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    Ok(cfg.archive_rar_delegate.map(std::path::PathBuf::from))
+    Ok(cfg.archive.rar_delegate.map(std::path::PathBuf::from))
 }
 
 /// Layered load from the standard layers. SYNC (startup): wrap in

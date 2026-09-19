@@ -28,6 +28,7 @@ pub mod logline;
 pub mod logring;
 pub mod profiles;
 pub mod schema;
+pub mod sections;
 #[cfg(feature = "watch")]
 pub mod watch;
 
@@ -51,5 +52,6 @@ pub use schema::{
     AiProviderEntry, AiSection, ArchiveSection, ConfigError, DEFAULT_PRESET, DaemonMode,
     DaemonSection, HotlistEntry, KeymapSection, LogFormat, NorteToml, UiSection,
 };
+pub use sections::{ArchiveSettings, DaemonSettings, LogSettings};
 #[cfg(feature = "watch")]
 pub use watch::{Watch, WatchMode, watch, watch_polling};

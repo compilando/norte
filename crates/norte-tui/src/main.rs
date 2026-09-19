@@ -134,13 +134,13 @@ async fn main() -> Result<()> {
     // el motivo exacto se escribe en un fichero de otra terminal.
     let log_ring = norte_core::logging::init_to_file_with_ring(
         norte_core::logging::LogConfig {
-            dir: cfg.common.log_dir.as_deref(),
-            retain: cfg.common.log_retain,
+            dir: cfg.common.log.dir.as_deref(),
+            retain: cfg.common.log.retain,
             // El fichero compartido: la CLI, el daemon y el terminal no
             // coinciden vivos sobre el mismo estado como sí lo hacen el daemon
             // y la ventana.
             prefix: None,
-            format: cfg.common.log_format,
+            format: cfg.common.log.format,
         },
         norte_config::logring::RING_DEFAULT,
     );
@@ -742,7 +742,7 @@ async fn make_backend(
     cli_daemon: bool,
     cli_socket: Option<std::path::PathBuf>,
 ) -> Result<Backend> {
-    let want_daemon = cli_daemon || cfg.common.daemon_mode == Some(config::DaemonMode::Daemon);
+    let want_daemon = cli_daemon || cfg.common.daemon.mode == Some(config::DaemonMode::Daemon);
     if !want_daemon {
         // #167: el transporte embebido registra sus mutaciones (regla dura 4) en
         // EL journal del directorio de estado, el mismo que abre el daemon. Si
@@ -762,9 +762,9 @@ async fn make_backend(
         // en el core (`limits_from_overrides`) para que TUI y daemon jamás
         // diverjan en los límites anti-bomba.
         if let Some(limits) = norte_core::archive_config::limits_from_overrides(
-            cfg.common.archive_max_entries,
-            cfg.common.archive_max_decompressed_bytes,
-            cfg.common.archive_max_nesting,
+            cfg.common.archive.max_entries,
+            cfg.common.archive.max_decompressed_bytes,
+            cfg.common.archive.max_nesting,
         ) {
             engine.set_archive_limits(limits);
         }
@@ -774,7 +774,8 @@ async fn make_backend(
         // ajeno no elige qué binario se lanza.
         engine.set_rar_delegate(
             cfg.common
-                .archive_rar_delegate
+                .archive
+                .rar_delegate
                 .as_ref()
                 .map(std::path::PathBuf::from),
         );
@@ -828,7 +829,7 @@ async fn make_backend(
     #[cfg(unix)]
     {
         use norte_core::backend::remote::RemoteBackend;
-        let socket = match cli_socket.or_else(|| cfg.common.daemon_socket.clone()) {
+        let socket = match cli_socket.or_else(|| cfg.common.daemon.socket.clone()) {
             Some(s) => s,
             None => tokio::task::spawn_blocking(|| norte_core::daemon::default_socket_path(None))
                 .await

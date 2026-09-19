@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use norte_proto::VPath;
 
 use crate::dirs::{Layer, Layers};
-use crate::schema::{self, ConfigError, DaemonMode, NorteToml, toml_diag};
+use crate::schema::{self, ConfigError, NorteToml, toml_diag};
 
 /// The scalar config layer: the file every `persist_*` helper below writes.
 const NORTE_TOML: &str = "norte.toml";
@@ -1733,35 +1733,17 @@ pub struct CommonConfig {
     /// format, notice expiry, dialog buttons), last-wins per key from ALL
     /// layers including Project: presentation-only, like the scalars above.
     pub ui_chrome: UiChrome,
-    /// `[daemon] mode` (last-wins; None = embedded; never from Project —
-    /// fail-closed, review MAJOR-1). Startup only.
-    pub daemon_mode: Option<crate::schema::DaemonMode>,
-    /// `[daemon] socket` (last-wins; None = OS default; never from Project —
-    /// fail-closed, review MAJOR-1).
-    pub daemon_socket: Option<std::path::PathBuf>,
+    /// `[daemon]` merged (last-wins per key; never from Project or a profile
+    /// — fail-closed, review MAJOR-1). Startup only.
+    pub daemon: crate::DaemonSettings,
     /// Hotlist merged from every layer except Project.
     pub hotlist: Vec<HotlistItem>,
-    /// `[archive] max_entries` (last-wins per field; never from Project).
-    pub archive_max_entries: Option<u64>,
-    /// `[archive] max_decompressed_bytes` (last-wins; never from Project).
-    pub archive_max_decompressed_bytes: Option<u64>,
-    /// `[archive] max_nesting` (#56, last-wins; never from Project).
-    pub archive_max_nesting: Option<usize>,
-    /// `[archive] rar_delegate` (roadmap ítem 11, last-wins; never from
-    /// Project — naming an executable is not presentation, and honouring it
-    /// from a repository's `.norte.toml` is arbitrary code execution on `cd`).
-    /// `None` = probe `PATH`.
-    pub archive_rar_delegate: Option<String>,
-    /// `[log] dir` (last-wins; None = `<state_dir>/logs`; never from Project —
-    /// fail-closed, same reasoning as `[daemon]`: choosing where a process
-    /// writes is not presentation).
-    pub log_dir: Option<std::path::PathBuf>,
-    /// `[log] retain` (last-wins; None = the appender's default). How many
-    /// rotated files survive.
-    pub log_retain: Option<usize>,
-    /// `[log] format` (last-wins; default `text`; never from Project). How
-    /// the log FILE is written (ADR 0127).
-    pub log_format: crate::schema::LogFormat,
+    /// `[archive]` merged (last-wins per key; never from Project or a
+    /// profile — `rar_delegate` names an executable).
+    pub archive: crate::ArchiveSettings,
+    /// `[log]` merged (last-wins per key; never from Project or a profile —
+    /// choosing where a process writes is not presentation).
+    pub log: crate::LogSettings,
     /// `[ai]` merged (never from Project).
     pub ai: AiSettings,
     /// Files that participated (watcher + diagnostics).
@@ -1848,75 +1830,6 @@ fn merge_ai_layer(
     }
     ai.providers.extend(a.providers);
     Ok(())
-}
-
-/// Merges one layer's already-parsed `[daemon]` section (already filtered to
-/// non-Project by the caller) into the accumulators (last-present-wins per
-/// field, infallible). Extracted out of [`load`] to stay under clippy's
-/// line-count cap, same pattern as [`merge_ai_layer`].
-fn merge_daemon_layer(
-    daemon_mode: &mut Option<DaemonMode>,
-    daemon_socket: &mut Option<PathBuf>,
-    d: crate::schema::DaemonSection,
-) {
-    if let Some(m) = d.mode {
-        *daemon_mode = Some(m);
-    }
-    if let Some(sock) = d.socket {
-        *daemon_socket = Some(sock);
-    }
-}
-
-/// Merges one layer's already-parsed `[log]` section (already filtered to
-/// non-Project by the caller) into the accumulators (last-present-wins per
-/// field, infallible). Extracted out of [`load`] to stay under clippy's
-/// line-count cap, same pattern as [`merge_daemon_layer`].
-fn merge_log_layer(
-    log_dir: &mut Option<PathBuf>,
-    log_retain: &mut Option<usize>,
-    log_format: &mut crate::schema::LogFormat,
-    l: crate::schema::LogSection,
-) {
-    if let Some(d) = l.dir {
-        *log_dir = Some(d);
-    }
-    if let Some(r) = l.retain {
-        *log_retain = Some(r);
-    }
-    if let Some(f) = l.format {
-        *log_format = f;
-    }
-}
-
-/// Merges one layer's already-parsed `[archive]` section (already filtered
-/// to non-Project by the caller) into the accumulators (last-present-wins
-/// per field, infallible — every field is a plain scalar copy). Extracted
-/// out of [`load`] to stay under clippy's line-count cap, same pattern as
-/// [`merge_ai_layer`].
-fn merge_archive_layer(acc: &mut ArchiveAccum, a: &crate::schema::ArchiveSection) {
-    if let Some(n) = a.max_entries {
-        acc.max_entries = Some(n);
-    }
-    if let Some(b) = a.max_decompressed_bytes {
-        acc.max_decompressed_bytes = Some(b);
-    }
-    if let Some(n) = a.max_nesting {
-        acc.max_nesting = Some(n);
-    }
-    if let Some(d) = a.rar_delegate.as_ref() {
-        acc.rar_delegate = Some(d.clone());
-    }
-}
-
-/// Los acumuladores de `[archive]` mientras [`load`] recorre las capas. Van
-/// juntos porque se pasan juntos: un parámetro por campo hacía crecer la
-/// firma de [`merge_archive_layer`] con cada clave nueva.
-#[derive(Default)]
-struct ArchiveAccum {
-    max_entries: Option<u64>,
-    max_decompressed_bytes: Option<u64>,
-    max_nesting: Option<usize>,
-    rar_delegate: Option<String>,
 }
 
 /// Merges one layer's already-parsed `[ui] font`/`mono_font`/`font_size`/
@@ -2445,12 +2358,11 @@ fn profile_carve_out_warnings(parsed: &NorteToml, path: &std::path::Path) -> Vec
             path.display()
         ));
     };
-    // Campo a campo y no comparando contra `default()`: tres de las cuatro
-    // secciones no derivan `PartialEq`, y derivarlo en tipos PÚBLICOS para una
-    // comprobación interna es ampliar la API por comodidad. Un campo nuevo en
-    // cualquiera de ellas tiene que aparecer aquí, y el test de las cuatro
-    // secciones es lo que lo va a recordar.
-    if parsed.daemon.mode.is_some() || parsed.daemon.socket.is_some() {
+    // `declara` desestructura cada sección sin `..`: una clave nueva que no
+    // mire no compila. La lista campo a campo que había aquí se dejó
+    // `[log] format`, y el test de las cuatro secciones no lo vio porque
+    // su perfil traía `dir`.
+    if crate::DaemonSettings::declara(&parsed.daemon) {
         di("daemon", "un perfil no redirige el transporte del core");
     }
     if parsed.ai != crate::schema::AiSection::default() {
@@ -2459,14 +2371,13 @@ fn profile_carve_out_warnings(parsed: &NorteToml, path: &std::path::Path) -> Vec
             "un perfil no enciende la IA ni redirige sus proveedores",
         );
     }
-    if parsed.log.dir.is_some() || parsed.log.retain.is_some() {
-        di("log", "un perfil no decide dónde escribe este proceso");
+    if crate::LogSettings::declara(&parsed.log) {
+        di(
+            "log",
+            "un perfil no decide dónde ni cómo escribe este proceso",
+        );
     }
-    if parsed.archive.max_entries.is_some()
-        || parsed.archive.max_decompressed_bytes.is_some()
-        || parsed.archive.max_nesting.is_some()
-        || parsed.archive.rar_delegate.is_some()
-    {
+    if crate::ArchiveSettings::declara(&parsed.archive) {
         di("archive", "un perfil no sube los límites anti-bomba");
     }
     out
@@ -2557,13 +2468,10 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_layout: Option<String> = None;
     let mut ui_columns = ColumnsConfig::default();
     let mut ui_chrome = UiChrome::default();
-    let mut daemon_mode: Option<DaemonMode> = None;
-    let mut daemon_socket: Option<PathBuf> = None;
-    let mut log_dir: Option<PathBuf> = None;
-    let mut log_retain: Option<usize> = None;
-    let mut log_format = crate::schema::LogFormat::default();
+    let mut daemon = crate::DaemonSettings::default();
+    let mut log = crate::LogSettings::default();
     let mut hotlist: Vec<HotlistItem> = Vec::new();
-    let mut archive = ArchiveAccum::default();
+    let mut archive = crate::ArchiveSettings::default();
     let mut ai = AiSettings::default();
     let mut sources = Vec::new();
     let mut project_warnings: Vec<String> = Vec::new();
@@ -2707,9 +2615,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 // editor: es otro programa que se ejecuta.
                 ui_diff = parsed.ui.diff.clone().or(ui_diff);
                 ui_diff_detached = parsed.ui.diff_detached.or(ui_diff_detached);
-                merge_archive_layer(&mut archive, &parsed.archive);
-                merge_daemon_layer(&mut daemon_mode, &mut daemon_socket, parsed.daemon);
-                merge_log_layer(&mut log_dir, &mut log_retain, &mut log_format, parsed.log);
+                archive.merge(parsed.archive);
+                daemon.merge(parsed.daemon);
+                log.merge(parsed.log);
                 merge_ai_layer(&mut ai, parsed.ai, &norte)?;
             }
             sources.push(norte);
@@ -2740,16 +2648,10 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_diff_detached,
         ui_columns,
         ui_chrome,
-        daemon_mode,
-        daemon_socket,
-        log_dir,
-        log_retain,
-        log_format,
+        daemon,
+        log,
         hotlist,
-        archive_max_entries: archive.max_entries,
-        archive_max_decompressed_bytes: archive.max_decompressed_bytes,
-        archive_max_nesting: archive.max_nesting,
-        archive_rar_delegate: archive.rar_delegate,
+        archive,
         ai,
         sources,
         project_warnings,
@@ -2986,7 +2888,7 @@ mod hotlist_tests {
         };
         let cfg = load(&layers).expect("carga");
         assert_eq!(
-            cfg.archive_rar_delegate.as_deref(),
+            cfg.archive.rar_delegate.as_deref(),
             Some("/usr/bin/7z"),
             "el layer Project jamás elige el ejecutable"
         );
@@ -3713,8 +3615,8 @@ format = "exact"
             dirs: vec![(proyecto.path().to_path_buf(), Layer::Project)],
         };
         let cfg = load(&layers).expect("carga");
-        assert_eq!(cfg.daemon_mode, None, "project mode ignored");
-        assert_eq!(cfg.daemon_socket, None, "project socket ignored");
+        assert_eq!(cfg.daemon.mode, None, "project mode ignored");
+        assert_eq!(cfg.daemon.socket, None, "project socket ignored");
     }
 
     /// `[log]` se lee de las capas de máquina y de usuario, JAMÁS de la de
@@ -3744,13 +3646,13 @@ format = "exact"
         };
         let cfg = load(&layers).expect("carga");
         assert_eq!(
-            cfg.log_dir.as_deref(),
+            cfg.log.dir.as_deref(),
             Some(std::path::Path::new("/de-usuario")),
             "gana la capa de usuario; la de proyecto ni se mira"
         );
-        assert_eq!(cfg.log_retain, Some(3));
+        assert_eq!(cfg.log.retain, Some(3));
         assert_eq!(
-            cfg.log_format,
+            cfg.log.format,
             crate::schema::LogFormat::Text,
             "un repositorio tampoco decide el formato del log"
         );
@@ -5222,11 +5124,11 @@ max_entries = 999999999
 
         let cfg = load(&capas(usuario.path(), perfil.path())).expect("carga");
 
-        assert_eq!(cfg.daemon_socket, None, "el transporte no se redirige");
+        assert_eq!(cfg.daemon.socket, None, "el transporte no se redirige");
         assert!(!cfg.ai.enabled, "la IA no se enciende sola");
-        assert_eq!(cfg.log_dir, None, "los logs no se mudan");
+        assert_eq!(cfg.log.dir, None, "los logs no se mudan");
         assert_eq!(
-            cfg.archive_max_entries, None,
+            cfg.archive.max_entries, None,
             "los límites anti-bomba no suben"
         );
         assert_eq!(
@@ -5242,6 +5144,33 @@ max_entries = 999999999
                 cfg.profile_warnings
             );
         }
+    }
+
+    /// Cada CLAVE de esas secciones avisa sola, no sólo las que había cuando
+    /// se escribió el aviso. `[log] format` llegó después (ADR 0127), y un
+    /// perfil que sólo traía esa clave se descartaba sin decir nada.
+    #[test]
+    fn un_perfil_que_solo_pide_el_formato_del_log_tambien_avisa() {
+        let usuario = tempfile::tempdir().expect("tempdir");
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("norte.toml"),
+            "[log]\nformat = \"json\"\n",
+        )
+        .expect("write");
+
+        let cfg = load(&capas(usuario.path(), perfil.path())).expect("carga");
+
+        assert_eq!(
+            cfg.log.format,
+            crate::schema::LogFormat::Text,
+            "no se aplica"
+        );
+        assert!(
+            cfg.profile_warnings.iter().any(|w| w.contains("[log]")),
+            "y se dice: {:?}",
+            cfg.profile_warnings
+        );
     }
 
     /// Y lo que SÍ puede: presentación entera, más el preset de keymap y los
