@@ -47,11 +47,27 @@ pub(crate) async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
         let (texto, hostil) = norte_frontend::display_name(bytes);
         marcado(&texto, hostil)
     };
-    for e in &plan.entries {
+    // Un nombre por línea, con las mismas claves que el modal de la TUI:
+    // `a → b` en una sola dejaba que un fichero llamado `x → y` —imprimible
+    // corriente, `display_name` no lo enmascara— fingiera la pareja entera,
+    // justo en la pantalla que se lee antes de contestar «sí».
+    for (i, e) in plan.entries.iter().enumerate() {
         println!(
-            "  {} → {}",
-            masked(e.from.as_bytes()),
-            masked(e.to.as_bytes())
+            "  {}",
+            norte_i18n::ta(
+                "modal-ai-rename-pair-from",
+                &[
+                    ("n", &(i + 1).to_string()),
+                    ("from", &masked(e.from.as_bytes()))
+                ],
+            )
+        );
+        println!(
+            "     {}",
+            norte_i18n::ta(
+                "modal-ai-rename-pair-to",
+                &[("to", &masked(e.to.as_bytes()))]
+            )
         );
     }
 

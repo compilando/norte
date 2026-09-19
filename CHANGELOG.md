@@ -315,7 +315,9 @@ independently through `PROTOCOL_VERSION`.
   a rollback gets stuck, it prints the same report the window shows: what
   could not be put back and its current name, on a line of its own. Asking
   the model now times out after two minutes, as it already did in the
-  terminal and the window.
+  terminal and the window. The plan it shows before asking now puts one
+  name per line, as the terminal's dialog does, so a file named `x → y`
+  cannot pass for a whole pair.
 - **`norte sync` no longer says "nothing to sync" about a plan it did not
   receive.** A plan that announced steps and delivered none was read as two
   trees already in sync, and exited 0. It now exits 2 with the integrity

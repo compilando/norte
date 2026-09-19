@@ -663,4 +663,15 @@ fn ai_rename_aplica_un_intercambio_como_un_lote() {
         2,
         "no queda ningún temporal"
     );
+    // Un nombre por línea, como el modal de la TUI: `a → b` en una sola
+    // dejaba que un fichero llamado `x → y` fingiera la pareja entera, en la
+    // pantalla que se lee antes de contestar «sí» (`arrow_join_spoof`).
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lineas: Vec<&str> = stdout.lines().map(str::trim).collect();
+    for esperada in ["1. a.txt", "→ b.txt", "2. b.txt", "→ a.txt"] {
+        assert!(
+            lineas.contains(&esperada),
+            "falta la línea {esperada:?}: {stdout}"
+        );
+    }
 }
