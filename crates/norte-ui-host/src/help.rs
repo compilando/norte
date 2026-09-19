@@ -169,7 +169,10 @@ impl Ayuda {
                 self.teclas.clone()
             } else {
                 topic.map_or_else(Vec::new, |t| {
-                    t.blocks.iter().map(|b| bloque(b, &self.chords)).collect()
+                    t.blocks
+                        .iter()
+                        .map(|b| bloque(b, &self.chords, self.estado.actions()))
+                        .collect()
                 })
             },
             actions: filas.into_iter().map(|(_, v, _)| v).collect(),
@@ -292,7 +295,8 @@ impl Ayuda {
                     (Action::Run(r.row.command), vista, motivo)
                 })
                 .collect();
-        out.extend(topic.see_also.iter().map(|id| {
+        // `links()` y no `see_also`: los enlaces de la prosa también se siguen.
+        out.extend(topic.links().iter().map(|id| {
             let vista = HelpActionView {
                 label: clamp_display(titulo_de(id, self.estado.lang())),
                 chord: String::new(),
@@ -531,19 +535,27 @@ fn titulo_de(id: &TopicId, lang: Lang) -> String {
 }
 
 /// Un bloque del corpus, proyectado.
-fn bloque(b: &Block, chords: &Chords) -> HelpBlockView {
+fn bloque(b: &Block, chords: &Chords, acciones: &[Action]) -> HelpBlockView {
     match b {
         Block::Heading { level, text } => HelpBlockView::Heading {
             level: (*level).clamp(1, 3),
             text: clamp_display(text.clone()),
         },
         Block::Paragraph(spans) => HelpBlockView::Paragraph {
-            spans: spans.iter().map(|s| fragmento(s, chords)).collect(),
+            spans: spans
+                .iter()
+                .map(|s| fragmento(s, chords, acciones))
+                .collect(),
         },
         Block::Bullets(items) => HelpBlockView::Bullets {
             items: items
                 .iter()
-                .map(|spans| spans.iter().map(|s| fragmento(s, chords)).collect())
+                .map(|spans| {
+                    spans
+                        .iter()
+                        .map(|s| fragmento(s, chords, acciones))
+                        .collect()
+                })
                 .collect(),
         },
         Block::Code { lang, text } => HelpBlockView::Code {
@@ -563,14 +575,17 @@ fn bloque(b: &Block, chords: &Chords) -> HelpBlockView {
                 norte_help::Callout::Warn => crate::dto::HelpCalloutView::Warn,
                 norte_help::Callout::Tip => crate::dto::HelpCalloutView::Tip,
             },
-            spans: spans.iter().map(|s| fragmento(s, chords)).collect(),
+            spans: spans
+                .iter()
+                .map(|s| fragmento(s, chords, acciones))
+                .collect(),
         },
     }
 }
 
 /// Un fragmento, con las dos marcas VIVAS ya resueltas contra el keymap y el
 /// idioma de este lector.
-fn fragmento(s: &Span, chords: &Chords) -> HelpSpanView {
+fn fragmento(s: &Span, chords: &Chords, acciones: &[Action]) -> HelpSpanView {
     match s {
         Span::Text(t) => HelpSpanView::Text {
             text: clamp_display(t.clone()),
@@ -601,6 +616,12 @@ fn fragmento(s: &Span, chords: &Chords) -> HelpSpanView {
         }
         Span::TopicLink(id) => HelpSpanView::Link {
             text: clamp_display(titulo_de(id, chords_lang(chords))),
+            // La fila que lo sigue: `Topic::links()` mete cada enlace de la
+            // prosa en las acciones, así que pulsarlo es activar esa fila.
+            action: acciones
+                .iter()
+                .position(|a| matches!(a, Action::Open(destino) if destino == id))
+                .map(|i| i as u64),
         },
     }
 }

@@ -378,14 +378,22 @@ export function helpSpan(this: Screen, s: HelpSpanView): HTMLElement {
       return el;
     }
     case "link": {
-      // NO es un control: una marca `[[topic]]` en la prosa no está en la
-      // lista de acciones —esa la forman los comandos de la página y sus
-      // «ver también»—, así que no hay nada que activar. Un `button` que
-      // no hace nada es peor que un texto que se lee como enlace, y es la
-      // misma decisión que tomó el TUI.
+      // Desde el puente 75 un `[[enlace]]` de la prosa ES una fila de las
+      // acciones de la página, y pulsarlo es activar esa fila: lo mismo que
+      // Intro sobre ella, con el mismo camino por el host. Viaja el ÍNDICE,
+      // no la clave del destino. Sin fila (`null`) sigue siendo texto: un
+      // control que no hace nada es peor que un texto que se lee como enlace.
       const el = document.createElement("span");
       el.className = "help-link";
       el.textContent = s.text;
+      const fila = s.action;
+      if (fila !== null) {
+        el.setAttribute("role", "link");
+        el.dataset["live"] = "true";
+        el.addEventListener("click", () => {
+          this.send({ action: "help_activate", index: fila });
+        });
+      }
       return el;
     }
   }

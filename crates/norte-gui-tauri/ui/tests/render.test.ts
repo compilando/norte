@@ -2550,18 +2550,36 @@ describe("la ayuda", () => {
     expect(bloque).toContain("direction: ltr");
   });
 
-  it("un enlace de la prosa no es un control ni lleva la clave de destino", () => {
-    const { screen } = montar();
+  it("un enlace de la prosa se pulsa y activa SU fila, sin llevar la clave", () => {
+    const { screen, enviadas } = montar();
     const v = conAyuda();
     if (v.help !== null) {
-      v.help.blocks = [{ block: "paragraph", spans: [{ span: "link", text: "Marcar" }] }];
+      v.help.blocks = [
+        { block: "paragraph", spans: [{ span: "link", text: "Marcar", action: 1 }] },
+      ];
     }
     screen.paint(v);
-    const enlace = document.querySelector(".help-link");
-    expect(enlace?.tagName).toBe("SPAN");
-    // Una marca `[[topic]]` no está en la lista de acciones, así que no hay
-    // nada que activar: un `button` que no hace nada es peor que un texto.
-    expect(enlace?.getAttribute("data-topic")).toBeNull();
+    const enlace = document.querySelector(".help-link") as HTMLElement;
+    expect(enlace.getAttribute("role")).toBe("link");
+    // Viaja el índice de la fila, nunca el id del destino.
+    expect(enlace.getAttribute("data-topic")).toBeNull();
+    enlace.click();
+    expect(enviadas).toEqual([{ action: "help_activate", index: 1 }]);
+  });
+
+  it("un enlace sin fila sigue siendo texto", () => {
+    const { screen, enviadas } = montar();
+    const v = conAyuda();
+    if (v.help !== null) {
+      v.help.blocks = [
+        { block: "paragraph", spans: [{ span: "link", text: "Marcar", action: null }] },
+      ];
+    }
+    screen.paint(v);
+    const enlace = document.querySelector(".help-link") as HTMLElement;
+    expect(enlace.getAttribute("role")).toBeNull();
+    enlace.click();
+    expect(enviadas).toEqual([]);
   });
 
   it("las teclas de desplazar mueven el CUERPO sin depender del foco del DOM", () => {

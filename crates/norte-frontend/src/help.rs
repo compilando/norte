@@ -1070,7 +1070,10 @@ impl HelpState {
                 .iter()
                 .cloned()
                 .map(Action::Run)
-                .chain(topic.see_also.iter().cloned().map(Action::Open))
+                // `links()`: el `see_also` y DESPUÉS los `[[enlaces]]` de la
+                // prosa, que antes se pintaban como enlace y no se podían
+                // seguir ni con Enter ni con un clic.
+                .chain(topic.links().into_iter().map(Action::Open))
                 .collect()
         });
         self.action_cursor = 0;
@@ -1650,6 +1653,31 @@ mod tests {
              instead, so the cheatsheet could not be read past its first screen"
         );
         assert_eq!(s.action(), None);
+    }
+
+    /// Los `[[enlaces]]` de la prosa son acciones: se pintaban como enlace y
+    /// no se podían seguir ni con Intro ni con un clic. El orden es el de
+    /// `Topic::links()`, que es el que pintan los dos frontends.
+    #[test]
+    fn the_links_in_the_prose_are_actions_too() {
+        let mut algun_extra = false;
+        for t in norte_help::topics(Lang::En) {
+            let mut s = state();
+            s.open(&t.id);
+            let esperadas: Vec<Action> = t
+                .commands
+                .iter()
+                .cloned()
+                .map(Action::Run)
+                .chain(t.links().into_iter().map(Action::Open))
+                .collect();
+            assert_eq!(s.actions(), esperadas.as_slice(), "{}", t.id);
+            algun_extra |= t.links().len() > t.see_also.len();
+        }
+        assert!(
+            algun_extra,
+            "some page links in its prose to something see_also does not name"
+        );
     }
 
     #[test]

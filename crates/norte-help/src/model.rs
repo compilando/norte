@@ -318,6 +318,49 @@ pub struct Topic {
     pub origin: Origin,
 }
 
+impl Topic {
+    /// Every page this one links to, in the order a reader meets them: its
+    /// `see_also`, then the `[[links]]` of its prose that `see_also` did not
+    /// already name. Never itself, never twice.
+    ///
+    /// The ONE list the frontends build their "follow a link" rows from. A
+    /// link in the prose used to be painted as a link and reachable by
+    /// nothing — neither Enter nor a click — because the rows came from
+    /// `see_also` alone.
+    ///
+    /// ```
+    /// use norte_help::{Lang, topic};
+    ///
+    /// let panes = topic(Lang::En, "panes").expect("a shipped page");
+    /// let links = panes.links();
+    /// assert!(links.starts_with(&panes.see_also), "see_also comes first");
+    /// assert!(!links.contains(&panes.id), "never itself");
+    /// ```
+    #[must_use]
+    pub fn links(&self) -> Vec<TopicId> {
+        let mut out: Vec<TopicId> = Vec::with_capacity(self.see_also.len());
+        let mut add = |id: &TopicId| {
+            if *id != self.id && !out.contains(id) {
+                out.push(id.clone());
+            }
+        };
+        self.see_also.iter().for_each(&mut add);
+        let spans = self.blocks.iter().flat_map(|b| -> Vec<&Span> {
+            match b {
+                Block::Paragraph(s) | Block::Callout { spans: s, .. } => s.iter().collect(),
+                Block::Bullets(items) => items.iter().flatten().collect(),
+                Block::Heading { .. } | Block::Code { .. } | Block::Table { .. } => Vec::new(),
+            }
+        });
+        for span in spans {
+            if let Span::TopicLink(id) = span {
+                add(id);
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

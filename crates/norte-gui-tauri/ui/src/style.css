@@ -1947,6 +1947,14 @@ body {
   text-decoration: underline;
 }
 
+.help-link[data-live="true"] {
+  cursor: pointer;
+}
+
+.help-link[data-live="true"]:hover {
+  text-decoration-thickness: 2px;
+}
+
 .help-callout {
   display: block;
   padding: 6px 12px;

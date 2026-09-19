@@ -402,7 +402,11 @@ use serde::{Deserialize, Serialize};
 /// - 74: `MenuItemView` gana `section` y `role` (ADR 0125): los menús van en
 ///   secciones, con rótulo o sin él, y una entrada dice si borra o si la hace
 ///   una IA. `chord` vacío en vez de `—` cuando no hay atajo.
-pub const BRIDGE_VERSION: u32 = 74;
+/// - 75: `HelpSpanView::Link` gana `action`, el índice de la fila de
+///   `HelpView::actions` que lo sigue: un `[[enlace]]` de la prosa se pulsa.
+///   Un índice y no el id del tema, que es una clave que el renderer no
+///   necesita.
+pub const BRIDGE_VERSION: u32 = 75;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

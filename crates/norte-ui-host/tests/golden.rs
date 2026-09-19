@@ -2058,6 +2058,8 @@ fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
                     },
                     HelpSpanView::Link {
                         text: "Marcar".to_owned(),
+                        // La fila que lo sigue: la segunda acción de la vista.
+                        action: Some(1),
                     },
                 ],
             },
@@ -2634,7 +2636,8 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // `lines`/`hits`) y el clic sobre una de sus zonas (`UiAction::PanelClick`,
     // que manda la CELDA y no un comando; fase 3).
     // Puente 74: `MenuItemView.section` y `.role` (ADR 0125).
-    const FORMA: u64 = 9_770_681_050_816_723_760;
+    // Puente 75: `HelpSpanView::Link.action`, la fila que sigue el enlace.
+    const FORMA: u64 = 9_404_506_514_045_201_899;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {
