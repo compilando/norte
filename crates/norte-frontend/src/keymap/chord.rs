@@ -331,7 +331,8 @@ pub fn paint_chord(raw: &str) -> String {
             // `parse_chord`); a reader is told to press it. Only under a
             // modifier: a bare `Y` already reads as "the capital".
             if j == tokens.len() - 1 && j > 0 && es_letra_mayuscula(token) {
-                out.push_str("Shift+");
+                out.push_str(&pretty_token("shift"));
+                out.push('+');
             }
             out.push_str(&pretty_token(token));
         }
@@ -375,7 +376,11 @@ pub fn unpaint_chord(painted: &str) -> String {
             let last = j == n - 1;
             // `Shift+X` justo antes de la letra mayúscula final, bajo otro
             // modificador: se pliega en la letra.
-            if token == "Shift" && j > 0 && j + 1 == n - 1 && es_letra_mayuscula(tokens[j + 1]) {
+            if token_de_nombre(token) == Some("shift")
+                && j > 0
+                && j + 1 == n - 1
+                && es_letra_mayuscula(tokens[j + 1])
+            {
                 out.push('+');
                 out.push_str(tokens[j + 1]);
                 break;
@@ -383,10 +388,15 @@ pub fn unpaint_chord(painted: &str) -> String {
             if j > 0 {
                 out.push('+');
             }
+            // Un nombre de cualquiera de los dos idiomas vuelve a su forma
+            // canónica ANTES de mirar la caja: `↑` es un carácter suelto y se
+            // quedaría tal cual, y `AvPág` en minúscula no es `pgdn`.
+            if let Some(canonico) = token_de_nombre(token) {
+                out.push_str(canonico);
             // La tecla final de UN carácter conserva su caja (`k` y `K` son
             // dos ataduras); todo lo demás —modificadores, `F5`, `Enter`—
             // vuelve a minúscula.
-            if last && token.chars().count() == 1 {
+            } else if last && token.chars().count() == 1 {
                 out.push_str(token);
             } else {
                 out.push_str(&token.to_lowercase());
@@ -395,6 +405,92 @@ pub fn unpaint_chord(painted: &str) -> String {
         }
     }
     out
+}
+
+static CHORD_LANG: std::sync::OnceLock<norte_i18n::Lang> = std::sync::OnceLock::new();
+
+/// Fija en qué idioma se NOMBRAN las teclas ([`paint_chord`]). Una vez, al
+/// arrancar, igual que [`set_mod_key`]: el nombre de una tecla aparece en la
+/// barra, en la paleta, en la hoja de teclado y en la prosa de la ayuda, y
+/// dos de ellos con idiomas distintos se contradirían. Devuelve `false` si ya
+/// estaba fijado a otro; sin fijar, inglés.
+///
+/// Solo cambia lo que se LEE. El keymap, [`parse_chord`] y todo lo guardado
+/// siguen en la forma canónica (`pgdn`, `backspace`), y [`unpaint_chord`]
+/// entiende los dos idiomas.
+///
+/// Mismo cuidado que [`set_mod_key`] en los tests: desde la edición 2024 los
+/// doctests de este crate van en UN binario y comparten este `OnceLock`, así
+/// que un doctest que fijara el español rompería, según el orden, los de
+/// [`paint_chord`] que esperan inglés. El pintado en español se prueba en un
+/// `#[test]`, que nextest corre en su propio proceso.
+///
+/// ```
+/// use norte_frontend::keymap::{paint_chord, set_chord_lang};
+/// use norte_i18n::Lang;
+///
+/// // Sin fijar, inglés; y fijarlo al mismo valor no cambia nada.
+/// assert!(set_chord_lang(Lang::En));
+/// assert_eq!(paint_chord("pgdn"), "PgDn");
+/// ```
+pub fn set_chord_lang(lang: norte_i18n::Lang) -> bool {
+    *CHORD_LANG.get_or_init(|| lang) == lang
+}
+
+/// El nombre en español de un token con nombre; `None` si no se traduce.
+///
+/// Las flechas son símbolos y no palabras: son lo que lleva impreso un
+/// teclado español, y «Arriba y Abajo avanzan una fila» ocupa el doble sin
+/// decir más. `Ctrl`, `Alt`, `Tab` y `Esc` se quedan: son las serigrafías.
+fn nombre_es(token: &str) -> Option<&'static str> {
+    Some(match token {
+        "shift" => "Mayús",
+        "enter" => "Intro",
+        "backspace" => "Retroceso",
+        "space" => "Espacio",
+        "plus" => "Más",
+        "up" => "↑",
+        "down" => "↓",
+        "left" => "←",
+        "right" => "→",
+        "home" => "Inicio",
+        "end" => "Fin",
+        "pgup" => "RePág",
+        "pgdn" => "AvPág",
+        "delete" => "Supr",
+        _ => return None,
+    })
+}
+
+/// La forma canónica de un nombre PINTADO en cualquiera de los dos idiomas
+/// (`AvPág` → `pgdn`, `↑` → `up`); `None` si no es uno de ellos.
+///
+/// Por contenido y no por procedencia, y eso tiene un límite asumido: una tecla
+/// atada al CARÁCTER `↑` (un `Char`, no la flecha) se pinta igual que la flecha
+/// en español, y la inversa la lee como la flecha. Ningún preset lo hace, y en
+/// pantalla las dos son indistinguibles de todos modos — la ambigüedad está en
+/// lo que se enseña, no en esta función.
+fn token_de_nombre(pintado: &str) -> Option<&'static str> {
+    const CANONICOS: &[&str] = &[
+        "shift",
+        "enter",
+        "backspace",
+        "space",
+        "plus",
+        "up",
+        "down",
+        "left",
+        "right",
+        "home",
+        "end",
+        "pgup",
+        "pgdn",
+        "delete",
+    ];
+    CANONICOS
+        .iter()
+        .copied()
+        .find(|t| nombre_es(t) == Some(pintado) || pretty_token_en(t).eq_ignore_ascii_case(pintado))
 }
 
 /// Un token que es exactamente una letra ASCII mayúscula.
@@ -406,6 +502,16 @@ fn es_letra_mayuscula(token: &str) -> bool {
 /// One token of a chord, spelled for a reader. See [`paint_chord`] for the
 /// whole table and for why nothing here can undo the masking that ran before.
 fn pretty_token(token: &str) -> String {
+    if CHORD_LANG.get() == Some(&norte_i18n::Lang::Es)
+        && let Some(nombre) = nombre_es(token)
+    {
+        return nombre.to_owned();
+    }
+    pretty_token_en(token)
+}
+
+/// [`pretty_token`] en inglés, que es también el idioma sin fijar.
+fn pretty_token_en(token: &str) -> String {
     let named = match token {
         "ctrl" => "Ctrl",
         "alt" => "Alt",
