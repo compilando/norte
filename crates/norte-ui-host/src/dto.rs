@@ -456,6 +456,49 @@ pub struct HelpView {
     pub filtering: bool,
     /// Hay a dónde volver (`⌫`). Cuando no lo hay, `⌫` cierra.
     pub can_back: bool,
+    /// La última petición de desplazar el CUERPO (puente 76), o `None` si en
+    /// esta apertura no ha habido ninguna.
+    ///
+    /// El cuerpo lo desplaza el DOM, que es quien sabe lo que mide (#267);
+    /// lo que decide el HOST es qué tecla significa qué, con el keymap del
+    /// lector. Antes el renderer atendía `AvPág`, `Inicio`, `[`… como teclas
+    /// fijas, y un lector que las reataba veía el cambio en el terminal y no
+    /// aquí. El renderer aplica la petición UNA vez: `seq` crece con cada una,
+    /// y un parche que repinta la ayuda con la misma no la repite.
+    pub scroll: Option<HelpScrollView>,
+}
+
+/// Una petición de desplazar el cuerpo de la ayuda (puente 76).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelpScrollView {
+    /// Hacia dónde.
+    pub to: HelpScrollTo,
+    /// Crece con cada petición de esta apertura: lo que el renderer compara
+    /// para no aplicar dos veces la misma.
+    pub seq: u64,
+}
+
+/// Hacia dónde desplazar el cuerpo. Vocabulario CERRADO: cuánto es una línea,
+/// una página o dónde empieza una sección lo mide el renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HelpScrollTo {
+    /// Una línea arriba (flecha, en una página sin nada ejecutable).
+    LineUp,
+    /// Una línea abajo.
+    LineDown,
+    /// Una pantalla arriba.
+    PageUp,
+    /// Una pantalla abajo.
+    PageDown,
+    /// Al principio.
+    Top,
+    /// Al final.
+    Bottom,
+    /// Al encabezado anterior.
+    SectionPrev,
+    /// Al encabezado siguiente.
+    SectionNext,
 }
 
 /// Qué mitad del overlay tiene el cursor.

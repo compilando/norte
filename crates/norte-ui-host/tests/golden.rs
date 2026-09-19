@@ -2112,6 +2112,11 @@ fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
         filter: "cop".to_owned(),
         filtering: true,
         can_back: true,
+        // Puente 76: la petición de desplazar el cuerpo, con su número.
+        scroll: Some(norte_ui_host::dto::HelpScrollView {
+            to: norte_ui_host::dto::HelpScrollTo::PageDown,
+            seq: 3,
+        }),
     }
 }
 
@@ -2637,7 +2642,8 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // que manda la CELDA y no un comando; fase 3).
     // Puente 74: `MenuItemView.section` y `.role` (ADR 0125).
     // Puente 75: `HelpSpanView::Link.action`, la fila que sigue el enlace.
-    const FORMA: u64 = 9_404_506_514_045_201_899;
+    // Puente 76: `HelpView.scroll`, la petición de desplazar el cuerpo.
+    const FORMA: u64 = 8_530_096_040_792_592_060;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

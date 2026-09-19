@@ -294,6 +294,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **In the window, the keys that scroll the help follow your keymap**
+  (bridge 76). Page Up/Down, Home/End and the section keys were fixed keys
+  there, so a rebind changed the terminal and not the window. And Page
+  Up/Down never reached the keymap at all in the window: they were spelt
+  `pageup`/`pagedown`, which the keymap does not know, so in the help's
+  index they did nothing.
+
 - **A project's `.norte.toml` says what it asked for and does not get.** A
   repository cannot choose the daemon, the AI, the logs, the archive limits,
   the editor or diff program, the key preset or favourites; those keys were

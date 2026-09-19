@@ -2,7 +2,7 @@
 // enganchadas como propiedades en `render.ts`. El estado sigue en la clase.
 
 import type { Screen } from "../render";
-import type { HelpBlockView, HelpSpanView, HelpView } from "../types";
+import type { HelpBlockView, HelpScrollTo, HelpSpanView, HelpView } from "../types";
 import { revelar } from "./dom";
 
 /**
@@ -22,6 +22,9 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
     this.helpRoot.dataset["open"] = "false";
     this.helpBodyFocused = false;
     this.helpPintada = null;
+    // Cada apertura numera sus peticiones desde 1 (el host crea una ayuda
+    // nueva): sin esto, la primera de la siguiente se tomaría por vieja.
+    this.helpScrollSeq = 0;
     return;
   }
   // Dónde iba leyendo, para devolvérselo. El cuerpo se reconstruye entero
@@ -57,57 +60,58 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
       cuerpo.scrollTop = scroll;
     }
   }
+  // La petición de desplazar, UNA vez: un parche que repinta la ayuda por
+  // otro motivo trae la misma petición, con el mismo número.
+  if (help.scroll !== null && help.scroll.seq > this.helpScrollSeq) {
+    this.helpScrollSeq = help.scroll.seq;
+    this.desplazarAyuda(help.scroll.to);
+  }
 }
 
 /**
- * Desplaza el cuerpo de la ayuda con una tecla, si es de las que lo mueven.
- * Devuelve si la consumió.
+ * Desplaza el cuerpo de la ayuda hacia `to` (puente 76).
  *
- * Lo hace el renderer y no el DOM «por su cuenta»: el scroll nativo de
- * teclado necesita que la caja tenga el foco del documento, y el cuerpo se
- * reconstruye en cada parche —nadie le devolvía el foco—, así que `PgDn`
- * solo desplazaba después de un clic dentro. Tampoco el host: el cuerpo
- * cruza entero y quien sabe lo que mide es esta caja (#267).
+ * QUÉ tecla significa qué lo decide el HOST, con el keymap del lector: le
+ * llega la tecla como a cualquier otra pantalla y contesta con una petición
+ * en `HelpView.scroll`. Antes el renderer atendía `AvPág`, `Inicio`, `[`…
+ * como teclas fijas, y un reatado cambiaba el terminal y no esta ventana.
  *
- * Las flechas solo cuando la página no tiene nada ejecutable (la hoja de
- * teclado, la más larga): con acciones, las flechas eligen una y son del
- * host, que la revela.
- *
- * Límite conocido: estas teclas son FIJAS aquí y no pasan por el keymap,
- * así que reatar `dialog.page-down`, `dialog.top` o `dialog.section-next`
- * cambia el terminal y no esta ventana. Enrutarlas por el keymap pide que
- * el host diga qué verbo es cada tecla sin consumirla, y es otro cambio.
+ * CUÁNTO es una línea, una página o dónde empieza una sección lo mide esta
+ * caja, que es la única que lo sabe (#267). Y lo aplica el renderer y no el
+ * scroll nativo: ese necesita el foco del documento, y el cuerpo se
+ * reconstruye en cada parche sin que nadie se lo devuelva.
  */
-export function desplazarAyuda(this: Screen, key: string): boolean {
+export function desplazarAyuda(this: Screen, to: HelpScrollTo): void {
   const cuerpo = this.helpRoot.querySelector(".help-body");
   if (!(cuerpo instanceof HTMLElement)) {
-    return false;
+    return;
   }
   // Una línea de prosa, y una página con dos líneas de solape para no
   // perder el sitio en el salto.
   const linea = parseFloat(getComputedStyle(cuerpo).lineHeight) || 16;
   const pagina = Math.max(linea, cuerpo.clientHeight - 2 * linea);
-  const sinAcciones = cuerpo.querySelector(".help-actions") === null;
-  switch (key) {
-    case "PageDown":
+  switch (to) {
+    case "line_down":
+      cuerpo.scrollTop += linea;
+      return;
+    case "line_up":
+      cuerpo.scrollTop -= linea;
+      return;
+    case "page_down":
       cuerpo.scrollTop += pagina;
-      return true;
-    case "PageUp":
+      return;
+    case "page_up":
       cuerpo.scrollTop -= pagina;
-      return true;
-    case "Home":
+      return;
+    case "top":
       cuerpo.scrollTop = 0;
-      return true;
-    case "End":
+      return;
+    case "bottom":
       cuerpo.scrollTop = cuerpo.scrollHeight;
-      return true;
-    // Secciones: el encabezado siguiente (o el anterior) arriba de la caja.
-    // `[`/`]` como en el terminal, y `{`/`}` por los de vim.
-    case "]":
-    case "}":
-    case "[":
-    case "{": {
-      const adelante = key === "]" || key === "}";
+      return;
+    case "section_next":
+    case "section_prev": {
+      const adelante = to === "section_next";
       const tope = cuerpo.scrollTop;
       // Los TRES niveles del corpus (`helpBlock` los pinta como h2..h4): el
       // terminal para en todos, y la ventana tiene que parar en los mismos.
@@ -118,22 +122,8 @@ export function desplazarAyuda(this: Screen, key: string): boolean {
         ? secciones.find((h) => h.offsetTop > tope + 1)
         : secciones.reverse().find((h) => h.offsetTop < tope - 1);
       cuerpo.scrollTop = destino?.offsetTop ?? (adelante ? cuerpo.scrollHeight : 0);
-      return true;
+      return;
     }
-    case "ArrowDown":
-      if (sinAcciones) {
-        cuerpo.scrollTop += linea;
-        return true;
-      }
-      return false;
-    case "ArrowUp":
-      if (sinAcciones) {
-        cuerpo.scrollTop -= linea;
-        return true;
-      }
-      return false;
-    default:
-      return false;
   }
 }
 
