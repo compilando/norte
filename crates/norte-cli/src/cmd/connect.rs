@@ -58,6 +58,18 @@ fn plugin_schemes() -> &'static [String] {
     })
 }
 
+/// Un argumento de la línea de órdenes, como `VPath`.
+///
+/// Se queda en la CLI a propósito, y no en `norte-frontend` junto a
+/// `goto::parece_ruta`: son DOS gramáticas para dos entradas distintas. El
+/// «ir a» de la TUI y la ventana rechaza la ruta relativa (a dónde lleva no
+/// puede depender del panel) y toma cualquier `x://` como URL; un argumento
+/// de shell es relativo al cwd casi siempre, y `a://b` tiene que seguir
+/// siendo un fichero local salvo que su esquema esté en la allowlist
+/// ([`REMOTE_SCHEMES`], los de archivo y los de plugins instalados). Lo que
+/// sí es del core —rechazar un `user:pass@`, saber si un esquema tiene quien
+/// lo sirva— ya lo hacen `VPath::parse` y el conector; aquí solo se decide si
+/// un argumento es URL o ruta.
 pub(crate) fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
     // Una URL remota va por el parser wire; todo lo demás es un path NATIVO
     // local (bytes, jamás forzados a UTF-8 — un arg no-UTF8 no puede ser URL

@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use norte_core::backend::Backend;
+use norte_frontend::sync::Approval;
 use norte_proto::TaskState;
 
 use crate::SyncCliOpts;
@@ -157,40 +158,56 @@ async fn sync_plan_show_apply(
         }
     };
 
-    // Un plan BLOQUEADO va PRIMERO, antes que la comprobación de vacío: el
-    // wire garantiza que `!executable` ⟹ `steps` vacío, así que leerlo por la
-    // lista de pasos diría «nada que sincronizar» y contestaría 0 sobre un
-    // plan que se paró por una colisión de nombres o un destino de solo
-    // lectura. Es el mismo fallo que el tercer código existe para no cometer,
-    // y del lado que escribe.
-    if !plan.done().executable {
-        return Ok(report_blockers(plan.done()));
-    }
-
-    if plan.steps().is_empty() {
-        // Ejecutable, íntegro y sin un solo paso: los dos árboles ya coinciden.
-        println!("{}", norte_i18n::t("cli-sync-empty"));
-        return Ok(ExitCode::SUCCESS);
+    // Si el plan se puede aprobar, y si no por qué, lo decide
+    // `SyncPlan::approval` — el MISMO veredicto que habilita la tecla de
+    // aprobar en la TUI y en la ventana (regla 7). Esta CLI repetía sus tres
+    // condiciones a mano y en otro orden, y en ese orden una lista vacía se
+    // leía como «ya coinciden» ANTES de mirar la integridad: un plan que
+    // anunciaba dos copias y no traía ninguna salía con 0.
+    //
+    // Un plan BLOQUEADO no se enseña (no hay plan: `!executable` ⟹ `steps`
+    // vacío, y leerlo por la lista diría «nada que sincronizar»), y uno ya
+    // sincronizado no tiene nada que enseñar.
+    let aprobacion = plan.approval();
+    match aprobacion {
+        Approval::Blocked => return Ok(report_blockers(plan.done())),
+        Approval::InSync => {
+            println!("{}", norte_i18n::t("cli-sync-empty"));
+            return Ok(ExitCode::SUCCESS);
+        }
+        Approval::Incomplete(_) | Approval::NothingActs | Approval::Approvable => {}
     }
 
     if let Err(e) = print_plan(&plan) {
         return Ok(codigo_por_escritura(&e));
     }
 
-    // Los pasos que se acaban de enseñar no cuadran con lo que el plan dice
-    // ser. Se enseñan igual —son la explicación— pero no se aplica: el plan
-    // que `sync.apply` ejecutaría es el RETENIDO, entero, y aprobar una lista
-    // que no es esa es aprobar a ciegas. Vale también para `--dry-run`: un
-    // plan que no se puede enseñar entero tampoco se ha «enseñado».
-    if !plan.integrity().is_complete() {
-        eprintln!(
-            "norte: {}",
-            norte_i18n::ta(
-                "cli-sync-integrity",
-                &[("detail", &format!("{:?}", plan.integrity()))],
-            )
-        );
-        return Ok(ExitCode::from(2));
+    match aprobacion {
+        // Los pasos que se acaban de enseñar no cuadran con lo que el plan
+        // dice ser. Se enseñan igual —son la explicación— pero no se aplica: el
+        // plan que `sync.apply` ejecutaría es el RETENIDO, entero, y aprobar
+        // una lista que no es esa es aprobar a ciegas. Vale también para
+        // `--dry-run`: un plan que no se puede enseñar entero tampoco se ha
+        // «enseñado».
+        Approval::Incomplete(integridad) => {
+            eprintln!(
+                "norte: {}",
+                norte_i18n::ta(
+                    "cli-sync-integrity",
+                    &[("detail", &format!("{integridad:?}"))],
+                )
+            );
+            return Ok(ExitCode::from(2));
+        }
+        // Ni un paso que escriba: todo lo que el plan trae son omisiones. No
+        // hay nada que aprobar y aplicar no cambiaría un byte, pero tampoco se
+        // ha resuelto la diferencia que las provocó — así que no es un 0. Con
+        // `--dry-run` es un 1 como cualquier otra diferencia.
+        Approval::NothingActs if !opts.dry_run => {
+            eprintln!("norte: {}", norte_i18n::t("cli-sync-nothing-to-apply"));
+            return Ok(ExitCode::from(2));
+        }
+        _ => {}
     }
 
     if opts.dry_run {
@@ -374,11 +391,11 @@ async fn sync_apply_and_report(
     yes: bool,
     sigint: &SigintGate,
 ) -> anyhow::Result<ExitCode> {
-    // Ni un paso que escriba: todo lo que el plan trae son omisiones. No hay
-    // nada que aprobar (`SyncPlan::can_approve` lo dice también así) y aplicar
-    // no cambiaría un byte, pero tampoco se ha resuelto la diferencia que las
-    // provocó — así que no es un 0.
-    if plan.acting() == 0 {
+    // El llamante ya descartó todo lo que no es `Approvable`, y lo que se
+    // enseñó fue ESTE plan. Se comprueba igual porque lo que sigue escribe en
+    // el disco de alguien: si un día otro camino llega aquí, se para con el
+    // mismo código que todo lo que no llegó a escribir.
+    if !plan.can_approve() {
         eprintln!("norte: {}", norte_i18n::t("cli-sync-nothing-to-apply"));
         return Ok(ExitCode::from(2));
     }

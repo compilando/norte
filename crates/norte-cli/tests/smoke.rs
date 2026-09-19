@@ -567,3 +567,100 @@ fn daemon_run_arranca_y_stop_lo_para() {
         .expect("wait");
     assert!(fin.success(), "sale limpio: {fin:?}");
 }
+
+/// Un Ollama de mentira en `127.0.0.1:0` que contesta UNA petición de
+/// `/api/chat` con `contenido` como único delta, y se cierra.
+///
+/// Lee la petición entera (cabeceras y el `Content-Length` del cuerpo) antes
+/// de contestar: cerrar con bytes sin leer en el socket hace que el kernel
+/// mande un RST, y el cliente vería un error de conexión en vez de la
+/// respuesta.
+fn ollama_de_mentira(contenido: &str) -> std::net::SocketAddr {
+    use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind :0");
+    let addr = listener.local_addr().expect("addr");
+    let linea = serde_json::json!({ "message": { "content": contenido } }).to_string();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut lector = BufReader::new(stream.try_clone().expect("clone"));
+        let mut largo = 0usize;
+        loop {
+            let mut cabecera = String::new();
+            lector.read_line(&mut cabecera).expect("cabecera");
+            let cabecera = cabecera.trim_end();
+            if cabecera.is_empty() {
+                break;
+            }
+            if let Some((nombre, valor)) = cabecera.split_once(':')
+                && nombre.eq_ignore_ascii_case("content-length")
+            {
+                largo = valor.trim().parse().expect("content-length");
+            }
+        }
+        let mut peticion = vec![0u8; largo];
+        lector.read_exact(&mut peticion).expect("cuerpo");
+        let cuerpo = format!("{linea}\n{{\"done\":true}}\n");
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\n\
+             content-length: {}\r\nconnection: close\r\n\r\n{cuerpo}",
+            cuerpo.len()
+        )
+        .expect("respuesta");
+    });
+    addr
+}
+
+/// `norte ai rename` aplica el plan como UN lote del core, y no entrada a
+/// entrada (regla 7).
+///
+/// Un intercambio `a↔b` es el caso que lo distingue: el planificador de lotes
+/// lo rompe con un temporal; un bucle de `move_` intenta `a → b` con `b`
+/// todavía ahí y, o falla, o pisa `b` antes de moverlo. Es lo que la TUI y la
+/// ventana ya hacían; la CLI era el único camino que no.
+#[test]
+fn ai_rename_aplica_un_intercambio_como_un_lote() {
+    let plan = r#"[{"from":"a.txt","to":"b.txt"},{"from":"b.txt","to":"a.txt"}]"#;
+    let addr = ollama_de_mentira(plan);
+    let cfg = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        cfg.path().join("norte.toml"),
+        format!(
+            "[ai]\nenabled = true\nrename_provider = \"loc\"\n\n\
+             [ai.providers.loc]\nkind = \"ollama\"\nmodel = \"m\"\n\
+             base_url = \"http://{addr}\"\n"
+        ),
+    )
+    .expect("norte.toml");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "era a").expect("a");
+    std::fs::write(dir.path().join("b.txt"), "era b").expect("b");
+
+    let out = Command::cargo_bin("norte")
+        .expect("binario norte compilado")
+        .env("NORTE_CONFIG_DIR", cfg.path())
+        .env("NORTE_SECRET_AI_LOC", "x")
+        .args(["ai", "rename"])
+        .arg(dir.path())
+        .args(["intercambia", "--yes"])
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "el intercambio se aplica: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
+        "era b"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("b.txt")).expect("b"),
+        "era a"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path()).expect("ls").count(),
+        2,
+        "no queda ningún temporal"
+    );
+}

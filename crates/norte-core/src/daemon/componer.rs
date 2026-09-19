@@ -63,19 +63,23 @@ pub enum Aviso {
 }
 
 /// Lo que impide arrancar.
+///
+/// El mensaje NO repite la causa: va en `source()`, y quien imprime la
+/// cadena (`{e:#}` de anyhow) ya la añade. Con `{0}` en el mensaje salía dos
+/// veces.
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorDeArranque {
     /// El journal no abre; con «database is locked», otro proceso lo tiene.
-    #[error("no se pudo abrir el journal: {0}")]
+    #[error("no se pudo abrir el journal")]
     Journal(#[source] crate::journal::JournalError),
     /// `policy.toml` no se leyó o no es válido.
-    #[error("policy.toml: {0}")]
+    #[error("policy.toml")]
     Policy(#[source] std::io::Error),
     /// `[archive]` de `norte.toml` no se leyó o no es válido.
-    #[error("norte.toml ([archive]): {0}")]
+    #[error("norte.toml ([archive])")]
     Archivo(#[source] std::io::Error),
     /// El socket no se pudo enlazar.
-    #[error("no se pudo enlazar el daemon: {0}")]
+    #[error("no se pudo enlazar el daemon")]
     Bind(#[source] DaemonError),
 }
 

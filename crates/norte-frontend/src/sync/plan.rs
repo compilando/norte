@@ -136,6 +136,34 @@ impl UndoOutlook {
     }
 }
 
+/// What a closed plan is fit for: approval, or the ONE reason it is not.
+///
+/// [`SyncPlan::can_approve`] is `approval() == Approvable`, so a frontend that
+/// has to say WHY —the CLI, which has no greyed-out button to fall back on—
+/// matches on this instead of re-deriving the conditions. It used to re-derive
+/// them, in its own order, and read an empty step list as "already in sync"
+/// before looking at integrity: a plan that announced two copies and delivered
+/// none exited 0.
+///
+/// The order is the precedence, and it is the conservative one: the wire's
+/// verdict first, then whether what arrived is the plan at all, and only then
+/// what the plan contains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Approval {
+    /// [`SyncPlanDone::executable`] is `false`: the daemon stopped the plan.
+    Blocked,
+    /// The steps do not account for the plan; showing them is an explanation,
+    /// approving them would be approving blind.
+    Incomplete(PlanIntegrity),
+    /// Complete and without a single step: the trees already match.
+    InSync,
+    /// Complete, with steps, and none of them writes — only omissions. Nothing
+    /// to approve, and the differences that caused them are still there.
+    NothingActs,
+    /// Every condition holds.
+    Approvable,
+}
+
 /// Whether the steps that arrived account for the plan the daemon closed.
 ///
 /// Cross-checking is not paranoia about the transport — task 10 made a dropped
@@ -474,7 +502,23 @@ impl SyncPlan {
     ///    button either.
     #[must_use]
     pub fn can_approve(&self) -> bool {
-        self.done.executable && self.integrity.is_complete() && self.acting() > 0
+        self.approval() == Approval::Approvable
+    }
+
+    /// [`Self::can_approve`] with its reason — see [`Approval`].
+    #[must_use]
+    pub fn approval(&self) -> Approval {
+        if !self.done.executable {
+            Approval::Blocked
+        } else if !self.integrity.is_complete() {
+            Approval::Incomplete(self.integrity)
+        } else if self.steps.is_empty() && self.dropped == 0 {
+            Approval::InSync
+        } else if self.acting() == 0 {
+            Approval::NothingActs
+        } else {
+            Approval::Approvable
+        }
     }
 
     /// How many steps actually write something.

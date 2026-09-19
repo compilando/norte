@@ -572,6 +572,61 @@ mod tests {
         assert!(!SyncState::ready(steps, done).can_approve());
     }
 
+    /// Un plan que anuncia pasos y no trae ninguno NO está sincronizado: no
+    /// se pudo saber. La CLI lo leía por la lista vacía y salía con «nada que
+    /// sincronizar», código 0 — antes de mirar la integridad.
+    #[test]
+    fn a_plan_whose_steps_never_arrived_is_incomplete_and_not_in_sync() {
+        let anunciados = vec![
+            step(1, SyncStepKind::Copy, DestTrash::Restorable),
+            step(2, SyncStepKind::Copy, DestTrash::Restorable),
+        ];
+        let done = done_for(&anunciados, DestTrash::Restorable);
+        let SyncState::Ready(plan) = SyncState::ready(vec![], done) else {
+            panic!("el cierre deja el plan listo");
+        };
+        assert_eq!(
+            plan.approval(),
+            Approval::Incomplete(PlanIntegrity::Mismatch {
+                received: 0,
+                counted: 2
+            })
+        );
+        assert!(!plan.can_approve());
+    }
+
+    /// Cada motivo por el que un plan no se aprueba tiene su nombre, y
+    /// `can_approve` es exactamente «ninguno de ellos».
+    #[test]
+    fn approval_names_why_a_plan_cannot_be_approved() {
+        assert_eq!(
+            ready(vec![], DestTrash::Restorable).approval(),
+            Approval::InSync
+        );
+        let omisiones = ready(
+            vec![step(1, SyncStepKind::Skip, DestTrash::Restorable)],
+            DestTrash::Restorable,
+        );
+        assert_eq!(omisiones.approval(), Approval::NothingActs);
+        assert!(!omisiones.can_approve());
+        let bloqueado = {
+            let steps = vec![step(1, SyncStepKind::Copy, DestTrash::Restorable)];
+            let done = SyncPlanDone {
+                blockers_total: 1,
+                executable: false,
+                ..done_for(&steps, DestTrash::Restorable)
+            };
+            match SyncState::ready(steps, done) {
+                SyncState::Ready(p) => p,
+                other => panic!("listo: {other:?}"),
+            }
+        };
+        assert_eq!(bloqueado.approval(), Approval::Blocked);
+        let plan = update_plan();
+        assert_eq!(plan.approval(), Approval::Approvable);
+        assert!(plan.can_approve());
+    }
+
     /// THE test of this task. A copy onto a destination with no trash carries
     /// `delete` on the wire — and the undo skips it, so the file stays. A
     /// dialog that read the `reversal` column would promise it comes back.

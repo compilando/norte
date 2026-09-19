@@ -272,8 +272,8 @@ pub(crate) async fn daemon_cmd(
                 // embebido (un `ntc` sin `--daemon`) se queda el lock exclusivo,
                 // y sin esta frase el operador recibe un texto de sqlx y ninguna
                 // pista de qué cerrar.
-                Err(e @ ErrorDeArranque::Journal(_)) => {
-                    return Err(anyhow::Error::new(e).context(
+                Err(ErrorDeArranque::Journal(causa)) => {
+                    return Err(anyhow::Error::new(causa).context(
                         "no se pudo abrir el journal (si dice «database is locked», otro \
                          proceso norte lo tiene: ¿un `ntc` embebido, u otro daemon?)",
                     ));

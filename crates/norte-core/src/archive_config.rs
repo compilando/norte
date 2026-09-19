@@ -105,9 +105,9 @@ pub fn load_rar_delegate() -> std::io::Result<Option<std::path::PathBuf>> {
 /// `[archive]` ([`load_archive_limits`], [`load_rar_delegate`]).
 ///
 /// Fail-loud: un `norte.toml` roto aborta el arranque, mismo criterio que
-/// `policy.toml`. Lo usan el daemon ([`crate::daemon::componer()`]) y los
-/// comandos de la CLI que montan un engine propio; antes vivía en la CLI y el
-/// daemon no podía llamarlo desde el core.
+/// `policy.toml`. Lo usa el daemon ([`crate::daemon::componer()`]); antes
+/// vivía en la CLI y el daemon no podía llamarlo desde el core. Los engines
+/// embebidos de la CLI no lo aplican (tampoco lo hacían antes).
 ///
 /// # Errors
 /// Los de leer o validar `norte.toml`.
