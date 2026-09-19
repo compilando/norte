@@ -2346,39 +2346,71 @@ const fn es_capa_del_usuario(kind: Layer) -> bool {
     }
 }
 
-/// Los avisos de una capa de PERFIL que pidió lo que un perfil no decide (D2).
+/// Los avisos de una capa de PERFIL o de PROYECTO que pidió lo que esa capa no
+/// decide (D2).
 ///
 /// Una sección AUSENTE no avisa de nada: lo que se dice es lo que el fichero
-/// declaró y no se va a aplicar.
-fn profile_carve_out_warnings(parsed: &NorteToml, path: &std::path::Path) -> Vec<String> {
+/// declaró y no se va a aplicar. Hasta ahora solo avisaba un perfil, y ni
+/// siquiera de todo: el editor y el comparador (programas que se ejecutan) se
+/// descartaban callados, y un `.norte.toml` de repositorio callaba entero.
+/// Fallaba cerrado —no se aplicaba nada—, pero el dueño del fichero no tenía
+/// forma de saber por qué su cambio no hacía nada.
+///
+/// La capa de SISTEMA y la de USUARIO deciden todo, así que no avisan.
+fn carve_out_warnings(parsed: &NorteToml, path: &std::path::Path, kind: Layer) -> Vec<String> {
+    let quien = match kind {
+        Layer::Profile => "un perfil",
+        Layer::Project => "un proyecto",
+        Layer::System | Layer::User => return Vec::new(),
+    };
     let mut out = Vec::new();
     let mut di = |seccion: &str, motivo: &str| {
         out.push(format!(
-            "{}: [{seccion}] no lo decide un perfil ({motivo})",
+            "{}: [{seccion}] no lo decide {quien} ({motivo})",
             path.display()
         ));
     };
+    let ui = &parsed.ui;
+    if ui.editor.is_some()
+        || ui.editor_detached.is_some()
+        || ui.diff.is_some()
+        || ui.diff_detached.is_some()
+    {
+        di(
+            "ui",
+            "`editor` y `diff` eligen un programa que se ejecuta, y eso no es \
+             presentación",
+        );
+    }
+    // Lo que un perfil SÍ decide y un repositorio ajeno no: el preset de
+    // teclas (#260, elegir qué tecla borra no es presentación) y los favoritos
+    // (un repo no inyecta sitios en la sesión de nadie).
+    if kind == Layer::Project {
+        if parsed.keymap.preset.is_some() {
+            di("keymap", "elegir qué tecla borra no es presentación");
+        }
+        if !parsed.hotlist.is_empty() {
+            di(
+                "hotlist",
+                "un repositorio no añade favoritos a la sesión de nadie",
+            );
+        }
+    }
     // `declara` desestructura cada sección sin `..`: una clave nueva que no
     // mire no compila. La lista campo a campo que había aquí se dejó
     // `[log] format`, y el test de las cuatro secciones no lo vio porque
     // su perfil traía `dir`.
     if crate::DaemonSettings::declara(&parsed.daemon) {
-        di("daemon", "un perfil no redirige el transporte del core");
+        di("daemon", "no redirige el transporte del core");
     }
     if parsed.ai != crate::schema::AiSection::default() {
-        di(
-            "ai",
-            "un perfil no enciende la IA ni redirige sus proveedores",
-        );
+        di("ai", "no enciende la IA ni redirige sus proveedores");
     }
     if crate::LogSettings::declara(&parsed.log) {
-        di(
-            "log",
-            "un perfil no decide dónde ni cómo escribe este proceso",
-        );
+        di("log", "no decide dónde ni cómo escribe este proceso");
     }
     if crate::ArchiveSettings::declara(&parsed.archive) {
-        di("archive", "un perfil no sube los límites anti-bomba");
+        di("archive", "no sube los límites anti-bomba");
     }
     out
 }
@@ -2491,8 +2523,11 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 }
                 Err(e) => return Err(e),
             };
+            if *kind == Layer::Project {
+                project_warnings.extend(carve_out_warnings(&parsed, &norte, *kind));
+            }
             if *kind == Layer::Profile {
-                profile_warnings.extend(profile_carve_out_warnings(&parsed, &norte));
+                profile_warnings.extend(carve_out_warnings(&parsed, &norte, *kind));
                 merge_profile_section(
                     &mut profile_title,
                     &mut profile_start,
@@ -2766,6 +2801,47 @@ mod hotlist_tests {
         assert_eq!(
             cfg.hotlist[0].target.as_ref().unwrap(),
             &VPath::parse("file:///home/o").unwrap()
+        );
+        assert!(
+            cfg.project_warnings.iter().any(|w| w.contains("[hotlist]")),
+            "y se DICE que no entra: {:?}",
+            cfg.project_warnings
+        );
+    }
+
+    /// Lo que un repositorio ajeno pide y no se aplica se DICE, igual que en un
+    /// perfil. Se descartaba en silencio: fallaba cerrado, pero el dueño del
+    /// `.norte.toml` no tenía forma de saber por qué su transporte, su editor
+    /// o su preset de teclas no cambiaban.
+    #[test]
+    fn un_proyecto_que_pide_lo_que_no_decide_avisa() {
+        let usuario = tempfile::tempdir().unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        std::fs::write(
+            proyecto.path().join("norte.toml"),
+            "[daemon]\nsocket = \"/tmp/ajeno.sock\"\n\
+             [keymap]\npreset = \"vim\"\n\
+             [ui]\ndiff = [\"meld\"]\ntheme = \"nord\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.daemon.socket, None, "no se aplica");
+        for que in ["[daemon]", "keymap", "diff"] {
+            assert!(
+                cfg.project_warnings.iter().any(|w| w.contains(que)),
+                "falta el aviso de {que}: {:?}",
+                cfg.project_warnings
+            );
+        }
+        assert!(
+            !cfg.project_warnings.iter().any(|w| w.contains("theme")),
+            "la presentación SÍ la decide un proyecto, y no se avisa de ella"
         );
     }
 
@@ -5144,6 +5220,26 @@ max_entries = 999999999
                 cfg.profile_warnings
             );
         }
+    }
+
+    /// El editor y el comparador son programas que se EJECUTAN: un perfil no
+    /// los elige, y hasta ahora los descartaba sin decirlo.
+    #[test]
+    fn un_perfil_que_pide_editor_o_comparador_avisa() {
+        let usuario = tempfile::tempdir().expect("tempdir");
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("norte.toml"),
+            "[ui]\neditor = [\"vim\"]\ndiff_detached = true\n",
+        )
+        .expect("write");
+        let cfg = load(&capas(usuario.path(), perfil.path())).expect("carga");
+        assert_eq!(cfg.ui_editor, None, "no se aplica");
+        assert!(
+            cfg.profile_warnings.iter().any(|w| w.contains("editor")),
+            "y se dice: {:?}",
+            cfg.profile_warnings
+        );
     }
 
     /// Cada CLAVE de esas secciones avisa sola, no sólo las que había cuando
