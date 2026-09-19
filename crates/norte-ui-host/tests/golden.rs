@@ -1271,6 +1271,34 @@ fn slots_de_referencia() -> Vec<SlotView> {
             viewer: None,
             note: "directorio".to_owned(),
         })),
+        // La línea de tiempo (#359, puente 78): una fila del humano y un lote
+        // de agente sin vuelta con el nombre enmascarado, porque el renderer
+        // pinta las dos distinto.
+        SlotView::Timeline(Box::new(norte_ui_host::dto::TimelineSlotView {
+            slot_id: 14,
+            title: "Línea de tiempo".to_owned(),
+            rows: vec![
+                norte_ui_host::dto::TimelineRowView {
+                    time: "12:00".to_owned(),
+                    actor: "user".to_owned(),
+                    op: "renamed".to_owned(),
+                    path: "/casa/a.txt".to_owned(),
+                    hostile: false,
+                    tail: String::new(),
+                },
+                norte_ui_host::dto::TimelineRowView {
+                    time: "11:58".to_owned(),
+                    actor: "agent".to_owned(),
+                    op: "removed".to_owned(),
+                    path: "/casa/caf\u{fffd}".to_owned(),
+                    hostile: true,
+                    tail: "3 de golpe · sin vuelta".to_owned(),
+                },
+            ],
+            cursor: Some(1),
+            empty: "todavía no se ha hecho nada".to_owned(),
+            footer: "1 entradas se deshacen".to_owned(),
+        })),
         // El panel de un PLUGIN (fase 3): tramos con estilo y zonas SIN su
         // comando — el renderer dice dónde se pulsó y el host resuelve qué
         // era, así que por el cable no viaja nada ejecutable.
@@ -2677,7 +2705,8 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // Puente 75: `HelpSpanView::Link.action`, la fila que sigue el enlace.
     // Puente 76: `HelpView.scroll`, la petición de desplazar el cuerpo.
     // Puente 77: `GotoView` («ir a», #357) en la foto y en su cambio.
-    const FORMA: u64 = 7_418_230_142_513_937_372;
+    // Puente 78: `SlotView::Timeline` (la línea de tiempo, #359).
+    const FORMA: u64 = 7_846_945_752_170_644_590;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

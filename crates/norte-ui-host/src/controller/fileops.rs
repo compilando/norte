@@ -1061,6 +1061,8 @@ impl Estado {
                         // Deshacer una sesión ESCRIBE: mueve ficheros de
                         // vuelta y borra lo que el agente creó.
                         | Pendiente::DeshacerSesion { .. }
+                        // Y deshacer hasta un punto, por lo mismo.
+                        | Pendiente::DeshacerHasta { .. }
                         // Pedir un plan no escribe en el disco, y aun así
                         // entra: manda el contenido de un directorio a un
                         // modelo, que no es algo que deba hacer una ventana

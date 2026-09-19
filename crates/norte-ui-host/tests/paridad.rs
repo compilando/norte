@@ -79,16 +79,9 @@ const APLAZADOS: &[(&str, u32)] = &[
     // aquí las teclas imprimibles no llegan al host), y la sección de plugins,
     // que es informativa en los dos frontends.
     //
-    // «Ir a cualquier sitio» (fase 6, ADR 0120) estuvo aquí hasta #357: ya lo
-    // pinta la ventana, con el modelo y el despacho de `norte_frontend::goto`.
-    //
-    // La línea de tiempo del journal (fase 7, ADR 0121). El kind es del
-    // registro compartido, así que la ventana YA enseña su botón en la barra
-    // de paneles; lo que le falta es pintar el hueco y la pregunta del
-    // deshacer. El modelo —qué es una fila, que un lote es una, qué `seq`
-    // manda el corte y cómo se cuenta lo que se va a deshacer— está en
-    // `norte_frontend::timeline` y es de los dos.
-    ("layout.timeline", 359),
+    // «Ir a cualquier sitio» (fase 6, ADR 0120) estuvo aquí hasta #357, y la
+    // línea de tiempo del journal (fase 7, ADR 0121) hasta #359: ya las pinta
+    // la ventana, con los modelos compartidos de `norte_frontend`.
 ];
 
 /// Todo comando vivo o lo implementa la ventana, o está clasificado.

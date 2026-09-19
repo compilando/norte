@@ -100,6 +100,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.processes",
     "layout.log",
     "layout.disk-map",
+    "layout.timeline",
     "layout.metadata",
     "layout.preview",
     "pane.tree",
@@ -797,6 +798,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.processes" => Efecto::AlternarHueco { kind: "processes" },
         "layout.log" => Efecto::AlternarHueco { kind: "log" },
         "layout.disk-map" => Efecto::AlternarHueco { kind: "disk-map" },
+        "layout.timeline" => Efecto::AlternarHueco { kind: "timeline" },
         // El último de los siete de la ADR 0058 (#291): el visor acoplado.
         "layout.preview" => Efecto::AlternarHueco { kind: "viewer" },
         "pane.tree" => Efecto::AlternarHueco { kind: "tree" },

@@ -3045,6 +3045,64 @@ body {
   padding: 2px 6px;
 }
 
+/* La línea de tiempo del journal (#359): una fila por mutación, con el punto
+   del color de QUIÉN la hizo. */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.timeline-rows {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  margin: 0;
+  padding: 2px 6px;
+  list-style: none;
+}
+
+.timeline-row {
+  display: flex;
+  gap: 0.5ch;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.timeline-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.timeline-time,
+.timeline-tail {
+  color: var(--muted, var(--title-fg));
+}
+
+.timeline-dot[data-actor="user"] {
+  color: var(--fg);
+}
+
+.timeline-dot[data-actor="agent"] {
+  color: var(--warning-fg);
+}
+
+.timeline-dot[data-actor="other"] {
+  color: var(--info-fg);
+}
+
+.timeline-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.timeline-footer {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: var(--info-fg);
+  border-top: 1px solid var(--border);
+}
+
 /* `relative` porque las zonas pulsables se colocan ENCIMA de su fila, por
    columna y ancho en celdas: el guest habla de celdas, no de píxeles. */
 .panel-line {

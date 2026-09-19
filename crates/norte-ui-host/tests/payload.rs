@@ -247,6 +247,9 @@ fn filas_de(s: &norte_ui_host::dto::SlotView) -> usize {
         // cero aquí desarmaría el guardia justo para el hueco que más fácil
         // puede crecer — un mapa es tantas líneas como alto tenga.
         SlotView::DiskMap(m) => m.lines.len(),
+        // La línea de tiempo lleva sus filas CARGADAS, acotadas por el tope de
+        // filas del puente: cuentan, y una página más al llegar abajo suma.
+        SlotView::Timeline(t) => t.rows.len(),
         // El panel de procesos no lleva sus filas en el hueco: las lleva
         // `ViewSnapshot::tasks`, que es una sola lista para toda la pantalla.
         SlotView::Processes { .. } | SlotView::Unsupported { .. } => 0,

@@ -94,6 +94,9 @@ impl Estado {
                 Some(super::diskmap::KIND) => {
                     slots.push(SlotView::DiskMap(Box::new(self.vista_de_mapa(id))));
                 }
+                Some(super::timeline::KIND) => {
+                    slots.push(SlotView::Timeline(Box::new(self.vista_de_linea(id))));
+                }
                 Some("processes") => slots.push(SlotView::Processes {
                     slot_id: id,
                     // Índice sobre las filas PINTADAS, que es lo que el

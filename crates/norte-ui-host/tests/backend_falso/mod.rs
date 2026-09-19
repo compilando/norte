@@ -348,6 +348,12 @@ pub struct Falso {
     pub informe_de_sync: std::sync::Mutex<Option<norte_proto::methods::SyncReportResult>>,
     /// Las sesiones de agente que se pidió deshacer, en orden.
     pub deshechas: std::sync::Mutex<Vec<String>>,
+    /// Lo que contesta `journal.list`, de lo más nuevo a lo más viejo, y
+    /// paginado de verdad por `before_seq`. `None` = `Unsupported` (un daemon
+    /// sin journal).
+    pub journal: Option<Vec<norte_proto::methods::JournalRow>>,
+    /// Los cortes que se pidió deshacer (`journal.undo_after`), en orden.
+    pub deshechos_hasta: std::sync::Mutex<Vec<i64>>,
     /// Cuántas veces se ha pedido el catálogo de extensiones.
     pub catalogos_pedidos: std::sync::atomic::AtomicU64,
     /// Con qué DESENLACE termina una búsqueda.
@@ -1193,6 +1199,69 @@ impl HostBackend for Falso {
         self.latido();
         let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(900 + n as u64);
+        let progreso = norte_proto::TaskProgress {
+            task_id: id,
+            kind: norte_proto::TaskKind::Undo,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+            unreadable: None,
+            unvisited: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        self.progresos
+            .lock()
+            .expect("progresos")
+            .insert(id.get(), tx);
+        Box::pin(async move {
+            Ok(HostTask {
+                id,
+                progress: rx,
+                cancel: Arc::new(|| {}),
+                foreign: false,
+            })
+        })
+    }
+
+    fn journal_list(
+        &self,
+        before_seq: Option<i64>,
+        limit: u32,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::JournalListResult, Error>> {
+        self.latido();
+        let res = self
+            .journal
+            .as_ref()
+            .map_or(Err(Error::Unsupported), |filas| {
+                let tope = usize::try_from(limit).unwrap_or(usize::MAX);
+                let quedan: Vec<_> = filas
+                    .iter()
+                    .filter(|f| before_seq.is_none_or(|b| f.seq < b))
+                    .cloned()
+                    .collect();
+                let rows: Vec<_> = quedan.iter().take(tope).cloned().collect();
+                let next_before_seq = (quedan.len() > tope)
+                    .then(|| rows.last().map(|f| f.seq))
+                    .flatten();
+                Ok(norte_proto::methods::JournalListResult {
+                    rows,
+                    next_before_seq,
+                })
+            });
+        Box::pin(async move { res })
+    }
+
+    fn undo_after(&self, seq: i64) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.deshechos_hasta
+            .lock()
+            .expect("deshechos_hasta")
+            .push(seq);
+        self.latido();
+        let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
+        let id = norte_proto::TaskId::new(950 + n as u64);
         let progreso = norte_proto::TaskProgress {
             task_id: id,
             kind: norte_proto::TaskKind::Undo,

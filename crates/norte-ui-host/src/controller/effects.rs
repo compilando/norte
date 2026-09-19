@@ -63,6 +63,11 @@ impl Estado {
         if let Some(salida) = self.efecto_en_panel_enfocado(efecto) {
             return salida;
         }
+        // `Enter` en la línea de tiempo (#359) es «vuelve aquí»: pregunta con
+        // el recuento antes de deshacer nada.
+        if self.linea_tiene_el_foco() && matches!(efecto, Efecto::Entrar) {
+            return self.preguntar_deshacer_hasta();
+        }
         if self.sitios_tienen_el_foco() && matches!(efecto, Efecto::Entrar | Efecto::Marcar) {
             // Entrar y plegar los atiende la barra lateral, y el `cd` que
             // salga va al LISTADO por el mismo camino que cualquier otro: es

@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window paints the journal timeline** (#359). Its button was already
+  in the panel bar and opened a slot the window could not draw. It now
+  lists what has been done on this machine, newest first, with a batch as
+  one row. The arrows move through it, and Enter asks before undoing back
+  to that row, saying how many entries will be undone, skipped, or left
+  alone because they are not yours. The counts, the cut and the grouping
+  are the terminal's own, from the shared model.
 - **The window has «go anywhere»** (#357, `ctrl+g` in the default keys).
   It is the same screen the terminal has: type a path, or pick from the
   panel's history, the places you return to, bookmarks, connections,

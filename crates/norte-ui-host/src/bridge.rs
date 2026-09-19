@@ -414,7 +414,11 @@ use serde::{Deserialize, Serialize};
 ///   o fila, cada fila con su `hostile`), cursor y el texto de vacío—. Las
 ///   secciones de conexiones y del índice llegan en un parche aparte cuando
 ///   contestan, sin mover el cursor.
-pub const BRIDGE_VERSION: u32 = 77;
+/// - 78: la línea de tiempo del journal (#359): `SlotView::Timeline` con
+///   `TimelineSlotView` —filas ya pintables (hora, actor para el color,
+///   verbo, ruta con su `hostile`, cola traducida), cursor, texto de vacío y
+///   el pie con lo que se llevaría un `Enter`—. Un lote es UNA fila.
+pub const BRIDGE_VERSION: u32 = 78;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

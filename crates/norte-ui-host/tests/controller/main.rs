@@ -35,6 +35,7 @@ mod corpus;
 mod disposiciones;
 mod gestos;
 mod ir_a;
+mod linea_de_tiempo;
 mod organizar;
 mod paneles;
 mod paneles_de_plugin;

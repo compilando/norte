@@ -72,6 +72,7 @@ mod sums;
 mod sync;
 mod tabs;
 mod tasks;
+mod timeline;
 mod transfer;
 mod tree;
 mod viewer;
@@ -1001,6 +1002,14 @@ enum Fondo {
     /// Los volúmenes del host, con la APERTURA del selector que los pidió.
     /// Ver [`Fondo::Catalogo`].
     Volumenes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// Una página de la línea de tiempo (#359): el hueco, el testigo de la
+    /// petición y desde dónde se pidió (`None` = la primera).
+    PaginaDeLinea(
+        u32,
+        RequestToken,
+        Option<i64>,
+        Result<norte_proto::methods::JournalListResult, Error>,
+    ),
     /// Las conexiones para «ir a» (#357), con la APERTURA que las pidió: una
     /// respuesta de una apertura anterior no rellena la de ahora.
     ConexionesDeIrA(
@@ -1590,6 +1599,9 @@ async fn actor(
         for u in estado.sondear_mapas(&backend, &buzon) {
             let _ = updates.send(u);
         }
+        // Y la línea de tiempo (#359): la primera página cuando aparece su
+        // hueco, y la siguiente cuando el cursor llega abajo.
+        estado.sondear_lineas(&backend, &buzon);
         // Y la hoja de atributos, por lo MISMO y en el mismo sitio: también
         // sigue al cursor y tampoco tiene otro camino hasta el renderer. Va
         // después del visor para que, cuando los dos cambian a la vez, la
@@ -2219,6 +2231,12 @@ enum Pendiente {
         /// La clave OPACA con la que el core la resuelve, cruda.
         sesion: String,
     },
+    /// Deshacer lo del humano POSTERIOR a un punto de la línea de tiempo
+    /// (#359, `journal.undo_after`). La fila señalada se queda.
+    DeshacerHasta {
+        /// El corte: el `seq` más nuevo de la fila señalada.
+        seq: i64,
+    },
     /// Conceder las capabilities de una extensión.
     ///
     /// Es la única de las cuatro operaciones del gestor que PREGUNTA:
@@ -2634,6 +2652,8 @@ struct Estado {
     /// usa el terminal: qué directorio describe, lo medido y cuál es el hijo
     /// elegido. Una decisión escrita dos veces diverge en silencio (ADR 0077).
     mapas: std::collections::BTreeMap<u32, diskmap::EstadoMapa>,
+    /// La línea de tiempo de cada hueco que la tiene (#359).
+    lineas: std::collections::BTreeMap<u32, timeline::EstadoLinea>,
     /// Lo ÚLTIMO que se mandó de cada hoja de atributos, por hueco.
     ///
     /// La hoja no pide nada y se calcula entera del listado, así que no tiene
@@ -3169,6 +3189,7 @@ impl Estado {
             previews: std::collections::BTreeMap::new(),
             paneles: std::collections::BTreeMap::new(),
             mapas: std::collections::BTreeMap::new(),
+            lineas: std::collections::BTreeMap::new(),
             hojas: std::collections::BTreeMap::new(),
             gen_sitios: 0,
             ramas: None,

@@ -1819,6 +1819,13 @@ pub enum SlotView {
     /// en cuanto alguien toque un redondeo (ADR 0077). Lo que cruza son las
     /// líneas ya estiladas y sus zonas, igual que un panel de plugin.
     DiskMap(Box<DiskMapSlotView>),
+    /// La línea de tiempo del journal (fase 7, #359, puente 78): lo que se ha
+    /// hecho en esta máquina, de lo más nuevo a lo más viejo, con el cursor
+    /// sobre el punto al que se volvería.
+    ///
+    /// Las filas, cómo se agrupa un lote y qué se va a llevar un corte los
+    /// decide `norte_frontend::timeline`, el mismo modelo que la TUI.
+    Timeline(Box<TimelineSlotView>),
     /// Un hueco de un tipo que este host todavía no proyecta. Se enseña
     /// vacío y con su nombre: preservar lo que no se entiende es la regla de
     /// la sesión (ADR 0059), y desaparecer sería peor que estar en gris.
@@ -1906,6 +1913,46 @@ pub struct DiskMapSlotView {
     /// Viaja porque un mapa a medias sin decirlo se lee como un directorio
     /// pequeño, que es la respuesta equivocada y encima creíble.
     pub measuring: bool,
+}
+
+/// La línea de tiempo del journal (#359, puente 78).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineSlotView {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// El título del panel, ya traducido.
+    pub title: String,
+    /// Las filas, de la más nueva a la más vieja. Un lote es UNA fila.
+    pub rows: Vec<TimelineRowView>,
+    /// La fila con el cursor: el punto al que se volvería.
+    pub cursor: Option<u64>,
+    /// Lo que se dice cuando no hay filas, ya traducido: «todavía no se ha
+    /// hecho nada» sólo cuando se ha MIRADO, «cargando» antes, y el motivo
+    /// si no hay historial que enseñar. Un panel vacío sin explicación se lee
+    /// como «no has hecho nada», que es otra cosa.
+    pub empty: String,
+    /// Lo que se llevaría un `Enter` aquí, ya traducido; vacío sin filas. Es
+    /// el único número que importa antes de pulsar.
+    pub footer: String,
+}
+
+/// Una fila de la línea de tiempo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineRowView {
+    /// La hora, ya formateada.
+    pub time: String,
+    /// Quién: `user`, `agent`, `plugin`… Para el COLOR del punto: lo que
+    /// separa es «yo» de «algo en mi nombre».
+    pub actor: String,
+    /// El verbo.
+    pub op: String,
+    /// Sobre qué, como lo pintó el servidor (ya enmascarado).
+    pub path: String,
+    /// El servidor tuvo que enmascarar `path`.
+    pub hostile: bool,
+    /// Lo que la distingue, ya traducido: cuántas entradas trae si es un
+    /// lote, y si no tiene vuelta. Vacío si nada.
+    pub tail: String,
 }
 
 /// Una zona pulsable de un panel de plugin: dónde está, y nada más.

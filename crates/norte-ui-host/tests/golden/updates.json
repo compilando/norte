@@ -1313,6 +1313,32 @@
         "viewer": null
       },
       {
+        "cursor": 1,
+        "empty": "todavía no se ha hecho nada",
+        "footer": "1 entradas se deshacen",
+        "kind": "timeline",
+        "rows": [
+          {
+            "actor": "user",
+            "hostile": false,
+            "op": "renamed",
+            "path": "/casa/a.txt",
+            "tail": "",
+            "time": "12:00"
+          },
+          {
+            "actor": "agent",
+            "hostile": true,
+            "op": "removed",
+            "path": "/casa/caf�",
+            "tail": "3 de golpe · sin vuelta",
+            "time": "11:58"
+          }
+        ],
+        "slot_id": 14,
+        "title": "Línea de tiempo"
+      },
+      {
         "hits": [
           {
             "col": 5,
