@@ -225,13 +225,9 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let params = norte_proto::methods::FsSearchParams {
-            root: root.clone(),
             name_glob: Some(patron.clone()),
-            name_regex: None,
-            content: None,
-            content_regex: None,
-            case_sensitive: false,
             max_hits: Some(Self::MAX_RESULTADOS),
+            ..norte_proto::methods::FsSearchParams::new(root.clone())
         };
         let backend = Arc::clone(backend);
         let buzon2 = buzon.clone();

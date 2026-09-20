@@ -44,15 +44,7 @@ fn setup() -> (Engine, Arc<MemProvider>) {
 
 /// Params base: solo raíz, todo lo demás vacío/false.
 fn params(root: &str) -> FsSearchParams {
-    FsSearchParams {
-        root: vp(root),
-        name_glob: None,
-        name_regex: None,
-        content: None,
-        content_regex: None,
-        case_sensitive: false,
-        max_hits: None,
-    }
+    FsSearchParams::new(vp(root))
 }
 
 /// Drena el canal hasta el cierre; devuelve `(entry, match)` aplanado.

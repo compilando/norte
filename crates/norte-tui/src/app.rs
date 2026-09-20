@@ -1707,8 +1707,10 @@ mod tests {
         d.backspace();
         assert_eq!(d.content, "a");
         assert_eq!(d.name, "*x", "backspace solo tocó el campo activo");
+        // Desde 0.81.0 Tab recorre SIETE campos, no dos: la vuelta entera la
+        // comprueba `tab_da_la_vuelta_entera` en `app::pane`.
         d.toggle_field();
-        assert_eq!(d.field, SearchField::Name);
+        assert_eq!(d.field, SearchField::Exclude);
     }
 
     /// Los toggles (F2 regex / F3 case) alternan sus flags de forma

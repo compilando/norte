@@ -666,7 +666,6 @@ fn draw_search_dialog(
         let cursor = if active { "_" } else { "" };
         format!("{label} {masked}{cursor}")
     };
-    let name_active = dialog.field == SearchField::Name;
     // #98/F4: la raíz del walk es superficie de decisión — sigue la
     // reinterpretación del pane (la barra de abajo pinta el mismo dir así).
     let (root_txt, root_hostile) = norte_frontend::path_display_with(root, enc);
@@ -675,16 +674,35 @@ fn draw_search_dialog(
     } else {
         root_txt
     };
-    let body = [
-        field(&t("search-name"), &dialog.name, name_active),
-        field(&t("search-content"), &dialog.content, !name_active),
-        ta("search-regex", &[("on", &on_txt(dialog.regex))]),
-        ta("search-case", &[("on", &on_txt(dialog.case))]),
-        middle_ellipsis(&root_line, 56),
-        t("search-hint"),
-    ]
-    .join("\n");
-    let area = centered(frame.area(), 60, 8);
+    // Los siete campos en el orden en que los recorre Tab, y luego los cuatro
+    // interruptores. Se generan del MISMO `ORDEN` que el Tab: dos listas
+    // escritas a mano se separan en cuanto entra un campo, y entonces el
+    // cursor salta a una línea que no está pintada.
+    let mut lineas: Vec<String> = SearchField::ORDEN
+        .iter()
+        .map(|f| field(&t(f.clave()), dialog.texto(*f), dialog.field == *f))
+        .collect();
+    lineas.push(ta("search-regex", &[("on", &on_txt(dialog.regex))]));
+    lineas.push(ta("search-case", &[("on", &on_txt(dialog.case))]));
+    lineas.push(ta(
+        "search-whole-word",
+        &[("on", &on_txt(dialog.whole_word))],
+    ));
+    lineas.push(ta("search-recursive", &[("on", &on_txt(dialog.recursive))]));
+    lineas.push(ta("search-kinds", &[("what", &t(dialog.kinds.clave()))]));
+    lineas.push(middle_ellipsis(&root_line, 56));
+    lineas.push(t("search-hint"));
+    let body = lineas.join("\n");
+    // Alto = las líneas más el marco, pero SIN pasar de la pantalla: con
+    // once campos e interruptores el diálogo mide 18 filas, y en un terminal
+    // de 24 eso se comía la barra de menús por arriba y la de estado por
+    // abajo. Recortado, se pierden las últimas líneas —la ruta y la
+    // chuleta— antes que el marco, que es lo que deja el diálogo siendo un
+    // diálogo.
+    let alto = u16::try_from(lineas.len().saturating_add(2))
+        .unwrap_or(u16::MAX)
+        .min(frame.area().height);
+    let area = centered(frame.area(), 60, alto);
     clear_themed(frame, area, theme);
     frame.render_widget(
         Paragraph::new(body).block(

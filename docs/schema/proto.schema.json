@@ -2623,10 +2623,72 @@
             "null"
           ]
         },
+        "encoding": {
+          "description": "La codificación con la que leer el CONTENIDO, por su nombre WHATWG\n(`\"utf-8\"`, `\"windows-1252\"`, `\"shift_jis\"`).\n\nAusente = automática, que es lo que hay: la AGUJA se transcodifica a\nvarios candidatos y el pajar no se decodifica entero. Eso acierta\ncasi siempre y por eso es el defecto; esto es para cuando no\nacierta, que es el mismo motivo por el que el visor deja forzar la\nsuya. Un nombre que no se reconoce es un error de la petición, no\nuna búsqueda que calla y no encuentra nada.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exclude_names": {
+          "description": "Nombres de carpeta que no se bajan, EN CUALQUIER nivel: `target`,\n`node_modules`, `.git`.\n\nEs el filtro que convierte una búsqueda inútil en una útil, y se\nnombra por NOMBRE y no por ruta justamente porque la carpeta que\nsobra aparece cien veces en sitios que no se saben de antemano. Son\nglobs sobre el último segmento, con la misma disciplina que\n`name_glob`, y a lo sumo [`SEARCH_EXCLUDES_MAX`].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "exclude_roots": {
+          "description": "Subárboles que NO se recorren, por su ruta. A lo sumo\n[`SEARCH_EXCLUDES_MAX`].\n\nDistinto del `excluded` que ya aplicaba la POLÍTICA a un agente: eso\nes lo que no se puede leer, y esto es lo que el humano no quiere\nmirar. Los dos se suman, y el de la política no se puede levantar\ndesde aquí.",
+          "items": {
+            "$ref": "#/$defs/VPath"
+          },
+          "type": "array"
+        },
+        "kinds": {
+          "description": "Las CLASES de entrada que cuentan como resultado. Vacío = todas.\n\nEs la pregunta «busco una carpeta, no un fichero que se llame así»,\nque en un árbol de código es la diferencia entre tres resultados y\ntrescientos. No afecta al RECORRIDO: una carpeta que no cuenta como\nresultado se sigue bajando, porque lo que se busca puede estar\ndentro.",
+          "items": {
+            "$ref": "#/$defs/EntryKind"
+          },
+          "type": "array"
+        },
         "max_hits": {
           "description": "Tope de hits: alcanzado, la Task completa (`Completed`, no `Failed`).\nNo hay flag `truncated` en el wire — el cliente infiere la\ntruncación comparando el total de hits recibidos contra `max_hits`\n(== implica truncada).",
           "format": "uint32",
           "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_size": {
+          "description": "Tamaño máximo en bytes, inclusive.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_size": {
+          "description": "Tamaño mínimo en bytes, inclusive. Una entrada cuyo tamaño el\nprovider no sabe decir NO pasa un filtro de tamaño: filtrar es\nafirmar, y «no lo sé» no es «sí».",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mtime_after": {
+          "description": "Modificado en o después de este instante (ms desde epoch).\nMisma regla que el tamaño: sin fecha no pasa el filtro.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mtime_before": {
+          "description": "Modificado en o antes de este instante (ms desde epoch).",
+          "format": "int64",
           "type": [
             "integer",
             "null"
@@ -2646,9 +2708,17 @@
             "null"
           ]
         },
+        "recursive": {
+          "description": "Recorrer los subdirectorios. Ausente = `true`, que es lo que hacía.\n\nExiste porque «lo que hay AQUÍ» y «lo que hay aquí debajo» son dos\npreguntas, y la segunda sobre `/` es una tarde.",
+          "type": "boolean"
+        },
         "root": {
           "$ref": "#/$defs/VPath",
           "description": "Raíz del walk (subtree entero)."
+        },
+        "whole_word": {
+          "description": "La coincidencia de CONTENIDO tiene que ser una palabra entera.\n\nSin esto, buscar `set` en un árbol de código devuelve `offset`,\n`settings` y `subset`, que es la mitad del fichero.\n\nNo viaja cuando es `false`, que es su defecto: así el JSON de una\nbúsqueda corriente sigue siendo byte a byte el de 0.80.",
+          "type": "boolean"
         }
       },
       "required": [

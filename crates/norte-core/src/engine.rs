@@ -1626,6 +1626,13 @@ impl Engine {
     /// [`crate::search::SearchMatchers::compile`], que devuelve el mensaje del
     /// compilador de glob/regex). [`Error::Unsupported`] si el scheme del `root`
     /// no tiene provider registrado.
+    ///
+    /// **Lo que decide el actor, y lo que decide la petición** (0.81.0): las
+    /// exclusiones de la POLÍTICA (`policy::walk_exclusions`) se calculan
+    /// primero, y las que trae `params.exclude_roots` se AÑADEN a ellas. Se
+    /// suman y no se sustituyen, así que una petición puede estrechar el
+    /// recorrido y no puede ensancharlo: no hay forma de levantar un veto
+    /// metiendo rutas en una lista.
     pub async fn search_as(
         &self,
         params: norte_proto::methods::FsSearchParams,
@@ -1647,7 +1654,12 @@ impl Engine {
         // (#165): el directorio de estado del daemon cuelga de `$HOME`, y el
         // gate de lectura del daemon solo mira la raíz de la búsqueda. El
         // humano no se sandboxea, así que busca en sus propios ficheros.
-        let excluded = crate::policy::walk_exclusions(&actor);
+        let mut excluded = crate::policy::walk_exclusions(&actor);
+        // Y lo que el LECTOR no quiere mirar (0.81.0). Se SUMAN, en este
+        // orden y sin poder quitarse: lo de la política es lo que no se
+        // puede leer, y esto es una preferencia. Una petición no levanta un
+        // veto añadiendo rutas a una lista.
+        excluded.extend(params.exclude_roots.iter().cloned());
         let (tx, rx) = tokio::sync::mpsc::channel(8);
         let key = root.scheme().to_owned();
         let handle = self.sched.submit(

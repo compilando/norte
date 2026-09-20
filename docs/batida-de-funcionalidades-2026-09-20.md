@@ -4,6 +4,11 @@ Qué tiene norte, qué tiene Krusader, qué tienen los gestores modernos, y qué
 falta. Hecha leyendo el código, no de memoria: el catálogo de comandos, el
 catálogo RPC y los registros de kinds y de modales son la fuente.
 
+> **Estado**: tres de los huecos que nombra ya están cerrados en el mismo día
+> que se escribió — el pijama y la columna de permisos (ADR 0128), el zoom
+> del visor (ADR 0128) y la búsqueda filtrable (protocolo 0.81.0). Se marcan
+> en su sitio en vez de borrarlos: lo que faltaba es parte de por qué se hizo.
+
 ## De dónde salen los números
 
 | inventario | dónde vive | cuánto |
@@ -65,7 +70,19 @@ ya está, por ADR 0084.
 Un plugin **no** puede serlo: la WIT de paneles pinta spans y recibe comandos
 del catálogo, nunca bytes, y no importa ni `exec` ni pty.
 
-### 2.2 Búsqueda: tenemos 3 de los ~14 controles del diálogo
+### 2.2 Búsqueda — **hecho el 2026-09-20 (protocolo 0.81.0)**
+
+La tabla de abajo era el estado ANTES. Lo que se añadió: filtro por clase
+(ficheros/carpetas), rango de tamaño, «cambiado hace N días», excluir
+subárboles por ruta, excluir carpetas por NOMBRE en cualquier nivel, palabra
+entera, interruptor de subcarpetas y codificación forzada. Siguen faltando
+—y están en la lista de abajo— las varias raíces, seguir enlaces, buscar
+dentro de comprimidos, la pestaña de resultados persistente, copiar la
+consulta, y **la ventana, que sigue mandando solo un glob**: su diálogo tiene
+un único campo de texto, así que ponerle los filtros pide una forma de
+diálogo con varios campos que el puente no tiene todavía.
+
+### 2.2 bis. El estado anterior, para referencia
 
 `FsSearchParams` tiene hoy: una raíz, `name_glob` | `name_regex`,
 `content` | `content_regex`, `case_sensitive` (compartido) y `max_hits`.
@@ -147,15 +164,21 @@ Commander, Far 3, Yazi, nnn, Files/Nautilus, Directory Opus):
 
 ## 4. Propuesta, por orden de lo que se nota
 
-1. **Zoom en el visor de imágenes** (encargo 4). Contenido: estado en
-   `Viewer`, cuatro comandos, dos despachadores, siete presets. Sin wire.
-2. **Búsqueda a la altura** (encargo 6). Es el hueco más grande de los que
-   un usuario nota a diario. Pide bump de protocolo: tipo, tamaño, fecha,
-   varias raíces, excluir carpetas y nombres, palabra completa, no
-   recursivo, codificación. Y **nivelar la ventana con la TUI**, que hoy
-   solo manda un glob.
-3. **Panel de terminal** (encargo 7). El más caro: emulador VT nuevo,
-   kind nuevo, pty en dos frontends, revisión de seguridad.
+1. ~~**Zoom en el visor de imágenes**~~ — hecho (ADR 0128).
+2. ~~**Búsqueda a la altura**~~ — hecho en la terminal (protocolo 0.81.0).
+   Queda la mitad de la ventana, que es lo siguiente de esta lista.
+3. **Los filtros de búsqueda en la ventana.** Su diálogo tiene UN campo de
+   texto; los siete campos y los cuatro interruptores piden un
+   `DialogView` con varios campos. Es una pieza reutilizable —cualquier
+   diálogo futuro con formulario la quiere— y por eso vale la pena hacerla
+   bien y no a medida de la búsqueda.
+4. **Panel de terminal** (encargo 7). El más caro: emulador VT nuevo,
+   kind nuevo, pty en dos frontends, revisión de seguridad. Lo que ya
+   está: `portable-pty` en `norte-tui`, el registro de kinds abierto, y el
+   reparto E/S-pura de `subshell.rs` como modelo. **Plan escrito** en
+   `docs/superpowers/plans/2026-09-20-panel-de-terminal.md`, con las cinco
+   fases y la decisión de diseño que hay que tomar (quién manda en el
+   teclado cuando el panel lo tiene).
 4. **Siguiente/anterior imagen en el visor.** Pequeño y muy echado en falta
    una vez hay zoom.
 5. **Ordenar por permisos, y columnas de dueño y grupo.** `SortColumn` es

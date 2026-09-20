@@ -611,10 +611,28 @@
     "case_sensitive": true,
     "content": "año",
     "content_regex": "a.o",
+    "encoding": "windows-1252",
+    "exclude_names": [
+      "target",
+      "node_modules"
+    ],
+    "exclude_roots": [
+      "file:///home/user/.cache"
+    ],
+    "kinds": [
+      "file",
+      "dir"
+    ],
     "max_hits": 100,
+    "max_size": 1048576,
+    "min_size": 1024,
+    "mtime_after": 1700000000000,
+    "mtime_before": 1800000000000,
     "name_glob": "*.rs",
     "name_regex": "^ma.n\\.rs$",
-    "root": "file:///home/user"
+    "recursive": false,
+    "root": "file:///home/user",
+    "whole_word": true
   },
   "fs_search_params_minimo": {
     "case_sensitive": false,

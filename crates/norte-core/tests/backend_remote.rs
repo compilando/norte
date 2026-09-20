@@ -743,13 +743,8 @@ async fn remote_search_como_el_embebido() {
 
     let (task, rx) = backend
         .search(FsSearchParams {
-            root: vp("mem:///"),
             name_glob: Some("*.rs".into()),
-            name_regex: None,
-            content: None,
-            content_regex: None,
-            case_sensitive: false,
-            max_hits: None,
+            ..FsSearchParams::new(vp("mem:///"))
         })
         .await
         .expect("search");
@@ -782,13 +777,8 @@ async fn remote_search_preserva_nombre_no_utf8_byte_exacto() {
 
     let (task, mut rx) = backend
         .search(FsSearchParams {
-            root: vp("mem:///"),
             name_glob: Some("*".into()),
-            name_regex: None,
-            content: None,
-            content_regex: None,
-            case_sensitive: false,
-            max_hits: None,
+            ..FsSearchParams::new(vp("mem:///"))
         })
         .await
         .expect("search");
@@ -824,25 +814,15 @@ async fn remote_dos_busquedas_no_se_cruzan() {
 
     let (t1, rx1) = backend
         .search(FsSearchParams {
-            root: vp("mem:///da"),
             name_glob: Some("*.rs".into()),
-            name_regex: None,
-            content: None,
-            content_regex: None,
-            case_sensitive: false,
-            max_hits: None,
+            ..FsSearchParams::new(vp("mem:///da"))
         })
         .await
         .expect("search da");
     let (t2, rx2) = backend
         .search(FsSearchParams {
-            root: vp("mem:///db"),
             name_glob: Some("*.txt".into()),
-            name_regex: None,
-            content: None,
-            content_regex: None,
-            case_sensitive: false,
-            max_hits: None,
+            ..FsSearchParams::new(vp("mem:///db"))
         })
         .await
         .expect("search db");

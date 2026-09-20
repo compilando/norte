@@ -61,6 +61,40 @@ pub enum SearchError {
     /// `content`+`content_regex`).
     #[error("criterios excluyentes: {0}")]
     Conflicting(&'static str),
+    /// Más de [`norte_proto::methods::SEARCH_EXCLUDES_MAX`] exclusiones
+    /// (0.81.0).
+    ///
+    /// Se comprueba ANTES de compilar ninguna, que es donde está el gasto:
+    /// cada nombre es un glob y con él una regex con su presupuesto, en la
+    /// tarea que atiende la conexión y sin Task que lo acote.
+    #[error("demasiadas exclusiones: {0} (el tope es {1})")]
+    TooManyExcludes(usize, usize),
+    /// Dos filtros que no pueden cumplirse a la vez (0.81.0).
+    ///
+    /// Es un error y no una búsqueda de cero resultados por la misma razón
+    /// que el glob y la regex del mismo eje: cero resultados se lee como «no
+    /// hay nada», y aquí lo que no hay es la pregunta.
+    #[error("filtros contradictorios: {0}")]
+    ImpossibleFilter(&'static str),
+    /// El nombre de codificación de `encoding` no es ninguno conocido
+    /// (0.81.0).
+    ///
+    /// Es un error de la PETICIÓN y no una búsqueda que no encuentra nada: un
+    /// nombre mal escrito que cayera a la detección automática devolvería
+    /// resultados perfectamente creíbles leídos con otro alfabeto, y quien
+    /// forzó la codificación lo hizo justamente porque el automático no le
+    /// valía.
+    #[error("codificación desconocida: {0}")]
+    BadEncoding(String),
+}
+
+/// Envuelve un patrón entre fronteras de palabra (0.81.0).
+///
+/// El grupo `(?:…)` no es decorativo: sin él, un patrón con alternancia de
+/// primer nivel —`gato|perro`— se leería como `\bgato` o `perro\b`, que es
+/// otra búsqueda y además una que casa lo que el lector pidió excluir.
+fn palabra_entera(patron: &str) -> String {
+    format!(r"\b(?:{patron})\b")
 }
 
 /// Fold de nombre para el eje GLOB: `lossy → NFC → (lowercase → NFC)`. La 2ª
@@ -413,6 +447,71 @@ pub struct SearchMatchers {
     case_sensitive: bool,
     /// Tope de hits (ya convertido a `usize`); `None` = sin tope.
     max_hits: Option<usize>,
+    /// Los filtros de 0.81.0: lo que decide si una entrada que ya casó por
+    /// nombre y contenido cuenta además como resultado.
+    filtros: Filtros,
+    /// Nombres de carpeta que no se bajan, ya compilados a glob. Vacío = se
+    /// baja a todas.
+    excluir_nombres: Vec<NameMatcher>,
+    /// `false` = solo el directorio raíz.
+    recursivo: bool,
+    /// La codificación con la que leer el contenido, si el lector forzó una
+    /// (0.81.0). `None` = la que detecte cada fichero.
+    encoding: Option<&'static Encoding>,
+}
+
+/// Lo que se le pide a una entrada ADEMÁS de casar por nombre o contenido
+/// (protocolo 0.81.0).
+///
+/// Separado de los matchers porque son de otra naturaleza: aquéllos
+/// compilan patrones y pueden fallar, y éstos son comparaciones sobre lo que
+/// la entrada ya trae. Juntarlos haría que un rango de fechas tuviera que
+/// pasar por `Result`.
+#[derive(Debug, Clone, Default)]
+struct Filtros {
+    kinds: Vec<EntryKind>,
+    min_size: Option<u64>,
+    max_size: Option<u64>,
+    mtime_after: Option<i64>,
+    mtime_before: Option<i64>,
+}
+
+impl Filtros {
+    /// ¿Cuenta esta entrada como resultado?
+    ///
+    /// Un dato que el provider no sabe decir NO pasa un filtro sobre él.
+    /// Filtrar es afirmar, y «no lo sé» no es «sí»: un bucket de objetos que
+    /// no reporta fecha devolvería su contenido entero bajo «modificado esta
+    /// semana», que es peor que no devolver nada, porque se lee igual que un
+    /// resultado.
+    fn pasa(&self, e: &Entry) -> bool {
+        if !self.kinds.is_empty() && !self.kinds.contains(&e.kind) {
+            return false;
+        }
+        if self.min_size.is_some() || self.max_size.is_some() {
+            let Some(size) = e.size else { return false };
+            if self.min_size.is_some_and(|m| size < m) || self.max_size.is_some_and(|m| size > m) {
+                return false;
+            }
+        }
+        if self.mtime_after.is_some() || self.mtime_before.is_some() {
+            let Some(t) = e.mtime_ms else { return false };
+            if self.mtime_after.is_some_and(|m| t < m) || self.mtime_before.is_some_and(|m| t > m) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// ¿Hay algún filtro puesto? Sin ninguno no se toca nada, que es el
+    /// camino de 0.80.
+    fn vacios(&self) -> bool {
+        self.kinds.is_empty()
+            && self.min_size.is_none()
+            && self.max_size.is_none()
+            && self.mtime_after.is_none()
+            && self.mtime_before.is_none()
+    }
 }
 
 impl SearchMatchers {
@@ -424,6 +523,12 @@ impl SearchMatchers {
     ///   `content`+`content_regex` (excluyentes por eje).
     /// - [`SearchError::BadGlob`]/[`SearchError::BadRegex`] si un patrón no
     ///   compila (o excede el `size_limit` anti-ReDoS).
+    /// - [`SearchError::TooManyExcludes`] por encima de
+    ///   [`norte_proto::methods::SEARCH_EXCLUDES_MAX`] (0.81.0).
+    /// - [`SearchError::ImpossibleFilter`] si dos filtros no pueden cumplirse
+    ///   a la vez (0.81.0).
+    /// - [`SearchError::BadEncoding`] si `encoding` no nombra ninguna
+    ///   codificación conocida (0.81.0).
     pub fn compile(params: &FsSearchParams) -> Result<Self, SearchError> {
         if params.name_glob.is_some() && params.name_regex.is_some() {
             return Err(SearchError::Conflicting(
@@ -443,26 +548,129 @@ impl SearchMatchers {
         };
         // Una aguja de contenido VACÍA no es un criterio (casaría con todo):
         // se trata como ausente para el cómputo de "al menos un criterio".
+        // «Palabra entera» (0.81.0) se implementa SIEMPRE como regex, incluso
+        // para una aguja literal, y conviene decir por qué: el camino literal
+        // rápido busca BYTES, con la aguja transcodificada a varios
+        // candidatos y el pajar sin decodificar. Una frontera de palabra no
+        // es una propiedad de los bytes — depende de qué es letra, y eso
+        // depende del alfabeto—, así que no se puede comprobar ahí sin
+        // decodificar, que es justo lo que ese camino existe para no hacer.
+        // Pedirla cuesta el camino rápido; no pedirla no cuesta nada.
         let content = if let Some(c) = &params.content {
             if c.is_empty() {
                 ContentSpec::None
+            } else if params.whole_word {
+                ContentSpec::Regex(ContentRegex::new(&palabra_entera(&regex::escape(c)), cs)?)
             } else {
                 ContentSpec::Literal(c.clone())
             }
         } else if let Some(r) = &params.content_regex {
-            ContentSpec::Regex(ContentRegex::new(r, cs)?)
+            let patron = if params.whole_word {
+                palabra_entera(r)
+            } else {
+                r.clone()
+            };
+            ContentSpec::Regex(ContentRegex::new(&patron, cs)?)
         } else {
             ContentSpec::None
         };
-        if name.is_none() && matches!(content, ContentSpec::None) {
+        // El tope de exclusiones, antes de compilar ninguna: ahí está el
+        // gasto, y esto lo alcanza un agente.
+        let tope = norte_proto::methods::SEARCH_EXCLUDES_MAX;
+        for n in [params.exclude_names.len(), params.exclude_roots.len()] {
+            if n > tope {
+                return Err(SearchError::TooManyExcludes(n, tope));
+            }
+        }
+        let filtros = Filtros {
+            kinds: params.kinds.clone(),
+            min_size: params.min_size,
+            max_size: params.max_size,
+            mtime_after: params.mtime_after,
+            mtime_before: params.mtime_before,
+        };
+        // Dos filtros que no pueden cumplirse a la vez se DICEN. Cero
+        // resultados se lee como «no hay nada que casara», y lo que no hay
+        // es la pregunta.
+        if let (Some(min), Some(max)) = (filtros.min_size, filtros.max_size)
+            && min > max
+        {
+            return Err(SearchError::ImpossibleFilter(
+                "el tamaño mínimo es mayor que el máximo",
+            ));
+        }
+        if let (Some(desde), Some(hasta)) = (filtros.mtime_after, filtros.mtime_before)
+            && desde > hasta
+        {
+            return Err(SearchError::ImpossibleFilter(
+                "la fecha de inicio es posterior a la de fin",
+            ));
+        }
+        // Buscar CONTENIDO solo en carpetas no puede casar nada: el
+        // contenido se lee de ficheros regulares y nada más.
+        let solo_carpetas = !filtros.kinds.is_empty() && !filtros.kinds.contains(&EntryKind::File);
+        let pide_contenido = params.content.is_some() || params.content_regex.is_some();
+        if solo_carpetas && pide_contenido {
+            return Err(SearchError::ImpossibleFilter(
+                "se pide contenido y se excluyen los ficheros",
+            ));
+        }
+        // Un filtro SOLO —«todo lo que pese más de un giga»— es un criterio
+        // legítimo y de los más útiles que hay. Antes «sin nombre y sin
+        // contenido» era siempre «sin criterios»; ahora lo es solo cuando
+        // tampoco hay filtros.
+        if name.is_none() && matches!(content, ContentSpec::None) && filtros.vacios() {
             return Err(SearchError::NoCriteria);
         }
+        // Los nombres a no bajar son globs sobre el último segmento, con la
+        // misma disciplina que `name_glob` — incluido el fold, que es lo que
+        // hace que `Target` excluya `target` en un macOS.
+        let excluir_nombres = params
+            .exclude_names
+            .iter()
+            .map(|g| NameMatcher::glob(g, cs))
+            .collect::<Result<Vec<_>, _>>()?;
+        // `for_label_no_replacement` y NO `for_label`: el segundo acepta las
+        // etiquetas de reemplazo del estándar —`utf-7`, `hz-gb-2312`,
+        // `iso-2022-cn`— y devuelve el encoding REPLACEMENT, que decodifica
+        // el fichero entero a un solo U+FFFD. La búsqueda no fallaría: no
+        // encontraría nada, en silencio, que es exactamente lo que el
+        // rustdoc de este campo promete no hacer.
+        let encoding = match &params.encoding {
+            None => None,
+            Some(nombre) => Some(
+                Encoding::for_label_no_replacement(nombre.as_bytes())
+                    .ok_or_else(|| SearchError::BadEncoding(nombre.clone()))?,
+            ),
+        };
         Ok(Self {
             name,
             content,
             case_sensitive: cs,
             max_hits: params.max_hits.map(|m| m as usize),
+            filtros,
+            excluir_nombres,
+            recursivo: params.recursive,
+            encoding,
         })
+    }
+
+    /// ¿Se baja a este directorio? (protocolo 0.81.0)
+    ///
+    /// Por NOMBRE y en cualquier nivel: la carpeta que sobra —`target`,
+    /// `node_modules`, `.git`— aparece cien veces en sitios que no se saben
+    /// de antemano, así que nombrarla por ruta no serviría de nada.
+    fn se_baja_a(&self, e: &Entry) -> bool {
+        if self.excluir_nombres.is_empty() {
+            return true;
+        }
+        let Some(seg) = e.path.file_name() else {
+            return true;
+        };
+        !self
+            .excluir_nombres
+            .iter()
+            .any(|m| m.matches(seg.as_bytes()))
     }
 
     /// `true` si hay criterio de contenido (el walker debe leer ficheros).
@@ -665,7 +873,13 @@ pub async fn run_walk(
             });
 
             // Descenso: dirs sí; symlinks NO (candidato de nombre, no se sigue).
-            if entry.kind == EntryKind::Dir {
+            //
+            // Y desde 0.81.0, tampoco si el lector pidió no recorrer
+            // subdirectorios o excluyó este NOMBRE. Las dos cosas frenan el
+            // descenso y solo el descenso: la carpeta sigue pudiendo ser un
+            // resultado por su nombre, que es lo que quiere quien busca
+            // `node_modules` mientras excluye lo que hay dentro.
+            if entry.kind == EntryKind::Dir && matchers.recursivo && matchers.se_baja_a(&entry) {
                 queue.push_back(entry.path.clone());
             }
 
@@ -673,6 +887,13 @@ pub async fn run_walk(
             let name_bytes = entry.path.file_name().map_or(&[][..], Segment::as_bytes);
             let name_ok = matchers.name.as_ref().is_none_or(|m| m.matches(name_bytes));
             if !name_ok {
+                continue;
+            }
+            // Los filtros de 0.81.0: clase, tamaño y fecha. Antes del
+            // contenido a propósito — son comparaciones sobre lo que la
+            // entrada ya trae, y el contenido es una LECTURA por fichero,
+            // que por SFTP es una petición por cabeza.
+            if !matchers.filtros.pasa(&entry) {
                 continue;
             }
 
@@ -731,8 +952,17 @@ async fn search_content(
     let enc = match norte_encoding::detect(first.as_ref()) {
         Detection::Text { encoding, .. } => encoding,
         // Binario (NUL sin BOM): NO se busca contenido (spec §17.1a).
+        //
+        // También con una codificación FORZADA (0.81.0): forzar dice con qué
+        // alfabeto leer un texto, no que un ejecutable sea texto. Un fichero
+        // con NUL leído como windows-1252 casaría por accidente contra
+        // cualquier aguja corta, y eso es ruido con forma de resultado.
         Detection::Binary => return Ok(None),
     };
+    // La codificación que el lector FORZÓ manda sobre la detectada
+    // (0.81.0), que es el mismo trato que le da el visor: la detección
+    // acierta casi siempre, y esto es para cuando no.
+    let enc = matchers.encoding.unwrap_or(enc);
     let cs = matchers.case_sensitive;
     match &matchers.content {
         ContentSpec::None => Ok(None),
@@ -995,13 +1225,8 @@ mod tests {
 
     fn params(root: &str) -> FsSearchParams {
         FsSearchParams {
-            root: vp(root),
             name_glob: Some("*".into()),
-            name_regex: None,
-            content: None,
-            content_regex: None,
-            case_sensitive: false,
-            max_hits: None,
+            ..FsSearchParams::new(vp(root))
         }
     }
 
@@ -1049,6 +1274,261 @@ mod tests {
             .expect("walk completo");
         drop(ctx);
         h.await.expect("colector")
+    }
+
+    /// Lo mismo que [`walk`] pero con los params que le den, para los
+    /// filtros de 0.81.0.
+    async fn walk_con(p: FsSearchParams) -> Vec<VPath> {
+        let mem = arbol().await;
+        let root = p.root.clone();
+        let matchers = SearchMatchers::compile(&p).expect("criterios");
+        let (tx, mut rx) = mpsc::channel::<SearchHits>(8);
+        let ctx = ctx_de_test();
+        let provider: Arc<dyn Provider> = mem;
+        let h = tokio::spawn(async move {
+            let mut out = Vec::new();
+            while let Some(lote) = rx.recv().await {
+                out.extend(lote.entries.into_iter().map(|e| e.path));
+            }
+            out
+        });
+        run_walk(provider, root, matchers, Vec::new(), tx, &ctx)
+            .await
+            .expect("walk completo");
+        drop(ctx);
+        h.await.expect("colector")
+    }
+
+    /// Excluir un NOMBRE de carpeta la salta en cualquier nivel, y solo frena
+    /// el DESCENSO: la carpeta sigue pudiendo ser un resultado.
+    #[tokio::test]
+    async fn excluir_un_nombre_no_baja_pero_no_esconde_la_carpeta() {
+        let hits = walk_con(FsSearchParams {
+            name_glob: Some("*".into()),
+            exclude_names: vec!["norte".into()],
+            ..FsSearchParams::new(vp("mem:///home/u"))
+        })
+        .await;
+        assert!(
+            hits.contains(&vp("mem:///home/u/.config/norte")),
+            "la carpeta excluida sigue siendo un resultado: {hits:?}"
+        );
+        assert!(
+            !hits.contains(&vp("mem:///home/u/.config/norte/journal.db")),
+            "pero no se baja a ella: {hits:?}"
+        );
+        assert!(
+            hits.contains(&vp("mem:///home/u/.config/norte-backup/journal.db")),
+            "y el vecino que solo comparte prefijo NO se excluye: {hits:?}"
+        );
+    }
+
+    /// Sin recursión se lista el directorio de la raíz y nada más.
+    #[tokio::test]
+    async fn sin_recursion_solo_el_directorio_de_la_raiz() {
+        let hits = walk_con(FsSearchParams {
+            name_glob: Some("*".into()),
+            recursive: false,
+            ..FsSearchParams::new(vp("mem:///home/u"))
+        })
+        .await;
+        assert!(hits.contains(&vp("mem:///home/u/docs")), "{hits:?}");
+        assert!(
+            !hits.contains(&vp("mem:///home/u/docs/carta.txt")),
+            "nada de un nivel más abajo: {hits:?}"
+        );
+    }
+
+    /// Filtrar por CLASE no frena el recorrido: lo que se busca puede estar
+    /// dentro de una carpeta que no cuenta como resultado.
+    #[tokio::test]
+    async fn filtrar_por_clase_no_frena_el_recorrido() {
+        let hits = walk_con(FsSearchParams {
+            name_glob: Some("*".into()),
+            kinds: vec![EntryKind::File],
+            ..FsSearchParams::new(vp("mem:///home/u"))
+        })
+        .await;
+        assert!(
+            hits.contains(&vp("mem:///home/u/docs/carta.txt")),
+            "el fichero de dos niveles abajo sale: {hits:?}"
+        );
+        assert!(
+            !hits.contains(&vp("mem:///home/u/docs")),
+            "y la carpeta que hubo que atravesar no: {hits:?}"
+        );
+    }
+
+    /// Un filtro SOLO, sin nombre ni contenido, es un criterio legítimo — y
+    /// de los más útiles que hay («todo lo que pese más de un giga»).
+    #[test]
+    fn un_filtro_solo_ya_es_un_criterio() {
+        let p = FsSearchParams {
+            min_size: Some(1),
+            ..FsSearchParams::new(vp("mem:///"))
+        };
+        assert!(SearchMatchers::compile(&p).is_ok());
+        // Y sin nada de nada sigue sin serlo.
+        let vacio = FsSearchParams::new(vp("mem:///"));
+        assert!(matches!(
+            SearchMatchers::compile(&vacio),
+            Err(SearchError::NoCriteria)
+        ));
+    }
+
+    /// Un dato que el provider no sabe decir NO pasa un filtro sobre él.
+    ///
+    /// Es la mitad honesta del asunto: un bucket que no reporta fecha
+    /// devolvería su contenido entero bajo «modificado esta semana», y eso se
+    /// lee igual que un resultado.
+    #[test]
+    fn lo_que_no_se_sabe_no_pasa_el_filtro() {
+        let sin_datos = Entry {
+            path: vp("mem:///x"),
+            kind: EntryKind::File,
+            size: None,
+            mtime_ms: None,
+            attrs: std::collections::BTreeMap::new(),
+        };
+        let por_tamano = Filtros {
+            min_size: Some(0),
+            ..Filtros::default()
+        };
+        assert!(!por_tamano.pasa(&sin_datos), "sin tamaño no pasa");
+        let por_fecha = Filtros {
+            mtime_after: Some(i64::MIN),
+            ..Filtros::default()
+        };
+        assert!(!por_fecha.pasa(&sin_datos), "sin fecha no pasa");
+        // Y sin ningún filtro pasa todo, que es el camino de 0.80.
+        assert!(Filtros::default().pasa(&sin_datos));
+    }
+
+    /// Una codificación que no se reconoce es un error de la PETICIÓN.
+    ///
+    /// Caer a la automática devolvería resultados perfectamente creíbles
+    /// leídos con otro alfabeto, y quien la forzó lo hizo porque la
+    /// automática no le valía.
+    #[test]
+    fn una_codificacion_desconocida_no_cae_a_la_automatica() {
+        let p = FsSearchParams {
+            content: Some("hola".into()),
+            encoding: Some("no-existe-2026".into()),
+            ..FsSearchParams::new(vp("mem:///"))
+        };
+        assert!(matches!(
+            SearchMatchers::compile(&p),
+            Err(SearchError::BadEncoding(_))
+        ));
+    }
+
+    /// Las exclusiones tienen tope, y se comprueba ANTES de compilarlas.
+    ///
+    /// `fs.search` la alcanza un agente, y cada nombre excluido compila un
+    /// glob y una regex con su presupuesto en la tarea que atiende la
+    /// conexión — sin Task todavía, así que fuera del tope de tareas vivas.
+    #[test]
+    fn hay_un_tope_de_exclusiones() {
+        let tope = norte_proto::methods::SEARCH_EXCLUDES_MAX;
+        let muchos = vec!["x".to_owned(); tope + 1];
+        let p = FsSearchParams {
+            name_glob: Some("*".into()),
+            exclude_names: muchos,
+            ..FsSearchParams::new(vp("mem:///"))
+        };
+        assert!(matches!(
+            SearchMatchers::compile(&p),
+            Err(SearchError::TooManyExcludes(_, _))
+        ));
+        // Y justo en el tope pasa: la cota es inclusiva.
+        let justos = vec!["x".to_owned(); tope];
+        let p = FsSearchParams {
+            name_glob: Some("*".into()),
+            exclude_names: justos,
+            ..FsSearchParams::new(vp("mem:///"))
+        };
+        assert!(SearchMatchers::compile(&p).is_ok());
+    }
+
+    /// Dos filtros que no pueden cumplirse a la vez se DICEN.
+    ///
+    /// Cero resultados se lee como «no hay nada que casara»; aquí lo que no
+    /// hay es la pregunta, y son dos cosas distintas.
+    #[test]
+    fn los_filtros_imposibles_se_dicen() {
+        let imposible = |p: FsSearchParams| {
+            assert!(
+                matches!(
+                    SearchMatchers::compile(&p),
+                    Err(SearchError::ImpossibleFilter(_))
+                ),
+                "debería ser imposible"
+            );
+        };
+        imposible(FsSearchParams {
+            min_size: Some(10),
+            max_size: Some(1),
+            ..FsSearchParams::new(vp("mem:///"))
+        });
+        imposible(FsSearchParams {
+            mtime_after: Some(100),
+            mtime_before: Some(1),
+            ..FsSearchParams::new(vp("mem:///"))
+        });
+        // Contenido solo en carpetas: el contenido se lee de ficheros.
+        imposible(FsSearchParams {
+            content: Some("hola".into()),
+            kinds: vec![EntryKind::Dir],
+            ..FsSearchParams::new(vp("mem:///"))
+        });
+        // Y los rangos que sí se pueden cumplir compilan, incluido el de un
+        // solo valor.
+        let p = FsSearchParams {
+            min_size: Some(5),
+            max_size: Some(5),
+            ..FsSearchParams::new(vp("mem:///"))
+        };
+        assert!(SearchMatchers::compile(&p).is_ok());
+    }
+
+    /// Una etiqueta de REEMPLAZO no es una codificación utilizable.
+    ///
+    /// `utf-7` y compañía existen en el estándar solo para que un navegador
+    /// las neutralice: decodifican el fichero entero a un U+FFFD. Aceptarlas
+    /// haría que la búsqueda no fallara y no encontrara nada, que es justo
+    /// lo que forzar una codificación viene a evitar.
+    #[test]
+    fn una_etiqueta_de_reemplazo_no_vale_como_codificacion() {
+        for etiqueta in ["utf-7", "hz-gb-2312", "iso-2022-cn"] {
+            let p = FsSearchParams {
+                content: Some("hola".into()),
+                encoding: Some(etiqueta.to_owned()),
+                ..FsSearchParams::new(vp("mem:///"))
+            };
+            assert!(
+                matches!(
+                    SearchMatchers::compile(&p),
+                    Err(SearchError::BadEncoding(_))
+                ),
+                "{etiqueta} coló"
+            );
+        }
+        // Y una de verdad sí.
+        let p = FsSearchParams {
+            content: Some("hola".into()),
+            encoding: Some("windows-1252".into()),
+            ..FsSearchParams::new(vp("mem:///"))
+        };
+        assert!(SearchMatchers::compile(&p).is_ok());
+    }
+
+    /// «Palabra entera» envuelve el patrón en UN grupo.
+    ///
+    /// Sin el grupo, `gato|perro` se leería como `\bgato` o `perro\b`: otra
+    /// búsqueda, y una que casa justo lo que se pidió excluir.
+    #[test]
+    fn palabra_entera_agrupa_la_alternancia() {
+        assert_eq!(palabra_entera("gato|perro"), r"\b(?:gato|perro)\b");
     }
 
     /// #165: el gate de lectura mira la RAÍZ de la búsqueda, así que una raíz
