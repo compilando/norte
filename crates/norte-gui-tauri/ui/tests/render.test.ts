@@ -2703,10 +2703,19 @@ describe("los ajustes", () => {
   function conAjustes(): ViewSnapshot {
     const v = vista({});
     v.settings = {
+      index: [
+        { key: "appearance", title: "Apariencia", visible: 2 },
+        // Vaciada por el filtro: sigue en el índice, apagada.
+        { key: "open-with", title: "Abrir con", visible: 0 },
+        { key: "paths", title: "Dónde vive cada cosa", visible: 2 },
+      ],
+      query: "tema",
+      shown: 2,
+      total: 34,
       sections: [
         {
           section: "settings",
-          title: "General",
+          title: "Apariencia",
           rows: [
             {
               id: "ui.confirm-quit",
@@ -2715,6 +2724,16 @@ describe("los ajustes", () => {
               value: "siempre",
               hostile: false,
               restart_required: true,
+              modified: false,
+            },
+            {
+              id: "ui.theme",
+              name: "Tema",
+              desc: "El tema de la ventana",
+              value: "nord",
+              hostile: false,
+              restart_required: false,
+              modified: true,
             },
           ],
         },
@@ -2749,17 +2768,74 @@ describe("los ajustes", () => {
     expect(caja.getAttribute("aria-modal")).toBe("true");
     // La nota de «no escribe» se fue con el puente 60: esta ventana escribe.
     expect(caja.querySelector(".settings-note")).toBeNull();
-    // Dos cabeceras, tres filas: el cursor cuenta filas, no cabeceras.
+    // Dos cabeceras, cuatro filas: el cursor cuenta filas, no cabeceras.
     expect(caja.querySelectorAll(".settings-group")).toHaveLength(2);
     const filas = [...caja.querySelectorAll(".settings-row")];
-    expect(filas).toHaveLength(3);
+    expect(filas).toHaveLength(4);
     expect(filas.map((f) => f.id)).toEqual([
       "settings-row-0",
       "settings-row-1",
       "settings-row-2",
+      "settings-row-3",
     ]);
     const lista = caja.querySelector(".settings-rows") as HTMLElement;
     expect(lista.getAttribute("aria-activedescendant")).toBe("settings-row-1");
+  });
+
+  it("pinta el índice y manda al host la sección elegida", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conAjustes());
+    const indice = [...document.querySelectorAll(".settings-index-item")];
+    expect(indice.map((i) => (i as HTMLElement).dataset["key"])).toEqual([
+      "appearance",
+      "open-with",
+      "paths",
+    ]);
+    // La que el filtro vació sigue, apagada y sin poder pulsarse.
+    const vacia = indice[1] as HTMLButtonElement;
+    expect(vacia.dataset["empty"]).toBe("true");
+    expect(vacia.disabled).toBe(true);
+    (indice[0] as HTMLElement).click();
+    expect(enviadas.at(-1)).toEqual({
+      action: "settings_jump_section",
+      section: "appearance",
+    });
+  });
+
+  it("el buscador manda el texto, no una tecla", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conAjustes());
+    const caja = document.querySelector(".settings-search") as HTMLInputElement;
+    expect(caja.value).toBe("tema");
+    caja.value = "fuente";
+    caja.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(enviadas.at(-1)).toEqual({ action: "settings_query", text: "fuente" });
+  });
+
+  it("una fila tocada lleva punto y botón de restablecer", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conAjustes());
+    const filas = [...document.querySelectorAll(".settings-row")];
+    // La primera está en su valor de fábrica; la segunda no.
+    expect(filas[0]?.querySelector(".settings-reset")).toBeNull();
+    const boton = filas[1]?.querySelector(".settings-reset") as HTMLButtonElement;
+    expect(filas[1]?.querySelector(".settings-dot")?.getAttribute("aria-label")).toBe(
+      catalogoReal()["settings-modified"] ?? "",
+    );
+    boton.click();
+    expect(enviadas.at(-1)).toEqual({ action: "settings_reset", row: 1 });
+  });
+
+  it("conserva el sitio del scroll al repintar", () => {
+    const { screen } = montar();
+    screen.paint(conAjustes());
+    const lista = document.querySelector(".settings-rows") as HTMLElement;
+    // jsdom no hace layout, así que `scrollTop` solo se conserva si el
+    // renderer lo copia a mano — que es exactamente lo que se comprueba.
+    Object.defineProperty(lista, "scrollTop", { value: 120, writable: true });
+    screen.paint(conAjustes());
+    const despues = document.querySelector(".settings-rows") as HTMLElement;
+    expect(despues.scrollTop).toBe(120);
   });
 
   it("la cabecera de la sección se revela con su primera fila", () => {
@@ -2770,15 +2846,15 @@ describe("los ajustes", () => {
     }
     screen.paint(v);
     const lista = document.querySelector(".settings-rows") as HTMLElement;
-    // Fila 0: abre «General», así que lo que se desplaza a la vista es la
+    // Fila 0: abre «Apariencia», así que lo que se desplaza a la vista es la
     // CABECERA. Revelar solo la fila dejaba el rótulo fuera de la caja, que
-    // es cómo «General» dejaba de verse al volver arriba.
+    // es cómo el rótulo dejaba de verse al volver arriba.
     expect(objetivoRevelado(lista, 0)?.className).toBe("settings-group");
-    expect(objetivoRevelado(lista, 0)?.textContent).toContain("General");
-    // Fila 1: abre la sección de rutas, misma regla.
-    expect(objetivoRevelado(lista, 1)?.className).toBe("settings-group");
-    // Fila 2: no abre nada, se revela ella.
-    expect(objetivoRevelado(lista, 2)?.id).toBe("settings-row-2");
+    expect(objetivoRevelado(lista, 0)?.textContent).toContain("Apariencia");
+    // Fila 1: no abre nada, se revela ella.
+    expect(objetivoRevelado(lista, 1)?.id).toBe("settings-row-1");
+    // Fila 2: abre la sección de rutas, misma regla que la 0.
+    expect(objetivoRevelado(lista, 2)?.className).toBe("settings-group");
   });
 
   it("una ubicación que falta lo dice, y una hostil se marca", () => {
@@ -2796,13 +2872,14 @@ describe("los ajustes", () => {
       }
     }
     screen.paint(v);
+    // Las dos primeras son ajustes; las rutas van detrás.
     const filas = [...document.querySelectorAll(".settings-row")];
-    expect(filas[1]?.querySelector(".settings-value")?.getAttribute("data-hostile")).toBe(
+    expect(filas[2]?.querySelector(".settings-value")?.getAttribute("data-hostile")).toBe(
       "true",
     );
-    expect(filas[2]?.querySelector(".settings-missing")).not.toBeNull();
+    expect(filas[3]?.querySelector(".settings-missing")).not.toBeNull();
     // La que está no se marca como que falta.
-    expect(filas[1]?.querySelector(".settings-missing")).toBeNull();
+    expect(filas[2]?.querySelector(".settings-missing")).toBeNull();
   });
 
   it("si toda la sección pide reiniciar, se dice una vez y no cinco", () => {
@@ -2811,14 +2888,10 @@ describe("los ajustes", () => {
     if (v.settings !== null) {
       const sec = v.settings.sections[0];
       if (sec?.section === "settings") {
-        sec.rows.push({
-          id: "ui.theme",
-          name: "Tema",
-          desc: "El tema",
-          value: "tokyonight",
-          hostile: false,
-          restart_required: true,
-        });
+        // TODAS: la del fixture que no lo pedía, también.
+        for (const r of sec.rows) {
+          r.restart_required = true;
+        }
       }
     }
     screen.paint(v);
@@ -2837,12 +2910,13 @@ describe("los ajustes", () => {
       const sec = v.settings.sections[0];
       if (sec?.section === "settings") {
         sec.rows.push({
-          id: "ui.theme",
-          name: "Tema",
-          desc: "El tema",
-          value: "tokyonight",
+          id: "ui.lang",
+          name: "Idioma",
+          desc: "El idioma de la ventana",
+          value: "auto",
           hostile: false,
           restart_required: false,
+          modified: false,
         });
       }
     }

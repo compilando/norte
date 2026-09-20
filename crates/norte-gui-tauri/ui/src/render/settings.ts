@@ -27,6 +27,11 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
     this.settingsRoot.dataset["open"] = "false";
     return;
   }
+  // El sitio del scroll ANTES de rehacer la lista: el `<ul>` se reemplaza
+  // entero en cada pintada, y sin esto la rueda vuelve a cero cada vez que
+  // el host manda un parche.
+  const previo = this.settingsRoot.querySelector(".settings-rows");
+  const scroll = previo instanceof HTMLElement ? previo.scrollTop : 0;
   this.settingsRoot.dataset["open"] = "true";
   const caja = document.createElement("section");
   caja.className = "settings";
@@ -37,6 +42,29 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   const titulo = document.createElement("h1");
   titulo.textContent = this.t("settings-title");
   caja.append(titulo);
+
+  // El buscador. Un `<input>` de verdad y no una tecla que viaje: las
+  // imprimibles no llegan al host, que es por lo que esta pantalla no tuvo
+  // filtro hasta ahora.
+  const barra = document.createElement("div");
+  barra.className = "settings-search-bar";
+  const buscar = document.createElement("input");
+  buscar.className = "settings-search";
+  buscar.type = "search";
+  buscar.value = settings.query;
+  buscar.setAttribute("aria-label", this.t("settings-title"));
+  buscar.addEventListener("input", () => {
+    this.send({ action: "settings_query", text: buscar.value });
+  });
+  const cuenta = document.createElement("span");
+  cuenta.className = "settings-count";
+  cuenta.textContent = `${String(settings.shown)} / ${String(settings.total)}`;
+  barra.append(buscar, cuenta);
+  caja.append(barra);
+
+  const cuerpo = document.createElement("div");
+  cuerpo.className = "settings-body";
+  cuerpo.append(indiceDeSecciones.call(this, settings));
 
   const lista = document.createElement("ul");
   lista.className = "settings-rows";
@@ -82,6 +110,30 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
           valor.append(badge(this.t("hostile-name")));
         }
         fila.append(nombre, valor);
+        if (r.modified) {
+          // Un punto CON etiqueta, no color a secas: el color no es
+          // información para quien no lo distingue. Y con él, el botón que
+          // lo deshace — un punto que dice «esto lo tocaste tú» y no ofrece
+          // volver atrás es media función.
+          const punto = document.createElement("span");
+          punto.className = "settings-dot";
+          punto.setAttribute("aria-label", this.t("settings-modified"));
+          punto.textContent = "●";
+          const volver = document.createElement("button");
+          volver.className = "settings-reset";
+          volver.type = "button";
+          volver.textContent = this.t("settings-reset");
+          // El índice de ESTA fila, copiado: `i` es UNA variable del bucle,
+          // y una clausura que la leyera al pulsar vería la última.
+          const cual = i;
+          volver.addEventListener("click", (e) => {
+            // Sin burbujear: el `<li>` lleva un click que SEÑALA y un doble
+            // click que activa, y restablecer no es ninguna de las dos.
+            e.stopPropagation();
+            this.send({ action: "settings_reset", row: cual });
+          });
+          fila.append(punto, volver);
+        }
         if (r.restart_required && !todas) {
           const marca = document.createElement("span");
           marca.className = "settings-badge";
@@ -123,9 +175,45 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
     }
   }
   lista.setAttribute("aria-activedescendant", `settings-row-${String(settings.cursor)}`);
-  caja.append(lista);
+  cuerpo.append(lista);
+  caja.append(cuerpo);
   this.settingsRoot.replaceChildren(caja);
+  lista.scrollTop = scroll;
   revelar(objetivoRevelado(lista, settings.cursor));
+}
+
+/**
+ * El índice de la izquierda: todas las secciones que esta superficie tiene,
+ * con cuántas de sus filas se ven.
+ *
+ * Una que el filtro vació sigue aquí, apagada: un índice que cambia de largo
+ * mientras escribes no se puede usar como mapa. Lo que viaja de vuelta al
+ * pinchar es su clave ESTABLE, así que el salto no depende del idioma.
+ */
+function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
+  const nav = document.createElement("nav");
+  nav.className = "settings-index";
+  nav.setAttribute("aria-label", this.t("settings-title"));
+  for (const s of settings.index) {
+    const item = document.createElement("button");
+    item.className = "settings-index-item";
+    item.type = "button";
+    item.dataset["key"] = s.key;
+    item.dataset["empty"] = String(s.visible === 0);
+    item.disabled = s.visible === 0;
+    const titulo = document.createElement("span");
+    titulo.className = "settings-index-title";
+    titulo.textContent = s.title;
+    const cuantas = document.createElement("span");
+    cuantas.className = "settings-index-count";
+    cuantas.textContent = String(s.visible);
+    item.append(titulo, cuantas);
+    item.addEventListener("click", () => {
+      this.send({ action: "settings_jump_section", section: s.key });
+    });
+    nav.append(item);
+  }
+  return nav;
 }
 
 /**
