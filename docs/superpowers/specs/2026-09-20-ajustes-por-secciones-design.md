@@ -138,9 +138,12 @@ devuelve el valor de fábrica.** Si el sistema, el perfil o el proyecto fijan
 esa clave, el valor cambia y sigue sin ser el defecto. No se inventa
 maquinaria de procedencia para explicarlo: como `modified` se calcula contra
 el defecto y las filas se reconstruyen tras escribir, el punto **se queda
-encendido**, y la fila añade una línea (`settings-still-set-elsewhere`) que
-dice que otra capa lo fija. Es exactamente lo que ha pasado, dicho con lo que
-ya se sabe.
+encendido**, y quien restableció mira ese punto y lo anuncia — `settings-reset-done`
+si volvió al valor de fábrica, `settings-still-set-elsewhere` si no. Es
+exactamente lo que ha pasado, dicho con lo que ya se sabe y en el momento en
+el que importa. Una marca permanente en la fila pediría recordar «esto se
+restableció» a través de una reconstrucción que no conserva identidad, y eso
+sí sería maquinaria nueva.
 
 Restablecer una fila que no está modificada no escribe nada.
 
