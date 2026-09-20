@@ -888,6 +888,21 @@ pub fn build_rows_in(
             }
         })
         .collect();
+    // En orden de PANTALLA: por sección primero, y dentro de cada una el
+    // orden del catálogo. El catálogo va agrupado por sección de
+    // `norte.toml` (`[ui]` y luego `[keymap]`), que no es el mismo reparto:
+    // `ui.lang` es Comportamiento y `ui.quick-search` es Teclado, y están a
+    // dos filas la una de la otra. Sin ordenar aquí, una lista con cabeceras
+    // pintaría la misma sección siete veces.
+    //
+    // `sort_by_key` es ESTABLE, que es lo que conserva el orden del catálogo
+    // dentro de cada sección sin escribir un segundo criterio.
+    rows.sort_by_key(|r| {
+        Section::ORDER
+            .iter()
+            .position(|s| *s == r.section)
+            .unwrap_or(usize::MAX)
+    });
     rows.extend(plugin_summary_rows(plugin_summaries, lang));
     rows
 }

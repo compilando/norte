@@ -14,6 +14,7 @@ use crate::app::display_name;
 use crate::theme::TuiTheme;
 use norte_frontend::display::cells;
 use norte_frontend::middle_ellipsis;
+use norte_frontend::settings::Section;
 use norte_i18n::{t, ta};
 
 /// Overlay del catálogo de extensiones (M4-P3): la lista de plugins AGRUPADA
@@ -1256,10 +1257,19 @@ pub(crate) fn draw_wizard(
 /// Una línea de la lista de ajustes: una cabecera de sección o una fila.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsLine {
-    /// La cabecera de una sección, por su clave Fluent.
-    Header(&'static str),
+    /// La cabecera de una sección. Lleva la SECCIÓN y no su clave Fluent:
+    /// quien sabe cómo se llama una sección es ella.
+    Header(Section),
     /// Una fila, por su posición entre las VISIBLES.
     Row(usize),
+}
+
+/// La sección de la fila bajo el cursor: la que va CLAVADA arriba.
+///
+/// `None` solo si no hay ninguna fila visible.
+pub(crate) fn settings_cursor_section(settings: &crate::app::Settings) -> Option<Section> {
+    let &real = settings.visible().get(settings.cursor())?;
+    Some(settings.rows()[real].section)
 }
 
 /// Las líneas que pinta la lista de ajustes, en orden: cabeceras y filas.
@@ -1271,17 +1281,12 @@ pub(crate) enum SettingsLine {
 /// se desincroniza del dibujo en cuanto alguien añada una sección.
 pub(crate) fn settings_line_plan(settings: &crate::app::Settings) -> Vec<SettingsLine> {
     let mut plan = Vec::new();
-    let mut general_header = false;
-    let mut plugins_header = false;
+    let mut actual: Option<Section> = None;
     for (pos, &real) in settings.visible().iter().enumerate() {
-        if settings.rows()[real].is_plugins_note() {
-            if !plugins_header {
-                plan.push(SettingsLine::Header("settings-section-plugins"));
-                plugins_header = true;
-            }
-        } else if !general_header {
-            plan.push(SettingsLine::Header("settings-section-general"));
-            general_header = true;
+        let seccion = settings.rows()[real].section;
+        if actual != Some(seccion) {
+            plan.push(SettingsLine::Header(seccion));
+            actual = Some(seccion);
         }
         plan.push(SettingsLine::Row(pos));
     }
@@ -1296,7 +1301,9 @@ pub(crate) fn settings_line_plan(settings: &crate::app::Settings) -> Vec<Setting
 /// [`settings_line_plan`]: un alto adivinado rompe el scroll en silencio.
 pub(crate) fn settings_list_rows(alto: u16) -> usize {
     let caja = alto.saturating_sub(4).max(6);
-    usize::from(caja.saturating_sub(2).saturating_sub(1))
+    // Dos bordes, la línea de descripción reservada abajo, y la CABECERA
+    // CLAVADA de arriba: esa no scrollea, así que no es de la lista.
+    usize::from(caja.saturating_sub(2).saturating_sub(1).saturating_sub(1))
 }
 
 pub(crate) fn draw_settings(
@@ -1319,7 +1326,16 @@ pub(crate) fn draw_settings(
         Line::raw(format!(" {buf}_  {} ", t("settings-edit-hint")))
     } else {
         let (query, _) = display_name(settings.query_display().as_bytes());
-        Line::raw(format!(" /{query}  {} ", t("settings-hint")))
+        // La cuenta va SIEMPRE, no solo filtrando: sin la segunda cifra,
+        // «no hay nada» y «lo tapé con una letra» se leen igual.
+        let cuenta = ta(
+            "settings-count",
+            &[
+                ("shown", &settings.shown().to_string()),
+                ("total", &settings.total().to_string()),
+            ],
+        );
+        Line::raw(format!(" /{query}  {cuenta}  {} ", t("settings-hint")))
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1330,29 +1346,65 @@ pub(crate) fn draw_settings(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Tres franjas: la cabecera CLAVADA, la lista que scrollea, y la línea
+    // de descripción. La cabecera de arriba es la de la sección del cursor y
+    // no se mueve: es el único rótulo que dice dónde estás, y una que
+    // scrollea se va por el borde en cuanto bajas tres filas.
     let split = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
     let inner_w = usize::from(inner.width);
+
+    let clavada = settings_cursor_section(settings).map_or_else(String::new, |s| t(s.label_key()));
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            middle_ellipsis(&clavada, inner_w),
+            theme.role(Role::Title),
+        )),
+        split[0],
+    );
 
     let mut lines: Vec<Line<'_>> = Vec::new();
     if settings.visible().is_empty() {
         lines.push(Line::raw(" —"));
     } else {
-        for item in settings_line_plan(settings) {
+        // La cabecera que la clavada ya enseña arriba se pinta EN BLANCO en
+        // la lista, no se quita: quitarla movería las filas una línea cada
+        // vez que el cursor cruza de sección, y la cuenta de líneas dejaría
+        // de cuadrar con la que concilió `geometry`.
+        let plan = settings_line_plan(settings);
+        let tapada = settings_cursor_section(settings).filter(|s| {
+            plan.get(settings.viewport_offset()).copied() == Some(SettingsLine::Header(*s))
+        });
+        for item in plan {
             match item {
-                SettingsLine::Header(clave) => {
-                    lines.push(Line::styled(t(clave), theme.role(Role::Title)));
+                SettingsLine::Header(seccion) => {
+                    if tapada == Some(seccion) {
+                        lines.push(Line::raw(""));
+                        continue;
+                    }
+                    lines.push(Line::styled(
+                        t(seccion.label_key()),
+                        theme.role(Role::Title),
+                    ));
                 }
                 SettingsLine::Row(pos) => {
                     let row = &settings.rows()[settings.visible()[pos]];
                     let selected = pos == settings.cursor();
                     let cursor = if selected { ">" } else { " " };
+                    // El punto de «esto lo has tocado tú» es un CARÁCTER, no
+                    // un color: un color a secas no es información para
+                    // quien no lo distingue.
+                    let punto = if row.modified { "•" } else { " " };
                     let text = if row.is_plugins_note() {
-                        format!("{cursor} {}", row.name)
+                        format!("{cursor}{punto}{}", row.name)
                     } else {
-                        format!("{cursor} {:<28} {}", row.name, row.value)
+                        format!("{cursor}{punto}{:<28} {}", row.name, row.value)
                     };
                     let mut line = Line::raw(middle_ellipsis(&text, inner_w));
                     if selected {
@@ -1373,7 +1425,7 @@ pub(crate) fn draw_settings(
         .min(lines.len().saturating_sub(1));
     frame.render_widget(
         Paragraph::new(lines).scroll((u16::try_from(desde).unwrap_or(u16::MAX), 0)),
-        split[0],
+        split[1],
     );
 
     let desc = settings.selected_desc().unwrap_or_default();
@@ -1383,7 +1435,7 @@ pub(crate) fn draw_settings(
     ));
     frame.render_widget(
         Paragraph::new(desc_line).style(theme.role(Role::BorderUnfocused)),
-        split[1],
+        split[2],
     );
 }
 
