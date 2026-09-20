@@ -33,6 +33,36 @@ you asked, and the more specific file still wins.
 
 > 💡 A few options only take effect on a restart — a font, a language. Their row says so instead of pretending the change landed.
 
+# Getting around the screen
+
+The settings are split into sections: appearance, panes and listing, open
+with, keyboard and mouse, behaviour, plugins, and where things live. The
+heading of the section you are in stays pinned at the top as you scroll, and
+an index on the left says how many options each one is showing — a section
+your search emptied stays in the index, dimmed.
+
+| Key | What it does |
+|-----|--------------|
+| `[` and `]` | previous / next section, skipping the empty ones |
+| `ctrl+r` | reset the option under the cursor |
+| `ctrl+k` | the shortcut editor |
+
+Typing filters. Two operators narrow it further: `@modified` leaves only what
+is not at its factory value, and `@section:appearance` (or
+`@section:apariencia`, which works just as well) keeps one section. They
+combine with each other and with the text. An `@` that opens no known
+operator is ordinary text.
+
+In the window the index is clickable and the search is a text box.
+
+# Resetting, and what it cannot do
+
+A dot in front of the name means "this is not the factory value". `ctrl+r` —
+or the row's button, in the window — **removes the key from your file**, which
+is not the same as writing the default: if a layer below sets the same key,
+the value changes and still is not the factory one. The dot stays lit and the
+status bar says so, rather than leaving you thinking it did not work.
+
 # Themes
 
 {{cmd:app.theme}} lists the themes and previews the highlighted one as you
