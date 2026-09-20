@@ -797,7 +797,13 @@ msg-palette-no-help = no help page documents this command yet
 settings-title = Settings
 settings-hint = [↑/↓/pgup/pgdn] navigate · [enter] edit · [esc] close
 settings-edit-hint = [enter] save · [esc] cancel
+# obsolete: all 33 entries used to live here. Removed next cycle.
 settings-section-general = General
+settings-section-appearance = Appearance
+settings-section-panes = Panes and listing
+settings-section-open-with = Open with
+settings-section-input = Keyboard and mouse
+settings-section-behavior = Behaviour
 settings-section-plugins = Plugins
 settings-plugins-name = Plugin settings
 settings-plugins-note = No installed plugin declares configurable settings.

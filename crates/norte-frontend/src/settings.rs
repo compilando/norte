@@ -22,14 +22,98 @@
 use crate::config::FrontendConfig;
 use norte_i18n::t;
 
-/// Which group of the settings UI an entry renders under.
+/// Bajo qué grupo de la pantalla de ajustes se pinta una entrada.
+///
+/// Nació con dos variantes —`General` y `Plugins`— y una de las dos ni
+/// siquiera aparecía en [`catalog`]: las 33 entradas eran `General`, así que
+/// la pantalla se leía como una lista plana con un rótulo encima. El orden
+/// de [`Self::ORDER`] es el de la pantalla, y es deliberado: lo que se toca
+/// el primer día arriba, lo que es diagnóstico abajo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
-    /// The curated list in [`catalog`].
-    General,
+    /// Tema, fuentes y lo que se ve.
+    Appearance,
+    /// Qué enseña un panel y qué cromo lo rodea.
+    Panes,
+    /// Con qué programa se abre un fichero.
+    OpenWith,
+    /// Teclado y ratón.
+    Input,
+    /// Lo que norte hace sin que se lo pidan.
+    Behavior,
     /// Built from an approved plugin's manifest (S3/S4) — no entries of this
     /// kind live in [`catalog`] itself.
     Plugins,
+    /// Las ubicaciones (configuración, estado, logs, socket). Tampoco sale
+    /// del catálogo: la proyecta quien hospeda. Es una sección del MODELO
+    /// para que el índice la liste como una más y para que la terminal la
+    /// gane sin copiar la proyección de la ventana.
+    Paths,
+}
+
+impl Section {
+    /// Las secciones en el orden en el que se pintan.
+    pub const ORDER: &'static [Section] = &[
+        Section::Appearance,
+        Section::Panes,
+        Section::OpenWith,
+        Section::Input,
+        Section::Behavior,
+        Section::Plugins,
+        Section::Paths,
+    ];
+
+    /// Su nombre ESTABLE, sin traducir.
+    ///
+    /// Lo acepta `@section:` en cualquier idioma, y es lo que viaja por el
+    /// puente hacia la ventana: un fichero de traducción a medias no puede
+    /// volver una sección inencontrable ni romper un salto.
+    ///
+    /// ```
+    /// use norte_frontend::settings::Section;
+    /// assert_eq!(Section::OpenWith.stable_key(), "open-with");
+    /// ```
+    #[must_use]
+    pub fn stable_key(self) -> &'static str {
+        match self {
+            Section::Appearance => "appearance",
+            Section::Panes => "panes",
+            Section::OpenWith => "open-with",
+            Section::Input => "input",
+            Section::Behavior => "behavior",
+            Section::Plugins => "plugins",
+            Section::Paths => "paths",
+        }
+    }
+
+    /// La clave Fluent de su rótulo, derivada de [`Self::stable_key`]: dos
+    /// listas de nombres es una lista que se desincroniza.
+    ///
+    /// ```
+    /// use norte_frontend::settings::Section;
+    /// assert_eq!(Section::Appearance.label_key(), "settings-section-appearance");
+    /// ```
+    #[must_use]
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Section::Appearance => "settings-section-appearance",
+            Section::Panes => "settings-section-panes",
+            Section::OpenWith => "settings-section-open-with",
+            Section::Input => "settings-section-input",
+            Section::Behavior => "settings-section-behavior",
+            Section::Plugins => "settings-section-plugins",
+            Section::Paths => "settings-section-paths",
+        }
+    }
+
+    /// La sección anterior/siguiente en [`Self::ORDER`], sin dar la vuelta.
+    #[must_use]
+    pub fn step(self, delta: i32) -> Option<Section> {
+        let pos = Section::ORDER.iter().position(|s| *s == self)?;
+        let destino = i32::try_from(pos).ok()?.checked_add(delta)?;
+        let destino = usize::try_from(destino).ok()?;
+        Section::ORDER.get(destino).copied()
+    }
 }
 
 /// The editing widget a setting needs, and (for [`Self::Enum`]) its valid
@@ -96,13 +180,57 @@ pub struct SettingDef {
     /// across releases: it is also the seed for the Fluent key pair via
     /// [`fluent_name_id`]/[`fluent_desc_id`].
     pub id: &'static str,
-    /// [`Section::General`] for every entry in [`catalog`].
-    pub section: Section,
     /// The editing widget.
     pub kind: SettingKind,
     /// Whether a live edit applies without a restart, from the TUI's point
     /// of view (see the struct doc for the GUI's per-entry split).
     pub applies_live: bool,
+}
+
+impl SettingDef {
+    /// La sección bajo la que se pinta.
+    ///
+    /// Sale de [`section_of`] y no de un campo por entrada: escrito 33
+    /// veces al lado de cada `id`, el reparto no se puede leer de un
+    /// vistazo ni auditar de una vez — que es exactamente cómo las 33
+    /// entradas acabaron diciendo `General`.
+    ///
+    /// ```
+    /// use norte_frontend::settings::{catalog, Section};
+    /// let tema = catalog().iter().find(|d| d.id == "ui.theme").expect("ui.theme");
+    /// assert_eq!(tema.section(), Section::Appearance);
+    /// ```
+    #[must_use]
+    pub fn section(&self) -> Section {
+        // El invariante lo fija `cada_entrada_del_catalogo_tiene_seccion`:
+        // ningún id del catálogo cae aquí. Un id nuevo sin sección aterriza
+        // en «Comportamiento» —visible, no escondido— y el test lo caza.
+        section_of(self.id).unwrap_or(Section::Behavior)
+    }
+}
+
+/// El reparto del catálogo en secciones, en UN sitio.
+///
+/// `None` para un id que no es del catálogo. Un id del catálogo que
+/// devuelva `None` es un bug que caza el test de cobertura: la alternativa
+/// —un `_ =>` que le dé una sección cualquiera— archiva mal en silencio.
+#[must_use]
+pub fn section_of(id: &str) -> Option<Section> {
+    let s = match id {
+        "ui.theme" | "ui.theme-light" | "ui.theme-dark" | "ui.font" | "ui.mono-font"
+        | "ui.font-size" | "ui.reduce-motion" | "ui.row-stripes" | "ui.images" => {
+            Section::Appearance
+        }
+        "ui.show-hidden" | "ui.parent-entry" | "ui.dir-indicator" | "ui.pane-footer"
+        | "ui.date-format" | "ui.panel-bar" | "ui.panel-bar-style" | "ui.menu-bar"
+        | "ui.key-bar" | "ui.splash" | "ui.processes-panel" => Section::Panes,
+        "ui.editor" | "ui.editor-detached" | "ui.diff" | "ui.diff-detached" => Section::OpenWith,
+        "keymap.preset" | "ui.mouse" | "ui.alt-menu" | "ui.quick-search" => Section::Input,
+        "ui.confirm-quit" | "ui.dialog-buttons" | "ui.notice-seconds" | "ui.history-size"
+        | "ui.lang" => Section::Behavior,
+        _ => return None,
+    };
+    Some(s)
 }
 
 /// The curated GENERAL settings (v1). Order is DISPLAY order (S3/S4 render
@@ -111,43 +239,36 @@ pub struct SettingDef {
 const CATALOG: &[SettingDef] = &[
     SettingDef {
         id: "ui.theme",
-        section: Section::General,
         kind: SettingKind::ThemeName,
         applies_live: true,
     },
     SettingDef {
         id: "ui.lang",
-        section: Section::General,
         kind: SettingKind::Enum(&["es", "en"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.font",
-        section: Section::General,
         kind: SettingKind::Text,
         applies_live: true,
     },
     SettingDef {
         id: "ui.mono-font",
-        section: Section::General,
         kind: SettingKind::Text,
         applies_live: true,
     },
     SettingDef {
         id: "ui.font-size",
-        section: Section::General,
         kind: SettingKind::Int { min: 8, max: 32 },
         applies_live: true,
     },
     SettingDef {
         id: "ui.quick-search",
-        section: Section::General,
         kind: SettingKind::Enum(&["filter", "jump"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.reduce-motion",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -159,7 +280,6 @@ const CATALOG: &[SettingDef] = &[
         // topic) — and a setting you only learn about from a config file
         // you did not know existed is not discoverable.
         id: "ui.mouse",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -168,7 +288,6 @@ const CATALOG: &[SettingDef] = &[
         // defecto nadie la encontraría, y quien la busca es quien acaba de
         // pulsar Alt en el terminal y no ha pasado nada.
         id: "ui.alt-menu",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -178,7 +297,6 @@ const CATALOG: &[SettingDef] = &[
         // recuperar esa fila, y un ajuste del que solo te enteras leyendo un
         // fichero de config que no sabías que existía no es descubrible.
         id: "ui.menu-bar",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -188,7 +306,6 @@ const CATALOG: &[SettingDef] = &[
         // Dejar su interruptor solo en un fichero de config sería cometer el
         // mismo error una capa más arriba.
         id: "ui.panel-bar",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -197,7 +314,6 @@ const CATALOG: &[SettingDef] = &[
         // tiene comando ni tecla, así que el fichero era el ÚNICO sitio desde
         // el que se podía apagar o encender.
         id: "ui.parent-entry",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -206,7 +322,6 @@ const CATALOG: &[SettingDef] = &[
         // la SESIÓN y no persiste nada, así que sin esta fila el valor con el
         // que norte abre solo se podía cambiar escribiendo el fichero.
         id: "ui.show-hidden",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -216,7 +331,6 @@ const CATALOG: &[SettingDef] = &[
         // hasta ahora se elegía por variable de entorno, que es el sitio donde
         // menos se busca la configuración de un programa.
         id: "ui.editor",
-        section: Section::General,
         kind: SettingKind::Args,
         applies_live: true,
     },
@@ -225,7 +339,6 @@ const CATALOG: &[SettingDef] = &[
         // gráfico deja la terminal en blanco y no hay nada en pantalla que
         // explique por qué.
         id: "ui.editor-detached",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -234,20 +347,17 @@ const CATALOG: &[SettingDef] = &[
         // editor: sin fila, el que compara dos ficheros solo se elige
         // escribiendo el fichero de configuración.
         id: "ui.diff",
-        section: Section::General,
         kind: SettingKind::Args,
         applies_live: true,
     },
     SettingDef {
         // Y si ese comparador abre ventana propia (Meld, Kompare).
         id: "ui.diff-detached",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
         id: "ui.confirm-quit",
-        section: Section::General,
         kind: SettingKind::Enum(&["auto", "always", "never"]),
         applies_live: true,
     },
@@ -256,43 +366,36 @@ const CATALOG: &[SettingDef] = &[
     //     el fichero es un interruptor que no encuentra nadie.
     SettingDef {
         id: "ui.key-bar",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
         id: "ui.panel-bar-style",
-        section: Section::General,
         kind: SettingKind::Enum(&["names", "letters"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.pane-footer",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
         id: "ui.row-stripes",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
         id: "ui.date-format",
-        section: Section::General,
         kind: SettingKind::Enum(&["smart", "relative", "iso"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.notice-seconds",
-        section: Section::General,
         kind: SettingKind::Int { min: 0, max: 600 },
         applies_live: true,
     },
     SettingDef {
         id: "ui.history-size",
-        section: Section::General,
         kind: SettingKind::Int { min: 5, max: 64 },
         applies_live: true,
     },
@@ -300,13 +403,11 @@ const CATALOG: &[SettingDef] = &[
     // que se abre solo y la `/` de las carpetas.
     SettingDef {
         id: "ui.splash",
-        section: Section::General,
         kind: SettingKind::Enum(&["brief", "off", "home"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.processes-panel",
-        section: Section::General,
         kind: SettingKind::Enum(&["auto", "manual"]),
         applies_live: true,
     },
@@ -314,19 +415,16 @@ const CATALOG: &[SettingDef] = &[
     // TERMINAL — la ventana pinta imágenes por su propia webview y no la lee.
     SettingDef {
         id: "ui.images",
-        section: Section::General,
         kind: SettingKind::Enum(&["auto", "kitty", "blocks", "off"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.dir-indicator",
-        section: Section::General,
         kind: SettingKind::Enum(&["auto", "slash", "none"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.dialog-buttons",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -335,19 +433,16 @@ const CATALOG: &[SettingDef] = &[
     //     es la misma en los dos frontends.
     SettingDef {
         id: "ui.theme-light",
-        section: Section::General,
         kind: SettingKind::Text,
         applies_live: true,
     },
     SettingDef {
         id: "ui.theme-dark",
-        section: Section::General,
         kind: SettingKind::Text,
         applies_live: true,
     },
     SettingDef {
         id: "keymap.preset",
-        section: Section::General,
         kind: SettingKind::PresetName,
         applies_live: true,
     },
@@ -1778,6 +1873,60 @@ mod tests {
         // Y una cabecera no puede empujar el cursor fuera por abajo.
         s.reconcile_viewport(39, 38, 40, 10);
         assert!(s.viewport_offset() <= 38 && s.viewport_offset() + 10 > 39);
+    }
+
+    /// Ninguna entrada se queda sin sitio. Un id nuevo sin sección cae en
+    /// «Comportamiento» por el `unwrap_or` de `SettingDef::section`, y este
+    /// test es lo único que separa ese apaño de un archivado en silencio.
+    #[test]
+    fn cada_entrada_del_catalogo_tiene_seccion() {
+        for d in catalog() {
+            assert!(
+                section_of(d.id).is_some(),
+                "«{}» no está repartida en ninguna sección",
+                d.id
+            );
+        }
+    }
+
+    /// Y ninguna sección del catálogo se queda vacía: una sección que el
+    /// índice lista y nunca tiene nada es una promesa rota.
+    #[test]
+    fn cada_seccion_del_catalogo_tiene_al_menos_una_entrada() {
+        for s in Section::ORDER {
+            if matches!(s, Section::Plugins | Section::Paths) {
+                continue; // No salen del catálogo.
+            }
+            assert!(
+                catalog().iter().any(|d| d.section() == *s),
+                "la sección {s:?} no tiene ninguna entrada"
+            );
+        }
+    }
+
+    /// Cada sección se dice en los dos idiomas. Media pantalla traducida es
+    /// peor que ninguna.
+    #[test]
+    fn cada_seccion_tiene_su_rotulo_en_ambos_locales() {
+        for s in Section::ORDER {
+            for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+                let txt = norte_i18n::t_in(lang, s.label_key());
+                assert!(
+                    !txt.is_empty() && !txt.contains(s.label_key()),
+                    "{s:?} sin traducir en {lang:?}: {txt}"
+                );
+            }
+        }
+    }
+
+    /// Avanzar y retroceder por el índice no da la vuelta: en los extremos
+    /// no hay a dónde ir, y fingir que sí es un cursor que se teletransporta.
+    #[test]
+    fn el_paso_entre_secciones_para_en_los_extremos() {
+        assert_eq!(Section::Appearance.step(-1), None);
+        assert_eq!(Section::Appearance.step(1), Some(Section::Panes));
+        assert_eq!(Section::Paths.step(1), None);
+        assert_eq!(Section::Paths.step(-1), Some(Section::Plugins));
     }
 
     #[test]

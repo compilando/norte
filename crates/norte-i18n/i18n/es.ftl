@@ -806,7 +806,13 @@ msg-palette-no-help = ninguna página de la ayuda documenta este comando todaví
 settings-title = Ajustes
 settings-hint = [↑/↓/pgup/pgdn] navegar · [enter] editar · [esc] cerrar
 settings-edit-hint = [enter] guardar · [esc] cancelar
+# obsoleta: las 33 entradas vivían aquí. Se borra en el ciclo siguiente.
 settings-section-general = General
+settings-section-appearance = Apariencia
+settings-section-panes = Paneles y listado
+settings-section-open-with = Abrir con
+settings-section-input = Teclado y ratón
+settings-section-behavior = Comportamiento
 settings-section-plugins = Plugins
 settings-plugins-name = Ajustes de plugins
 settings-plugins-note = Ningún plugin instalado declara ajustes configurables.
