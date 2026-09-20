@@ -38,7 +38,9 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   const campo = this.settingsBarra?.querySelector(".settings-search");
   const enfocado = campo instanceof HTMLInputElement && document.activeElement === campo;
   const caret: [number | null, number | null] =
-    campo instanceof HTMLInputElement ? [campo.selectionStart, campo.selectionEnd] : [null, null];
+    campo instanceof HTMLInputElement
+      ? [campo.selectionStart, campo.selectionEnd]
+      : [null, null];
   this.settingsRoot.dataset["open"] = "true";
   const caja = document.createElement("section");
   caja.className = "settings";
@@ -263,7 +265,10 @@ function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
  * Aparte y exportada porque `scrollIntoView` no existe en jsdom: lo que los
  * tests pueden comprobar es la ELECCIÓN, no el desplazamiento.
  */
-export function objetivoRevelado(lista: Element, cursor: number): HTMLElement | undefined {
+export function objetivoRevelado(
+  lista: Element,
+  cursor: number,
+): HTMLElement | undefined {
   const fila = lista.querySelector(`#settings-row-${String(cursor)}`);
   if (!(fila instanceof HTMLElement)) {
     return undefined;
