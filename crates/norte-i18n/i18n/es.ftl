@@ -817,6 +817,7 @@ settings-section-behavior = Comportamiento
 settings-section-plugins = Plugins
 settings-count = {$shown} de {$total}
 settings-modified = no es el valor de fábrica
+settings-default-placeholder = lo que norte trae
 settings-reset = Restablecer
 settings-reset-done = «{$name}» vuelve al valor de fábrica
 # Quitar la clave de TU capa no siempre devuelve el valor de fábrica: si el

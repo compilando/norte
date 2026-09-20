@@ -461,7 +461,28 @@ use serde::{Deserialize, Serialize};
 ///   Sin este campo el renderer solo puede pintar uno, que es justo lo que
 ///   hace que no se sepa dónde está el foco. Un renderer anterior lo ignora
 ///   y pinta lo que pintaba — el índice a ratón, la lista con su cursor.
-pub const BRIDGE_VERSION: u32 = 82;
+/// - 83: los CONTROLES de los ajustes. `SettingRowView` gana `control`
+///   —`toggle`, `choice`, `number`, `text`, `args`—, `choices` con los
+///   valores admitidos y `min`/`max` de un número. Sin esto el renderer no
+///   puede pintar un interruptor: solo le llegaba el valor como texto, y la
+///   clase de un ajuste no se adivina mirando la palabra `true`.
+///
+///   Las listas VIVAS —los temas instalados, los presets— llegan ya
+///   resueltas dentro de `choices`, así que el renderer no distingue una
+///   lista del catálogo de una que cambia en caliente.
+///
+///   Y la acción `settings_set { id, value }`: PONE un valor en vez de
+///   ciclarlo. `settings_activate` sigue siendo lo que hace Enter, pero con
+///   un desplegable de diez temas elegir el séptimo serían siete viajes y
+///   seis escrituras en el `norte.toml`. Va por ID y no por fila porque un
+///   control tarda lo que tarda el lector en soltarlo, y el filtro de detrás
+///   puede haber cambiado qué filas hay.
+///
+///   Y `default`, el valor DE FÁBRICA de cada fila: lo que un campo vacío
+///   enseña como marcador. «Vacío» no es un hueco, es ese valor, y decir
+///   cuál informa — una frase que diga que lo hay ocupa el sitio del dato
+///   sin darlo.
+pub const BRIDGE_VERSION: u32 = 83;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

@@ -807,6 +807,7 @@ settings-section-behavior = Behaviour
 settings-section-plugins = Plugins
 settings-count = {$shown} of {$total}
 settings-modified = not the factory value
+settings-default-placeholder = whatever norte ships
 settings-reset = Reset
 settings-reset-done = "{$name}" is back to its factory value
 # Removing the key from YOUR layer does not always restore the factory

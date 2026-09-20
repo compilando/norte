@@ -112,6 +112,7 @@ body {
 .panelbar,
 .dialog,
 .palette,
+.settings,
 #whichkey,
 #fatal {
   font-family: var(--font-ui);
@@ -2120,8 +2121,12 @@ body {
 }
 
 .settings {
-  width: min(110ch, 92vw);
-  height: min(80vh, 100%);
+  /* Grande: son 34 ajustes con su valor y sus acciones a la derecha, y a
+     110ch la columna del valor se comía el nombre. El tope en `vw`/`vh`
+     sigue dejando ver el listado de detrás, que es lo que dice que esto es
+     un modal y no otra pantalla. */
+  width: min(150ch, 96vw);
+  height: min(90vh, 100%);
   display: flex;
   flex-direction: column;
   padding: 0 12px 8px;
@@ -2166,7 +2171,7 @@ body {
    cada ajuste sin sitio. */
 .settings-body {
   display: grid;
-  grid-template-columns: 22ch 1fr;
+  grid-template-columns: 26ch 1fr;
   gap: 0 12px;
   min-height: 0;
   flex: 1;
@@ -2193,7 +2198,10 @@ body {
 
 .settings-index-item {
   display: flex;
-  justify-content: space-between;
+  /* El rótulo pegado a su icono y la cuenta al final: con
+     `space-between` y tres hijos, el título se iba al centro y cada sección
+     empezaba en una columna distinta. */
+  justify-content: flex-start;
   gap: 8px;
   padding: 3px 8px 3px 4px;
   color: var(--fg);
@@ -2234,8 +2242,19 @@ body {
   cursor: default;
 }
 
+/* El rótulo NO parte en dos líneas: «Paneles y listado» a dos renglones
+   rompía la rejilla del índice y hacía saltar las cuentas de sitio. Si no
+   cabe, se recorta. */
+.settings-index-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-index-count {
   font-variant-numeric: tabular-nums;
+  opacity: 0.8;
 }
 
 .settings-rows {
@@ -2248,37 +2267,207 @@ body {
 /* PEGAJOSA: al desplazar, el rótulo de la sección en la que estás se queda
    arriba. Con fondo opaco — una cabecera translúcida con filas pasando por
    debajo es ilegible. */
+/* La cabecera de sección PESA: es la que separa un bloque de ajustes del
+   siguiente en una lista larga, y con el mismo cuerpo que la prosa no
+   separaba nada. */
 .settings-group {
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: 8px 0 2px;
+  margin-top: 10px;
+  padding: 6px 0 4px;
   color: var(--title-fg);
+  font-size: 1.25em;
+  font-weight: 600;
   background: var(--panel-bg);
+  border-bottom: 1px solid var(--separator, var(--border));
 }
 
 /* El punto de «no es el valor de fábrica», y el botón que lo deshace.
    Por el rol `title-fg` del tema y no por un `--accent` inventado: una
    variable que nadie alimenta se queda con su valor por defecto y deja de
-   seguir al tema en silencio. */
+   seguir al tema en silencio.
+
+   La celda existe SIEMPRE, con punto o sin él: es lo que mantiene los
+   nombres en columna. */
+/* La marca de «no es de fábrica»: una BARRA a la izquierda del bloque, no
+   un punto entre el texto. En una lista larga se encuentra de un vistazo lo
+   que has tocado, que es justo para lo que sirve. La celda existe siempre,
+   con barra o sin ella, para que los nombres empiecen todos igual. */
 .settings-dot {
-  color: var(--title-fg);
+  grid-area: marca;
+  align-self: stretch;
+  overflow: hidden;
+  /* El `●` que trae el nodo no se pinta: la información es la barra, y el
+     carácter está ahí para el lector de pantalla, con su etiqueta. */
+  text-indent: -99em;
 }
 
+.settings-dot[data-on="true"] {
+  background: var(--border-focus);
+  border-radius: 2px;
+}
+
+/* Las acciones, arriba a la derecha del bloque, a la altura del nombre. */
+.settings-actions {
+  grid-area: acciones;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+/* Restablecer: un ICONO. El texto se comía treinta celdas de cada fila
+   tocada para decir lo mismo que una flecha de deshacer. */
 .settings-reset {
-  padding: 0 6px;
+  width: 2.2em;
+  padding: 0;
   color: var(--fg);
   font: inherit;
+  line-height: inherit;
   background: none;
   border: 1px solid var(--border);
+  border-radius: 3px;
   cursor: pointer;
+}
+
+.settings-reset:hover {
+  color: var(--title-fg);
+  border-color: var(--border-focus);
+}
+
+/* --- Los controles de una fila -------------------------------------- */
+
+/* El interruptor. Pomo a un lado o al otro Y color: dos señales, porque una
+   posición sola no se distingue sin mirar fijo. */
+.settings-switch {
+  position: relative;
+  width: 2.4em;
+  height: 1.2em;
+  padding: 0;
+  background: var(--widget-bg, var(--panel-bg));
+  border: 1px solid var(--border);
+  border-radius: 1em;
+  cursor: pointer;
+}
+
+.settings-switch[data-on="true"] {
+  background: var(--selection-bg);
+  border-color: var(--border-focus);
+}
+
+.settings-switch-knob {
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  width: 0.9em;
+  height: 0.9em;
+  background: var(--fg);
+  border-radius: 50%;
+  transition: left 80ms ease-out;
+}
+
+.settings-switch[data-on="true"] .settings-switch-knob {
+  left: calc(100% - 0.9em - 3px);
+  background: var(--selection-fg);
+}
+
+/* Movimiento reducido: el pomo salta en vez de deslizarse. */
+@media (prefers-reduced-motion: reduce) {
+  .settings-switch-knob {
+    transition: none;
+  }
+}
+
+.settings-select,
+.settings-number,
+.settings-text {
+  width: 100%;
+  max-width: 28ch;
+  padding: 0 4px;
+  color: var(--fg);
+  font: inherit;
+  background: var(--input-bg, var(--bg));
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 3px;
+  /* SIN la apariencia del sistema. WebKit pintaba su propio fondo y su
+     propio color por encima de estos, y los controles salían grises —con
+     pinta de estar desactivados— sobre un tema oscuro. */
+  appearance: none;
+}
+
+/* La flecha del desplegable, que `appearance: none` se lleva por delante.
+   Dibujada con un degradado y no con un carácter: un glifo dependería de la
+   fuente que haya, y este control tiene que verse igual en todas. */
+.settings-select {
+  padding-right: 2ch;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-repeat: no-repeat;
+  background-position:
+    right 1ch top 55%,
+    right calc(1ch - 4px) top 55%;
+  background-size:
+    4px 4px,
+    4px 4px;
+}
+
+/* Un valor vacío NO es un hueco: es «la que trae norte». Se dice, en vez de
+   dejar una caja gris que parece rota. */
+.settings-text::placeholder,
+.settings-number::placeholder {
+  color: var(--info-fg, var(--fg));
+  opacity: 0.7;
+}
+
+/* Ancho para el número Y sus flechas: a ocho celdas los botones tapaban el
+   valor, así que el campo se veía vacío con el número detrás. */
+.settings-number {
+  width: 12ch;
+  max-width: 12ch;
+}
+
+.settings-select:focus,
+.settings-number:focus,
+.settings-text:focus,
+.settings-switch:focus-visible,
+.settings-reset:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+/* Los iconos del índice llevan su propia pila: Inter no tiene los símbolos
+   geométricos, y sin esto el navegador sustituye glifo a glifo con lo que
+   encuentre — que es por lo que uno salía con otra forma y otro ancho. */
+.settings-index-icon {
+  width: 1.4em;
+  font-family:
+    "DejaVu Sans", "Noto Sans Symbols 2", "Symbols Nerd Font Mono", var(--font-ui);
+  text-align: center;
+  opacity: 0.85;
 }
 
 .settings-row {
   display: grid;
-  grid-template-columns: 34ch 1fr auto;
-  gap: 0 12px;
-  padding: 0 6px;
+  /* Cada ajuste es un BLOQUE, no una fila de tabla: nombre, descripción y
+     control, uno debajo de otro. En columnas el control acaba lejos de lo
+     que controla, la descripción no cabe en ninguna parte y cada fila es su
+     propia rejilla —así que nada forma columna de verdad—. Los editores de
+     ajustes que la gente ya sabe usar lo hacen así.
+
+     La primera columna es la MARCA de modificado: una barra de 3px como la
+     que usa VSCode, que se lee de un vistazo en una lista larga mucho mejor
+     que un punto perdido entre el texto. */
+  grid-template-columns: 3px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "marca nombre acciones"
+    "marca desc acciones"
+    "marca control control";
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 6px 8px;
   cursor: pointer;
   /* Un valor puede ser una RUTA, y una ruta puede traer marcas de dirección:
      cada celda es su propia corrida bidi. */
@@ -2290,37 +2479,74 @@ body {
   color: var(--selection-fg);
 }
 
-.settings-name,
-.settings-value {
+/* El nombre es el TÍTULO del bloque: en seminegrita, porque es lo que se
+   recorre con la vista para encontrar un ajuste. */
+.settings-name {
+  grid-area: nombre;
   overflow: hidden;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
   unicode-bidi: isolate;
 }
 
 .settings-value {
-  color: var(--border-focus);
+  grid-area: control;
+  margin-top: 2px;
+  unicode-bidi: isolate;
 }
 
 .settings-value[data-hostile="true"] {
   color: var(--hostile-fg);
 }
 
+/* «requiere reinicio» y «no está» son PASTILLAS, no texto suelto: dicen
+   algo sobre la fila entera y tienen que leerse como una etiqueta, no como
+   la continuación del valor. Borde y no relleno, para que no compitan con
+   el cursor de la fila elegida. */
 .settings-badge,
 .settings-missing {
-  color: var(--hostile-fg);
+  padding: 0 6px;
+  color: var(--warning-fg, var(--hostile-fg));
+  font-size: 0.85em;
   white-space: nowrap;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  opacity: 0.9;
   unicode-bidi: isolate;
+}
+
+/* La de una ubicación que falta sigue siendo un aviso de otra clase: ahí el
+   color hostil es el correcto, porque habla de una ruta. */
+.settings-missing {
+  color: var(--hostile-fg);
 }
 
 /* La descripción ocupa la fila entera bajo el nombre, y solo se lee en la
    fila elegida: con todas visibles, la lista deja de poder recorrerse. */
+/* La descripción va SIEMPRE, no solo bajo la fila elegida: es lo que dice
+   qué hace un ajuste, y esconderla obliga a recorrer la lista con el cursor
+   para poder leerla. Atenuada, para que el nombre siga mandando. */
 .settings-desc {
-  grid-column: 1 / -1;
-  display: none;
-  padding-left: 2ch;
-  opacity: 0.8;
+  grid-area: desc;
+  /* Atenuada, NO azul. El azul de `--info-fg` se lee como «esto se puede
+     pulsar», y una descripción no se pulsa: el color vivo es de los
+     controles y los enlaces, no de la prosa que los explica. */
+  color: inherit;
+  opacity: 0.72;
   unicode-bidi: isolate;
+}
+
+/* CUÁNDO se aplica lo que cambies, al final de la descripción y en
+   cursiva: repetido como pastilla en seis filas a la vez dejaba de leerse,
+   y es información que solo importa cuando tocas ESA fila. */
+.settings-when {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.settings-when::before {
+  content: "· ";
 }
 
 .settings-row[aria-selected="true"] .settings-desc {

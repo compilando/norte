@@ -986,9 +986,18 @@
           "key": "behavior",
           "rows": [
             {
+              "choices": [
+                "auto",
+                "always",
+                "never"
+              ],
+              "control": "choice",
+              "default": "auto",
               "desc": "Pregunta antes de cerrar norte",
               "hostile": false,
               "id": "ui.confirm-quit",
+              "max": null,
+              "min": null,
               "modified": false,
               "name": "Confirmar al salir",
               "restart_required": true,
@@ -1002,9 +1011,14 @@
           "key": "appearance",
           "rows": [
             {
+              "choices": [],
+              "control": "text",
+              "default": "",
               "desc": "La fuente de la ventana",
               "hostile": true,
               "id": "ui.font",
+              "max": null,
+              "min": null,
               "modified": true,
               "name": "Tipografía",
               "restart_required": true,

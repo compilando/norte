@@ -61,6 +61,22 @@ operator is ordinary text.
 
 In the window the index is clickable and the search is a text box.
 
+# The window has real controls
+
+What is a word you cycle with Enter in the terminal is the matching control
+in the window: a switch for what turns on and off, a dropdown for a list —
+with the themes you have installed already in it — and a number field with
+its bounds. Text and command lines are typed in the row and saved when you
+leave the field or press Enter; `esc` puts the field back.
+
+Every setting shows its description at all times, and a bar down the left
+marks whatever is not at its factory value. An empty field shows that
+factory value; if it shows nothing, norte sets none and the system decides.
+
+What a setting admits is decided by the same catalogue on both surfaces and
+validated by the same editor: a number out of range is refused the same way
+typed in the window as in the terminal.
+
 # Resetting, and what it cannot do
 
 A dot in front of the name means "this is not the factory value". `ctrl+r` —

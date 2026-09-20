@@ -201,6 +201,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::SettingsSelectRow { .. } => "settings_select_row",
         UiAction::SettingsActivate { .. } => "settings_activate",
         UiAction::SettingsQuery { .. } => "settings_query",
+        UiAction::SettingsSet { .. } => "settings_set",
         UiAction::SettingsJumpSection { .. } => "settings_jump_section",
         UiAction::SettingsReset { .. } => "settings_reset",
         UiAction::ExtensionSelectRow { .. } => "extension_select_row",
@@ -415,24 +416,6 @@ fn un_selector_cancelado_viaja_como_null() {
 fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
     vec![
         (
-            "settings_select_row",
-            UiAction::SettingsSelectRow { row: 2 },
-        ),
-        ("settings_activate", UiAction::SettingsActivate { row: 2 }),
-        (
-            "settings_query",
-            UiAction::SettingsQuery {
-                text: "@modified fira".to_owned(),
-            },
-        ),
-        (
-            "settings_jump_section",
-            UiAction::SettingsJumpSection {
-                section: "open-with".to_owned(),
-            },
-        ),
-        ("settings_reset", UiAction::SettingsReset { row: 2 }),
-        (
             "extension_select_row",
             UiAction::ExtensionSelectRow { row: 1 },
         ),
@@ -509,8 +492,42 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
         ),
     ]
     .into_iter()
+    .chain(acciones_de_ajustes())
     .chain(acciones_de_cromo())
     .collect()
+}
+
+/// Las de la pantalla de AJUSTES, aparte porque son seis y la lista de
+/// overlays se pasaba del tope de líneas del lint.
+fn acciones_de_ajustes() -> Vec<(&'static str, UiAction)> {
+    vec![
+        (
+            "settings_select_row",
+            UiAction::SettingsSelectRow { row: 2 },
+        ),
+        ("settings_activate", UiAction::SettingsActivate { row: 2 }),
+        (
+            "settings_query",
+            UiAction::SettingsQuery {
+                text: "@modified fira".to_owned(),
+            },
+        ),
+        (
+            "settings_jump_section",
+            UiAction::SettingsJumpSection {
+                section: "open-with".to_owned(),
+            },
+        ),
+        ("settings_reset", UiAction::SettingsReset { row: 2 }),
+        // PONER, no ciclar: por el id del catálogo y con el valor dentro.
+        (
+            "settings_set",
+            UiAction::SettingsSet {
+                id: "ui.theme".to_owned(),
+                value: "nord".to_owned(),
+            },
+        ),
+    ]
 }
 
 /// Las del CROMO: menús, barras, el asistente y la pantalla de arranque.
@@ -2049,59 +2066,78 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
 
 /// Los ajustes de referencia: una entrada del registro con su valor efectivo,
 /// y una sección de ubicaciones con una que falta.
-fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
-    use norte_ui_host::dto::{
-        PathRowView, SectionIndexView, SettingRowView, SettingsSectionView, SettingsView,
-    };
-    SettingsView {
-        sections: vec![
-            SettingsSectionView::Settings {
-                key: "behavior".to_owned(),
-                title: "Comportamiento".to_owned(),
-                rows: vec![SettingRowView {
-                    id: "ui.confirm-quit".to_owned(),
-                    name: "Confirmar al salir".to_owned(),
-                    desc: "Pregunta antes de cerrar norte".to_owned(),
-                    value: "siempre".to_owned(),
+/// Las dos secciones de ajustes de la vista de referencia, aparte porque la
+/// función entera se pasaba del tope de líneas del lint.
+fn secciones_de_ajustes_de_referencia() -> Vec<norte_ui_host::dto::SettingsSectionView> {
+    use norte_ui_host::dto::{PathRowView, SettingRowView, SettingsSectionView};
+    vec![
+        SettingsSectionView::Settings {
+            key: "behavior".to_owned(),
+            title: "Comportamiento".to_owned(),
+            rows: vec![SettingRowView {
+                id: "ui.confirm-quit".to_owned(),
+                name: "Confirmar al salir".to_owned(),
+                desc: "Pregunta antes de cerrar norte".to_owned(),
+                value: "siempre".to_owned(),
+                default: "auto".to_owned(),
+                hostile: false,
+                restart_required: true,
+                // Una lista CERRADA: el renderer pinta un desplegable y
+                // no tiene que saber de dónde salen los valores.
+                control: "choice".to_owned(),
+                choices: vec!["auto".to_owned(), "always".to_owned(), "never".to_owned()],
+                min: None,
+                max: None,
+                modified: false,
+            }],
+        },
+        SettingsSectionView::Settings {
+            key: "appearance".to_owned(),
+            title: "Apariencia".to_owned(),
+            // Un valor que el USUARIO escribió en su `norte.toml` con un
+            // override bidi dentro: llega enmascarado, marcado, y con el
+            // punto de «esto no es de fábrica».
+            rows: vec![SettingRowView {
+                id: "ui.font".to_owned(),
+                name: "Tipografía".to_owned(),
+                desc: "La fuente de la ventana".to_owned(),
+                value: "Fira\u{fffd}Code".to_owned(),
+                // Vacío de fábrica: la ventana lo enseña como marcador,
+                // y aquí queda fijado que un defecto puede ser vacío.
+                default: String::new(),
+                hostile: true,
+                restart_required: true,
+                control: "text".to_owned(),
+                choices: Vec::new(),
+                min: None,
+                max: None,
+                modified: true,
+            }],
+        },
+        SettingsSectionView::Paths {
+            title: "Dónde vive cada cosa".to_owned(),
+            rows: vec![
+                PathRowView {
+                    label: "Tu configuración".to_owned(),
+                    display: "/home/oscar/.config/norte".to_owned(),
                     hostile: false,
-                    restart_required: true,
-                    modified: false,
-                }],
-            },
-            SettingsSectionView::Settings {
-                key: "appearance".to_owned(),
-                title: "Apariencia".to_owned(),
-                // Un valor que el USUARIO escribió en su `norte.toml` con un
-                // override bidi dentro: llega enmascarado, marcado, y con el
-                // punto de «esto no es de fábrica».
-                rows: vec![SettingRowView {
-                    id: "ui.font".to_owned(),
-                    name: "Tipografía".to_owned(),
-                    desc: "La fuente de la ventana".to_owned(),
-                    value: "Fira\u{fffd}Code".to_owned(),
-                    hostile: true,
-                    restart_required: true,
-                    modified: true,
-                }],
-            },
-            SettingsSectionView::Paths {
-                title: "Dónde vive cada cosa".to_owned(),
-                rows: vec![
-                    PathRowView {
-                        label: "Tu configuración".to_owned(),
-                        display: "/home/oscar/.config/norte".to_owned(),
-                        hostile: false,
-                        missing: false,
-                    },
-                    PathRowView {
-                        label: "Configuración del proyecto".to_owned(),
-                        display: ".norte".to_owned(),
-                        hostile: false,
-                        missing: true,
-                    },
-                ],
-            },
-        ],
+                    missing: false,
+                },
+                PathRowView {
+                    label: "Configuración del proyecto".to_owned(),
+                    display: ".norte".to_owned(),
+                    hostile: false,
+                    missing: true,
+                },
+            ],
+        },
+    ]
+}
+
+fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
+    use norte_ui_host::dto::{SectionIndexView, SettingsView};
+    SettingsView {
+        sections: secciones_de_ajustes_de_referencia(),
         index: vec![
             SectionIndexView {
                 key: "appearance".to_owned(),
@@ -2773,7 +2809,13 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // Puente 82: `SettingsView.focus` (qué mitad tiene el teclado) y
     // `SettingsSectionView::Settings.key` (la clave estable, para emparejar
     // una sección con su fila del índice sin casar rótulos traducidos).
-    const FORMA: u64 = 8_636_545_508_171_146_769;
+    // Puente 83: los CONTROLES. `SettingRowView` gana `control`, `choices`,
+    // `min` y `max` —lo que un interruptor, un desplegable o un campo
+    // numérico necesitan saber— y la acción `settings_set` pone un valor
+    // concreto en vez de ciclar.
+    //   Y `default`: el valor de fábrica, que la ventana enseña como
+    //   marcador de un campo vacío — «vacío» no es un hueco, es ese valor.
+    const FORMA: u64 = 12_185_788_950_238_215_034;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

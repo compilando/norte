@@ -2736,7 +2736,12 @@ describe("los ajustes", () => {
               desc: "Pregunta antes de cerrar norte",
               value: "siempre",
               hostile: false,
+              default: "",
               restart_required: true,
+              control: "choice",
+              choices: ["auto", "siempre", "nunca"],
+              min: null,
+              max: null,
               modified: false,
             },
             {
@@ -2745,7 +2750,12 @@ describe("los ajustes", () => {
               desc: "El tema de la ventana",
               value: "nord",
               hostile: false,
+              default: "",
               restart_required: false,
+              control: "choice",
+              choices: ["default", "nord"],
+              min: null,
+              max: null,
               modified: true,
             },
           ],
@@ -2851,6 +2861,150 @@ describe("los ajustes", () => {
     expect(lista2.querySelector('[aria-selected="true"]')).not.toBeNull();
   });
 
+  it("un desplegable manda el valor elegido, no un ciclo", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conAjustes());
+    const sel = document.querySelector("#settings-row-1 select") as HTMLSelectElement;
+    expect([...sel.options].map((o) => o.value)).toEqual(["default", "nord"]);
+    expect(sel.value).toBe("nord");
+    sel.value = "default";
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    // Por ID y de una vez: `settings_activate` habría ciclado.
+    expect(enviadas.at(-1)).toEqual({
+      action: "settings_set",
+      id: "ui.theme",
+      value: "default",
+    });
+  });
+
+  /// Un valor que el fichero trae y la lista ya no reconoce —un tema
+  /// borrado— se AÑADE al desplegable: enseñar otra cosa de la que hay
+  /// puesta sería mentir sobre la configuración.
+  it("un valor que la lista no reconoce sigue estando en el desplegable", () => {
+    const { screen } = montar();
+    const v = conAjustes();
+    if (v.settings !== null) {
+      const sec = v.settings.sections[0];
+      if (sec?.section === "settings") {
+        const fila = sec.rows[1];
+        if (fila !== undefined) {
+          fila.value = "un-tema-que-borre";
+        }
+      }
+    }
+    screen.paint(v);
+    const sel = document.querySelector("#settings-row-1 select") as HTMLSelectElement;
+    expect(sel.value).toBe("un-tema-que-borre");
+    expect([...sel.options].map((o) => o.value)).toContain("un-tema-que-borre");
+  });
+
+  it("un interruptor dice su estado y manda el contrario", () => {
+    const { screen, enviadas } = montar();
+    const v = conAjustes();
+    if (v.settings !== null) {
+      const sec = v.settings.sections[0];
+      if (sec?.section === "settings") {
+        sec.rows = [
+          {
+            id: "ui.mouse",
+            name: "Ratón",
+            desc: "Captura el ratón",
+            value: "true",
+            hostile: false,
+            default: "",
+            restart_required: false,
+            control: "toggle",
+            choices: [],
+            min: null,
+            max: null,
+            modified: false,
+          },
+        ];
+      }
+    }
+    screen.paint(v);
+    const sw = document.querySelector('[role="switch"]') as HTMLButtonElement;
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+    sw.click();
+    expect(enviadas.at(-1)).toEqual({
+      action: "settings_set",
+      id: "ui.mouse",
+      value: "false",
+    });
+  });
+
+  /// Un campo guarda al SALIR, no en cada tecla: cada pulsación sería una
+  /// escritura en el `norte.toml` y una recarga de la configuración entera.
+  it("un campo de texto guarda al salir y se rinde con escape", () => {
+    const { screen, enviadas } = montar();
+    const v = conAjustes();
+    if (v.settings !== null) {
+      const sec = v.settings.sections[0];
+      if (sec?.section === "settings") {
+        sec.rows = [
+          {
+            id: "ui.editor",
+            name: "Editor",
+            desc: "Con qué se abre un fichero",
+            value: "zed %f",
+            hostile: false,
+            default: "",
+            restart_required: false,
+            control: "args",
+            choices: [],
+            min: null,
+            max: null,
+            modified: true,
+          },
+        ];
+      }
+    }
+    screen.paint(v);
+    const campo = document.querySelector(".settings-text") as HTMLInputElement;
+    campo.value = "vim";
+    campo.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(enviadas.at(-1)).not.toMatchObject({ action: "settings_set" });
+    campo.dispatchEvent(new FocusEvent("blur"));
+    expect(enviadas.at(-1)).toEqual({
+      action: "settings_set",
+      id: "ui.editor",
+      value: "vim",
+    });
+  });
+
+  /// Un campo vacío dice CUÁL es el valor de fábrica, no una frase sobre
+  /// que lo hay: el marcador ocupa el sitio del dato, así que tiene que ser
+  /// el dato.
+  it("un campo vacío enseña el valor de fábrica como marcador", () => {
+    const { screen } = montar();
+    const v = conAjustes();
+    if (v.settings !== null) {
+      const sec = v.settings.sections[0];
+      if (sec?.section === "settings") {
+        sec.rows = [
+          {
+            id: "ui.font",
+            name: "Tipografía de la interfaz",
+            desc: "La del cromo",
+            value: "",
+            default: "Inter",
+            hostile: false,
+            restart_required: true,
+            control: "text",
+            choices: [],
+            min: null,
+            max: null,
+            modified: false,
+          },
+        ];
+      }
+    }
+    screen.paint(v);
+    const campo = document.querySelector(".settings-text") as HTMLInputElement;
+    expect(campo.value).toBe("");
+    expect(campo.placeholder).toBe("Inter");
+  });
+
   it("el buscador conserva el foco y el caret entre repintados", () => {
     const { screen } = montar();
     screen.paint(conAjustes());
@@ -2867,6 +3021,29 @@ describe("los ajustes", () => {
     expect(document.activeElement).toBe(despues);
     expect(despues.value).toBe("fue");
     expect(despues.selectionStart).toBe(3);
+  });
+
+  /// Cada fila cuelga EXACTAMENTE cuatro celdas, en el mismo orden, tenga o
+  /// no punto y acciones. La rejilla tiene cuatro columnas: un hijo de más
+  /// manda lo que sobra a una fila nueva, y así salía el botón de
+  /// restablecer como una caja de ancho completo.
+  it("cada fila cuelga las mismas cuatro celdas, en el mismo orden", () => {
+    const { screen } = montar();
+    screen.paint(conAjustes());
+    for (const fila of document.querySelectorAll(".settings-row")) {
+      const celdas = [...fila.children].filter(
+        (c) => !c.classList.contains("settings-desc"),
+      );
+      expect(celdas.map((c) => c.className)).toEqual([
+        "settings-dot",
+        "settings-name",
+        "settings-value",
+        "settings-actions",
+      ]);
+    }
+    // Y lo que antes se iba de la fila vive ahora DENTRO de las acciones.
+    const tocada = document.querySelector("#settings-row-1") as HTMLElement;
+    expect(tocada.querySelector(".settings-actions .settings-reset")).not.toBeNull();
   });
 
   it("una fila tocada lleva punto y botón de restablecer", () => {
@@ -2972,13 +3149,24 @@ describe("los ajustes", () => {
           desc: "El idioma de la ventana",
           value: "auto",
           hostile: false,
+          default: "",
           restart_required: false,
+          control: "text",
+          choices: [],
+          min: null,
+          max: null,
           modified: false,
         });
       }
     }
     screen.paint(v);
-    expect(document.querySelectorAll(".settings-row .settings-badge")).toHaveLength(1);
+    // En la DESCRIPCIÓN de esa fila, no en una pastilla: repetido como
+    // etiqueta en seis filas a la vez dejaba de leerse, y es algo que solo
+    // importa cuando se toca esa fila.
+    const cuando = [...document.querySelectorAll(".settings-desc .settings-when")];
+    expect(cuando).toHaveLength(1);
+    expect(cuando[0]?.textContent).toBe(catalogoReal()["settings-restart-badge"] ?? "");
+    expect(document.querySelectorAll(".settings-row .settings-badge")).toHaveLength(0);
     expect(document.querySelector(".settings-group")?.textContent).not.toContain(
       catalogoReal()["settings-restart-badge"] ?? "",
     );

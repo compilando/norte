@@ -9,6 +9,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window edits settings with real controls** (ADR 0130, bridge 83). A
+  boolean is a switch, a fixed list is a dropdown — with the installed
+  themes and keymap presets already in it — and a number is a number field
+  with its bounds. Text and command lines are typed in the row and saved
+  when you leave them. Picking the seventh theme in a dropdown is one write,
+  not six: the window says which value it wants instead of cycling to it.
+  Each setting is now a block — name, description, control — with the
+  description always readable instead of hidden behind the cursor, a bar
+  down the left of whatever is not at its factory value, and an empty field
+  showing that factory value rather than a sentence about it. What a setting
+  admits is still decided by the shared catalogue and validated by the same
+  editor the terminal's keyboard drives; the window only paints it.
 - **The settings index takes the keyboard** (ADR 0129, bridge 82). `tab`
   moves between the index and the list, in both frontends, and with the
   keyboard on the index the arrows walk sections while the list follows —

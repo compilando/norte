@@ -855,6 +855,27 @@ pub struct SettingRowView {
     /// Cambiarlo pide reiniciar la ventana: lo que se escribe se guarda, y
     /// hace efecto en la siguiente.
     pub restart_required: bool,
+    /// Su valor DE FÁBRICA, como texto.
+    ///
+    /// Se pinta como marcador de un campo vacío: «vacío» no es un hueco,
+    /// es este valor. Decirlo con un dato —`Inter`, `14`— informa; decirlo
+    /// con una frase («lo que norte trae») ocupa el sitio del dato y no
+    /// dice cuál es.
+    pub default: String,
+    /// Qué control pide: `toggle`, `choice`, `number`, `text` o `args`.
+    ///
+    /// Viaja porque una ventana tiene controles de verdad y no puede
+    /// adivinar la clase mirando el texto del valor. Las listas vivas —temas
+    /// y presets— llegan ya resueltas en [`Self::choices`], así que el
+    /// renderer no distingue «enum del catálogo» de «temas instalados»: para
+    /// él las dos son un desplegable.
+    pub control: String,
+    /// Los valores admitidos, si el control es `choice`. Vacío si no.
+    pub choices: Vec<String>,
+    /// Los topes de un `number`, los dos incluidos.
+    pub min: Option<i64>,
+    /// Ver [`Self::min`].
+    pub max: Option<i64>,
     /// Su valor NO es el de fábrica — el punto de «esto lo has tocado tú».
     ///
     /// Se calcula contra el valor por defecto, no contra «hay una clave en

@@ -3899,6 +3899,7 @@ impl Estado {
             UiAction::SettingsQuery { text } => self.buscar_ajuste(text),
             UiAction::SettingsJumpSection { section } => self.saltar_a_seccion(section),
             UiAction::SettingsReset { row } => self.restablecer_ajuste(*row, buzon),
+            UiAction::SettingsSet { id, value } => self.poner_ajuste(id, value, buzon),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
             UiAction::ExtensionGovern { row, id, change } => {
                 self.gobernar_por_raton(*row, id, (*change).into(), backend, buzon)

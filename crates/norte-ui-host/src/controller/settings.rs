@@ -91,8 +91,18 @@ impl Estado {
     }
 
     /// La proyección de los ajustes.
+    ///
+    /// Las listas de temas y presets se resuelven AQUÍ y vivas, como al
+    /// activar una fila: el tema efectivo cambia en caliente, y un
+    /// desplegable con la lista de hace dos recargas ofrece lo que ya no
+    /// está.
     pub(super) fn vista_ajustes(&self) -> Option<crate::dto::SettingsView> {
-        Some(self.ajustes.as_ref()?.vista(self.lang))
+        let temas = norte_frontend::theme::theme_names(&self.config.user_themes);
+        Some(self.ajustes.as_ref()?.vista(
+            self.lang,
+            &temas,
+            norte_frontend::keymap::presets::NAMES,
+        ))
     }
 
     /// Lo que se ha escrito en el buscador.
@@ -136,6 +146,78 @@ impl Estado {
             settings: self.vista_ajustes(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Un control de la ventana puso un valor: se valida con el editor
+    /// compartido y, si vale, se escribe.
+    ///
+    /// Mismo camino que girar con Enter a partir de aquí —escritura en el
+    /// hilo de fondo, relectura, foto—, porque es la misma operación: lo
+    /// único distinto es quién eligió el valor.
+    pub(super) fn poner_ajuste(
+        &mut self,
+        id: &str,
+        valor: &str,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !self.dialogos.is_empty() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        let temas = norte_frontend::theme::theme_names(&self.config.user_themes);
+        let Some(a) = self.ajustes.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match a.poner(id, valor, &temas, norte_frontend::keymap::presets::NAMES) {
+            Ok(write) => {
+                let cambio = ViewChange::Settings {
+                    settings: self.vista_ajustes(),
+                };
+                let mut salidas = vec![self.parche(vec![cambio])];
+                let (motivo, partes) = self.escribir_ajuste(write, buzon);
+                salidas.extend(partes);
+                match motivo {
+                    Some(clave) => (
+                        ActionAck::Unavailable {
+                            reason_key: clave.to_owned(),
+                        },
+                        salidas,
+                    ),
+                    None => (self.aplicada(), salidas),
+                }
+            }
+            // El rechazo se dice CON sus números, como el del teclado: una
+            // clave sola no dice entre qué y qué.
+            Err(e) => {
+                let (clave, texto) = match e {
+                    norte_frontend::settings::SettingsEditError::NotAnInt => (
+                        "msg-settings-invalid-int",
+                        norte_i18n::t_in(self.lang, "msg-settings-invalid-int"),
+                    ),
+                    norte_frontend::settings::SettingsEditError::OutOfRange { min, max } => (
+                        "msg-settings-invalid-range",
+                        norte_i18n::ta_in(
+                            self.lang,
+                            "msg-settings-invalid-range",
+                            &[("min", &min.to_string()), ("max", &max.to_string())],
+                        ),
+                    ),
+                };
+                self.status.message = Some(clamp_display(texto));
+                let cambios = vec![
+                    ViewChange::Settings {
+                        settings: self.vista_ajustes(),
+                    },
+                    ViewChange::Status(self.status.clone()),
+                ];
+                let salidas = vec![self.parche(cambios)];
+                (
+                    ActionAck::Unavailable {
+                        reason_key: clave.to_owned(),
+                    },
+                    salidas,
+                )
+            }
+        }
     }
 
     /// Restablecer una fila: quitar su clave de la capa de escritura.
