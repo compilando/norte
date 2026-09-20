@@ -209,6 +209,27 @@ impl SettingDef {
     }
 }
 
+/// Una sección tal y como la pinta el índice: su rótulo ya traducido,
+/// cuántas filas visibles tiene con el filtro puesto, y en cuál empieza.
+///
+/// Se proyecta, no se guarda: el estado es el filtro, y un índice guardado
+/// al lado sería una segunda copia que se queda vieja en cuanto alguien
+/// teclea una letra.
+#[derive(Debug, Clone)]
+pub struct SectionView {
+    /// Qué sección es.
+    pub section: Section,
+    /// Su rótulo, traducido al idioma activo.
+    pub title: String,
+    /// Cuántas de sus filas se ven con el filtro puesto. Cero = apagada en
+    /// el índice, nunca ausente.
+    pub visible: usize,
+    /// Posición de su primera fila visible dentro de
+    /// [`SettingsState::visible`] — la unidad del cursor. `None` si el
+    /// filtro la dejó vacía.
+    pub first_row: Option<usize>,
+}
+
 /// La configuración DE FÁBRICA: la que sale de cero capas.
 ///
 /// Es contra esto contra lo que se decide si una fila está «modificada», y
@@ -1049,6 +1070,56 @@ impl SettingsState {
     #[must_use]
     pub fn rows(&self) -> &[Row] {
         &self.rows
+    }
+
+    /// El índice de secciones que pinta la pantalla: TODAS, en el orden de
+    /// [`Section::ORDER`], con cuántas filas visibles tiene cada una y en
+    /// cuál empieza.
+    ///
+    /// Una sección que el filtro deja a cero **sigue en la lista**, apagada:
+    /// un índice que cambia de largo mientras escribes es un índice que no
+    /// se puede usar como mapa.
+    ///
+    /// `first_row` es una posición dentro de [`Self::visible`] —la misma
+    /// unidad que [`Self::cursor`]— y NO un índice dentro de [`Self::rows`].
+    /// Mezclar las dos unidades es un cursor que apunta a otra fila.
+    #[must_use]
+    pub fn sections(&self) -> Vec<SectionView> {
+        Section::ORDER
+            .iter()
+            .map(|s| {
+                let mut visible = 0;
+                let mut first_row = None;
+                for (pos, &real) in self.visible.iter().enumerate() {
+                    if self.rows[real].section == *s {
+                        visible += 1;
+                        if first_row.is_none() {
+                            first_row = Some(pos);
+                        }
+                    }
+                }
+                SectionView {
+                    section: *s,
+                    title: t(s.label_key()),
+                    visible,
+                    first_row,
+                }
+            })
+            .collect()
+    }
+
+    /// Lleva el cursor a la primera fila visible de `section`.
+    ///
+    /// Una sección sin filas visibles no mueve nada: un salto que aterriza
+    /// en la fila de otra sección es peor que un salto que no ocurre.
+    pub fn jump_to(&mut self, section: Section) {
+        let destino = self
+            .visible
+            .iter()
+            .position(|&real| self.rows[real].section == section);
+        if let Some(pos) = destino {
+            self.set_cursor(pos);
+        }
     }
 
     /// Selection position WITHIN [`Self::visible`].
@@ -1914,6 +1985,58 @@ mod tests {
         // Y una cabecera no puede empujar el cursor fuera por abajo.
         s.reconcile_viewport(39, 38, 40, 10);
         assert!(s.viewport_offset() <= 38 && s.viewport_offset() + 10 > 39);
+    }
+
+    #[test]
+    fn el_indice_lista_todas_las_secciones_aunque_el_filtro_vacie_alguna() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        // Por el ID, no por el rótulo: estos tests corren en el locale por
+        // defecto, y un filtro escrito en español no casa nada en inglés.
+        for c in "theme".chars() {
+            s.push_char(c);
+        }
+        let idx = s.sections();
+        assert_eq!(
+            idx.len(),
+            Section::ORDER.len(),
+            "el índice no encoge al filtrar"
+        );
+        let apariencia = idx
+            .iter()
+            .find(|v| v.section == Section::Appearance)
+            .expect("apariencia");
+        assert!(apariencia.visible > 0);
+        let abrir = idx
+            .iter()
+            .find(|v| v.section == Section::OpenWith)
+            .expect("abrir con");
+        assert_eq!(abrir.visible, 0);
+        assert_eq!(abrir.first_row, None);
+    }
+
+    #[test]
+    fn saltar_a_una_seccion_pone_el_cursor_en_su_primera_fila_visible() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        s.jump_to(Section::Input);
+        let fila = &s.rows()[s.visible()[s.cursor()]];
+        assert_eq!(fila.section, Section::Input);
+        // Y es la PRIMERA de la sección, no una cualquiera.
+        assert!(s.cursor() == 0 || s.rows()[s.visible()[s.cursor() - 1]].section != Section::Input);
+    }
+
+    #[test]
+    fn saltar_a_una_seccion_vacia_no_mueve_nada() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        for c in "theme".chars() {
+            s.push_char(c);
+        }
+        let antes = s.cursor();
+        s.jump_to(Section::OpenWith);
+        assert_eq!(
+            s.cursor(),
+            antes,
+            "una sección sin filas visibles no mueve el cursor"
+        );
     }
 
     /// El punto de «esto lo has tocado tú» se calcula contra el valor DE
