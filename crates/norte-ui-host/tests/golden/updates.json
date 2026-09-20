@@ -962,6 +962,7 @@
     },
     "settings": {
       "cursor": 0,
+      "focus": "index",
       "index": [
         {
           "key": "appearance",
@@ -982,6 +983,7 @@
       "query": "fira",
       "sections": [
         {
+          "key": "behavior",
           "rows": [
             {
               "desc": "Pregunta antes de cerrar norte",
@@ -997,6 +999,7 @@
           "title": "Comportamiento"
         },
         {
+          "key": "appearance",
           "rows": [
             {
               "desc": "La fuente de la ventana",

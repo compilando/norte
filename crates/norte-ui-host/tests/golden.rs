@@ -2056,6 +2056,7 @@ fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
     SettingsView {
         sections: vec![
             SettingsSectionView::Settings {
+                key: "behavior".to_owned(),
                 title: "Comportamiento".to_owned(),
                 rows: vec![SettingRowView {
                     id: "ui.confirm-quit".to_owned(),
@@ -2068,6 +2069,7 @@ fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
                 }],
             },
             SettingsSectionView::Settings {
+                key: "appearance".to_owned(),
                 title: "Apariencia".to_owned(),
                 // Un valor que el USUARIO escribió en su `norte.toml` con un
                 // override bidi dentro: llega enmascarado, marcado, y con el
@@ -2118,6 +2120,9 @@ fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
                 visible: 0,
             },
         ],
+        // El teclado en el ÍNDICE: es el lado que el renderer tiene que
+        // saber pintar vivo, y el otro apagado.
+        focus: "index".to_owned(),
         cursor: 0,
         query: "fira".to_owned(),
         shown: 2,
@@ -2765,7 +2770,10 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // cifras), y `SettingRowView.modified` (el punto de «esto no es de
     // fábrica»), más las acciones `settings_query`,
     // `settings_jump_section` y `settings_reset`.
-    const FORMA: u64 = 14_294_946_905_780_476_047;
+    // Puente 82: `SettingsView.focus` (qué mitad tiene el teclado) y
+    // `SettingsSectionView::Settings.key` (la clave estable, para emparejar
+    // una sección con su fila del índice sin casar rótulos traducidos).
+    const FORMA: u64 = 8_636_545_508_171_146_769;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

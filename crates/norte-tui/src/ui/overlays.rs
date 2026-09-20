@@ -14,7 +14,7 @@ use crate::app::display_name;
 use crate::theme::TuiTheme;
 use norte_frontend::display::cells;
 use norte_frontend::middle_ellipsis;
-use norte_frontend::settings::Section;
+use norte_frontend::settings::{Focus, Section};
 use norte_i18n::{t, ta};
 
 /// Overlay del catálogo de extensiones (M4-P3): la lista de plugins AGRUPADA
@@ -1311,7 +1311,15 @@ fn settings_list_lines<'a>(
                 };
                 let line = Line::raw(middle_ellipsis(&text, inner_w));
                 if selected {
-                    line.style(theme.role(Role::Selection))
+                    // El cursor se pinta SIEMPRE, tenga el teclado o no, y
+                    // apagado cuando no lo tiene: la misma regla que las dos
+                    // mitades de la ayuda (ADR 0128). Dos cursores vivos, o
+                    // ninguno, es lo que hace que no sepas dónde estás.
+                    line.style(if settings.focus() == Focus::List {
+                        theme.role(Role::Selection)
+                    } else {
+                        theme.role(Role::SelectionUnfocused)
+                    })
                 } else {
                     line
                 }
@@ -1343,7 +1351,13 @@ fn draw_settings_index(
         .map(|v| {
             let texto = format!("{} {}", v.title, v.visible);
             let estilo = if Some(v.section) == actual {
-                theme.role(Role::Selection)
+                // Igual que la lista: el cursor de este lado se pinta
+                // siempre, y apagado cuando el teclado está en el otro.
+                if settings.focus() == Focus::Index {
+                    theme.role(Role::Selection)
+                } else {
+                    theme.role(Role::SelectionUnfocused)
+                }
             } else if v.visible == 0 {
                 theme.role(Role::BorderUnfocused)
             } else {

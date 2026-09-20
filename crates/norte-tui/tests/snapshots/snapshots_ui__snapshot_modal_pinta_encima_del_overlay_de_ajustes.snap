@@ -23,6 +23,6 @@ expression: render_80x24(&app)
 "│  │                      Ver ocultos al arrancar      false                │  │"
 "│  │                      Barra de teclas              true                 │  │"
 "│  │ Preset de color de la int…e tema propio, ADR 0020).                    │  │"
-"│  └ /  [[/]] sección · [enter] editar · [ctrl+r] restablecer · [esc] cerrar┘  │"
+"│  └ /  [tab] lado · [[/]] sección · [enter] editar · [ctrl+r] restablecer ·┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
 " /casa  2/5                                                                     "

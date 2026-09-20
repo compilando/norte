@@ -95,6 +95,14 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
                 // bindearlo en los siete presets, y el precio de aquí es que
                 // no se puede buscar un corchete, que no aparece en el nombre
                 // de ningún ajuste.
+                // Cambia de lado, como en la ayuda. `tab` en la pantalla
+                // `dialog` del catálogo es `dialog.pane`, y esto hace lo
+                // mismo con otro nombre: es una tecla LOCAL del overlay,
+                // que se come las teclas antes que el despachador.
+                KeyCode::Tab if plain => {
+                    settings.toggle_focus();
+                    SettingsKeyOutcome::None
+                }
                 KeyCode::Char('[') if plain => {
                     settings.step_section(-1);
                     SettingsKeyOutcome::None

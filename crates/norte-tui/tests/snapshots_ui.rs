@@ -2555,6 +2555,34 @@ fn el_indice_de_secciones_desaparece_en_una_terminal_estrecha() {
     );
 }
 
+/// `tab` cambia de lado, y los DOS cursores se ven siempre: el que no tiene
+/// el teclado, apagado. La misma regla que las dos mitades de la ayuda — dos
+/// cursores vivos, o ninguno, es lo que hace que no sepas dónde estás.
+#[test]
+fn tab_cambia_de_lado_y_las_flechas_recorren_secciones() {
+    let mut app = app_base();
+    app.settings = Some(norte_tui::app::Settings::new(
+        norte_tui::settings::build_rows(&cfg_vacia(), &[]),
+    ));
+    let s = app.settings.as_mut().expect("ajustes");
+    assert_eq!(s.focus(), norte_frontend::settings::Focus::List);
+
+    s.toggle_focus();
+    assert_eq!(s.focus(), norte_frontend::settings::Focus::Index);
+    // En el índice, bajar cambia de SECCIÓN y la lista sigue.
+    s.down();
+    let seccion = s.rows()[s.visible()[s.cursor()]].section;
+    assert_eq!(seccion, norte_frontend::settings::Section::Panes);
+
+    // Y la pantalla lo enseña: la cabecera clavada es la de la sección nueva.
+    ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 100, 24));
+    let pantalla = render_en(&app, 100, 24);
+    assert!(
+        pantalla.contains(&norte_i18n::t("settings-section-panes")),
+        "la pantalla sigue al índice:\n{pantalla}"
+    );
+}
+
 /// La cuenta del filtro. Sin la segunda cifra, «no hay nada» y «lo tapé con
 /// una letra» se leen igual.
 #[test]

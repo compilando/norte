@@ -455,7 +455,13 @@ use serde::{Deserialize, Serialize};
 ///   pantalla no tuvo filtro hasta ahora), `settings_jump_section` (por la
 ///   clave ESTABLE de la sección, para que el salto no dependa del idioma) y
 ///   `settings_reset` (quitar la clave de la capa de escritura).
-pub const BRIDGE_VERSION: u32 = 81;
+/// - 82: `SettingsView.focus` —`"index"` o `"list"`—, qué mitad de esa
+///   pantalla tiene el teclado. `tab` la cambia, como en la ayuda, y los DOS
+///   cursores se pintan siempre: el que no lo tiene, apagado (ADR 0128).
+///   Sin este campo el renderer solo puede pintar uno, que es justo lo que
+///   hace que no se sepa dónde está el foco. Un renderer anterior lo ignora
+///   y pinta lo que pintaba — el índice a ratón, la lista con su cursor.
+pub const BRIDGE_VERSION: u32 = 82;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

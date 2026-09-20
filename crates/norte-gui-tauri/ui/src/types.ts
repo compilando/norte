@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 81;
+export const BRIDGE_VERSION = 82;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -978,7 +978,8 @@ export interface PathRowView {
 }
 
 export type SettingsSectionView =
-  | { section: "settings"; title: string; rows: SettingRowView[] }
+  /** `key` es la clave ESTABLE: empareja la sección con su fila del índice. */
+  | { section: "settings"; key: string; title: string; rows: SettingRowView[] }
   | { section: "paths"; title: string; rows: PathRowView[] };
 
 /** Una sección en el índice de la izquierda. */
@@ -995,6 +996,8 @@ export interface SettingsView {
   sections: SettingsSectionView[];
   /** TODAS las que esta superficie tiene, tape o no el filtro sus filas. */
   index: SectionIndexView[];
+  /** Qué mitad tiene el teclado: la otra pinta su cursor apagado. */
+  focus: "index" | "list";
   cursor: number;
   query: string;
   shown: number;

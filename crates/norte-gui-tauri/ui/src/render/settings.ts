@@ -201,6 +201,10 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
     }
   }
   lista.setAttribute("aria-activedescendant", `settings-row-${String(settings.cursor)}`);
+  // Qué mitad tiene el teclado. Los DOS cursores se pintan siempre y el que
+  // no lo tiene va apagado (ADR 0128): uno solo vivo, o ninguno, es lo que
+  // hace que no se sepa dónde está el foco.
+  lista.dataset["focused"] = String(settings.focus === "list");
   cuerpo.append(lista);
   caja.append(cuerpo);
   // Conservar el nodo NO basta: moverlo a la caja nueva lo saca del DOM un
@@ -227,9 +231,23 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
  * pinchar es su clave ESTABLE, así que el salto no depende del idioma.
  */
 function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
+  // En qué sección cae el cursor. Se cuenta sobre las mismas secciones que
+  // se pintan, y se empareja por CLAVE: casar por el rótulo traducido se
+  // rompería el día que dos se llamen parecido o alguien retoque una cadena.
+  let vistas = 0;
+  let actual: string | null = null;
+  for (const sec of settings.sections) {
+    const n = sec.rows.length;
+    if (settings.cursor < vistas + n) {
+      actual = sec.section === "settings" ? sec.key : "paths";
+      break;
+    }
+    vistas += n;
+  }
   const nav = document.createElement("nav");
   nav.className = "settings-index";
   nav.setAttribute("aria-label", this.t("settings-title"));
+  nav.dataset["focused"] = String(settings.focus === "index");
   for (const s of settings.index) {
     const item = document.createElement("button");
     item.className = "settings-index-item";
@@ -237,6 +255,11 @@ function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
     item.dataset["key"] = s.key;
     item.dataset["empty"] = String(s.visible === 0);
     item.disabled = s.visible === 0;
+    if (s.key === actual) {
+      // El cursor de ESTE lado. Se pinta siempre; el CSS lo apaga cuando el
+      // teclado está en la lista.
+      item.setAttribute("aria-current", "true");
+    }
     const titulo = document.createElement("span");
     titulo.className = "settings-index-title";
     titulo.textContent = s.title;

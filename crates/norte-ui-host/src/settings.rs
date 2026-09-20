@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 
 use norte_frontend::settings::{
-    PendingWrite, Row, Section, SettingsEditError, SettingsState, build_rows_in,
+    Focus, PendingWrite, Row, Section, SettingsEditError, SettingsState, build_rows_in,
 };
 use norte_i18n::Lang;
 
@@ -341,8 +341,35 @@ impl Ajustes {
         salida
     }
 
+    /// Cambia de lado: índice ↔ lista.
+    ///
+    /// El foco vive en el editor compartido, no aquí: es la misma decisión
+    /// —y las mismas flechas— en las dos pantallas, y duplicarla es cómo se
+    /// separan.
+    pub(crate) fn cambiar_lado(&mut self) {
+        self.estado.toggle_focus();
+    }
+
+    /// Qué lado tiene el teclado.
+    pub(crate) fn foco(&self) -> Focus {
+        self.estado.focus()
+    }
+
     /// Mueve el cursor `delta` filas, sin salirse.
+    ///
+    /// Con el foco en el ÍNDICE no mueve filas: cambia de sección, una por
+    /// pulsación, y el cursor plano sigue a la primera fila de la sección
+    /// nueva. Una página en el índice es una sección, no diez: el índice
+    /// tiene siete filas y paginar en él no significa nada.
     pub(crate) fn mover(&mut self, delta: i64) {
+        if self.estado.focus() == Focus::Index {
+            if delta != 0 {
+                let paso = if delta > 0 { 1 } else { -1 };
+                self.estado.step_section(paso);
+                self.cursor = self.estado.cursor();
+            }
+            return;
+        }
         let total = self.total();
         if total == 0 {
             return;
@@ -386,6 +413,7 @@ impl Ajustes {
                 continue;
             }
             sections.push(SettingsSectionView::Settings {
+                key: v.section.stable_key().to_owned(),
                 title: clamp_display(norte_i18n::t_in(lang, v.section.label_key())),
                 rows: filas,
             });
@@ -415,6 +443,11 @@ impl Ajustes {
         SettingsView {
             sections,
             index,
+            focus: match self.foco() {
+                Focus::Index => "index",
+                Focus::List => "list",
+            }
+            .to_owned(),
             cursor: self.cursor as u64,
             query: clamp_display(self.estado.query_display()),
             shown: self.estado.shown() as u64,

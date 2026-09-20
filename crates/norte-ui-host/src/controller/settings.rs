@@ -270,6 +270,10 @@ impl Estado {
             (Some("dialog.page-up"), _) => a.mover(-PAGINA),
             (_, "Home" | "home") => a.mover(i64::MIN / 2),
             (_, "End" | "end") => a.mover(i64::MAX / 2),
+            // Cambia de lado, como en la ayuda. Por la tecla y no por un
+            // verbo del catálogo: en esta pantalla `dialog.pane` no
+            // significa nada, y el índice no es un panel.
+            (_, "Tab" | "tab") => a.cambiar_lado(),
             _ => return (self.aplicada(), Vec::new()),
         }
         let cambio = ViewChange::Settings {
