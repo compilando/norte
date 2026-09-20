@@ -16,6 +16,8 @@ const config: Config = {
         muted: "#89938C",
         phosphor: "#B7FF52",
         cyan: "#87DDD7",
+        amber: "#FFC46B",
+        coral: "#FF9F87",
       },
       fontFamily: {
         sans: ["var(--font-inter)", "sans-serif"],
@@ -24,6 +26,7 @@ const config: Config = {
       boxShadow: {
         terminal: "0 42px 120px rgba(0, 0, 0, 0.58)",
         glow: "0 0 44px rgba(183, 255, 82, 0.18)",
+        card: "0 24px 70px rgba(0, 0, 0, 0.45)",
       },
     },
   },

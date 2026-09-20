@@ -2,7 +2,23 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 
-const signals = ["ASYNC I/O", "MULTI-TERMINAL", "LOCAL", "SFTP", "S3", "ZIP / TAR", "MCP", "SEMANTIC SEARCH", "JOURNAL", "UNDO", "WASM PLUGINS"];
+const signals = [
+  "ASYNC I/O",
+  "TERMINAL + WINDOW",
+  "LOCAL",
+  "SFTP",
+  "FTP",
+  "S3",
+  "ZIP / TAR / RAR",
+  "MCP",
+  "SEMANTIC SEARCH",
+  "JOURNAL TIMELINE",
+  "UNDO TO A POINT",
+  "7 KEYMAPS",
+  "10 THEMES",
+  "WASM PLUGINS",
+  "NO TELEMETRY",
+];
 
 export function SignalStrip() {
   const reduceMotion = useReducedMotion();
