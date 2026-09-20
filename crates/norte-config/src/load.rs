@@ -147,6 +147,108 @@ pub fn persist_set(
     Ok(path)
 }
 
+/// Lo que una escritura de configuración hizo: dónde, y si cambió algo.
+#[derive(Debug, Clone)]
+pub struct ConfigWrite {
+    /// El `norte.toml` sobre el que se trabajó.
+    pub path: PathBuf,
+    /// `false` = no había nada que hacer y no se tocó el fichero.
+    pub changed: bool,
+}
+
+/// Quita `key` de `[section]` en el `norte.toml` de `dir` — el reverso de
+/// [`persist_set`], y lo que hay detrás de «restablecer» en la pantalla de
+/// ajustes.
+///
+/// Quita la clave de la capa que se le pase, que es la de ESCRITURA. Ojo con
+/// lo que eso significa de cara al usuario: si el sistema, el perfil o el
+/// proyecto fijan la misma clave, el valor cambia y **sigue sin ser el de
+/// fábrica**. Esta función no lo sabe ni lo puede saber; quien la llama
+/// compara después y lo dice.
+///
+/// Un fichero que no está, una sección que no está o una clave que no está
+/// son un **no-op documentado**, no un error: no hay nada que quitar. Y no
+/// crea nada — sin `create_dir_all`, igual que
+/// [`persist_keymap_unbind`]: una eliminación que crea un directorio es una
+/// eliminación que deja rastro.
+///
+/// Una `[section]` que se queda vacía **se conserva**. Borrarla cambia el
+/// fichero más de lo que se pidió, y una tabla vacía no significa nada
+/// distinto de una ausente.
+///
+/// BLOQUEANTE: I/O de FS síncrono — el caller DEBE envolverla en
+/// `spawn_blocking` (regla 2), mismo patrón que [`persist_set`].
+///
+/// # Errors
+/// [`std::io::Error`] si el TOML existente no parsea, si `[section]` existe
+/// con una forma que no es tabla, o si falla el I/O.
+pub fn persist_unset(dir: &Path, section: &str, key: &str) -> std::io::Result<ConfigWrite> {
+    use std::io::{Error, ErrorKind};
+    let declarado = dir.join(NORTE_TOML);
+    // Sin fichero no hay nada que quitar, y el lock no debe crearlo.
+    let lock = match lock_config_file(dir, NORTE_TOML) {
+        Ok(l) => l,
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Ok(ConfigWrite {
+                path: declarado,
+                changed: false,
+            });
+        }
+        Err(e) => return Err(e),
+    };
+    let path = lock.target().to_path_buf();
+    let mut doc = match std::fs::read_to_string(&path) {
+        Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
+            // Nombra el fichero, nunca el contenido: el `Display` del error
+            // de `toml_edit` cita la línea ofensiva, y ahí puede haber un
+            // nombre hostil persistido antes (#73).
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    path.display()
+                ),
+            )
+        })?,
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Ok(ConfigWrite {
+                path,
+                changed: false,
+            });
+        }
+        Err(e) => return Err(e),
+    };
+    // El mismo guard de forma que `persist_set`, y por lo mismo: una
+    // `[section]` que no es tabla indexaría en pánico.
+    let Some(existing) = doc.as_table().get(section) else {
+        return Ok(ConfigWrite {
+            path,
+            changed: false,
+        });
+    };
+    if !existing.is_table_like() {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "{}: [{section}] no es una tabla (forma inesperada); corrígelo o bórralo",
+                path.display()
+            ),
+        ));
+    }
+    let quitada = doc
+        .as_table_mut()
+        .get_mut(section)
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .is_some_and(|t| t.remove(key).is_some());
+    if quitada {
+        write_config_file(&lock, &doc)?;
+    }
+    Ok(ConfigWrite {
+        path,
+        changed: quitada,
+    })
+}
+
 /// El `sort` a persistir (#108 7a) — espejo consciente de [`SortChoice`]:
 /// este writer serializa EXACTAMENTE el vocabulario que `load` parsea en
 /// `parse_sort_section` (`column` = `name`|`size`|`mtime`, `dir` =
@@ -2707,6 +2809,78 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
 /// Tests de historial+hotlist (spec 2026-07-18, navTC T2) + `[ai]` (ADR
 /// 0035): mod nuevo junto a `toml_diag_tests` de `schema.rs` (no
 /// reutilizarlo — ese mod es solo del diagnóstico compacto de `#73`).
+/// `persist_unset`: el reverso de `persist_set`, y lo que hay detrás de
+/// «restablecer» en la pantalla de ajustes.
+#[cfg(test)]
+mod unset_tests {
+    use super::*;
+
+    #[test]
+    fn quitar_una_clave_la_borra_y_deja_las_vecinas() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).unwrap();
+        persist_set(dir.path(), "ui", "font_size", toml_edit::Value::from(18)).unwrap();
+        let out = persist_unset(dir.path(), "ui", "theme").unwrap();
+        assert!(out.changed);
+        let s = std::fs::read_to_string(&out.path).unwrap();
+        assert!(!s.contains("theme"), "{s}");
+        assert!(s.contains("font_size"), "la vecina se queda: {s}");
+    }
+
+    #[test]
+    fn quitar_lo_que_no_esta_no_escribe_nada_ni_crea_el_fichero() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = persist_unset(dir.path(), "ui", "theme").unwrap();
+        assert!(!out.changed, "un fichero que no está es un no-op");
+        assert!(!out.path.exists(), "y no lo crea");
+        // Con fichero, pero sin esa clave: lo mismo.
+        persist_set(dir.path(), "ui", "font_size", toml_edit::Value::from(18)).unwrap();
+        let out = persist_unset(dir.path(), "ui", "theme").unwrap();
+        assert!(!out.changed);
+        let out = persist_unset(dir.path(), "keymap", "preset").unwrap();
+        assert!(!out.changed, "una sección que no está tampoco");
+    }
+
+    /// Poner y quitar deja el fichero como estaba. Si esto falla,
+    /// restablecer ensucia el `norte.toml` un poco en cada vuelta.
+    #[test]
+    fn poner_y_quitar_es_la_identidad() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "# mi config\n[ui]\nfont_size = 18 # el tamaño\n",
+        )
+        .unwrap();
+        let antes = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).unwrap();
+        persist_unset(dir.path(), "ui", "theme").unwrap();
+        let despues = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert_eq!(antes, despues, "comentarios y formato incluidos");
+    }
+
+    /// Una sección que se queda vacía se CONSERVA: borrarla cambia el
+    /// fichero más de lo que se pidió.
+    #[test]
+    fn la_seccion_vacia_se_queda() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).unwrap();
+        persist_unset(dir.path(), "ui", "theme").unwrap();
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert!(s.contains("[ui]"), "{s}");
+    }
+
+    /// El mismo guard de forma que `persist_set`: una `[ui]` que no es tabla
+    /// se rechaza en vez de indexarse, que sería un pánico en el hilo de
+    /// fondo de quien llama.
+    #[test]
+    fn una_seccion_que_no_es_tabla_se_rechaza() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "ui = 3\n").unwrap();
+        let e = persist_unset(dir.path(), "ui", "theme").unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+    }
+}
+
 #[cfg(test)]
 mod hotlist_tests {
     use super::*;
