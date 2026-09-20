@@ -209,6 +209,25 @@ impl SettingDef {
     }
 }
 
+/// La configuración DE FÁBRICA: la que sale de cero capas.
+///
+/// Es contra esto contra lo que se decide si una fila está «modificada», y
+/// se calcula con [`current_value`], la misma función que pinta el valor —
+/// una tabla de defectos escrita a mano se desincroniza del esquema en
+/// cuanto alguien cambia uno.
+///
+/// Cacheada porque las 33 entradas se comparan contra la misma y
+/// [`crate::config::load`] con cero capas no toca el disco (recorre una
+/// lista vacía). Si alguna vez fallara, `None` degrada a «nada está
+/// modificado»: un punto de menos es un fallo inerte, y uno de más señala
+/// como tocado algo que nadie tocó.
+fn factory_config() -> Option<&'static FrontendConfig> {
+    static FABRICA: std::sync::OnceLock<Option<FrontendConfig>> = std::sync::OnceLock::new();
+    FABRICA
+        .get_or_init(|| crate::config::load(&norte_config::Layers { dirs: vec![] }).ok())
+        .as_ref()
+}
+
 /// El reparto del catálogo en secciones, en UN sitio.
 ///
 /// `None` para un id que no es del catálogo. Un id del catálogo que
@@ -624,6 +643,18 @@ pub struct Row {
     /// Current value as display text; empty for a row with nothing single
     /// to show (the informational fallback).
     pub value: String,
+    /// La sección bajo la que se pinta: la del catálogo para una entrada
+    /// curada, [`Section::Plugins`] para un resumen de plugin.
+    ///
+    /// Va en la fila y no se re-deriva del id en cada frontend: dos cuentas
+    /// de «dónde va esto» son dos pantallas que se desordenan por separado.
+    pub section: Section,
+    /// El valor efectivo NO es el de fábrica — el punto de «esto lo has
+    /// tocado tú».
+    ///
+    /// Falso siempre para una fila que no sale del catálogo: no hay valor
+    /// de fábrica con el que compararla.
+    pub modified: bool,
 }
 
 impl Row {
@@ -672,6 +703,8 @@ fn plugin_summary_rows(summaries: &[PluginConfigSummary], lang: norte_i18n::Lang
             name: norte_i18n::t_in(lang, "settings-plugins-name"),
             desc: norte_i18n::t_in(lang, "settings-plugins-note"),
             value: String::new(),
+            section: Section::Plugins,
+            modified: false,
         }];
     }
     summaries
@@ -686,6 +719,8 @@ fn plugin_summary_rows(summaries: &[PluginConfigSummary], lang: norte_i18n::Lang
                 "settings-plugins-key-count",
                 &[("count", &s.key_count.to_string())],
             ),
+            section: Section::Plugins,
+            modified: false,
         })
         .collect()
 }
@@ -714,15 +749,21 @@ pub fn build_rows_in(
     plugin_summaries: &[PluginConfigSummary],
     lang: norte_i18n::Lang,
 ) -> Vec<Row> {
+    let fabrica = factory_config();
     let mut rows: Vec<Row> = catalog()
         .iter()
         .enumerate()
-        .map(|(i, def)| Row {
-            def_index: Some(i),
-            plugin_id: None,
-            name: norte_i18n::t_in(lang, &fluent_name_id(def.id)),
-            desc: norte_i18n::t_in(lang, &fluent_desc_id(def.id)),
-            value: current_value(def, cfg),
+        .map(|(i, def)| {
+            let value = current_value(def, cfg);
+            Row {
+                def_index: Some(i),
+                plugin_id: None,
+                name: norte_i18n::t_in(lang, &fluent_name_id(def.id)),
+                desc: norte_i18n::t_in(lang, &fluent_desc_id(def.id)),
+                modified: fabrica.is_some_and(|f| value != current_value(def, f)),
+                value,
+                section: def.section(),
+            }
         })
         .collect();
     rows.extend(plugin_summary_rows(plugin_summaries, lang));
@@ -1873,6 +1914,45 @@ mod tests {
         // Y una cabecera no puede empujar el cursor fuera por abajo.
         s.reconcile_viewport(39, 38, 40, 10);
         assert!(s.viewport_offset() <= 38 && s.viewport_offset() + 10 > 39);
+    }
+
+    /// El punto de «esto lo has tocado tú» se calcula contra el valor DE
+    /// FÁBRICA, con la misma función que pinta el valor: una tabla de
+    /// defectos escrita a mano se desincroniza del esquema en cuanto alguien
+    /// cambia uno.
+    #[test]
+    fn sobre_la_config_por_defecto_no_hay_nada_modificado() {
+        for r in build_rows(&cfg_vacia(), &[]) {
+            assert!(!r.modified, "«{}» no debería salir modificada", r.name);
+        }
+    }
+
+    #[test]
+    fn cambiar_un_campo_enciende_el_punto_de_esa_fila_y_de_ninguna_otra() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_theme = Some("nord".to_owned());
+        let filas = build_rows(&cfg, &[]);
+        let tocadas: Vec<_> = filas
+            .iter()
+            .filter(|r| r.modified)
+            .map(super::Row::id)
+            .collect();
+        assert_eq!(tocadas, vec![Some("ui.theme")]);
+    }
+
+    /// Una fila que no sale del catálogo nunca está modificada: no hay valor
+    /// de fábrica con el que compararla.
+    #[test]
+    fn una_fila_de_plugins_no_esta_modificada() {
+        let resumen = PluginConfigSummary {
+            plugin_id: "org.a".into(),
+            name: "A".into(),
+            key_count: 2,
+        };
+        let filas = build_rows(&cfg_vacia(), &[resumen]);
+        let fila = filas.last().expect("hay fila de plugin");
+        assert_eq!(fila.section, Section::Plugins);
+        assert!(!fila.modified);
     }
 
     /// Ninguna entrada se queda sin sitio. Un id nuevo sin sección cae en
