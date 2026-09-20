@@ -200,6 +200,9 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::HelpActivate { .. } => "help_activate",
         UiAction::SettingsSelectRow { .. } => "settings_select_row",
         UiAction::SettingsActivate { .. } => "settings_activate",
+        UiAction::SettingsQuery { .. } => "settings_query",
+        UiAction::SettingsJumpSection { .. } => "settings_jump_section",
+        UiAction::SettingsReset { .. } => "settings_reset",
         UiAction::ExtensionSelectRow { .. } => "extension_select_row",
         UiAction::ExtensionGovern { .. } => "extension_govern",
         UiAction::ExtensionHelp { .. } => "extension_help",
@@ -416,6 +419,19 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
             UiAction::SettingsSelectRow { row: 2 },
         ),
         ("settings_activate", UiAction::SettingsActivate { row: 2 }),
+        (
+            "settings_query",
+            UiAction::SettingsQuery {
+                text: "@modified fira".to_owned(),
+            },
+        ),
+        (
+            "settings_jump_section",
+            UiAction::SettingsJumpSection {
+                section: "open-with".to_owned(),
+            },
+        ),
+        ("settings_reset", UiAction::SettingsReset { row: 2 }),
         (
             "extension_select_row",
             UiAction::ExtensionSelectRow { row: 1 },
@@ -2034,31 +2050,37 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
 /// Los ajustes de referencia: una entrada del registro con su valor efectivo,
 /// y una sección de ubicaciones con una que falta.
 fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
-    use norte_ui_host::dto::{PathRowView, SettingRowView, SettingsSectionView, SettingsView};
+    use norte_ui_host::dto::{
+        PathRowView, SectionIndexView, SettingRowView, SettingsSectionView, SettingsView,
+    };
     SettingsView {
         sections: vec![
             SettingsSectionView::Settings {
-                title: "General".to_owned(),
-                rows: vec![
-                    SettingRowView {
-                        id: "ui.confirm-quit".to_owned(),
-                        name: "Confirmar al salir".to_owned(),
-                        desc: "Pregunta antes de cerrar norte".to_owned(),
-                        value: "siempre".to_owned(),
-                        hostile: false,
-                        restart_required: true,
-                    },
-                    // Un valor que el USUARIO escribió en su `norte.toml` con
-                    // un override bidi dentro: llega enmascarado y marcado.
-                    SettingRowView {
-                        id: "ui.font".to_owned(),
-                        name: "Tipografía".to_owned(),
-                        desc: "La fuente de la ventana".to_owned(),
-                        value: "Fira\u{fffd}Code".to_owned(),
-                        hostile: true,
-                        restart_required: true,
-                    },
-                ],
+                title: "Comportamiento".to_owned(),
+                rows: vec![SettingRowView {
+                    id: "ui.confirm-quit".to_owned(),
+                    name: "Confirmar al salir".to_owned(),
+                    desc: "Pregunta antes de cerrar norte".to_owned(),
+                    value: "siempre".to_owned(),
+                    hostile: false,
+                    restart_required: true,
+                    modified: false,
+                }],
+            },
+            SettingsSectionView::Settings {
+                title: "Apariencia".to_owned(),
+                // Un valor que el USUARIO escribió en su `norte.toml` con un
+                // override bidi dentro: llega enmascarado, marcado, y con el
+                // punto de «esto no es de fábrica».
+                rows: vec![SettingRowView {
+                    id: "ui.font".to_owned(),
+                    name: "Tipografía".to_owned(),
+                    desc: "La fuente de la ventana".to_owned(),
+                    value: "Fira\u{fffd}Code".to_owned(),
+                    hostile: true,
+                    restart_required: true,
+                    modified: true,
+                }],
             },
             SettingsSectionView::Paths {
                 title: "Dónde vive cada cosa".to_owned(),
@@ -2078,7 +2100,28 @@ fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
                 ],
             },
         ],
+        index: vec![
+            SectionIndexView {
+                key: "appearance".to_owned(),
+                title: "Apariencia".to_owned(),
+                visible: 1,
+            },
+            SectionIndexView {
+                key: "behavior".to_owned(),
+                title: "Comportamiento".to_owned(),
+                visible: 1,
+            },
+            // Una sección que el filtro vació: sigue en el índice, apagada.
+            SectionIndexView {
+                key: "open-with".to_owned(),
+                title: "Abrir con".to_owned(),
+                visible: 0,
+            },
+        ],
         cursor: 0,
+        query: "fira".to_owned(),
+        shown: 2,
+        total: 34,
     }
 }
 
@@ -2717,7 +2760,12 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // desinstala (`ExtensionErrorView.id`, ADR 0113).
     // Puente 80: `View::row_stripes` (el pijama del listado) y
     // `ViewerView::image_zoom` (el zoom de una imagen).
-    const FORMA: u64 = 13_356_512_637_820_858_921;
+    // Puente 81: los ajustes por secciones — `SettingsView.index` (el índice
+    // de la izquierda), `.query`, `.shown` y `.total` (el buscador y sus dos
+    // cifras), y `SettingRowView.modified` (el punto de «esto no es de
+    // fábrica»), más las acciones `settings_query`,
+    // `settings_jump_section` y `settings_reset`.
+    const FORMA: u64 = 14_294_946_905_780_476_047;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

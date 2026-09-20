@@ -12,22 +12,24 @@ use super::*;
 
 /// La posición de una entrada del registro en la lista PLANA de los ajustes.
 ///
-/// La sección general va primero, así que su índice dentro de la sección es
-/// el de la lista entera.
+/// Cuenta a través de TODAS las secciones, en su orden: desde que hay siete,
+/// el índice dentro de una sección ya no es el de la lista entera.
 fn fila_de(a: &norte_ui_host::dto::SettingsView, id: &str) -> u32 {
-    let general = a
-        .sections
-        .iter()
-        .find_map(|s| match s {
-            norte_ui_host::dto::SettingsSectionView::Settings { rows, .. } => Some(rows),
-            norte_ui_host::dto::SettingsSectionView::Paths { .. } => None,
-        })
-        .expect("hay sección general");
-    let pos = general
-        .iter()
-        .position(|r| r.id == id)
-        .unwrap_or_else(|| panic!("la entrada {id} está en el registro"));
-    u32::try_from(pos).expect("cabe")
+    let mut plana = 0usize;
+    for s in &a.sections {
+        match s {
+            norte_ui_host::dto::SettingsSectionView::Settings { rows, .. } => {
+                for r in rows {
+                    if r.id == id {
+                        return u32::try_from(plana).expect("cabe");
+                    }
+                    plana += 1;
+                }
+            }
+            norte_ui_host::dto::SettingsSectionView::Paths { rows, .. } => plana += rows.len(),
+        }
+    }
+    panic!("la entrada {id} está en el registro")
 }
 
 /// El valor que la vista de ajustes enseña para una entrada.
@@ -63,6 +65,113 @@ async fn ajustes_sobre(
 /// Lo que hay en el `norte.toml` de la capa del usuario, si ya existe.
 fn toml_de(raiz: &std::path::Path) -> Option<String> {
     std::fs::read_to_string(raiz.join("norte.toml")).ok()
+}
+
+/// Con el buscador puesto, el cursor apunta a la fila que SE VE.
+///
+/// El cursor de esta ventana era plano sobre `filas ++ rutas`, y eso solo
+/// valía porque no filtraba: había un `debug_assert` diciendo exactamente
+/// eso. Con filtro, la tercera fila de la pantalla no es la tercera del
+/// registro, y un Enter activaría otra cosa.
+#[tokio::test]
+async fn con_filtro_el_cursor_apunta_a_la_fila_que_se_ve() {
+    let raiz = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F11")).await.expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("abren");
+    let total = a.total;
+    assert_eq!(a.shown, total, "sin filtro se ven todos");
+
+    h.dispatch(UiAction::SettingsQuery {
+        text: "show-hidden".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    assert!(
+        a.shown < total,
+        "el filtro tapa filas: {} de {total}",
+        a.shown
+    );
+    assert_eq!(
+        fila_de(&a, "ui.show-hidden"),
+        0,
+        "la fila que queda es la primera de la lista"
+    );
+    // Y el índice sigue listando las secciones que el filtro vació.
+    assert!(
+        a.index.iter().any(|s| s.visible == 0),
+        "una sección vacía sigue en el índice: {:?}",
+        a.index
+    );
+}
+
+/// Un click en el índice lleva el cursor a esa sección.
+#[tokio::test]
+async fn saltar_a_una_seccion_pone_el_cursor_en_su_primera_fila() {
+    let raiz = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F11")).await.expect("host vivo");
+    siguiente_ajustes(&mut sub).await.expect("abren");
+
+    h.dispatch(UiAction::SettingsJumpSection {
+        section: "open-with".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    assert_eq!(
+        a.cursor,
+        u64::from(fila_de(&a, "ui.editor")),
+        "«Abrir con» empieza en el editor"
+    );
+}
+
+/// Restablecer quita la clave, y si OTRA capa la fija se dice: el valor no
+/// vuelve al de fábrica, y callarlo mandaría al lector a buscar un bug.
+#[tokio::test]
+async fn restablecer_con_otra_capa_por_debajo_lo_dice() {
+    let sistema = tempfile::tempdir().expect("temp");
+    let usuario = tempfile::tempdir().expect("temp");
+    // El sistema fija el tema; el usuario lo tapa con otro.
+    std::fs::write(
+        sistema.path().join("norte.toml"),
+        "[ui]\ntheme = \"nord\"\n",
+    )
+    .expect("escribir sistema");
+    std::fs::write(
+        usuario.path().join("norte.toml"),
+        "[ui]\ntheme = \"tokyonight\"\n",
+    )
+    .expect("escribir usuario");
+    let (h, _snap) = host_con_capas_apiladas(sistema.path(), usuario.path()).await;
+    let mut sub = h.subscribe();
+    let a = ajustes_sobre(&h, &mut sub, "ui.theme").await;
+    let fila = fila_de(&a, "ui.theme");
+
+    h.dispatch(UiAction::SettingsReset { row: fila })
+        .await
+        .expect("host vivo");
+
+    // La clave del usuario se va...
+    let escrito = foto_hasta(&h, &mut sub, "theme quitado del usuario", |_| {
+        std::fs::read_to_string(usuario.path().join("norte.toml"))
+            .ok()
+            .filter(|s| !s.contains("tokyonight"))
+    })
+    .await;
+    assert!(escrito.contains("[ui]"), "la sección se queda: {escrito}");
+    // ...y el aviso dice que otra capa lo sigue fijando.
+    let dicho = foto_hasta(&h, &mut sub, "lo dice", |s| {
+        s.status
+            .message
+            .clone()
+            .filter(|m| m.contains("otra capa") || m.contains("another layer"))
+    })
+    .await;
+    assert!(!dicho.is_empty());
 }
 
 /// Enter sobre un booleano lo gira, lo escribe en `norte.toml` y la fila

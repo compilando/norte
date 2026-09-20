@@ -943,6 +943,24 @@
     "change": "settings",
     "settings": {
       "cursor": 0,
+      "index": [
+        {
+          "key": "appearance",
+          "title": "Apariencia",
+          "visible": 1
+        },
+        {
+          "key": "behavior",
+          "title": "Comportamiento",
+          "visible": 1
+        },
+        {
+          "key": "open-with",
+          "title": "Abrir con",
+          "visible": 0
+        }
+      ],
+      "query": "fira",
       "sections": [
         {
           "rows": [
@@ -950,21 +968,29 @@
               "desc": "Pregunta antes de cerrar norte",
               "hostile": false,
               "id": "ui.confirm-quit",
+              "modified": false,
               "name": "Confirmar al salir",
               "restart_required": true,
               "value": "siempre"
-            },
+            }
+          ],
+          "section": "settings",
+          "title": "Comportamiento"
+        },
+        {
+          "rows": [
             {
               "desc": "La fuente de la ventana",
               "hostile": true,
               "id": "ui.font",
+              "modified": true,
               "name": "Tipografía",
               "restart_required": true,
               "value": "Fira�Code"
             }
           ],
           "section": "settings",
-          "title": "General"
+          "title": "Apariencia"
         },
         {
           "rows": [
@@ -984,7 +1010,9 @@
           "section": "paths",
           "title": "Dónde vive cada cosa"
         }
-      ]
+      ],
+      "shown": 2,
+      "total": 34
     }
   },
   "slot_state": {

@@ -973,6 +973,8 @@ enum Fondo {
     /// releída con él. En caja porque una `FrontendConfig` es grande al lado
     /// del resto del enum.
     AjusteEscrito(Box<settings::AjusteEscrito>),
+    /// Una clave de F11 ya no está en el `norte.toml` — restablecida.
+    AjusteRestablecido(Box<settings::AjusteRestablecido>),
     /// El catálogo que pidió la PALETA, para sus filas de plugin.
     PluginsDePaleta(u64, Result<norte_proto::methods::PluginListResult, Error>),
     /// Un cambio de gobierno (aprobar/revocar, encender/apagar) contestó.
@@ -3890,6 +3892,9 @@ impl Estado {
             UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
             UiAction::SettingsActivate { row } => self.activar_ajuste_por_raton(*row, buzon),
+            UiAction::SettingsQuery { text } => self.buscar_ajuste(text),
+            UiAction::SettingsJumpSection { section } => self.saltar_a_seccion(section),
+            UiAction::SettingsReset { row } => self.restablecer_ajuste(*row, buzon),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
             UiAction::ExtensionGovern { row, id, change } => {
                 self.gobernar_por_raton(*row, id, (*change).into(), backend, buzon)

@@ -28,6 +28,21 @@ pub(super) struct AjusteEscrito {
     pub(super) resultado: Result<Option<norte_frontend::config::FrontendConfig>, &'static str>,
 }
 
+/// Una clave de F11 ya NO está (o no se pudo quitar), y la configuración
+/// releída con ella.
+///
+/// Lleva el `id` porque el mensaje depende de lo que diga la fila DESPUÉS de
+/// releer: quitar la clave de tu capa no devuelve el valor de fábrica si el
+/// perfil o el proyecto fijan la misma.
+pub(super) struct AjusteRestablecido {
+    /// Cómo se llama la entrada, ya traducido, para el mensaje.
+    pub(super) nombre: String,
+    /// Su id del catálogo (`ui.theme`), para volver a encontrar la fila.
+    pub(super) id: String,
+    /// `Err` es la clave del motivo por el que no se quitó.
+    pub(super) resultado: Result<Option<norte_frontend::config::FrontendConfig>, &'static str>,
+}
+
 impl Estado {
     /// Abre los ajustes.
     ///
@@ -78,6 +93,128 @@ impl Estado {
     /// La proyección de los ajustes.
     pub(super) fn vista_ajustes(&self) -> Option<crate::dto::SettingsView> {
         Some(self.ajustes.as_ref()?.vista(self.lang))
+    }
+
+    /// Lo que se ha escrito en el buscador.
+    pub(super) fn buscar_ajuste(
+        &mut self,
+        texto: &str,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(a) = self.ajustes.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        a.consultar(texto);
+        let cambio = ViewChange::Settings {
+            settings: self.vista_ajustes(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Un click en el índice: el cursor a la primera fila de esa sección.
+    pub(super) fn saltar_a_seccion(
+        &mut self,
+        seccion: &str,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(a) = self.ajustes.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        a.saltar(seccion);
+        let cambio = ViewChange::Settings {
+            settings: self.vista_ajustes(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Restablecer una fila: quitar su clave de la capa de escritura.
+    ///
+    /// Va por el MISMO camino que escribir —hilo de fondo, buzón, relectura
+    /// y foto— porque es la misma clase de operación: I/O con un lock entre
+    /// procesos detrás. Lo único distinto es lo que se dice al final, y eso
+    /// se decide MIRANDO la fila releída: quitar la clave de tu capa no
+    /// devuelve el valor de fábrica si el perfil o el proyecto la fijan.
+    pub(super) fn restablecer_ajuste(
+        &mut self,
+        row: u32,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(a) = self.ajustes.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        a.senalar(row as usize);
+        let Some(reset) = a.restablecer(row as usize) else {
+            // Nada que quitar: ni aviso ni escritura. Una fila que ya está
+            // en su valor de fábrica no tiene clave en ningún sitio.
+            let cambio = ViewChange::Settings {
+                settings: self.vista_ajustes(),
+            };
+            return (self.aplicada(), vec![self.parche(vec![cambio])]);
+        };
+        let Some(dir) = self.dir_de_escritura() else {
+            return (self.aplicada(), self.decir("host-no-config-dir"));
+        };
+        let capas = self.capas_actuales();
+        let buzon = buzon.clone();
+        let norte_frontend::settings::PendingReset { section, key, name } = reset;
+        let id = format!("{section}.{}", key.replace('_', "-"));
+        tokio::task::spawn_blocking(move || {
+            let resultado = match norte_config::persist_unset(&dir, section, &key) {
+                // El error NO viaja: puede llevar la ruta del fichero (#73).
+                Err(e) => Err(clave_de_io(&e)),
+                Ok(_) => Ok(norte_frontend::config::load(&capas).ok()),
+            };
+            let hecho = AjusteRestablecido {
+                nombre: name,
+                id,
+                resultado,
+            };
+            let _ = buzon.blocking_send(Mensaje::Fondo(Box::new(Fondo::AjusteRestablecido(
+                Box::new(hecho),
+            ))));
+        });
+        (self.aplicada(), Vec::new())
+    }
+
+    /// La clave ya no está (o no se pudo quitar): se aplica lo releído y se
+    /// dice lo que de verdad pasó.
+    pub(super) fn ajuste_restablecido(
+        &mut self,
+        hecho: AjusteRestablecido,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let AjusteRestablecido {
+            nombre,
+            id,
+            resultado,
+        } = hecho;
+        let cfg = match resultado {
+            Err(clave) => return self.decir(clave),
+            Ok(cfg) => cfg,
+        };
+        if let Some(cfg) = cfg {
+            self.aplicar_config(cfg, backend, buzon);
+        }
+        if let Some(a) = self.ajustes.as_mut() {
+            a.refrescar(&self.config, self.lang);
+        }
+        // El punto, releído, es la respuesta: si la fila sigue modificada,
+        // otra capa la fija y el valor no ha vuelto al de fábrica.
+        let sigue = self
+            .ajustes
+            .as_ref()
+            .is_some_and(|a| a.sigue_modificada(&id));
+        let clave = if sigue {
+            "settings-still-set-elsewhere"
+        } else {
+            "settings-reset-done"
+        };
+        self.status.message = Some(clamp_display(norte_i18n::ta_in(
+            self.lang,
+            clave,
+            &[("name", &nombre)],
+        )));
+        let snap = self.snapshot();
+        vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
     }
 
     /// Las teclas mientras los ajustes están abiertos.

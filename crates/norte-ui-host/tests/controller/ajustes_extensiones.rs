@@ -63,20 +63,23 @@ async fn los_ajustes_ensenan_el_registro_compartido_con_su_valor() {
     h.dispatch(tecla("F11")).await.expect("host vivo");
     let a = siguiente_ajustes(&mut sub).await.expect("abren");
 
-    let general = a
+    // Todas las secciones de ajustes juntas: desde que hay siete, ninguna
+    // sola lleva el catálogo entero.
+    let general: Vec<_> = a
         .sections
         .iter()
-        .find_map(|s| match s {
+        .filter_map(|s| match s {
             norte_ui_host::dto::SettingsSectionView::Settings { rows, .. } => Some(rows),
             norte_ui_host::dto::SettingsSectionView::Paths { .. } => None,
         })
-        .expect("hay sección general");
+        .flatten()
+        .collect();
     assert_eq!(
         general.len(),
         norte_frontend::settings::catalog().len(),
         "ni una entrada del catálogo compartido se queda fuera"
     );
-    for r in general {
+    for r in &general {
         assert!(!r.id.is_empty(), "cada fila lleva su id estable");
         assert!(!r.name.is_empty(), "y su nombre traducido: {r:?}");
         assert!(

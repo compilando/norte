@@ -1146,6 +1146,23 @@ impl SettingsState {
         self.recompute();
     }
 
+    /// Pone la consulta ENTERA de golpe y recomputa.
+    ///
+    /// La ventana la necesita: su buscador es un `<input>` del navegador y
+    /// lo que cruza el puente es el texto completo, no la tecla. El terminal
+    /// sigue con [`Self::push_char`] porque su overlay sí recibe teclas.
+    ///
+    /// El texto llega como bytes de una caja de texto: no se valida ni se
+    /// recorta aquí — plegar y filtrar es todo lo que se hace con él, y
+    /// pintarlo es de quien pinta ([`Self::query_display`] lo enmascara).
+    pub fn set_query(&mut self, text: &str) {
+        if self.edit.is_some() {
+            return;
+        }
+        self.query = text.as_bytes().to_vec();
+        self.recompute();
+    }
+
     /// Removes the last complete UTF-8 char from the query. No-op editing.
     pub fn backspace(&mut self) {
         if self.edit.is_some() || self.query.is_empty() {

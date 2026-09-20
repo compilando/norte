@@ -755,11 +755,42 @@ pub struct HelpActionView {
 /// no configuración.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsView {
-    /// Las secciones, en su orden.
+    /// Las secciones, en su orden. Solo las que tienen filas que enseñar con
+    /// el filtro puesto.
     pub sections: Vec<SettingsSectionView>,
+    /// El índice de la izquierda: TODAS las secciones que esta superficie
+    /// tiene, tape o no el filtro sus filas.
+    ///
+    /// Va aparte de [`Self::sections`] a propósito: una sección que el filtro
+    /// vació sigue en el índice —apagada— porque un índice que cambia de
+    /// largo mientras escribes no se puede usar como mapa, y no está en
+    /// `sections` porque no hay nada que pintar debajo de su rótulo.
+    pub index: Vec<SectionIndexView>,
     /// Qué fila tiene el cursor, contando TODAS las filas de todas las
     /// secciones en orden (las cabeceras no cuentan: no se pueden elegir).
     pub cursor: u64,
+    /// Lo que hay escrito en el buscador, YA ENMASCARADO.
+    pub query: String,
+    /// Cuántos ajustes se ven con el filtro puesto.
+    pub shown: u64,
+    /// Cuántos hay en total. Con [`Self::shown`] son las dos cifras de «7 de
+    /// 33»: sin la segunda, «no hay nada» y «lo tapé con una letra» se leen
+    /// igual.
+    pub total: u64,
+}
+
+/// Una sección en el índice de los ajustes.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SectionIndexView {
+    /// Su clave ESTABLE (`appearance`, `open-with`…): una identidad, no algo
+    /// que se pinte. Es lo que vuelve en `settings_jump_section`, y por eso
+    /// no pasa por el recorte de pantalla.
+    pub key: String,
+    /// Su rótulo, en el idioma del lector.
+    pub title: String,
+    /// Cuántas de sus filas se ven con el filtro puesto. Cero = apagada.
+    pub visible: u64,
 }
 
 /// Una sección de los ajustes: entradas del registro, o ubicaciones.
@@ -811,6 +842,13 @@ pub struct SettingRowView {
     /// Cambiarlo pide reiniciar la ventana: lo que se escribe se guarda, y
     /// hace efecto en la siguiente.
     pub restart_required: bool,
+    /// Su valor NO es el de fábrica — el punto de «esto lo has tocado tú».
+    ///
+    /// Se calcula contra el valor por defecto, no contra «hay una clave en
+    /// tu fichero»: una clave escrita con el mismo valor que ya traía no es
+    /// un cambio, y marcarla como tal mandaría a restablecer algo que no
+    /// hace nada.
+    pub modified: bool,
 }
 
 /// Dónde vive cada cosa: las capas de configuración, el estado, los logs y el
