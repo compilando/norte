@@ -1221,6 +1221,7 @@ describe("el visor", () => {
       preview_lossy: false,
       image: null,
       image_refused: "",
+      image_zoom: 100,
       styled: [],
     };
     screen.paint(v);
@@ -1253,6 +1254,7 @@ describe("el visor", () => {
       preview_lossy: false,
       image: null,
       image_refused: "",
+      image_zoom: 100,
       styled: [],
     };
 
@@ -1309,6 +1311,7 @@ describe("el visor", () => {
       preview_lossy: false,
       image: null,
       image_refused: "",
+      image_zoom: 100,
       styled: [],
     };
     screen.paint(v);
@@ -1339,6 +1342,7 @@ describe("el visor", () => {
       preview_lossy: false,
       image: null,
       image_refused: "",
+      image_zoom: 100,
       styled: [
         [
           { text: "fn", role: "title", fg: "#ff0000", bg: null },
@@ -1396,6 +1400,7 @@ describe("el visor", () => {
       preview_lossy: false,
       image: null,
       image_refused: "",
+      image_zoom: 100,
       styled: [],
     };
     screen.paint(v);
@@ -1655,6 +1660,7 @@ describe("la imagen del visor", () => {
         ...base,
         image: { format: "PNG", width: 800, height: 600 },
         image_refused: "",
+        image_zoom: 100,
       }),
     );
     // La promesa se resuelve en el siguiente turno.
@@ -1684,6 +1690,7 @@ describe("la imagen del visor", () => {
           ...base,
           image: { format: "PNG", width: 10, height: 10 },
           image_refused: "",
+          image_zoom: 100,
         }),
       );
       await Promise.resolve();
@@ -1710,6 +1717,7 @@ describe("la imagen del visor", () => {
         ...base,
         image: null,
         image_refused: "imagen demasiado grande para previsualizarla",
+        image_zoom: 100,
       }),
     );
     const no = document.querySelector(".viewer-image-refused");
@@ -1744,6 +1752,7 @@ describe("la preview de un plugin en el visor", () => {
       preview_lossy: true,
       image: null,
       image_refused: "",
+      image_zoom: 100,
       styled: [],
     };
     screen.paint(v);
@@ -1780,6 +1789,7 @@ describe("la preview de un plugin en el visor", () => {
       preview_lossy: true,
       image: null,
       image_refused: "",
+      image_zoom: 100,
       styled: [],
     };
     screen.paint(v);
@@ -1815,6 +1825,7 @@ describe("la preview de un plugin en el visor", () => {
       preview_lossy: false,
       image: null,
       image_refused: "",
+      image_zoom: 100,
       styled: [],
     };
     screen.paint(v);
@@ -3601,6 +3612,7 @@ describe("los huecos que no son listados", () => {
           preview_lossy: false,
           image: null,
           image_refused: "",
+          image_zoom: 100,
           styled: [
             [{ text: "Título", role: "title", fg: null, bg: null }],
             [{ text: "texto", role: null, fg: "#ff0000", bg: "#000040" }],
@@ -3654,6 +3666,7 @@ describe("los huecos que no son listados", () => {
           preview_lossy: false,
           image: null,
           image_refused: "",
+          image_zoom: 100,
           styled: [],
         },
       },
