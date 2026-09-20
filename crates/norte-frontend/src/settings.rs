@@ -937,6 +937,25 @@ impl PendingWrite {
     }
 }
 
+/// Una clave que hay que QUITAR de la capa de escritura, producida por
+/// [`SettingsState::reset`].
+///
+/// Como [`PendingWrite`], es pura: quien la recibe llama a
+/// `norte_config::persist_unset` fuera del hilo de pintado (regla 2) y
+/// anuncia el resultado. No lleva valor porque no hay ninguno que escribir
+/// — restablecer es dejar de decir nada, no decir el defecto: escribir el
+/// valor de fábrica en el fichero lo congelaría contra un cambio futuro del
+/// defecto, que es justo lo contrario de lo que el lector pidió.
+#[derive(Debug, Clone)]
+pub struct PendingReset {
+    /// `[section]` de `norte.toml`.
+    pub section: &'static str,
+    /// La clave dentro de esa sección (`snake_case`, ya convertida).
+    pub key: String,
+    /// El nombre traducido del ajuste, para el aviso.
+    pub name: String,
+}
+
 /// Why [`SettingsState::edit_commit`] rejected the buffer — WITHOUT
 /// persisting (S3/S4: "invalid = status-bar/inline error, value untouched").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1354,6 +1373,40 @@ impl SettingsState {
                 None
             }
         }
+    }
+
+    /// Restablecer la fila del cursor: la clave que hay que QUITAR de la
+    /// capa de escritura, o `None` si no hay nada que quitar.
+    ///
+    /// `None` cuando la fila ya está en su valor de fábrica (quitar una
+    /// clave que no está es un no-op que no merece un aviso), cuando no sale
+    /// del catálogo (un resumen de plugin no tiene valor de fábrica), o
+    /// mientras se edita — igual que el resto de esta máquina, editar
+    /// congela todo lo demás.
+    ///
+    /// **Quitar la clave de TU capa no siempre devuelve el valor de
+    /// fábrica**: si el sistema, el perfil o el proyecto fijan la misma, el
+    /// valor cambia y sigue sin ser el defecto. Esta función no lo sabe;
+    /// quien la llama reconstruye las filas después —ya lo hace tras cada
+    /// escritura— y mira el punto: si la fila sigue `modified`, lo dice con
+    /// `settings-still-set-elsewhere`, y si no, con `settings-reset-done`.
+    /// El punto encendido es verdad sin maquinaria de procedencia.
+    pub fn reset(&mut self) -> Option<PendingReset> {
+        if self.edit.is_some() {
+            return None;
+        }
+        let &real = self.visible.get(self.cursor)?;
+        let row = &self.rows[real];
+        if !row.modified {
+            return None;
+        }
+        let id = row.id()?;
+        let (section, key) = wire_key(id);
+        Some(PendingReset {
+            section,
+            key,
+            name: row.name.clone(),
+        })
     }
 
     /// Confirms the inline edit buffer: `Int` parses the buffer as `f64`
@@ -2098,6 +2151,59 @@ mod tests {
         // Y una cabecera no puede empujar el cursor fuera por abajo.
         s.reconcile_viewport(39, 38, 40, 10);
         assert!(s.viewport_offset() <= 38 && s.viewport_offset() + 10 > 39);
+    }
+
+    #[test]
+    fn restablecer_una_fila_tocada_pide_quitar_su_clave() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_theme = Some("nord".to_owned());
+        let mut s = SettingsState::new(build_rows(&cfg, &[]));
+        let pos = s
+            .visible()
+            .iter()
+            .position(|&i| s.rows()[i].id() == Some("ui.theme"))
+            .expect("ui.theme visible");
+        s.set_cursor(pos);
+        let r = s.reset().expect("hay algo que quitar");
+        assert_eq!((r.section, r.key.as_str()), ("ui", "theme"));
+    }
+
+    #[test]
+    fn restablecer_lo_que_ya_es_de_fabrica_no_pide_nada() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        s.set_cursor(0);
+        assert!(s.reset().is_none());
+    }
+
+    #[test]
+    fn una_fila_de_plugins_no_se_restablece() {
+        let resumen = PluginConfigSummary {
+            plugin_id: "org.a".into(),
+            name: "A".into(),
+            key_count: 2,
+        };
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[resumen]));
+        let ultima = s.visible().len() - 1;
+        s.set_cursor(ultima);
+        assert!(s.reset().is_none());
+    }
+
+    /// Editando, restablecer no hace nada: igual que el resto de esta
+    /// máquina, una edición abierta congela todo lo demás.
+    #[test]
+    fn editando_no_se_restablece() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_font = Some("Inter".to_owned());
+        let mut s = SettingsState::new(build_rows(&cfg, &[]));
+        let pos = s
+            .visible()
+            .iter()
+            .position(|&i| s.rows()[i].id() == Some("ui.font"))
+            .expect("ui.font visible");
+        s.set_cursor(pos);
+        s.activate(&[], &[]);
+        assert!(s.is_editing());
+        assert!(s.reset().is_none());
     }
 
     #[test]

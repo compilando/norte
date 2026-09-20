@@ -814,6 +814,12 @@ settings-section-open-with = Abrir con
 settings-section-input = Teclado y ratón
 settings-section-behavior = Comportamiento
 settings-section-plugins = Plugins
+settings-count = {$shown} de {$total}
+settings-reset-done = «{$name}» vuelve al valor de fábrica
+# Quitar la clave de TU capa no siempre devuelve el valor de fábrica: si el
+# perfil o el proyecto fijan la misma, el valor cambia y sigue sin ser el
+# defecto. Se dice, en vez de dejar al lector creyendo que no funcionó.
+settings-still-set-elsewhere = «{$name}» sigue fijado por otra capa (perfil o proyecto): no vuelve al valor de fábrica
 settings-plugins-name = Ajustes de plugins
 settings-plugins-note = Ningún plugin instalado declara ajustes configurables.
 settings-plugins-open-hint = [enter] abrir los ajustes de este plugin

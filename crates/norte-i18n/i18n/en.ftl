@@ -805,6 +805,13 @@ settings-section-open-with = Open with
 settings-section-input = Keyboard and mouse
 settings-section-behavior = Behaviour
 settings-section-plugins = Plugins
+settings-count = {$shown} of {$total}
+settings-reset-done = "{$name}" is back to its factory value
+# Removing the key from YOUR layer does not always restore the factory
+# value: if the profile or the project set the same one, the value changes
+# and still is not the default. Say so, rather than leave the reader
+# thinking it did not work.
+settings-still-set-elsewhere = "{$name}" is still set by another layer (profile or project): it does not go back to the factory value
 settings-plugins-name = Plugin settings
 settings-plugins-note = No installed plugin declares configurable settings.
 settings-plugins-open-hint = [enter] open this plugin's settings
