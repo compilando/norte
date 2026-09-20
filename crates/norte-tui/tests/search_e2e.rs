@@ -50,15 +50,7 @@ fn backend_mem() -> (Backend, Arc<MemProvider>) {
 /// Params base: solo raíz, resto vacío/false (mismo molde que
 /// `engine_search.rs`, para que los cuatro ejes se puedan setear con `..`).
 fn params(root: &str) -> FsSearchParams {
-    FsSearchParams {
-        root: vp(root),
-        name_glob: None,
-        name_regex: None,
-        content: None,
-        content_regex: None,
-        case_sensitive: false,
-        max_hits: None,
-    }
+    FsSearchParams::new(vp(root))
 }
 
 /// Drena el canal de hits hasta que se cierra; aplana entries+matches.

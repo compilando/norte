@@ -31,6 +31,41 @@ por nombre, con glob (`*.rs`) o con expresión regular, y también sabe buscar
 por CONTENIDO: una cadena literal o una expresión regular sobre los ficheros
 que el detector lee como texto.
 
+## Estrechar la búsqueda
+
+Un nombre y un contenido rara vez bastan en un árbol grande, así que el
+diálogo tiene además siete campos y cuatro interruptores. Todos son
+opcionales y todos van en la misma dirección: quitar de en medio lo que no
+estás buscando.
+
+**Saltar carpetas** es el que más se nota. Nombres separados por comas
+—`target, node_modules, .git`— y se saltan en CUALQUIER nivel, que es como
+aparecen. Es un nombre y no una ruta justamente por eso: la carpeta que sobra
+está en cien sitios que no sabes de antemano. Frena el DESCENSO y nada más,
+así que la carpeta sigue pudiendo salir como resultado si su nombre casa.
+
+**Al menos** y **como mucho** acotan el tamaño, escrito como se dice: `1M`,
+`500k`, `2.5G`, o los bytes a pelo. **Cambiado hace** toma un número de días.
+Y **busco** (`F6`) recorre «cualquier cosa», «ficheros» y «carpetas».
+
+Un filtro SOLO ya es una búsqueda: «todo lo que pese más de un giga» no
+necesita ningún nombre, y es de las preguntas que más se hacen.
+
+**Palabra entera** (`F4`) es para el contenido: sin ella, buscar `set` en
+código devuelve `offset`, `settings` y `subset`. Cuesta algo —obliga a
+decodificar en vez de comparar bytes— y por eso no viene puesta.
+
+**Subcarpetas** (`F5`) se puede apagar cuando la pregunta es «qué hay AQUÍ» y
+no «qué hay aquí debajo».
+
+**Leer el texto como** fuerza una codificación para el contenido. Vacío es lo
+normal y lo que acierta casi siempre; esto es para cuando no acierta, igual
+que el visor deja forzar la suya. Un nombre que no se reconoce se te dice, en
+vez de caer a la automática y devolverte resultados creíbles leídos con otro
+alfabeto.
+
+> ⚠ Un campo que no se entiende PARA la búsqueda y te lleva a él. No es celo: lanzarla ignorando un `1 gigabyte` mal escrito devuelve el árbol entero, y un árbol entero se lee exactamente igual que un resultado.
+
 Los resultados aparecen en el panel según se encuentran, así que los primeros
 sirven mientras el recorrido sigue. Un hit que vive en otro sitio es una
 entrada de verdad: pon el cursor encima y funcionan los comandos de las páginas

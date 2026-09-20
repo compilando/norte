@@ -453,13 +453,8 @@ async fn rpc_cancel_de_id_desconocido_es_no_op() {
 /// Params de `fs.search` con solo un glob de nombre (helper de test).
 pub(super) fn search_by_name(root: &str, name_glob: &str) -> FsSearchParams {
     FsSearchParams {
-        root: vp(root),
         name_glob: Some(name_glob.into()),
-        name_regex: None,
-        content: None,
-        content_regex: None,
-        case_sensitive: false,
-        max_hits: None,
+        ..FsSearchParams::new(vp(root))
     }
 }
 

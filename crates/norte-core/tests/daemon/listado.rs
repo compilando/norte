@@ -436,15 +436,7 @@ async fn cerrar_conexion_libera_sus_listings_retenidos() {
 async fn fs_search_params_invalidos_no_crean_task() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
-    let params = FsSearchParams {
-        root: vp("mem:///"),
-        name_glob: None,
-        name_regex: None,
-        content: None,
-        content_regex: None,
-        case_sensitive: false,
-        max_hits: None,
-    };
+    let params = FsSearchParams::new(vp("mem:///"));
     let err = c
         .call::<_, FsTaskResult>(methods::FS_SEARCH, &params)
         .await

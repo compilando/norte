@@ -1279,7 +1279,41 @@ use crate::{
 /// `Unsupported` y lo dice, como el ancla de `plugin.set_approval` (#294). Un
 /// **cliente 0.79 contra un daemon 0.80** no lo manda, y el daemon lo lee
 /// como `None`: sin techo, que es lo de 0.79.
-pub const PROTOCOL_VERSION: &str = "0.80.0";
+///
+/// # 0.81.0 — `fs.search` gana los filtros que hacen útil una búsqueda
+///
+/// [`FsSearchParams`] crece con DIEZ campos, todos opcionales: `kinds`,
+/// `min_size`, `max_size`, `mtime_after`, `mtime_before`, `exclude_roots`,
+/// `exclude_names`, `whole_word`, `recursive` y `encoding`. Ninguno cambia
+/// el JSON de una búsqueda que no los use: los que son opciones se omiten,
+/// y `whole_word` y `recursive` se omiten cuando valen su defecto.
+///
+/// **Lo que pierde un peer una versión por detrás hay que decirlo sin
+/// rodeos, porque no es lo de siempre.** Un filtro que el daemon ignora no
+/// deja de filtrar en silencio: devuelve el SUPERCONJUNTO. Quien pidió «de
+/// menos de un mega, sin bajar a `node_modules`» recibe el árbol entero y no
+/// tiene cómo saber que lo que mira no es lo que pidió — una búsqueda de más
+/// se lee igual que una búsqueda a secas. Por eso el SDK **no los manda** a
+/// un daemon 0.80: con cualquiera de ellos puesto rehúsa con `Unsupported` y
+/// nombra el filtro, igual que el techo de `journal.undo_after`. Sin ninguno
+/// puesto no hay nada que rehusar y la búsqueda va como iba.
+///
+/// **Ese rechazo es del SDK, no del protocolo, y hay que decirlo aquí**
+/// porque este documento lo lee quien escribe un cliente desde
+/// `proto.schema.json`: el esquema enseña los diez campos y no puede enseñar
+/// la comprobación. Un cliente que no sea este SDK tiene que mirar él mismo
+/// la versión que negoció en `initialize` antes de mandar un filtro, o se
+/// llevará el superconjunto sin señal ninguna.
+///
+/// Al revés es inofensivo: un **cliente 0.80 contra un daemon 0.81** no los
+/// manda, el daemon los lee ausentes, y eso es exactamente la búsqueda de
+/// 0.80. Un cliente MÁS NUEVO es otra cosa y de otro tamaño: `kinds` es el
+/// primer `Vec<EntryKind>` que viaja en una PETICIÓN, y el `serde(other)` de
+/// ese enum se diseñó para que un cliente degradara una respuesta. Una clase
+/// que este daemon no conozca le llegará como `Other` y filtrará por ella
+/// — o sea que ESTRECHA en vez de ensanchar, que es la dirección segura,
+/// pero no es «no pasa nada».
+pub const PROTOCOL_VERSION: &str = "0.81.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2851,6 +2885,169 @@ pub struct FsSearchParams {
     /// (== implica truncada).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_hits: Option<u32>,
+
+    // ---- Los filtros de 0.81.0 ---------------------------------------
+    //
+    // Todos opcionales y todos en la dirección segura: ausentes, la
+    // búsqueda es exactamente la de 0.80. Lo que NO es seguro es mandarlos
+    // a un daemon que no los conoce, porque los ignoraría y contestaría
+    // MÁS de lo que se le pidió — un filtro que no se aplica devuelve el
+    // superconjunto, y quien buscaba «ficheros de menos de un mega» se
+    // lleva el árbol entero creyendo que ése era el resultado. El SDK
+    // rehúsa con `Unsupported` en vez de mandarlos, igual que el techo de
+    // `journal.undo_after` (0.80.0).
+    /// Las CLASES de entrada que cuentan como resultado. Vacío = todas.
+    ///
+    /// Es la pregunta «busco una carpeta, no un fichero que se llame así»,
+    /// que en un árbol de código es la diferencia entre tres resultados y
+    /// trescientos. No afecta al RECORRIDO: una carpeta que no cuenta como
+    /// resultado se sigue bajando, porque lo que se busca puede estar
+    /// dentro.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<EntryKind>,
+    /// Tamaño mínimo en bytes, inclusive. Una entrada cuyo tamaño el
+    /// provider no sabe decir NO pasa un filtro de tamaño: filtrar es
+    /// afirmar, y «no lo sé» no es «sí».
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_size: Option<u64>,
+    /// Tamaño máximo en bytes, inclusive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_size: Option<u64>,
+    /// Modificado en o después de este instante (ms desde epoch).
+    /// Misma regla que el tamaño: sin fecha no pasa el filtro.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_after: Option<i64>,
+    /// Modificado en o antes de este instante (ms desde epoch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_before: Option<i64>,
+    /// Subárboles que NO se recorren, por su ruta. A lo sumo
+    /// [`SEARCH_EXCLUDES_MAX`].
+    ///
+    /// Distinto del `excluded` que ya aplicaba la POLÍTICA a un agente: eso
+    /// es lo que no se puede leer, y esto es lo que el humano no quiere
+    /// mirar. Los dos se suman, y el de la política no se puede levantar
+    /// desde aquí.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_roots: Vec<VPath>,
+    /// Nombres de carpeta que no se bajan, EN CUALQUIER nivel: `target`,
+    /// `node_modules`, `.git`.
+    ///
+    /// Es el filtro que convierte una búsqueda inútil en una útil, y se
+    /// nombra por NOMBRE y no por ruta justamente porque la carpeta que
+    /// sobra aparece cien veces en sitios que no se saben de antemano. Son
+    /// globs sobre el último segmento, con la misma disciplina que
+    /// `name_glob`, y a lo sumo [`SEARCH_EXCLUDES_MAX`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_names: Vec<String>,
+    /// La coincidencia de CONTENIDO tiene que ser una palabra entera.
+    ///
+    /// Sin esto, buscar `set` en un árbol de código devuelve `offset`,
+    /// `settings` y `subset`, que es la mitad del fichero.
+    ///
+    /// No viaja cuando es `false`, que es su defecto: así el JSON de una
+    /// búsqueda corriente sigue siendo byte a byte el de 0.80.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub whole_word: bool,
+    /// Recorrer los subdirectorios. Ausente = `true`, que es lo que hacía.
+    ///
+    /// Existe porque «lo que hay AQUÍ» y «lo que hay aquí debajo» son dos
+    /// preguntas, y la segunda sobre `/` es una tarde.
+    #[serde(default = "verdadero", skip_serializing_if = "es_verdadero")]
+    pub recursive: bool,
+    /// La codificación con la que leer el CONTENIDO, por su nombre WHATWG
+    /// (`"utf-8"`, `"windows-1252"`, `"shift_jis"`).
+    ///
+    /// Ausente = automática, que es lo que hay: la AGUJA se transcodifica a
+    /// varios candidatos y el pajar no se decodifica entero. Eso acierta
+    /// casi siempre y por eso es el defecto; esto es para cuando no
+    /// acierta, que es el mismo motivo por el que el visor deja forzar la
+    /// suya. Un nombre que no se reconoce es un error de la petición, no
+    /// una búsqueda que calla y no encuentra nada.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
+}
+
+/// Cuántas exclusiones admite una búsqueda, contando por separado
+/// [`FsSearchParams::exclude_roots`] y [`FsSearchParams::exclude_names`].
+///
+/// La cota es del PROTOCOLO y no del motor, y por eso está aquí: un tope que
+/// no esté en el rustdoc del campo no es parte del contrato, y quien escriba
+/// un cliente desde `proto.schema.json` no puede adivinarlo.
+///
+/// Existe porque `fs.search` la alcanza un AGENTE dentro de su ámbito de
+/// lectura, y cada nombre excluido compila un glob —y con él una regex con
+/// su presupuesto anti-ReDoS— en la tarea que atiende la conexión, ANTES de
+/// que exista ninguna Task que contar contra el tope de tareas vivas. Sin
+/// cota, una petición que cabe en un frame compra un millón de
+/// compilaciones y luego una pasada lineal por cada entrada del recorrido.
+///
+/// 256 porque la lista de verdad —`target`, `node_modules`, `.git`,
+/// `vendor`, `dist`— tiene un puñado de entradas, y dos órdenes de magnitud
+/// por encima de lo que nadie escribe a mano es sitio de sobra para lo que
+/// genere una herramienta.
+pub const SEARCH_EXCLUDES_MAX: usize = 256;
+
+impl FsSearchParams {
+    /// Una búsqueda bajo `root` SIN ningún criterio ni filtro: todo lo demás
+    /// en su valor ausente, incluido `recursive: true`.
+    ///
+    /// No es un `Default` —`root` no tiene uno, y una búsqueda sin raíz no
+    /// significa nada— sino la base sobre la que un llamante pone lo suyo:
+    ///
+    /// ```
+    /// use norte_proto::methods::FsSearchParams;
+    /// use norte_proto::VPath;
+    ///
+    /// let root = VPath::parse("file:///casa").expect("vpath");
+    /// let p = FsSearchParams {
+    ///     name_glob: Some("*.rs".to_owned()),
+    ///     ..FsSearchParams::new(root)
+    /// };
+    /// assert!(p.recursive, "recorrer subdirectorios es el defecto");
+    /// assert!(p.content.is_none());
+    /// ```
+    ///
+    /// Existe para que un campo nuevo del protocolo no rompa a cada
+    /// frontend: los diez filtros de 0.81.0 tocaron dos sitios que
+    /// deletreaban la estructura entera, y el siguiente tocaría los mismos.
+    #[must_use]
+    pub fn new(root: VPath) -> Self {
+        Self {
+            root,
+            name_glob: None,
+            name_regex: None,
+            content: None,
+            content_regex: None,
+            case_sensitive: false,
+            max_hits: None,
+            kinds: Vec::new(),
+            min_size: None,
+            max_size: None,
+            mtime_after: None,
+            mtime_before: None,
+            exclude_roots: Vec::new(),
+            exclude_names: Vec::new(),
+            whole_word: false,
+            recursive: true,
+            encoding: None,
+        }
+    }
+}
+
+/// `true`, para el `serde(default)` de un booleano cuyo valor ausente es sí.
+const fn verdadero() -> bool {
+    true
+}
+
+/// Si es `true`, para el `skip_serializing_if` de esos mismos: un valor que
+/// coincide con el defecto no viaja, y así el JSON de una búsqueda corriente
+/// sigue siendo byte a byte el de 0.80.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "la firma que pide serde para skip_serializing_if"
+)]
+const fn es_verdadero(b: &bool) -> bool {
+    *b
 }
 
 /// Un lote de resultados de [`SEARCH_HITS`]. `matches` alineado 1:1 con

@@ -9,6 +9,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Search can be narrowed** (protocol 0.81.0). `fs.search` grows ten
+  optional filters and the terminal's dialog grows the fields for them: skip
+  folders by name at any level (`target, node_modules, .git`), a size range
+  written the way people say it (`1M`, `500k`, `2.5G`), changed-in-the-last-N
+  days, what you are looking for (anything / files / folders), whole-word
+  content matching, subfolders on or off, and a forced text encoding. A
+  filter on its own is already a search: "everything over a gigabyte" needs
+  no name. A field that cannot be read stops the search and takes you to it,
+  because running it anyway returns the whole tree and a whole tree reads
+  exactly like a result. Against a daemon older than 0.81 the SDK refuses and
+  names the filter rather than let it be ignored — an ignored filter does not
+  return less, it returns everything.
 - **Listings can read in bands** (`[ui] row_stripes`, ADR 0128). The odd
   rows of a listing get a band of their own — the pyjama — so a wide row is
   easy to follow from its name to its date. Off by default, and the colour

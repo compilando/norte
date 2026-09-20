@@ -31,6 +31,40 @@ the name, by glob (`*.rs`) or by regular expression, and it can also search
 CONTENT — a literal string or a regular expression over the files the detector
 reads as text.
 
+## Narrowing it down
+
+A name and some content are rarely enough in a big tree, so the dialog also
+has seven fields and four switches. All optional, and all pulling the same
+way: getting out of sight what you are not looking for.
+
+**Skip folders** is the one you feel most. Comma-separated names — `target,
+node_modules, .git` — skipped at ANY level, which is how they turn up. Names
+and not paths for exactly that reason: the folder in the way is in a hundred
+places you cannot list in advance. It stops the DESCENT and nothing else, so
+the folder itself can still come back as a hit if its name matches.
+
+**At least** and **at most** bound the size, written the way people say it:
+`1M`, `500k`, `2.5G`, or plain bytes. **Changed in last** takes a number of
+days. And **looking for** (`F6`) cycles anything / files / folders.
+
+A filter ON ITS OWN is already a search: "everything over a gigabyte" needs no
+name at all, and it is one of the questions people ask most.
+
+**Whole word** (`F4`) is for content: without it, searching `set` in code
+returns `offset`, `settings` and `subset`. It costs something — it forces a
+decode instead of a byte comparison — which is why it is off by default.
+
+**Subfolders** (`F5`) can be turned off when the question is what is HERE
+rather than what is under here.
+
+**Read text as** forces an encoding for the content. Empty is the normal case
+and the one that is right nearly always; this is for when it is not, the same
+way the viewer lets you force its own. A name that is not recognised is
+reported, rather than falling back to detection and handing you believable
+results read in the wrong alphabet.
+
+> ⚠ A field that cannot be read STOPS the search and takes you to it. That is not fussiness: running it while ignoring a mistyped `1 gigabyte` returns the whole tree, and a whole tree reads exactly like a result.
+
 Results arrive in the pane as they are found, so the first hits are usable
 while the walk is still going. A hit that lives somewhere else is still a real
 entry: put the cursor on it and every command on this page's neighbours works

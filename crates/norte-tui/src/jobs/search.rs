@@ -69,16 +69,28 @@ pub fn on_search_dialog_key(
         // (review MINOR-4), igual que el resto de la captura del diálogo.
         KeyCode::F(2) if plain => dialog.toggle_regex(),
         KeyCode::F(3) if plain => dialog.toggle_case(),
+        KeyCode::F(4) if plain => dialog.toggle_whole_word(),
+        KeyCode::F(5) if plain => dialog.toggle_recursive(),
+        KeyCode::F(6) if plain => dialog.cycle_kinds(),
         KeyCode::Tab if plain => dialog.toggle_field(),
         KeyCode::Char(c) if plain => dialog.push_char(c),
         KeyCode::Backspace if plain => dialog.backspace(),
         KeyCode::Esc => app.search_dialog = None,
         KeyCode::Enter => {
+            // Un campo que no se entiende para ANTES de lanzar y lleva el
+            // foco a él (0.81.0). Lanzar ignorándolo devuelve el árbol
+            // entero, y eso se lee igual que un resultado: es la misma
+            // trampa que el aviso de versión evita contra un daemon viejo.
+            if let Some(campo) = dialog.campo_ilegible() {
+                dialog.field = campo;
+                app.message = Some(t("search-bad-field"));
+                return None;
+            }
             if dialog.has_criteria() {
                 let root = app.focused().dir().clone();
                 return Some(search_params(app.search_dialog.as_ref()?, root));
             }
-            // Ambos campos vacíos: no-op con aviso (una búsqueda sin criterio
+            // Sin ningún criterio: no-op con aviso (una búsqueda sin criterio
             // no tiene sentido). El diálogo sigue abierto.
             app.message = Some(t("search-empty"));
         }
@@ -103,14 +115,37 @@ pub fn search_params(dialog: &SearchDialog, root: VPath) -> FsSearchParams {
         (false, false) => (Some(dialog.content.clone()), None),
         (false, true) => (None, Some(dialog.content.clone())),
     };
+    // Los días se convierten a un instante AQUÍ, no en el core: «los últimos
+    // siete» se cuenta desde cuando se pulsa Enter, y el core no tiene por
+    // qué saber en qué momento se hizo la pregunta.
+    let mtime_after = crate::app::parse_days(&dialog.days).map(|d| {
+        let ahora = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        ahora.saturating_sub(i64::from(d).saturating_mul(86_400_000))
+    });
+    let encoding = {
+        let e = dialog.encoding.trim();
+        (!e.is_empty()).then(|| e.to_owned())
+    };
     FsSearchParams {
-        root,
         name_glob,
         name_regex,
         content,
         content_regex,
         case_sensitive: dialog.case,
         max_hits: Some(SEARCH_MAX_HITS),
+        kinds: dialog.kinds.wire(),
+        min_size: crate::app::parse_size(&dialog.min_size),
+        max_size: crate::app::parse_size(&dialog.max_size),
+        mtime_after,
+        mtime_before: None,
+        exclude_roots: Vec::new(),
+        exclude_names: dialog.exclude_names(),
+        whole_word: dialog.whole_word,
+        recursive: dialog.recursive,
+        encoding,
+        ..FsSearchParams::new(root)
     }
 }
 

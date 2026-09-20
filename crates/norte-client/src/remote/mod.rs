@@ -1444,6 +1444,23 @@ impl RemoteBackend {
         &self,
         params: FsSearchParams,
     ) -> Result<(RemoteTask, mpsc::Receiver<SearchHits>), Error> {
+        // Los filtros de 0.81.0 no se le mandan a un daemon que no los
+        // conoce, por el mismo criterio que el techo de `undo_after` y con
+        // un agravante: un filtro ignorado no deja de filtrar en silencio,
+        // devuelve el SUPERCONJUNTO. Quien pidió «de menos de un mega, sin
+        // bajar a node_modules» recibiría el árbol entero, y una búsqueda de
+        // más se lee exactamente igual que una búsqueda a secas.
+        if let Some(filtro) = primer_filtro_de_0_81(&params)
+            && !self.peer_honra_los_filtros()
+        {
+            tracing::warn!(
+                peer = self.peer_protocol_version().as_deref().unwrap_or("?"),
+                filtro,
+                "el daemon es anterior a 0.81 y no sabe filtrar la búsqueda: \
+                 se rehúsa en vez de devolver más de lo que se pidió"
+            );
+            return Err(Error::Unsupported);
+        }
         let result: FsTaskResult = self.call_timed(methods::FS_SEARCH, &params).await?;
         let id = result.task_id;
         let rx = register_route(&self.inner, id.get(), methods::SEARCH_HITS, |i| {
@@ -2234,6 +2251,14 @@ impl RemoteBackend {
     /// Falla CERRADO como [`Self::peer_comprueba_el_ancla`], y por lo mismo.
     fn peer_honra_el_techo(&self) -> bool {
         techo_honrado(self.peer_protocol_version().as_deref())
+    }
+
+    /// ¿Sabe el peer filtrar una búsqueda (0.81.0)? Falla CERRADO igual.
+    fn peer_honra_los_filtros(&self) -> bool {
+        let Some(v) = self.peer_protocol_version() else {
+            return true;
+        };
+        methods::version_at_least(&v, 0, 81)
     }
 
     fn peer_comprueba_el_ancla(&self) -> bool {
@@ -3058,6 +3083,77 @@ async fn pump_loop(
     }
 }
 
+/// El PRIMER filtro de 0.81.0 que trae una petición de búsqueda, por su
+/// nombre, o `None` si no trae ninguno.
+///
+/// Devuelve el nombre y no un booleano porque es lo que se pone en el aviso:
+/// «tu daemon es viejo» sin decir qué se ha rehusado deja al lector quitando
+/// campos a ciegas hasta acertar.
+///
+/// Pura, para poder probar la promesa N-1 sin levantar un daemon viejo.
+#[must_use]
+fn primer_filtro_de_0_81(p: &FsSearchParams) -> Option<&'static str> {
+    // Se DESTRUCTURA entero, y eso no es estilo: es lo único que hace que el
+    // filtro número once no se pueda olvidar aquí. Una cadena de `if`s sobre
+    // `p.campo` compila igual con un campo nuevo sin mirar, y el test que
+    // enumera los diez de hoy también pasa — y entonces ese filtro nuevo
+    // viajaría a un daemon 0.81 que lo ignora, que es exactamente el fallo
+    // del superconjunto una versión más tarde. Así, el campo nuevo no
+    // compila hasta que alguien decida qué hacer con él.
+    let FsSearchParams {
+        root: _,
+        name_glob: _,
+        name_regex: _,
+        content: _,
+        content_regex: _,
+        case_sensitive: _,
+        max_hits: _,
+        kinds,
+        min_size,
+        max_size,
+        mtime_after,
+        mtime_before,
+        exclude_roots,
+        exclude_names,
+        whole_word,
+        recursive,
+        encoding,
+    } = p;
+    if !kinds.is_empty() {
+        return Some("kinds");
+    }
+    if min_size.is_some() {
+        return Some("min_size");
+    }
+    if max_size.is_some() {
+        return Some("max_size");
+    }
+    if mtime_after.is_some() {
+        return Some("mtime_after");
+    }
+    if mtime_before.is_some() {
+        return Some("mtime_before");
+    }
+    if !exclude_roots.is_empty() {
+        return Some("exclude_roots");
+    }
+    if !exclude_names.is_empty() {
+        return Some("exclude_names");
+    }
+    if *whole_word {
+        return Some("whole_word");
+    }
+    // `recursive` es el ÚNICO cuyo defecto es `true`, así que lo que se pide
+    // —y lo que un daemon viejo no sabría respetar— es el `false`.
+    if !*recursive {
+        return Some("recursive");
+    }
+    if encoding.is_some() {
+        return Some("encoding");
+    }
+    None
+}
+
 /// ¿Sabe un peer con esta versión poner techo a `journal.undo_after`
 /// (`upto_seq`, 0.80.0)?
 ///
@@ -3086,6 +3182,121 @@ mod tests {
         assert!(!techo_honrado(Some("0.79.9")), "N-1 no sabe");
         assert!(!techo_honrado(Some("norte-0.80")), "no parsea: no sabe");
         assert!(techo_honrado(None), "sin handshake decide el daemon");
+    }
+
+    /// Cada filtro de 0.81.0 se DETECTA, y se detecta por su nombre.
+    ///
+    /// Es lo que decide si la búsqueda se manda o se rehúsa, así que un
+    /// filtro que este barrido no viera viajaría a un daemon que lo ignora —
+    /// y ese daemon contestaría el SUPERCONJUNTO, que se lee exactamente
+    /// igual que un resultado. Por eso están los diez, uno a uno: un `||` de
+    /// diez condiciones pasa el test con nueve.
+    #[test]
+    fn cada_filtro_de_0_81_se_reconoce_por_su_nombre() {
+        use norte_proto::methods::FsSearchParams;
+        let base = || FsSearchParams::new(vpd("file:///casa"));
+        // Sin nada: no hay nada que rehusar, y la búsqueda de siempre va.
+        assert_eq!(primer_filtro_de_0_81(&base()), None);
+        // Y los criterios de 0.18 tampoco son filtros.
+        assert_eq!(
+            primer_filtro_de_0_81(&FsSearchParams {
+                name_glob: Some("*.rs".into()),
+                content: Some("hola".into()),
+                case_sensitive: true,
+                max_hits: Some(10),
+                ..base()
+            }),
+            None,
+            "lo que 0.80 ya sabía hacer no se rehúsa"
+        );
+        let casos: [(&str, FsSearchParams); 10] = [
+            (
+                "kinds",
+                FsSearchParams {
+                    kinds: vec![norte_proto::EntryKind::File],
+                    ..base()
+                },
+            ),
+            (
+                "min_size",
+                FsSearchParams {
+                    min_size: Some(1),
+                    ..base()
+                },
+            ),
+            (
+                "max_size",
+                FsSearchParams {
+                    max_size: Some(1),
+                    ..base()
+                },
+            ),
+            (
+                "mtime_after",
+                FsSearchParams {
+                    mtime_after: Some(1),
+                    ..base()
+                },
+            ),
+            (
+                "mtime_before",
+                FsSearchParams {
+                    mtime_before: Some(1),
+                    ..base()
+                },
+            ),
+            (
+                "exclude_roots",
+                FsSearchParams {
+                    exclude_roots: vec![vpd("file:///casa/x")],
+                    ..base()
+                },
+            ),
+            (
+                "exclude_names",
+                FsSearchParams {
+                    exclude_names: vec!["target".into()],
+                    ..base()
+                },
+            ),
+            (
+                "whole_word",
+                FsSearchParams {
+                    whole_word: true,
+                    ..base()
+                },
+            ),
+            // El ÚNICO cuyo defecto es `true`: lo que se pide es el `false`.
+            (
+                "recursive",
+                FsSearchParams {
+                    recursive: false,
+                    ..base()
+                },
+            ),
+            (
+                "encoding",
+                FsSearchParams {
+                    encoding: Some("utf-8".into()),
+                    ..base()
+                },
+            ),
+        ];
+        for (nombre, p) in casos {
+            assert_eq!(
+                primer_filtro_de_0_81(&p),
+                Some(nombre),
+                "{nombre} no se reconoce y viajaría a un daemon que lo ignora"
+            );
+        }
+        // Y `recursive: true` NO es pedir nada: es el defecto.
+        assert_eq!(
+            primer_filtro_de_0_81(&FsSearchParams {
+                recursive: true,
+                ..base()
+            }),
+            None
+        );
     }
 
     /// Un daemon que no conoce `plugin.panel_render` deja el hueco SIN marco,

@@ -150,13 +150,8 @@ async fn embedded_search_stream_de_hits() {
 
     let (task, mut rx) = backend
         .search(FsSearchParams {
-            root: vp("mem:///"),
             name_glob: Some("*.rs".into()),
-            name_regex: None,
-            content: None,
-            content_regex: None,
-            case_sensitive: false,
-            max_hits: None,
+            ..FsSearchParams::new(vp("mem:///"))
         })
         .await
         .expect("search");

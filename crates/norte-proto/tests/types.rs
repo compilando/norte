@@ -1350,10 +1350,17 @@ fn version_ventana_actual() {
     // error genérico que ya sabía leer.
     // 0.80.0: `journal.undo_after` gana `upto_seq`, opcional. Un daemon 0.79
     // lo ignora y deshace sin techo (lo de antes); un cliente 0.79 no lo manda.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.80.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.79.0"), "N-1");
+    // 0.81.0: `fs.search` gana diez filtros, todos opcionales. Y aquí la
+    // ventana compra algo distinto de lo de siempre: un daemon 0.80 que
+    // ignorase uno de ellos no dejaría de filtrar en silencio, devolvería el
+    // SUPERCONJUNTO — el árbol entero en vez de lo que se pidió, y con la
+    // misma cara. Por eso el SDK no se los manda y rehúsa con `Unsupported`
+    // nombrando el filtro. Al revés es inofensivo: un cliente 0.80 no los
+    // manda y el daemon los lee ausentes, que es la búsqueda de 0.80.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.81.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.80.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.78.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.79.9"),
         "N-2 fuera de la ventana"
     );
 }

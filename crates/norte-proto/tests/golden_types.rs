@@ -3671,27 +3671,36 @@ fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
         fixtures,
         "fs_search_params",
         &FsSearchParams {
-            root: vpath("file:///home/user"),
             name_glob: Some("*.rs".to_owned()),
             name_regex: Some("^ma.n\\.rs$".to_owned()),
             content: Some("año".to_owned()),
             content_regex: Some("a.o".to_owned()),
             case_sensitive: true,
             max_hits: Some(100),
+            // Los diez filtros de 0.81.0, TODOS puestos y ninguno en su valor
+            // ausente: el golden de un campo que coincide con su defecto no
+            // distingue «viaja» de «no existe». `recursive` en `false` por eso
+            // mismo, que es el único cuyo defecto es `true`.
+            kinds: vec![norte_proto::EntryKind::File, norte_proto::EntryKind::Dir],
+            min_size: Some(1024),
+            max_size: Some(1_048_576),
+            mtime_after: Some(1_700_000_000_000),
+            mtime_before: Some(1_800_000_000_000),
+            exclude_roots: vec![vpath("file:///home/user/.cache")],
+            exclude_names: vec!["target".to_owned(), "node_modules".to_owned()],
+            whole_word: true,
+            recursive: false,
+            encoding: Some("windows-1252".to_owned()),
+            ..FsSearchParams::new(vpath("file:///home/user"))
         },
     );
     check_one(
         fixtures,
         "fs_search_params_minimo",
-        &FsSearchParams {
-            root: vpath("file:///home/user"),
-            name_glob: None,
-            name_regex: None,
-            content: None,
-            content_regex: None,
-            case_sensitive: false,
-            max_hits: None,
-        },
+        // El mínimo es LITERALMENTE lo que construye `new`: sin criterios y
+        // sin filtros. Escribirlo campo a campo sería copiar el constructor
+        // y dejar que las dos copias se separen.
+        &FsSearchParams::new(vpath("file:///home/user")),
     );
     check_one(
         fixtures,
@@ -4877,7 +4886,10 @@ fn method_names_frozen() {
     // 0.79.0: ningún método nuevo — `policy.undo_report` contesta `NotFound`
     // de la taxonomía a un id que no conoce, como `fs.rename_batch_report`.
     // 0.80.0: `journal.undo_after` gana el techo opcional `upto_seq`.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.80.0");
+    // 0.81.0: ningún método nuevo — `fs.search` gana diez filtros opcionales,
+    // y ninguno viaja cuando no se pide, así que el JSON de una búsqueda
+    // corriente no se mueve.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.81.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

@@ -440,9 +440,17 @@ impl Backend {
     ///   más lotes.
     ///
     /// # Errors
-    /// Criterios inválidos (cero criterios, o glob y regex del mismo eje) →
+    /// Criterios inválidos (cero criterios y cero filtros, glob y regex del
+    /// mismo eje, o una codificación que no se reconoce) →
     /// [`Error::InvalidPath`] embebido / `INVALID_PARAMS` del daemon; resto,
     /// taxonomía del protocolo; daemon caído = `ProviderUnavailable`.
+    ///
+    /// Y contra un daemon anterior a 0.81 con cualquiera de los filtros
+    /// puestos, [`Error::Unsupported`]: ese daemon los ignoraría y
+    /// contestaría el SUPERCONJUNTO, que se lee igual que un resultado. El
+    /// rechazo vive en el SDK (`RemoteClient::search`) y por eso alcanza a
+    /// todo el mundo: éste es el único camino al cable, y el embebido no
+    /// cruza ninguno.
     pub async fn search(
         &self,
         params: norte_proto::methods::FsSearchParams,
