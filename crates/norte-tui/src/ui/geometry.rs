@@ -127,8 +127,16 @@ pub fn before_frame(app: &mut App, area: Rect) {
             .iter()
             .position(|l| *l == super::overlays::SettingsLine::Row(settings.cursor()))
             .unwrap_or(0);
+        // La cabecera que abre la sección del cursor, si es que la abre él:
+        // entra en la ventana CON su fila. Sin esto, la primera fila (línea
+        // 1, porque la 0 es «General») dejaba el desplazamiento clavado en 1
+        // y la cabecera no volvía al subir.
+        let anchor = match cursor_line.checked_sub(1).and_then(|p| plan.get(p)) {
+            Some(super::overlays::SettingsLine::Header(_)) => cursor_line - 1,
+            _ => cursor_line,
+        };
         let rows = super::overlays::settings_list_rows(area.height);
-        settings.reconcile_viewport(cursor_line, plan.len(), rows);
+        settings.reconcile_viewport(cursor_line, anchor, plan.len(), rows);
     }
 }
 

@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
 import { OVERSCAN } from "../src/render/dom";
+import { objetivoRevelado } from "../src/render/settings";
 import { catalogoReal } from "./fixtures";
 import { BRIDGE_VERSION } from "../src/types";
 import type {
@@ -2759,6 +2760,25 @@ describe("los ajustes", () => {
     ]);
     const lista = caja.querySelector(".settings-rows") as HTMLElement;
     expect(lista.getAttribute("aria-activedescendant")).toBe("settings-row-1");
+  });
+
+  it("la cabecera de la sección se revela con su primera fila", () => {
+    const { screen } = montar();
+    const v = conAjustes();
+    if (v.settings !== null) {
+      v.settings.cursor = 0;
+    }
+    screen.paint(v);
+    const lista = document.querySelector(".settings-rows") as HTMLElement;
+    // Fila 0: abre «General», así que lo que se desplaza a la vista es la
+    // CABECERA. Revelar solo la fila dejaba el rótulo fuera de la caja, que
+    // es cómo «General» dejaba de verse al volver arriba.
+    expect(objetivoRevelado(lista, 0)?.className).toBe("settings-group");
+    expect(objetivoRevelado(lista, 0)?.textContent).toContain("General");
+    // Fila 1: abre la sección de rutas, misma regla.
+    expect(objetivoRevelado(lista, 1)?.className).toBe("settings-group");
+    // Fila 2: no abre nada, se revela ella.
+    expect(objetivoRevelado(lista, 2)?.id).toBe("settings-row-2");
   });
 
   it("una ubicación que falta lo dice, y una hostil se marca", () => {

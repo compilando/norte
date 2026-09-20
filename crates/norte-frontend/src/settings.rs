@@ -741,9 +741,25 @@ impl SettingsState {
     /// filas: esa cuenta es suya, y hacerla aquí sería una segunda copia de
     /// cómo se pinta. La ventana, que es web, ni lo llama — el navegador ya
     /// desplaza la fila elegida hasta que se ve.
-    pub fn reconcile_viewport(&mut self, cursor_line: usize, total_lines: usize, rows: usize) {
-        self.viewport_offset =
+    ///
+    /// `anchor_line` es la primera línea que tiene que verse CON el cursor:
+    /// la cabecera de su sección cuando el cursor está en la primera fila de
+    /// ella, y `cursor_line` en cualquier otro caso. Existe porque anclar
+    /// solo al cursor esconde la cabecera para siempre: la primera fila vive
+    /// en la línea 1 —la 0 es «General»—, así que al subir del todo el
+    /// desplazamiento se quedaba en 1 y la cabecera no volvía nunca. El
+    /// cursor manda en el borde de ABAJO (una cabecera no puede empujarlo
+    /// fuera de la caja) y el ancla solo tira hacia ARRIBA.
+    pub fn reconcile_viewport(
+        &mut self,
+        cursor_line: usize,
+        anchor_line: usize,
+        total_lines: usize,
+        rows: usize,
+    ) {
+        let off =
             crate::viewport::sticky_offset(self.viewport_offset, cursor_line, total_lines, rows);
+        self.viewport_offset = off.min(anchor_line.min(cursor_line));
     }
 
     /// La primera línea visible — ver [`Self::reconcile_viewport`].
@@ -1740,6 +1756,28 @@ mod tests {
             "la query 'reduce-motion' se conserva tras el refresh"
         );
         assert_eq!(s.rows()[s.visible()[0]].value, "true", "valor fresco");
+    }
+
+    /// El ancla tira hacia ARRIBA y el cursor manda abajo.
+    ///
+    /// Con la ventana abajo, volver a la primera fila (línea 1, porque la 0
+    /// es la cabecera «General») dejaba el desplazamiento en 1: la cabecera
+    /// no volvía nunca. El ancla es la línea de esa cabecera.
+    #[test]
+    fn la_cabecera_de_la_seccion_entra_con_su_primera_fila() {
+        let mut s = SettingsState::new(rows());
+        // Diez líneas de caja sobre cuarenta; la ventana ya bajó.
+        s.reconcile_viewport(39, 39, 40, 10);
+        assert_eq!(s.viewport_offset(), 30);
+        // Volver a la primera fila: su cabecera es la línea 0.
+        s.reconcile_viewport(1, 0, 40, 10);
+        assert_eq!(s.viewport_offset(), 0, "la cabecera vuelve con su fila");
+        // Una fila que NO abre sección no tira de nada: ancla = cursor.
+        s.reconcile_viewport(25, 25, 40, 10);
+        assert_eq!(s.viewport_offset(), 16);
+        // Y una cabecera no puede empujar el cursor fuera por abajo.
+        s.reconcile_viewport(39, 38, 40, 10);
+        assert!(s.viewport_offset() <= 38 && s.viewport_offset() + 10 > 39);
     }
 
     #[test]

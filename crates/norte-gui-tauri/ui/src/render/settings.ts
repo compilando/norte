@@ -125,7 +125,32 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   lista.setAttribute("aria-activedescendant", `settings-row-${String(settings.cursor)}`);
   caja.append(lista);
   this.settingsRoot.replaceChildren(caja);
-  revelar(lista.querySelector(`#settings-row-${String(settings.cursor)}`) ?? undefined);
+  revelar(objetivoRevelado(lista, settings.cursor));
+}
+
+/**
+ * QUÉ hay que dejar a la vista para el cursor: su fila, o la CABECERA de su
+ * sección cuando la fila es la primera de ella.
+ *
+ * Revelar solo la fila deja la cabecera justo por encima del borde, y el
+ * lector pierde el único rótulo que dice dónde está: bajar del todo y volver
+ * arriba dejaba «General» fuera para siempre. La terminal tiene la misma
+ * regla en su conciliación de ventana (`SettingsState::reconcile_viewport`),
+ * escrita ahí porque allí el scroll es nuestro y aquí es del navegador.
+ *
+ * Aparte y exportada porque `scrollIntoView` no existe en jsdom: lo que los
+ * tests pueden comprobar es la ELECCIÓN, no el desplazamiento.
+ */
+export function objetivoRevelado(lista: Element, cursor: number): HTMLElement | undefined {
+  const fila = lista.querySelector(`#settings-row-${String(cursor)}`);
+  if (!(fila instanceof HTMLElement)) {
+    return undefined;
+  }
+  const previo = fila.previousElementSibling;
+  if (previo instanceof HTMLElement && previo.classList.contains("settings-group")) {
+    return previo;
+  }
+  return fila;
 }
 
 /**

@@ -2453,6 +2453,36 @@ fn la_lista_de_ajustes_sigue_al_cursor() {
     );
 }
 
+/// Y la cabecera de la sección VUELVE al subir.
+///
+/// Lo que Oscar vio: «si bajo hasta abajo y subo, General no vuelve a subir».
+/// La ventana se ancla al cursor en LÍNEAS, y la primera fila vive en la
+/// línea 1 porque la 0 es la cabecera: subiendo del todo el offset se queda
+/// en 1 y la cabecera no reaparece nunca. La regla que lo arregla es más
+/// general que este caso —si el cursor está en la PRIMERA fila de su sección,
+/// la cabecera de esa sección entra en la ventana con él— y esto la fija por
+/// su síntoma.
+#[test]
+fn la_cabecera_de_la_seccion_vuelve_al_subir() {
+    let mut app = app_base();
+    let mut settings =
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
+    let ultima = settings.visible().len() - 1;
+    settings.set_cursor(ultima);
+    app.settings = Some(settings);
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    // Bajar del todo mueve la ventana...
+    ui::before_frame(&mut app, area);
+    // ...y volver arriba tiene que devolverla ENTERA, cabecera incluida.
+    app.settings.as_mut().expect("ajustes").set_cursor(0);
+    ui::before_frame(&mut app, area);
+    let pantalla = render_80x24(&app);
+    assert!(
+        pantalla.contains("General"),
+        "la cabecera de la sección tiene que volver al subir:\n{pantalla}"
+    );
+}
+
 /// La captura del 2026-09-18: dos paneles de ~50 columnas con Tipo, Tamaño
 /// y Fecha dejaban 16 celdas al nombre y cada captura de pantalla salía
 /// como `Ca….png`. El nombre se lee ahora entero: cede la clase, que ya

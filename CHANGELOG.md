@@ -40,6 +40,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A settings section keeps its heading when you scroll back up.** Both
+  frontends anchored the view to the selected ROW, and the first row of a
+  section sits one line below its heading — so once you had scrolled to the
+  bottom, "General" stayed above the edge for good and the list lost the
+  only label saying where you were. The rule is now the section's: landing
+  on the first row of a section brings that section's heading with it, in
+  the terminal (the viewport reconciliation) and in the window (what gets
+  scrolled into view).
+
 - **The system help says which of its two halves has the keys** (ADR 0128).
   The topic list and the page both drew their cursor the same way, so
   pressing Tab moved the keys and changed nothing on screen. Both cursors
