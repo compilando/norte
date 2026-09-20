@@ -209,6 +209,107 @@ impl SettingDef {
     }
 }
 
+/// El filtro de la pantalla de ajustes, ya interpretado.
+///
+/// El texto libre busca donde siempre —id, nombre y descripción, plegados—,
+/// y encima hay dos operadores, copiados de donde el lector ya los conoce:
+/// `@modified` (solo lo que no es de fábrica) y `@section:<x>`.
+///
+/// `@section:` casa contra la clave ESTABLE de la sección y contra su
+/// rótulo en **los dos** idiomas, no solo en el activo: un fichero de
+/// traducción no puede ser la diferencia entre encontrar algo y no
+/// encontrarlo.
+///
+/// Una arroba que no abre operador conocido es texto normal. Nadie tiene
+/// que escapar nada para buscar una arroba, y un filtro que se come lo que
+/// no entiende deja al lector mirando una lista vacía sin saber por qué.
+#[derive(Debug, Default)]
+struct Query {
+    /// El texto libre, ya plegado. Vacío = no filtra por texto.
+    text: String,
+    /// `@modified` estaba en la consulta.
+    only_modified: bool,
+    /// Las secciones nombradas con `@section:`. Vacío = todas.
+    sections: Vec<Section>,
+    /// `@section:` nombró algo que no existe. No filtra a «todas»: filtra a
+    /// NADA, que es la respuesta honesta a «enséñame los ajustes de algo que
+    /// no hay». Ignorar el operador enseñaría la lista entera y el lector
+    /// leería eso como «aquí está todo lo que pediste».
+    imposible: bool,
+}
+
+impl Query {
+    /// Interpreta la consulta cruda (bytes, como se teclean).
+    fn parse(raw: &[u8]) -> Self {
+        let mut q = Query::default();
+        // El texto libre se conserva TAL CUAL mientras no haya operadores, y
+        // eso no es pereza: `ui.font ` con el espacio final aísla una fila
+        // que `ui.font` no aísla, porque el heno lleva el id seguido del
+        // nombre. Trocear y volver a juntar por un espacio se come esa
+        // precisión, y un filtro que enseña dos filas donde antes enseñaba
+        // una es una regresión silenciosa.
+        if !raw.contains(&b'@') {
+            q.text = crate::nav::fold(raw);
+            return q;
+        }
+        // Con operadores por medio: se sacan sus tokens y el resto se pliega
+        // junto, ya sin la precisión del espacio de los bordes — combinar
+        // `@modified` con un fragmento que dependa de un espacio final no es
+        // una consulta que nadie escriba.
+        let mut resto: Vec<&[u8]> = Vec::new();
+        // Por bytes y separando por espacio ASCII: la consulta es entrada de
+        // usuario cruda (pegado incluido) y no tiene por qué ser UTF-8
+        // válido. `from_utf8_lossy` para mirar un token no lo escribe en
+        // ningún sitio.
+        for token in raw.split(|b| *b == b' ').filter(|t| !t.is_empty()) {
+            let texto = String::from_utf8_lossy(token);
+            if texto == "@modified" {
+                q.only_modified = true;
+            } else if let Some(nombre) = texto.strip_prefix("@section:") {
+                match section_by_name(nombre) {
+                    Some(s) => q.sections.push(s),
+                    None => q.imposible = true,
+                }
+            } else {
+                resto.push(token);
+            }
+        }
+        q.text = crate::nav::fold(resto.join(&b' ').as_slice());
+        q
+    }
+
+    /// ¿Esta fila pasa el filtro? `fold` es su heno ya plegado.
+    fn matches(&self, row: &Row, fold: &str) -> bool {
+        if self.imposible {
+            return false;
+        }
+        if self.only_modified && !row.modified {
+            return false;
+        }
+        if !self.sections.is_empty() && !self.sections.contains(&row.section) {
+            return false;
+        }
+        self.text.is_empty() || fold.contains(&self.text)
+    }
+}
+
+/// La sección cuyo nombre estable, o cuyo rótulo en CUALQUIERA de los dos
+/// idiomas, casa con `nombre` (plegando acentos y mayúsculas).
+fn section_by_name(nombre: &str) -> Option<Section> {
+    let buscado = crate::nav::fold(nombre.as_bytes());
+    if buscado.is_empty() {
+        return None;
+    }
+    Section::ORDER.iter().copied().find(|s| {
+        if crate::nav::fold(s.stable_key().as_bytes()) == buscado {
+            return true;
+        }
+        [norte_i18n::Lang::Es, norte_i18n::Lang::En]
+            .into_iter()
+            .any(|l| crate::nav::fold(norte_i18n::t_in(l, s.label_key()).as_bytes()) == buscado)
+    })
+}
+
 /// Una sección tal y como la pinta el índice: su rótulo ya traducido,
 /// cuántas filas visibles tiene con el filtro puesto, y en cuál empieza.
 ///
@@ -972,17 +1073,14 @@ impl SettingsState {
     }
 
     fn recompute(&mut self) {
-        self.visible = if self.query.is_empty() {
-            (0..self.rows.len()).collect()
-        } else {
-            let q = crate::nav::fold(&self.query);
-            self.folds
-                .iter()
-                .enumerate()
-                .filter(|(_, f)| f.contains(&q))
-                .map(|(i, _)| i)
-                .collect()
-        };
+        let filtro = Query::parse(&self.query);
+        self.visible = self
+            .folds
+            .iter()
+            .enumerate()
+            .filter(|(i, f)| filtro.matches(&self.rows[*i], f))
+            .map(|(i, _)| i)
+            .collect();
         self.clamp_cursor();
     }
 
@@ -1126,6 +1224,21 @@ impl SettingsState {
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    /// Cuántas filas hay en total, filtre lo que filtre.
+    #[must_use]
+    pub fn total(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Cuántas se ven con el filtro puesto.
+    ///
+    /// Va con [`Self::total`] a la pantalla («7 de 33») porque sin la
+    /// segunda cifra «no hay nada» y «lo tapé con una letra» se leen igual.
+    #[must_use]
+    pub fn shown(&self) -> usize {
+        self.visible.len()
     }
 
     /// The localized description of the row under the cursor, if any is
@@ -1985,6 +2098,76 @@ mod tests {
         // Y una cabecera no puede empujar el cursor fuera por abajo.
         s.reconcile_viewport(39, 38, 40, 10);
         assert!(s.viewport_offset() <= 38 && s.viewport_offset() + 10 > 39);
+    }
+
+    #[test]
+    fn el_operador_modified_deja_solo_lo_tocado() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_theme = Some("nord".to_owned());
+        let mut s = SettingsState::new(build_rows(&cfg, &[]));
+        for c in "@modified".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 1);
+        assert_eq!(s.rows()[s.visible()[0]].id(), Some("ui.theme"));
+    }
+
+    /// En los DOS idiomas, y por la clave estable: un fichero de traducción
+    /// no puede ser la diferencia entre encontrar algo y no encontrarlo.
+    #[test]
+    fn el_operador_section_acepta_el_nombre_traducido_y_el_estable() {
+        for q in ["@section:appearance", "@section:apariencia"] {
+            let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+            for c in q.chars() {
+                s.push_char(c);
+            }
+            assert!(s.shown() > 0, "«{q}» no encontró nada");
+            assert!(
+                s.visible()
+                    .iter()
+                    .all(|&i| s.rows()[i].section == Section::Appearance)
+            );
+        }
+    }
+
+    #[test]
+    fn los_operadores_se_combinan_con_el_texto() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_theme = Some("nord".to_owned());
+        cfg.common.ui_show_hidden = Some(true);
+        let mut s = SettingsState::new(build_rows(&cfg, &[]));
+        for c in "@modified".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 2, "dos tocadas");
+        for c in " theme".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 1, "y con el texto, una");
+    }
+
+    /// Una arroba que no abre operador conocido es TEXTO. Nadie tiene que
+    /// escapar nada para buscar una arroba.
+    #[test]
+    fn una_arroba_suelta_es_texto_normal() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        for c in "@nada".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 0);
+        assert_eq!(s.total(), s.rows().len(), "el total no lo toca el filtro");
+    }
+
+    /// Una sección que no existe filtra a NADA. Ignorar el operador
+    /// enseñaría la lista entera, y el lector la leería como «esto es todo
+    /// lo que pediste».
+    #[test]
+    fn una_seccion_que_no_existe_no_ensena_la_lista_entera() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        for c in "@section:loquesea".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 0);
     }
 
     #[test]
