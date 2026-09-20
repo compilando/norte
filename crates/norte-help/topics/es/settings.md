@@ -41,8 +41,14 @@ El rótulo de la sección en la que estás se queda clavado arriba mientras te
 desplazas, y a la izquierda hay un índice con cuántas opciones se ven de cada
 una — una sección que tu búsqueda vació sigue en el índice, apagada.
 
+`tab` pasa el teclado al índice y de vuelta a la lista. Con el teclado en el
+índice, las flechas cambian de **sección** y la lista sigue; el cursor del
+lado que no tiene el teclado se pinta apagado, para que siempre se vea dónde
+estás sin dudar cuál de los dos manda.
+
 | Tecla     | Qué hace                                            |
 |-----------|-----------------------------------------------------|
+| tab       | cambia de lado: índice ↔ lista                      |
 | [ y ]     | sección anterior / siguiente, saltándose las vacías |
 | ctrl+r    | restablecer la opción del cursor                    |
 | ctrl+k    | el editor de atajos                                 |

@@ -766,6 +766,13 @@ pub struct SettingsView {
     /// largo mientras escribes no se puede usar como mapa, y no está en
     /// `sections` porque no hay nada que pintar debajo de su rótulo.
     pub index: Vec<SectionIndexView>,
+    /// Qué mitad tiene el teclado: `"index"` o `"list"`.
+    ///
+    /// Viaja porque los DOS cursores se pintan siempre y el que no tiene el
+    /// teclado va apagado — la misma regla que las dos mitades de la ayuda
+    /// (ADR 0128). Sin esto, el renderer solo podría pintar uno, que es
+    /// justo lo que hace que no se sepa dónde está el foco.
+    pub focus: String,
     /// Qué fila tiene el cursor, contando TODAS las filas de todas las
     /// secciones en orden (las cabeceras no cuentan: no se pueden elegir).
     pub cursor: u64,
@@ -802,6 +809,13 @@ pub struct SectionIndexView {
 pub enum SettingsSectionView {
     /// Entradas del registro con su valor efectivo.
     Settings {
+        /// Su clave ESTABLE, la misma que la entrada del índice.
+        ///
+        /// Es lo que empareja una sección con su fila del índice. Casarlas
+        /// por el título traducido funcionaría hoy y se rompería el día que
+        /// dos secciones se llamen parecido o alguien retoque una cadena:
+        /// un rótulo es prosa, no una identidad.
+        key: String,
         /// Su título, ya traducido.
         title: String,
         /// Sus filas.

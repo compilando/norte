@@ -41,8 +41,14 @@ heading of the section you are in stays pinned at the top as you scroll, and
 an index on the left says how many options each one is showing — a section
 your search emptied stays in the index, dimmed.
 
+`tab` hands the keyboard to the index and back to the list. With the keyboard
+on the index the arrows change **section** and the list follows; the cursor on
+the side without the keyboard is drawn dimmed, so you can always see where you
+are without wondering which half is listening.
+
 | Key       | What it does                                     |
 |-----------|--------------------------------------------------|
+| tab       | switch sides: index ↔ list                       |
 | [ and ]   | previous / next section, skipping the empty ones |
 | ctrl+r    | reset the option under the cursor                |
 | ctrl+k    | the shortcut editor                              |

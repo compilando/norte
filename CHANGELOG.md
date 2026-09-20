@@ -9,6 +9,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The settings index takes the keyboard** (ADR 0129, bridge 82). `tab`
+  moves between the index and the list, in both frontends, and with the
+  keyboard on the index the arrows walk sections while the list follows —
+  the way the help's sidebar opens a topic as you move through it. Both
+  cursors are drawn at all times and the one without the keyboard is dimmed,
+  so the screen always says which half is listening.
 - **The settings screen has sections** (ADR 0129, bridge 81). The 33 options
   were all under one heading called `General`; they are now split into
   appearance, panes and listing, open with, keyboard and mouse, behaviour,

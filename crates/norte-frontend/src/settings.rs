@@ -326,6 +326,20 @@ fn section_by_name(nombre: &str) -> Option<Section> {
     })
 }
 
+/// Qué mitad de la pantalla de ajustes tiene el teclado.
+///
+/// El mismo vocabulario que [`crate::help::Focus`], y por el mismo motivo:
+/// dos listas a la vez piden decir cuál manda, y las dos pantallas que lo
+/// hacen tienen que decirlo igual.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Focus {
+    /// La lista de ajustes: arriba/abajo recorren filas, Enter edita.
+    #[default]
+    List,
+    /// El índice: arriba/abajo cambian de SECCIÓN, y la lista sigue.
+    Index,
+}
+
 /// Una sección tal y como la pinta el índice: su rótulo ya traducido,
 /// cuántas filas visibles tiene con el filtro puesto, y en cuál empieza.
 ///
@@ -1055,6 +1069,13 @@ pub struct SettingsState {
     /// ~30 ajustes dejó de serlo: bajar con el cursor pasado el borde lo
     /// dejaba fuera de la caja y la lista no se movía.
     viewport_offset: usize,
+    /// Qué mitad tiene el teclado.
+    ///
+    /// No hay un cursor del índice aparte: con el foco en él, moverse CAMBIA
+    /// de sección y la lista sigue, igual que la barra lateral de la ayuda
+    /// abre el tema al recorrerla. Un segundo cursor que hubiera que
+    /// sincronizar con el primero es la clase de estado que se desincroniza.
+    focus: Focus,
 }
 
 impl SettingsState {
@@ -1109,6 +1130,7 @@ impl SettingsState {
             cursor: 0,
             edit: None,
             viewport_offset: 0,
+            focus: Focus::List,
         };
         s.recompute();
         s
@@ -1207,14 +1229,29 @@ impl SettingsState {
 
     /// Moves the selection up (clamped at the top). No-op editing.
     pub fn up(&mut self) {
-        if self.edit.is_none() {
-            self.cursor = self.cursor.saturating_sub(1);
+        if self.edit.is_some() {
+            return;
         }
+        // Con el foco en el índice se recorren SECCIONES, no filas, y la
+        // lista sigue: es lo que hace la barra lateral de la ayuda, que abre
+        // el tema al pasar por él.
+        if self.focus == Focus::Index {
+            self.step_section(-1);
+            return;
+        }
+        self.cursor = self.cursor.saturating_sub(1);
     }
 
     /// Moves the selection down (clamped at the end). No-op editing.
     pub fn down(&mut self) {
-        if self.edit.is_none() && self.cursor + 1 < self.visible.len() {
+        if self.edit.is_some() {
+            return;
+        }
+        if self.focus == Focus::Index {
+            self.step_section(1);
+            return;
+        }
+        if self.cursor + 1 < self.visible.len() {
             self.cursor += 1;
         }
     }
@@ -1291,6 +1328,29 @@ impl SettingsState {
                 }
             })
             .collect()
+    }
+
+    /// Qué mitad tiene el teclado.
+    #[must_use]
+    pub fn focus(&self) -> Focus {
+        self.focus
+    }
+
+    /// Cambia de lado. No-op mientras se edita: una edición abierta congela
+    /// todo lo demás, como el resto de esta máquina.
+    ///
+    /// Del índice no se puede salir a un sitio que no existe, así que pasar
+    /// a él con la lista vacía tampoco tiene sentido: sin filas visibles no
+    /// hay sección a la que ir, y el foco se queda donde está.
+    pub fn toggle_focus(&mut self) {
+        if self.edit.is_some() {
+            return;
+        }
+        self.focus = match self.focus {
+            Focus::Index => Focus::List,
+            Focus::List if self.visible.is_empty() => Focus::List,
+            Focus::List => Focus::Index,
+        };
     }
 
     /// Lleva el cursor a la sección anterior (`delta` negativo) o siguiente,
@@ -2455,6 +2515,70 @@ mod tests {
         assert_eq!(fila.section, Section::Input);
         // Y es la PRIMERA de la sección, no una cualquiera.
         assert!(s.cursor() == 0 || s.rows()[s.visible()[s.cursor() - 1]].section != Section::Input);
+    }
+
+    /// Con el foco en el índice, las flechas recorren SECCIONES y la lista
+    /// sigue — como la barra lateral de la ayuda, que abre el tema al pasar
+    /// por él. Sin un segundo cursor que sincronizar.
+    #[test]
+    fn con_el_foco_en_el_indice_las_flechas_cambian_de_seccion() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        let seccion = |s: &SettingsState| s.rows()[s.visible()[s.cursor()]].section;
+        assert_eq!(s.focus(), Focus::List);
+        s.down();
+        assert_eq!(
+            seccion(&s),
+            Section::Appearance,
+            "en la lista, baja una fila"
+        );
+
+        s.toggle_focus();
+        assert_eq!(s.focus(), Focus::Index);
+        s.down();
+        assert_eq!(
+            seccion(&s),
+            Section::Panes,
+            "en el índice, baja una sección"
+        );
+        s.up();
+        assert_eq!(seccion(&s), Section::Appearance);
+
+        // Y volver al otro lado devuelve las flechas a las filas.
+        s.toggle_focus();
+        assert_eq!(s.focus(), Focus::List);
+        let antes = s.cursor();
+        s.down();
+        assert_eq!(s.cursor(), antes + 1);
+    }
+
+    /// Sin filas visibles no hay sección a la que ir: el foco no cruza.
+    #[test]
+    fn con_la_lista_vacia_el_foco_no_pasa_al_indice() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        for c in "@section:loquesea".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 0);
+        s.toggle_focus();
+        assert_eq!(s.focus(), Focus::List);
+    }
+
+    /// Y editando no cruza tampoco: una edición abierta congela lo demás.
+    #[test]
+    fn editando_el_foco_no_cambia() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_font = Some("Inter".to_owned());
+        let mut s = SettingsState::new(build_rows(&cfg, &[]));
+        let pos = s
+            .visible()
+            .iter()
+            .position(|&i| s.rows()[i].id() == Some("ui.font"))
+            .expect("ui.font visible");
+        s.set_cursor(pos);
+        s.activate(&[], &[]);
+        assert!(s.is_editing());
+        s.toggle_focus();
+        assert_eq!(s.focus(), Focus::List);
     }
 
     /// El recorrido de secciones, que es el MISMO en las dos pantallas.

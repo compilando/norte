@@ -804,7 +804,7 @@ msg-palette-no-help = ninguna página de la ayuda documenta este comando todaví
 # paleta de arriba (decisión 8): la búsqueda está SIEMPRE activa, Enter
 # togglea/cicla/edita.
 settings-title = Ajustes
-settings-hint = [[/]] sección · [enter] editar · [ctrl+r] restablecer · [esc] cerrar
+settings-hint = [tab] lado · [[/]] sección · [enter] editar · [ctrl+r] restablecer · [esc] cerrar
 
 settings-edit-hint = [enter] guardar · [esc] cancelar
 # obsoleta: las 33 entradas vivían aquí. Se borra en el ciclo siguiente.

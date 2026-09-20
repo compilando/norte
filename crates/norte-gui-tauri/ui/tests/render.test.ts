@@ -2723,9 +2723,11 @@ describe("los ajustes", () => {
       query: "tema",
       shown: 2,
       total: 34,
+      focus: "list",
       sections: [
         {
           section: "settings",
+          key: "appearance",
           title: "Apariencia",
           rows: [
             {
@@ -2821,6 +2823,32 @@ describe("los ajustes", () => {
     caja.value = "fuente";
     caja.dispatchEvent(new Event("input", { bubbles: true }));
     expect(enviadas.at(-1)).toEqual({ action: "settings_query", text: "fuente" });
+  });
+
+  it("pinta los dos cursores y apaga el del lado sin teclado", () => {
+    const { screen } = montar();
+    const v = conAjustes();
+    screen.paint(v);
+    // Con el teclado en la lista: la lista viva, el índice con su sección
+    // marcada pero apagada por el CSS.
+    const lista = document.querySelector(".settings-rows") as HTMLElement;
+    const nav = document.querySelector(".settings-index") as HTMLElement;
+    expect(lista.dataset["focused"]).toBe("true");
+    expect(nav.dataset["focused"]).toBe("false");
+    // El cursor (fila 1) cae en Apariencia, y el índice lo dice por CLAVE.
+    const marcada = nav.querySelector('[aria-current="true"]') as HTMLElement;
+    expect(marcada.dataset["key"]).toBe("appearance");
+
+    if (v.settings !== null) {
+      v.settings.focus = "index";
+    }
+    screen.paint(v);
+    const lista2 = document.querySelector(".settings-rows") as HTMLElement;
+    const nav2 = document.querySelector(".settings-index") as HTMLElement;
+    expect(lista2.dataset["focused"]).toBe("false");
+    expect(nav2.dataset["focused"]).toBe("true");
+    // Y la fila del cursor sigue marcada: se pinta siempre, apagada.
+    expect(lista2.querySelector('[aria-selected="true"]')).not.toBeNull();
   });
 
   it("el buscador conserva el foco y el caret entre repintados", () => {

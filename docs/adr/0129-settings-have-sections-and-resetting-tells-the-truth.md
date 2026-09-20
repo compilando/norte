@@ -96,11 +96,20 @@ done", and it is confined to keys that only exist inside one modal.
 Written down rather than forgotten, because silence and an oversight read
 the same:
 
-- **`tab` does not move between the terminal's index and its list.** The
-  index is a map, not a focus target: `[` and `]` already move by section,
-  and a second focus ring inside a modal that is itself a focus trap buys a
-  key and costs an explanation. If someone wants to click it one day, that
-  is when it needs focus.
+- ~~**`tab` does not move between the index and the list.**~~ **Reversed the
+  same day** (bridge 82). The argument above — "the index is a map, not a
+  focus target" — was written from the code and not from using it: the first
+  reader to open the screen said the index "is not very navigable" and asked
+  for exactly this. `tab` now moves the keyboard between the two halves in
+  both frontends, and with the keyboard on the index the arrows walk
+  SECTIONS while the list follows, the way the help's sidebar opens a topic
+  as you move through it. There is no second cursor to keep in sync: the
+  index simply points at the cursor's section.
+
+  Both cursors are drawn at all times and the one without the keyboard is
+  dimmed — ADR 0128's rule, which is why `SettingsView` had to grow `focus`
+  and each section its stable `key` (pairing a section with its index row by
+  translated title would break the day two read alike).
 - **The modified dot is always `•`, never `*`.** The design asked for an
   ASCII fallback on terminals without reliable Unicode. There is no
   capability probe in this repository to hang that on, and inventing one for

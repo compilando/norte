@@ -147,6 +147,40 @@ async fn con_filtro_el_dialogo_pregunta_por_el_ajuste_correcto() {
     );
 }
 
+/// `tab` cambia de lado, y con el teclado en el índice las flechas recorren
+/// SECCIONES en vez de filas — como la barra lateral de la ayuda.
+#[tokio::test]
+async fn tab_pasa_el_teclado_al_indice_y_las_flechas_cambian_de_seccion() {
+    let raiz = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F11")).await.expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("abren");
+    assert_eq!(a.focus, "list", "el teclado empieza en la lista");
+
+    h.dispatch(tecla("Tab")).await.expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    assert_eq!(a.focus, "index");
+
+    // Abajo: la sección siguiente, y el cursor a su primera fila.
+    h.dispatch(tecla("Down")).await.expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    assert_eq!(
+        a.cursor,
+        u64::from(fila_de(&a, "ui.menu-bar")),
+        "«Paneles y listado» empieza en su PRIMERA fila, la barra de menú"
+    );
+
+    // Y de vuelta: las flechas mueven filas otra vez.
+    h.dispatch(tecla("Tab")).await.expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    assert_eq!(a.focus, "list");
+    let antes = a.cursor;
+    h.dispatch(tecla("Down")).await.expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    assert_eq!(a.cursor, antes + 1);
+}
+
 /// Un click en el índice lleva el cursor a esa sección.
 #[tokio::test]
 async fn saltar_a_una_seccion_pone_el_cursor_en_su_primera_fila() {

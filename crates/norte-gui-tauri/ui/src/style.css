@@ -2208,6 +2208,24 @@ body {
   background: var(--hover, var(--panel-bg));
 }
 
+/* Los DOS cursores se pintan siempre; el del lado sin teclado, apagado
+   (ADR 0128). Uno solo vivo, o ninguno, es lo que hace que no se sepa dónde
+   está el foco. */
+.settings-index-item[aria-current="true"] {
+  background: var(--selection-unfocused-bg);
+  color: var(--selection-unfocused-fg);
+}
+
+.settings-index[data-focused="true"] .settings-index-item[aria-current="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.settings-rows:not([data-focused="true"]) .settings-row[aria-selected="true"] {
+  background: var(--selection-unfocused-bg);
+  color: var(--selection-unfocused-fg);
+}
+
 /* Vacía por el filtro: se queda, apagada. Un índice que cambia de largo
    mientras escribes no se puede usar como mapa. */
 .settings-index-item[data-empty="true"] {
