@@ -41,11 +41,11 @@ El rótulo de la sección en la que estás se queda clavado arriba mientras te
 desplazas, y a la izquierda hay un índice con cuántas opciones se ven de cada
 una — una sección que tu búsqueda vació sigue en el índice, apagada.
 
-| Tecla | Qué hace |
-|-------|----------|
-| `[` y `]` | sección anterior / siguiente, saltándose las vacías |
-| `ctrl+r` | restablecer la opción del cursor |
-| `ctrl+k` | el editor de atajos |
+| Tecla     | Qué hace                                            |
+|-----------|-----------------------------------------------------|
+| [ y ]     | sección anterior / siguiente, saltándose las vacías |
+| ctrl+r    | restablecer la opción del cursor                    |
+| ctrl+k    | el editor de atajos                                 |
 
 Escribir filtra. Dos operadores estrechan más: `@modified` deja solo lo que no
 está en su valor de fábrica, y `@section:apariencia` (o `@section:appearance`,

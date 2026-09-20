@@ -41,11 +41,11 @@ heading of the section you are in stays pinned at the top as you scroll, and
 an index on the left says how many options each one is showing — a section
 your search emptied stays in the index, dimmed.
 
-| Key | What it does |
-|-----|--------------|
-| `[` and `]` | previous / next section, skipping the empty ones |
-| `ctrl+r` | reset the option under the cursor |
-| `ctrl+k` | the shortcut editor |
+| Key       | What it does                                     |
+|-----------|--------------------------------------------------|
+| [ and ]   | previous / next section, skipping the empty ones |
+| ctrl+r    | reset the option under the cursor                |
+| ctrl+k    | the shortcut editor                              |
 
 Typing filters. Two operators narrow it further: `@modified` leaves only what
 is not at its factory value, and `@section:appearance` (or
