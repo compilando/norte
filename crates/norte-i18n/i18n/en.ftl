@@ -795,7 +795,7 @@ msg-palette-no-help = no help page documents this command yet
 # --- Settings overlay (S3) — same free-text-filter idiom as the palette
 # above (decision 8): search is always active, Enter toggles/cycles/edits.
 settings-title = Settings
-settings-hint = [↑/↓/pgup/pgdn] navigate · [enter] edit · [esc] close
+settings-hint = [[/]] section · [enter] edit · [ctrl+r] reset · [esc] close
 settings-edit-hint = [enter] save · [esc] cancel
 # obsolete: all 33 entries used to live here. Removed next cycle.
 settings-section-general = General

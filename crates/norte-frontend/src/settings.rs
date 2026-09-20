@@ -322,9 +322,15 @@ pub struct SectionView {
     pub section: Section,
     /// Su rótulo, traducido al idioma activo.
     pub title: String,
-    /// Cuántas de sus filas se ven con el filtro puesto. Cero = apagada en
-    /// el índice, nunca ausente.
+    /// Cuántas de sus filas se ven con el filtro puesto. Cero con
+    /// [`Self::total`] mayor que cero = apagada en el índice, nunca ausente.
     pub visible: usize,
+    /// Cuántas filas tiene en total, filtre lo que filtre.
+    ///
+    /// Distingue «la tapó el filtro» de «esta superficie no la tiene»: la
+    /// terminal no proyecta ubicaciones, y un índice que anuncia una sección
+    /// que nunca va a tener nada promete algo que no va a cumplir.
+    pub total: usize,
     /// Posición de su primera fila visible dentro de
     /// [`SettingsState::visible`] — la unidad del cursor. `None` si el
     /// filtro la dejó vacía.
@@ -1234,6 +1240,7 @@ impl SettingsState {
                     section: *s,
                     title: t(s.label_key()),
                     visible,
+                    total: self.rows.iter().filter(|r| r.section == *s).count(),
                     first_row,
                 }
             })
@@ -1799,9 +1806,18 @@ mod tests {
     fn build_rows_valores_coinciden_con_current_value() {
         let cfg = cfg_vacia();
         let rows = build_rows(&cfg, &[]);
-        for (i, def) in catalog().iter().enumerate() {
-            assert_eq!(rows[i].value, current_value(def, &cfg));
+        // Por ID, no por posición: las filas salen en orden de PANTALLA
+        // (sección primero) y el catálogo va agrupado por sección de
+        // `norte.toml`, que es otro orden.
+        for def in catalog() {
+            let row = rows
+                .iter()
+                .find(|r| r.id() == Some(def.id))
+                .unwrap_or_else(|| panic!("«{}» no está en las filas", def.id));
+            assert_eq!(row.value, current_value(def, &cfg));
         }
+        // El catálogo entero, más la fila informativa de Plugins.
+        assert_eq!(rows.len(), catalog().len() + 1);
     }
 
     /// The Plugins informational row carries no value (nothing to edit) and
@@ -2450,12 +2466,16 @@ mod tests {
     fn set_cursor_es_no_op_mientras_se_edita() {
         let mut s = SettingsState::new(rows());
         // Sin filtrar: TODAS las filas siguen visibles, así que si el guard
-        // de edición fallara habría a dónde moverse de verdad. `down()` dos
-        // veces aterriza en "ui.font" (índice 2 del catálogo: theme, lang,
-        // font), una fila `Text` — activarla abre edición.
-        s.down();
-        s.down();
-        let idx = s.cursor();
+        // de edición fallara habría a dónde moverse de verdad. Se busca
+        // `ui.font` por su ID —una fila `Text`, que al activarse abre
+        // edición—, no por su posición: las filas salen en orden de
+        // pantalla, que no es el del catálogo.
+        let idx = s
+            .visible()
+            .iter()
+            .position(|&i| s.rows()[i].id() == Some("ui.font"))
+            .expect("ui.font visible");
+        s.set_cursor(idx);
         assert_eq!(s.rows()[s.visible()[idx]].name, t("setting-ui-font-name"));
         s.activate(&[], &[]);
         assert!(s.is_editing());
@@ -2470,8 +2490,15 @@ mod tests {
     #[test]
     fn row_id_devuelve_el_id_del_catalogo_o_none_para_la_nota_de_plugins() {
         let rows = rows();
-        for (i, def) in catalog().iter().enumerate() {
-            assert_eq!(rows[i].id(), Some(def.id));
+        // Cada id del catálogo sale UNA vez; el orden es el de pantalla
+        // (sección primero), no el del catálogo.
+        for def in catalog() {
+            assert_eq!(
+                rows.iter().filter(|r| r.id() == Some(def.id)).count(),
+                1,
+                "«{}» tiene que salir exactamente una vez",
+                def.id
+            );
         }
         assert_eq!(rows.last().unwrap().id(), None);
     }

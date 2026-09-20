@@ -37,7 +37,14 @@ fn render(app: &App) -> String {
 /// pantalla de 16 usada en el resto del archivo para pintar su lista
 /// completa sin recorte vertical.
 fn render_80x24(app: &App) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+    render_en(app, 80, 24)
+}
+
+/// El mismo pintado a un tamaño DADO: lo que degrada con el ancho (el índice
+/// de secciones de los ajustes, por ejemplo) no se puede comprobar a uno
+/// solo.
+fn render_en(app: &App, ancho: u16, alto: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(ancho, alto)).expect("terminal");
     terminal.draw(|f| ui::draw(f, app)).expect("draw");
     terminal.backend().to_string()
 }
@@ -2517,6 +2524,34 @@ fn la_cabecera_clavada_sigue_a_la_seccion_del_cursor() {
     assert!(
         abajo.contains(&ultima_seccion),
         "al final manda la suya («{ultima_seccion}»):\n{abajo}"
+    );
+}
+
+/// Con sitio, el índice está; sin sitio, se va. La misma degradación que
+/// hacen las columnas de un panel: una columna que no cabe no se encoge
+/// hasta ser ilegible, se va.
+#[test]
+fn el_indice_de_secciones_desaparece_en_una_terminal_estrecha() {
+    let mut app = app_base();
+    app.settings = Some(norte_tui::app::Settings::new(
+        norte_tui::settings::build_rows(&cfg_vacia(), &[]),
+    ));
+    let abrir_con = norte_i18n::t("settings-section-open-with");
+
+    let ancha = ratatui::layout::Rect::new(0, 0, 110, 24);
+    ui::before_frame(&mut app, ancha);
+    let pantalla = render_en(&app, 110, 24);
+    assert!(
+        pantalla.contains(&abrir_con),
+        "el índice lista las secciones a las que el cursor no ha ido:\n{pantalla}"
+    );
+
+    let estrecha = ratatui::layout::Rect::new(0, 0, 50, 24);
+    ui::before_frame(&mut app, estrecha);
+    let pantalla = render_en(&app, 50, 24);
+    assert!(
+        !pantalla.contains(&abrir_con),
+        "a 50 columnas no cabe el índice y manda la lista:\n{pantalla}"
     );
 }
 
