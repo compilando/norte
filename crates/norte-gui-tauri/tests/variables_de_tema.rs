@@ -51,6 +51,10 @@ const NO_SON_COLOR: &[&str] = &[
     // un rol al tema sería pedirle un color para una coordenada.
     "hit-col",
     "hit-width",
+    // Un FACTOR de escala: el zoom de una imagen, el porcentaje que el host
+    // lleva ya dividido entre cien (puente 80). `1` es ajustada. Pedirle un
+    // rol al tema sería pedirle un color para un multiplicador.
+    "zoom",
 ];
 
 /// Huérfanas CONOCIDAS, con dueño y fecha. Vacía desde que los roles `muted`

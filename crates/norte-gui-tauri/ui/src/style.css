@@ -2157,7 +2157,7 @@ body {
 }
 
 .settings-count {
-  color: var(--muted-fg, var(--fg));
+  color: var(--info-fg, var(--fg));
   font-variant-numeric: tabular-nums;
 }
 
@@ -2205,13 +2205,13 @@ body {
 }
 
 .settings-index-item:hover:not(:disabled) {
-  background: var(--hover-bg, var(--panel-bg));
+  background: var(--hover, var(--panel-bg));
 }
 
 /* Vacía por el filtro: se queda, apagada. Un índice que cambia de largo
    mientras escribes no se puede usar como mapa. */
 .settings-index-item[data-empty="true"] {
-  color: var(--muted-fg, var(--fg));
+  color: var(--info-fg, var(--fg));
   opacity: 0.55;
   cursor: default;
 }
@@ -2239,9 +2239,12 @@ body {
   background: var(--panel-bg);
 }
 
-/* El punto de «esto lo has tocado tú», y el botón que lo deshace. */
+/* El punto de «no es el valor de fábrica», y el botón que lo deshace.
+   Por el rol `title-fg` del tema y no por un `--accent` inventado: una
+   variable que nadie alimenta se queda con su valor por defecto y deja de
+   seguir al tema en silencio. */
 .settings-dot {
-  color: var(--accent, var(--title-fg));
+  color: var(--title-fg);
 }
 
 .settings-reset {
