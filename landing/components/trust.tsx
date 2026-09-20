@@ -1,7 +1,7 @@
 const proof = [
   { value: "0", label: "accounts required", body: "Install it. Point it at your files. Work." },
-  { value: "0", label: "telemetry events", body: "Diagnostics stay on your machine. There is no opt-in funnel." },
-  { value: "100%", label: "inspectable", body: "Core, clients, protocol, providers and policy live in the open." },
+  { value: "0", label: "telemetry events", body: "Diagnostics stay on your machine. There is no opt-in funnel, because there is no funnel." },
+  { value: "100%", label: "inspectable", body: "Core, clients, protocol, providers and policy live in the open—and the JSON schemas ship with the binaries." },
 ];
 
 export function Trust() {
@@ -29,7 +29,7 @@ export function Trust() {
           <div className="flex items-center border-b border-line px-5 py-4 font-mono text-[9px] uppercase tracking-[0.12em]"><span className="text-muted">policy.toml</span><span className="ml-auto text-phosphor">enforced by core</span></div>
           <div className="grid lg:grid-cols-2">
             <pre className="overflow-x-auto p-6 font-mono text-[10px] leading-7 sm:p-8 sm:text-[11px]"><code><span className="text-muted">[[rule]]</span>{"\n"}<span className="text-cyan">agent</span>   = <span className="text-ink">&quot;*&quot;</span>{"\n"}<span className="text-cyan">path</span>    = <span className="text-ink">&quot;~/projects/**&quot;</span>{"\n"}<span className="text-cyan">write</span>   = <span className="text-phosphor">&quot;ask&quot;</span>{"\n"}<span className="text-cyan">delete</span>  = <span className="text-[#ff9f87]">&quot;deny&quot;</span>{"\n"}<span className="text-cyan">expires</span> = <span className="text-ink">&quot;20m&quot;</span></code></pre>
-            <div className="border-t border-line p-6 lg:border-l lg:border-t-0 lg:p-8"><p className="font-mono text-[9px] uppercase tracking-[0.13em] text-muted">The boundary is the product</p><h3 className="mt-5 max-w-lg text-3xl font-medium tracking-[-0.045em] text-ink">Agents never receive a secret backdoor to your filesystem.</h3><p className="mt-5 max-w-lg text-sm leading-6 text-muted">Every request crosses the same core as the human clients: scoped access, explicit approvals, expiring grants, attribution and session-level undo.</p><div className="mt-7 flex flex-wrap gap-2 font-mono text-[8px] uppercase tracking-[0.1em] text-muted"><span className="rounded-full border border-line px-3 py-2">fail closed</span><span className="rounded-full border border-line px-3 py-2">hash-chained audit</span><span className="rounded-full border border-line px-3 py-2">human override</span></div></div>
+            <div className="border-t border-line p-6 lg:border-l lg:border-t-0 lg:p-8"><p className="font-mono text-[9px] uppercase tracking-[0.13em] text-muted">The boundary is the product</p><h3 className="mt-5 max-w-lg text-3xl font-medium tracking-[-0.045em] text-ink">Agents never receive a secret backdoor to your filesystem.</h3><p className="mt-5 max-w-lg text-sm leading-6 text-muted">Every request crosses the same core as the human clients: scoped access, explicit approvals, expiring grants, attribution and session-level undo—you can revert an agent&apos;s whole session, long after the agent is gone.</p><div className="mt-7 flex flex-wrap gap-2 font-mono text-[8px] uppercase tracking-[0.1em] text-muted"><span className="rounded-full border border-line px-3 py-2">fail closed</span><span className="rounded-full border border-line px-3 py-2">hash-chained audit</span><span className="rounded-full border border-line px-3 py-2">human override</span></div></div>
           </div>
         </div>
       </div>
