@@ -107,6 +107,46 @@ async fn con_filtro_el_cursor_apunta_a_la_fila_que_se_ve() {
     );
 }
 
+/// Con filtro puesto, el diálogo pregunta por el ajuste QUE SE VE.
+///
+/// El nombre salía de `rows()[fila]` con `fila` contando VISIBLES: filtrando
+/// a «Abrir con», Enter sobre la primera fila abría la edición del editor y
+/// el diálogo decía «Tema». El lector creía cambiar el tema y reescribía su
+/// línea de órdenes.
+#[tokio::test]
+async fn con_filtro_el_dialogo_pregunta_por_el_ajuste_correcto() {
+    let raiz = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F11")).await.expect("host vivo");
+    siguiente_ajustes(&mut sub).await.expect("abren");
+    h.dispatch(UiAction::SettingsQuery {
+        text: "@section:open-with".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    // La primera fila visible es `ui.editor`, una de texto.
+    assert_eq!(fila_de(&a, "ui.editor"), 0);
+    h.dispatch(UiAction::SettingsSelectRow { row: 0 })
+        .await
+        .expect("host vivo");
+    siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+
+    let cuerpo = foto_hasta(&h, &mut sub, "el diálogo dice de qué ajuste habla", |s| {
+        s.dialogs
+            .first()
+            .and_then(|d| d.body.first().map(|t| t.text.clone()))
+    })
+    .await;
+    let nombre_editor = norte_i18n::t_in(norte_i18n::Lang::Es, "setting-ui-editor-name");
+    assert_eq!(
+        cuerpo, nombre_editor,
+        "el diálogo tiene que nombrar el ajuste que se activó"
+    );
+}
+
 /// Un click en el índice lleva el cursor a esa sección.
 #[tokio::test]
 async fn saltar_a_una_seccion_pone_el_cursor_en_su_primera_fila() {

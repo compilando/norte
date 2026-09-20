@@ -74,6 +74,13 @@ read back: still modified means another layer sets it, and the status bar
 says so (`settings-still-set-elsewhere`). What has happened, said with what
 is already known.
 
+Two consequences of measuring against the default rather than "is the key in
+your file", and both are deliberate: a key written by hand with the value it
+already had shows **no** dot and cannot be removed from this screen (edit
+the file for that), and a key set only by the system layer shows a dot the
+reader never caused — which is why the label reads "not the factory value"
+and not "you changed this".
+
 ### The new keys are local to the overlay
 
 `[`, `]` and `ctrl+r` are handled where the settings screen reads its keys,
@@ -83,6 +90,22 @@ consumes every printable character for its filter anyway. The price is that
 a bracket cannot be searched for, and no setting's name contains one. This is
 a deliberate exception to "a key change is not done until every preset is
 done", and it is confined to keys that only exist inside one modal.
+
+### Two things the design asked for and this does not do
+
+Written down rather than forgotten, because silence and an oversight read
+the same:
+
+- **`tab` does not move between the terminal's index and its list.** The
+  index is a map, not a focus target: `[` and `]` already move by section,
+  and a second focus ring inside a modal that is itself a focus trap buys a
+  key and costs an explanation. If someone wants to click it one day, that
+  is when it needs focus.
+- **The modified dot is always `•`, never `*`.** The design asked for an
+  ASCII fallback on terminals without reliable Unicode. There is no
+  capability probe in this repository to hang that on, and inventing one for
+  a single glyph is the wrong place to start: the panel bar's indicators and
+  the tree's branches already assume the same character set.
 
 ## Consequences
 

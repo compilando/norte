@@ -96,11 +96,11 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
                 // no se puede buscar un corchete, que no aparece en el nombre
                 // de ningún ajuste.
                 KeyCode::Char('[') if plain => {
-                    salta_de_seccion(settings, -1);
+                    settings.step_section(-1);
                     SettingsKeyOutcome::None
                 }
                 KeyCode::Char(']') if plain => {
-                    salta_de_seccion(settings, 1);
+                    settings.step_section(1);
                     SettingsKeyOutcome::None
                 }
                 KeyCode::Char(c) if plain => {
@@ -169,30 +169,6 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
     }
 }
 
-/// Lleva el cursor a la sección anterior (`delta` negativo) o siguiente,
-/// saltándose las que el filtro dejó VACÍAS.
-///
-/// Saltárselas es lo que hace que la tecla sirva con un filtro puesto: una
-/// sección sin filas visibles no es un sitio al que ir, y parar en ella
-/// obligaría a pulsar dos veces sin que nada se mueva.
-fn salta_de_seccion(settings: &mut crate::app::Settings, delta: i32) {
-    let Some(&real) = settings.visible().get(settings.cursor()) else {
-        return;
-    };
-    let mut actual = settings.rows()[real].section;
-    let index = settings.sections();
-    while let Some(siguiente) = actual.step(delta) {
-        if index
-            .iter()
-            .any(|v| v.section == siguiente && v.visible > 0)
-        {
-            settings.jump_to(siguiente);
-            return;
-        }
-        actual = siguiente;
-    }
-}
-
 /// Quita la clave de un ajuste de la capa de escritura (`Ctrl+R`) y dice
 /// QUÉ pasó de verdad.
 ///
@@ -207,8 +183,12 @@ async fn reset_setting(app: &mut App, reset: norte_frontend::settings::PendingRe
         app.message = Some(t("msg-settings-no-config-dir"));
         return;
     };
-    let norte_frontend::settings::PendingReset { section, key, name } = reset;
-    let id = format!("{section}.{}", key.replace('_', "-"));
+    let norte_frontend::settings::PendingReset {
+        section,
+        key,
+        id,
+        name,
+    } = reset;
     // Las MISMAS capas con las que se escribe, perfil incluido: releer con
     // otras contestaría sobre una configuración que este proceso no usa.
     let capas = config::standard_layers_with_profile(app.active_profile.as_deref());
@@ -219,7 +199,7 @@ async fn reset_setting(app: &mut App, reset: norte_frontend::settings::PendingRe
             let sigue = config::load(&capas).ok().map(|cfg| {
                 norte_frontend::settings::build_rows(&cfg, &[])
                     .into_iter()
-                    .find(|r| r.id() == Some(id.as_str()))
+                    .find(|r| r.id() == Some(id))
                     .is_some_and(|r| r.modified)
             });
             (out, sigue)
@@ -374,76 +354,5 @@ mod settings_message_tests {
                 assert_ne!(t_in(lang, clave), clave, "falta «{clave}» en {lang:?}");
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod salto_tests {
-    use super::salta_de_seccion;
-    use crate::app::Settings;
-    use norte_frontend::settings::{Section, build_rows};
-
-    fn abiertos() -> Settings {
-        let cfg = crate::config::load(&norte_config::Layers { dirs: vec![] })
-            .expect("la config vacía carga");
-        Settings::new(build_rows(&cfg, &[]))
-    }
-
-    fn seccion(s: &Settings) -> Section {
-        s.rows()[s.visible()[s.cursor()]].section
-    }
-
-    #[test]
-    fn el_corchete_derecho_va_a_la_seccion_siguiente() {
-        let mut s = abiertos();
-        assert_eq!(seccion(&s), Section::Appearance);
-        salta_de_seccion(&mut s, 1);
-        assert_eq!(seccion(&s), Section::Panes);
-        salta_de_seccion(&mut s, -1);
-        assert_eq!(seccion(&s), Section::Appearance);
-    }
-
-    /// En el primer extremo no hay a dónde ir, y el cursor se queda: fingir
-    /// que da la vuelta es un cursor que se teletransporta.
-    #[test]
-    fn en_el_extremo_no_se_mueve() {
-        let mut s = abiertos();
-        salta_de_seccion(&mut s, -1);
-        assert_eq!(s.cursor(), 0);
-    }
-
-    /// Una sección que el filtro dejó vacía NO es un sitio al que ir: el
-    /// salto la atraviesa, y si no queda ninguna con filas, no se mueve.
-    /// Parar en una vacía obligaría a pulsar dos veces sin que nada pase.
-    #[test]
-    fn las_secciones_vacias_se_saltan() {
-        let mut s = abiertos();
-        // «theme» solo deja filas en Apariencia — ni siquiera la nota de
-        // Plugins, cuyo heno no lleva esa palabra.
-        for c in "theme".chars() {
-            s.push_char(c);
-        }
-        assert_eq!(seccion(&s), Section::Appearance);
-        let antes = s.cursor();
-        salta_de_seccion(&mut s, 1);
-        assert_eq!(
-            s.cursor(),
-            antes,
-            "no queda ninguna sección con filas: el cursor se queda donde está"
-        );
-    }
-
-    /// Y sin filtro, el recorrido entero llega hasta la última y para.
-    #[test]
-    fn el_recorrido_llega_al_final_y_para() {
-        let mut s = abiertos();
-        for _ in 0..Section::ORDER.len() * 2 {
-            salta_de_seccion(&mut s, 1);
-        }
-        assert_eq!(
-            seccion(&s),
-            Section::Plugins,
-            "la última con filas es Plugins (las rutas no están en el terminal)"
-        );
     }
 }

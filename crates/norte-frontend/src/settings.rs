@@ -263,7 +263,10 @@ impl Query {
         // ningún sitio.
         for token in raw.split(|b| *b == b' ').filter(|t| !t.is_empty()) {
             let texto = String::from_utf8_lossy(token);
-            if texto == "@modified" {
+            // Plegado, como todo lo demás de esta pantalla: `@Modified` y
+            // `@MODIFIED` son lo mismo, y dos operadores con dos reglas de
+            // comparación es una trampa.
+            if crate::nav::fold(token) == "@modified" {
                 q.only_modified = true;
             } else if let Some(nombre) = texto.strip_prefix("@section:") {
                 match section_by_name(nombre) {
@@ -294,19 +297,32 @@ impl Query {
 }
 
 /// La sección cuyo nombre estable, o cuyo rótulo en CUALQUIERA de los dos
-/// idiomas, casa con `nombre` (plegando acentos y mayúsculas).
+/// idiomas, EMPIEZA por `nombre` (plegando acentos y mayúsculas).
+///
+/// Por prefijo y no por igualdad, por dos motivos que son el mismo: la
+/// consulta se trocea por espacios, así que `@section:abrir con` solo trae
+/// `abrir` —y cinco de las siete secciones tienen el rótulo de dos palabras,
+/// o sea que con igualdad eran inalcanzables—, y quien teclea espera ver el
+/// efecto según escribe, no al poner la última letra.
+///
+/// Ambigüedad: gana la primera de [`Section::ORDER`], que es el orden de la
+/// pantalla. Ninguna pareja de rótulos comparte prefijo hoy en ninguno de
+/// los dos idiomas.
 fn section_by_name(nombre: &str) -> Option<Section> {
     let buscado = crate::nav::fold(nombre.as_bytes());
     if buscado.is_empty() {
         return None;
     }
     Section::ORDER.iter().copied().find(|s| {
-        if crate::nav::fold(s.stable_key().as_bytes()) == buscado {
+        if crate::nav::fold(s.stable_key().as_bytes()).starts_with(&buscado) {
             return true;
         }
         [norte_i18n::Lang::Es, norte_i18n::Lang::En]
             .into_iter()
-            .any(|l| crate::nav::fold(norte_i18n::t_in(l, s.label_key()).as_bytes()) == buscado)
+            .any(|l| {
+                crate::nav::fold(norte_i18n::t_in(l, s.label_key()).as_bytes())
+                    .starts_with(&buscado)
+            })
     })
 }
 
@@ -777,8 +793,13 @@ pub struct Row {
     /// Va en la fila y no se re-deriva del id en cada frontend: dos cuentas
     /// de «dónde va esto» son dos pantallas que se desordenan por separado.
     pub section: Section,
-    /// El valor efectivo NO es el de fábrica — el punto de «esto lo has
-    /// tocado tú».
+    /// El valor efectivo NO es el de fábrica.
+    ///
+    /// «No es el de fábrica», y no «lo has tocado tú»: una clave que solo
+    /// fija la capa del sistema enciende el punto sin que el lector haya
+    /// hecho nada, y una que escribió a mano con el valor que ya traía no lo
+    /// enciende. La etiqueta de la pantalla dice lo primero, que es lo que
+    /// esto mide.
     ///
     /// Falso siempre para una fila que no sale del catálogo: no hay valor
     /// de fábrica con el que compararla.
@@ -973,6 +994,14 @@ pub struct PendingReset {
     pub section: &'static str,
     /// La clave dentro de esa sección (`snake_case`, ya convertida).
     pub key: String,
+    /// El id del catálogo (`ui.theme`), para volver a encontrar la fila
+    /// después de releer.
+    ///
+    /// Viaja porque la vuelta —de `(section, key)` al id— NO es una
+    /// biyección: un id futuro con `_` volvería con `-` y no casaría con
+    /// ninguna fila, y quien busca contestaría «vuelve al valor de fábrica»
+    /// para todo, que es la respuesta equivocada y muda.
+    pub id: &'static str,
     /// El nombre traducido del ajuste, para el aviso.
     pub name: String,
 }
@@ -1264,6 +1293,32 @@ impl SettingsState {
             .collect()
     }
 
+    /// Lleva el cursor a la sección anterior (`delta` negativo) o siguiente,
+    /// SALTÁNDOSE las que el filtro dejó vacías. Devuelve a cuál fue, o
+    /// `None` si no había ninguna con filas hacia ese lado.
+    ///
+    /// Vive aquí y no en cada frontend porque las dos pantallas tienen que
+    /// moverse igual: con el recorrido escrito dos veces, la octava sección
+    /// —o un cambio de orden— las separa en silencio y solo una tiene test.
+    /// Saltarse las vacías es lo que hace que la tecla sirva con un filtro
+    /// puesto: parar en una obligaría a pulsar dos veces sin que nada pase.
+    pub fn step_section(&mut self, delta: i32) -> Option<Section> {
+        let &real = self.visible.get(self.cursor)?;
+        let mut actual = self.rows[real].section;
+        let index = self.sections();
+        while let Some(siguiente) = actual.step(delta) {
+            if index
+                .iter()
+                .any(|v| v.section == siguiente && v.visible > 0)
+            {
+                self.jump_to(siguiente);
+                return Some(siguiente);
+            }
+            actual = siguiente;
+        }
+        None
+    }
+
     /// Lleva el cursor a la primera fila visible de `section`.
     ///
     /// Una sección sin filas visibles no mueve nada: un salto que aterriza
@@ -1444,6 +1499,7 @@ impl SettingsState {
         Some(PendingReset {
             section,
             key,
+            id,
             name: row.name.clone(),
         })
     }
@@ -2284,6 +2340,46 @@ mod tests {
         }
     }
 
+    /// CADA sección, en los DOS idiomas, por su rótulo entero y por un
+    /// prefijo. Cinco de las siete tienen el rótulo de dos palabras, y la
+    /// consulta se trocea por espacios: con igualdad exacta eran
+    /// inencontrables, y el test que solo probaba «apariencia» —la única de
+    /// una palabra en ambos idiomas— no lo veía.
+    #[test]
+    fn cada_seccion_se_encuentra_por_su_rotulo_en_los_dos_idiomas() {
+        for s in Section::ORDER {
+            let mut consultas = vec![s.stable_key().to_owned()];
+            for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+                let rotulo = norte_i18n::t_in(lang, s.label_key());
+                // La primera palabra: es lo que sobrevive al troceo.
+                let primera = rotulo.split(' ').next().unwrap_or(&rotulo).to_owned();
+                consultas.push(primera);
+            }
+            for q in consultas {
+                assert_eq!(
+                    section_by_name(&q),
+                    Some(*s),
+                    "«{q}» tenía que llevar a {s:?}"
+                );
+            }
+        }
+    }
+
+    /// Y el otro operador se compara igual: plegado. Dos operadores con dos
+    /// reglas de mayúsculas es una trampa.
+    #[test]
+    fn el_operador_modified_no_distingue_mayusculas() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_theme = Some("nord".to_owned());
+        for q in ["@modified", "@Modified", "@MODIFIED"] {
+            let mut s = SettingsState::new(build_rows(&cfg, &[]));
+            for c in q.chars() {
+                s.push_char(c);
+            }
+            assert_eq!(s.shown(), 1, "«{q}»");
+        }
+    }
+
     #[test]
     fn los_operadores_se_combinan_con_el_texto() {
         let mut cfg = cfg_vacia();
@@ -2359,6 +2455,41 @@ mod tests {
         assert_eq!(fila.section, Section::Input);
         // Y es la PRIMERA de la sección, no una cualquiera.
         assert!(s.cursor() == 0 || s.rows()[s.visible()[s.cursor() - 1]].section != Section::Input);
+    }
+
+    /// El recorrido de secciones, que es el MISMO en las dos pantallas.
+    #[test]
+    fn el_paso_de_seccion_va_y_vuelve() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        let seccion = |s: &SettingsState| s.rows()[s.visible()[s.cursor()]].section;
+        assert_eq!(seccion(&s), Section::Appearance);
+        assert_eq!(s.step_section(1), Some(Section::Panes));
+        assert_eq!(seccion(&s), Section::Panes);
+        assert_eq!(s.step_section(-1), Some(Section::Appearance));
+    }
+
+    /// En el extremo no hay a dónde ir y el cursor se queda: fingir que da
+    /// la vuelta es un cursor que se teletransporta.
+    #[test]
+    fn el_paso_de_seccion_para_en_el_extremo() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        assert_eq!(s.step_section(-1), None);
+        assert_eq!(s.cursor(), 0);
+    }
+
+    /// Una sección que el filtro vació se ATRAVIESA, y si no queda ninguna
+    /// con filas, no se mueve nada.
+    #[test]
+    fn el_paso_de_seccion_se_salta_las_vacias() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        // «theme» solo deja filas en Apariencia — ni la nota de Plugins,
+        // cuyo heno no lleva esa palabra.
+        for c in "theme".chars() {
+            s.push_char(c);
+        }
+        let antes = s.cursor();
+        assert_eq!(s.step_section(1), None);
+        assert_eq!(s.cursor(), antes);
     }
 
     #[test]

@@ -2321,11 +2321,15 @@ enum Pendiente {
     /// pregunta es «¿cómo está la pantalla?», que solo tiene sentido AHORA.
     GuardarPerfil,
     /// El valor de una entrada de TEXTO de los ajustes (F11). Lo que se
-    /// teclea es el valor; `fila` es sobre qué entrada se preguntó, porque el
-    /// cursor de los ajustes puede haberse movido con el diálogo delante.
+    /// teclea es el valor; `id` es sobre qué entrada se preguntó.
+    ///
+    /// Un ID y no una fila: el cursor puede moverse con el diálogo delante,
+    /// y el buscador de detrás puede cambiar qué filas hay — una posición
+    /// deja de nombrar la misma entrada, y confirmar escribiría el valor en
+    /// otra.
     EditarAjuste {
-        /// La fila PLANA de los ajustes sobre la que se preguntó.
-        fila: usize,
+        /// El id del catálogo sobre el que se preguntó.
+        id: &'static str,
     },
     /// Crear un directorio dentro de este otro. El nombre lo teclea el
     /// usuario y se valida al confirmar, no al teclear: corregir un nombre a

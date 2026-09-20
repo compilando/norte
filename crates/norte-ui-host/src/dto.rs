@@ -780,8 +780,7 @@ pub struct SettingsView {
 }
 
 /// Una sección en el índice de los ajustes.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SectionIndexView {
     /// Su clave ESTABLE (`appearance`, `open-with`…): una identidad, no algo
     /// que se pinte. Es lo que vuelve en `settings_jump_section`, y por eso

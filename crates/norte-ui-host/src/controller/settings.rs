@@ -38,7 +38,7 @@ pub(super) struct AjusteRestablecido {
     /// Cómo se llama la entrada, ya traducido, para el mensaje.
     pub(super) nombre: String,
     /// Su id del catálogo (`ui.theme`), para volver a encontrar la fila.
-    pub(super) id: String,
+    pub(super) id: &'static str,
     /// `Err` es la clave del motivo por el que no se quitó.
     pub(super) resultado: Result<Option<norte_frontend::config::FrontendConfig>, &'static str>,
 }
@@ -96,10 +96,20 @@ impl Estado {
     }
 
     /// Lo que se ha escrito en el buscador.
+    ///
+    /// Con un diálogo delante, NO: el mismo guard que `activar_ajuste`, y
+    /// por un motivo peor. El prompt del valor se queda abierto con la
+    /// pantalla viva detrás, y filtrar debajo de él cambia qué filas hay —
+    /// lo que el diálogo confirme se busca por id, así que ya no escribe en
+    /// otra, pero la pantalla cambiando bajo un modal es lo que hace que
+    /// nadie entienda dónde acabó el valor.
     pub(super) fn buscar_ajuste(
         &mut self,
         texto: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !self.dialogos.is_empty() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
         let Some(a) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
@@ -115,6 +125,9 @@ impl Estado {
         &mut self,
         seccion: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !self.dialogos.is_empty() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
         let Some(a) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
@@ -137,6 +150,9 @@ impl Estado {
         row: u32,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !self.dialogos.is_empty() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
         let Some(a) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
@@ -154,8 +170,12 @@ impl Estado {
         };
         let capas = self.capas_actuales();
         let buzon = buzon.clone();
-        let norte_frontend::settings::PendingReset { section, key, name } = reset;
-        let id = format!("{section}.{}", key.replace('_', "-"));
+        let norte_frontend::settings::PendingReset {
+            section,
+            key,
+            id,
+            name,
+        } = reset;
         tokio::task::spawn_blocking(move || {
             let resultado = match norte_config::persist_unset(&dir, section, &key) {
                 // El error NO viaja: puede llevar la ruta del fichero (#73).
@@ -202,7 +222,7 @@ impl Estado {
         let sigue = self
             .ajustes
             .as_ref()
-            .is_some_and(|a| a.sigue_modificada(&id));
+            .is_some_and(|a| a.sigue_modificada(id));
         let clave = if sigue {
             "settings-still-set-elsewhere"
         } else {
@@ -297,11 +317,9 @@ impl Estado {
                     None => (self.aplicada(), salidas),
                 }
             }
-            crate::settings::Activacion::PedirTexto {
-                nombre,
-                actual,
-                fila,
-            } => self.pedir_valor_de_ajuste(&nombre, actual, fila),
+            crate::settings::Activacion::PedirTexto { nombre, actual, id } => {
+                self.pedir_valor_de_ajuste(&nombre, actual, id)
+            }
         }
     }
 
@@ -314,7 +332,7 @@ impl Estado {
         &mut self,
         nombre: &str,
         actual: String,
-        fila: usize,
+        ajuste: &'static str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
@@ -357,7 +375,7 @@ impl Estado {
             vista,
             tecleado: Tecleado::Texto(actual),
             reconocido: true,
-            al_confirmar: Some(Pendiente::EditarAjuste { fila }),
+            al_confirmar: Some(Pendiente::EditarAjuste { id: ajuste }),
         });
         let cambio = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
@@ -372,7 +390,7 @@ impl Estado {
     /// vuelve al acuse por su clave, sin escribir nada.
     pub(super) fn confirmar_valor_de_ajuste(
         &mut self,
-        fila: usize,
+        id: &'static str,
         texto: &str,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -384,7 +402,7 @@ impl Estado {
                 self.decir("host-settings-closed"),
             );
         };
-        match a.confirmar_texto(fila, texto) {
+        match a.confirmar_texto(id, texto) {
             Ok(write) => {
                 let cambio = ViewChange::Settings {
                     settings: self.vista_ajustes(),

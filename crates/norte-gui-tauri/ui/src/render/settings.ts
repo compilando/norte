@@ -32,6 +32,13 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   // el host manda un parche.
   const previo = this.settingsRoot.querySelector(".settings-rows");
   const scroll = previo instanceof HTMLElement ? previo.scrollTop : 0;
+  // El foco, ANTES de tocar nada. Mover la barra a la caja nueva ya saca el
+  // campo del DOM un instante, y eso lo desenfoca: mirarlo después sería
+  // mirar siempre «no lo tenía».
+  const campo = this.settingsBarra?.querySelector(".settings-search");
+  const enfocado = campo instanceof HTMLInputElement && document.activeElement === campo;
+  const caret: [number | null, number | null] =
+    campo instanceof HTMLInputElement ? [campo.selectionStart, campo.selectionEnd] : [null, null];
   this.settingsRoot.dataset["open"] = "true";
   const caja = document.createElement("section");
   caja.className = "settings";
@@ -46,20 +53,37 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   // El buscador. Un `<input>` de verdad y no una tecla que viaje: las
   // imprimibles no llegan al host, que es por lo que esta pantalla no tuvo
   // filtro hasta ahora.
-  const barra = document.createElement("div");
-  barra.className = "settings-search-bar";
-  const buscar = document.createElement("input");
-  buscar.className = "settings-search";
-  buscar.type = "search";
-  buscar.value = settings.query;
-  buscar.setAttribute("aria-label", this.t("settings-title"));
-  buscar.addEventListener("input", () => {
-    this.send({ action: "settings_query", text: buscar.value });
-  });
-  const cuenta = document.createElement("span");
-  cuenta.className = "settings-count";
-  cuenta.textContent = `${String(settings.shown)} / ${String(settings.total)}`;
-  barra.append(buscar, cuenta);
+  //
+  // Se REUSA entre pintadas. Cada tecla provoca un parche del host, o sea un
+  // repintado: un campo que se recreara se destruiría con el primer carácter
+  // y se llevaría el foco y el caret. Mismo fallo y misma cura que el filtro
+  // del registro y el campo de un diálogo.
+  let barra = this.settingsBarra;
+  if (barra === null) {
+    barra = document.createElement("div");
+    barra.className = "settings-search-bar";
+    const nuevo = document.createElement("input");
+    nuevo.className = "settings-search";
+    nuevo.type = "search";
+    nuevo.setAttribute("aria-label", this.t("settings-title"));
+    nuevo.addEventListener("input", () => {
+      this.send({ action: "settings_query", text: nuevo.value });
+    });
+    const cuantas = document.createElement("span");
+    cuantas.className = "settings-count";
+    barra.append(nuevo, cuantas);
+    this.settingsBarra = barra;
+  }
+  const buscar = barra.querySelector(".settings-search");
+  // Resembrarlo mientras se escribe en él devolvería la proyección del host
+  // encima de lo que el lector está tecleando.
+  if (buscar instanceof HTMLInputElement && !enfocado) {
+    buscar.value = settings.query;
+  }
+  const cuenta = barra.querySelector(".settings-count");
+  if (cuenta instanceof HTMLElement) {
+    cuenta.textContent = `${String(settings.shown)} / ${String(settings.total)}`;
+  }
   caja.append(barra);
 
   const cuerpo = document.createElement("div");
@@ -177,7 +201,17 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   lista.setAttribute("aria-activedescendant", `settings-row-${String(settings.cursor)}`);
   cuerpo.append(lista);
   caja.append(cuerpo);
+  // Conservar el nodo NO basta: moverlo a la caja nueva lo saca del DOM un
+  // instante, y eso ya lo desenfoca. Se le devuelve el foco —y el caret—
+  // que tenía al empezar. Es la misma cura que el campo de un diálogo
+  // necesitó por lo mismo.
   this.settingsRoot.replaceChildren(caja);
+  if (enfocado && buscar instanceof HTMLInputElement) {
+    buscar.focus();
+    if (caret[0] !== null && caret[1] !== null) {
+      buscar.setSelectionRange(caret[0], caret[1]);
+    }
+  }
   lista.scrollTop = scroll;
   revelar(objetivoRevelado(lista, settings.cursor));
 }

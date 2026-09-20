@@ -107,8 +107,14 @@ pub(crate) enum Activacion {
         nombre: String,
         /// Qué dice ahora.
         actual: String,
-        /// Sobre qué fila PLANA se preguntó, para volver a ella al confirmar.
-        fila: usize,
+        /// SOBRE QUÉ se preguntó, por su id del catálogo.
+        ///
+        /// Un id y no un número de fila: el diálogo se queda abierto
+        /// mientras el buscador de detrás sigue vivo, y una posición deja de
+        /// nombrar la misma fila en cuanto el filtro cambia — confirmar
+        /// escribiría el valor tecleado en OTRO ajuste. Una posición no
+        /// nombra una fila en una lista que se mueve.
+        id: &'static str,
     },
 }
 
@@ -208,12 +214,24 @@ impl Ajustes {
             }
             return;
         }
-        let antes = self.estado.cursor();
-        self.estado.jump_to(seccion);
-        let ahora = self.estado.cursor();
-        if ahora != antes || self.estado.shown() > 0 {
-            self.cursor = ahora;
-        }
+        // Se decide con la PROYECCIÓN, no comparando el cursor del editor
+        // antes y después: ese cursor y el de esta ventana son dos, y solo
+        // `activar` los sincroniza — así que «no se movió» no significaba
+        // nada, y saltar a una sección vacía movía el cursor a la primera
+        // fila de la lista.
+        let Some(vista) = self
+            .estado
+            .sections()
+            .into_iter()
+            .find(|v| v.section == seccion)
+        else {
+            return;
+        };
+        let Some(primera) = vista.first_row else {
+            return; // Vacía por el filtro: no es un sitio al que ir.
+        };
+        self.estado.set_cursor(primera);
+        self.cursor = primera;
     }
 
     /// ¿La fila de este id sigue diciendo que no es de fábrica?
@@ -264,33 +282,45 @@ impl Ajustes {
         // misma fila, y un diálogo cancelado no deja nada que cerrar.
         let actual = self.estado.edit_buffer().unwrap_or_default().to_owned();
         self.estado.edit_cancel();
-        let nombre = self.estado.rows()[fila].name.clone();
-        Activacion::PedirTexto {
-            nombre,
-            actual,
-            fila,
-        }
+        // Por `visible[fila]`, no por `fila`: `fila` es una posición entre
+        // las VISIBLES, y con filtro puesto indexar `rows()` con ella daba
+        // el nombre de otro ajuste — el diálogo decía «Tema» y escribía el
+        // editor.
+        let real = self.estado.visible()[fila];
+        let fila_actual = &self.estado.rows()[real];
+        let nombre = fila_actual.name.clone();
+        let Some(id) = fila_actual.id() else {
+            return Activacion::Nada;
+        };
+        Activacion::PedirTexto { nombre, actual, id }
     }
 
-    /// El valor que el diálogo trajo para la fila `fila`.
+    /// El valor que el diálogo trajo para el ajuste `id`.
     ///
     /// Vuelve a entrar en la edición de esa fila, pone el texto entero y
     /// confirma: la validación —rango de un entero, forma de una línea de
     /// órdenes— es la del editor compartido, no una copia.
     ///
+    /// Se busca POR ID y no por posición: el buscador de detrás sigue vivo
+    /// mientras el diálogo está abierto, y una posición deja de nombrar la
+    /// misma fila en cuanto el filtro cambia.
+    ///
     /// # Errors
-    /// Lo que el editor rechaza, sin escribir nada. Una fila que ya no pide
-    /// texto —el registro cambió bajo el diálogo— se rechaza como un entero
-    /// inválido: es el fallo inerte del editor, y no hay nada que escribir.
+    /// Lo que el editor rechaza, sin escribir nada. Un ajuste que ya no está
+    /// visible —el filtro cambió bajo el diálogo— o que ya no pide texto se
+    /// rechaza como un entero inválido: es el fallo inerte del editor, y no
+    /// hay nada que escribir.
     pub(crate) fn confirmar_texto(
         &mut self,
-        fila: usize,
+        id: &str,
         texto: &str,
     ) -> Result<PendingWrite, SettingsEditError> {
-        // La fila viaja PLANA en el diálogo, como salió: se vuelve a
-        // traducir a visible aquí, porque el filtro puede haber cambiado
-        // mientras el diálogo estaba abierto.
-        let Some(visible) = self.fila_visible(fila) else {
+        let Some(visible) = self
+            .estado
+            .visible()
+            .iter()
+            .position(|&i| self.estado.rows()[i].id() == Some(id))
+        else {
             return Err(SettingsEditError::NotAnInt);
         };
         self.estado.set_cursor(visible);

@@ -2812,6 +2812,24 @@ describe("los ajustes", () => {
     expect(enviadas.at(-1)).toEqual({ action: "settings_query", text: "fuente" });
   });
 
+  it("el buscador conserva el foco y el caret entre repintados", () => {
+    const { screen } = montar();
+    screen.paint(conAjustes());
+    const caja = document.querySelector(".settings-search") as HTMLInputElement;
+    caja.focus();
+    expect(document.activeElement).toBe(caja);
+    caja.value = "fue";
+    caja.setSelectionRange(3, 3);
+    // El host contesta a cada tecla con un parche, o sea un repintado. Si el
+    // campo se recreara, el lector no podría escribir más de una letra.
+    screen.paint(conAjustes());
+    const despues = document.querySelector(".settings-search") as HTMLInputElement;
+    expect(despues).toBe(caja);
+    expect(document.activeElement).toBe(despues);
+    expect(despues.value).toBe("fue");
+    expect(despues.selectionStart).toBe(3);
+  });
+
   it("una fila tocada lleva punto y botón de restablecer", () => {
     const { screen, enviadas } = montar();
     screen.paint(conAjustes());
