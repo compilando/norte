@@ -471,6 +471,30 @@ pub enum UiAction {
         /// Fila, contando TODAS las de todas las secciones en orden.
         row: u32,
     },
+    /// Lo que hay escrito en el buscador de los ajustes.
+    ///
+    /// Viaja el TEXTO entero y no la tecla: el buscador de esta ventana es
+    /// un `<input>` del navegador, y las teclas imprimibles no llegan al
+    /// host — que es por lo que esta pantalla no tuvo filtro hasta ahora.
+    SettingsQuery {
+        /// El texto tal y como está en la caja.
+        text: String,
+    },
+    /// Lleva el cursor a una sección, por su clave ESTABLE (`appearance`,
+    /// `open-with`…).
+    ///
+    /// Por la clave y no por el rótulo traducido: el índice manda de vuelta
+    /// lo que el host le dio, y un rótulo viajando de ida y vuelta ataría el
+    /// salto al idioma.
+    SettingsJumpSection {
+        /// La clave estable de la sección, de `index` de la vista.
+        section: String,
+    },
+    /// Restablece esa fila: quita su clave de la capa de escritura.
+    SettingsReset {
+        /// Fila, contando TODAS las de todas las secciones en orden.
+        row: u32,
+    },
     /// Pone delante la pestaña de este hueco (un click).
     SelectTab {
         /// El hueco que hay dentro de la pestaña elegida.

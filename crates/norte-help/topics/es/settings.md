@@ -33,6 +33,36 @@ pantalla escribió lo que le pediste, y el fichero más específico sigue ganand
 
 > 💡 Unas pocas opciones solo hacen efecto al reiniciar —una fuente, un idioma—. Su fila lo dice, en vez de fingir que el cambio aterrizó.
 
+# Moverse por la pantalla
+
+Los ajustes están repartidos en secciones: apariencia, paneles y listado,
+abrir con, teclado y ratón, comportamiento, plugins, y dónde vive cada cosa.
+El rótulo de la sección en la que estás se queda clavado arriba mientras te
+desplazas, y a la izquierda hay un índice con cuántas opciones se ven de cada
+una — una sección que tu búsqueda vació sigue en el índice, apagada.
+
+| Tecla | Qué hace |
+|-------|----------|
+| `[` y `]` | sección anterior / siguiente, saltándose las vacías |
+| `ctrl+r` | restablecer la opción del cursor |
+| `ctrl+k` | el editor de atajos |
+
+Escribir filtra. Dos operadores estrechan más: `@modified` deja solo lo que no
+está en su valor de fábrica, y `@section:apariencia` (o `@section:appearance`,
+que vale igual) se queda con una sección. Se combinan entre ellos y con el
+texto. Una arroba que no abre operador es texto normal.
+
+En la ventana, el índice se pincha y el buscador es una caja de texto.
+
+# Restablecer, y lo que no puede hacer
+
+Un punto delante del nombre significa «esto no es el valor de fábrica».
+`ctrl+r` —o el botón de la fila, en la ventana— **quita la clave de tu
+fichero**, que no es lo mismo que poner el valor por defecto: si una capa de
+abajo fija la misma clave, el valor cambia y sigue sin ser el de fábrica. El
+punto se queda encendido y la barra te lo dice, en vez de dejarte creyendo
+que no funcionó.
+
 # Temas
 
 {{cmd:app.theme}} lista los temas y previsualiza el resaltado según te mueves:

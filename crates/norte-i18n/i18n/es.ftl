@@ -804,10 +804,25 @@ msg-palette-no-help = ninguna página de la ayuda documenta este comando todaví
 # paleta de arriba (decisión 8): la búsqueda está SIEMPRE activa, Enter
 # togglea/cicla/edita.
 settings-title = Ajustes
-settings-hint = [↑/↓/pgup/pgdn] navegar · [enter] editar · [esc] cerrar
+settings-hint = [[/]] sección · [enter] editar · [ctrl+r] restablecer · [esc] cerrar
+
 settings-edit-hint = [enter] guardar · [esc] cancelar
+# obsoleta: las 33 entradas vivían aquí. Se borra en el ciclo siguiente.
 settings-section-general = General
+settings-section-appearance = Apariencia
+settings-section-panes = Paneles y listado
+settings-section-open-with = Abrir con
+settings-section-input = Teclado y ratón
+settings-section-behavior = Comportamiento
 settings-section-plugins = Plugins
+settings-count = {$shown} de {$total}
+settings-modified = no es el valor de fábrica
+settings-reset = Restablecer
+settings-reset-done = «{$name}» vuelve al valor de fábrica
+# Quitar la clave de TU capa no siempre devuelve el valor de fábrica: si el
+# perfil o el proyecto fijan la misma, el valor cambia y sigue sin ser el
+# defecto. Se dice, en vez de dejar al lector creyendo que no funcionó.
+settings-still-set-elsewhere = «{$name}» sigue fijado por otra capa (perfil o proyecto): no vuelve al valor de fábrica
 settings-plugins-name = Ajustes de plugins
 settings-plugins-note = Ningún plugin instalado declara ajustes configurables.
 settings-plugins-open-hint = [enter] abrir los ajustes de este plugin

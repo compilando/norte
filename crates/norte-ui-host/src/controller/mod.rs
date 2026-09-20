@@ -973,6 +973,8 @@ enum Fondo {
     /// releída con él. En caja porque una `FrontendConfig` es grande al lado
     /// del resto del enum.
     AjusteEscrito(Box<settings::AjusteEscrito>),
+    /// Una clave de F11 ya no está en el `norte.toml` — restablecida.
+    AjusteRestablecido(Box<settings::AjusteRestablecido>),
     /// El catálogo que pidió la PALETA, para sus filas de plugin.
     PluginsDePaleta(u64, Result<norte_proto::methods::PluginListResult, Error>),
     /// Un cambio de gobierno (aprobar/revocar, encender/apagar) contestó.
@@ -2319,11 +2321,15 @@ enum Pendiente {
     /// pregunta es «¿cómo está la pantalla?», que solo tiene sentido AHORA.
     GuardarPerfil,
     /// El valor de una entrada de TEXTO de los ajustes (F11). Lo que se
-    /// teclea es el valor; `fila` es sobre qué entrada se preguntó, porque el
-    /// cursor de los ajustes puede haberse movido con el diálogo delante.
+    /// teclea es el valor; `id` es sobre qué entrada se preguntó.
+    ///
+    /// Un ID y no una fila: el cursor puede moverse con el diálogo delante,
+    /// y el buscador de detrás puede cambiar qué filas hay — una posición
+    /// deja de nombrar la misma entrada, y confirmar escribiría el valor en
+    /// otra.
     EditarAjuste {
-        /// La fila PLANA de los ajustes sobre la que se preguntó.
-        fila: usize,
+        /// El id del catálogo sobre el que se preguntó.
+        id: &'static str,
     },
     /// Crear un directorio dentro de este otro. El nombre lo teclea el
     /// usuario y se valida al confirmar, no al teclear: corregir un nombre a
@@ -3890,6 +3896,9 @@ impl Estado {
             UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
             UiAction::SettingsActivate { row } => self.activar_ajuste_por_raton(*row, buzon),
+            UiAction::SettingsQuery { text } => self.buscar_ajuste(text),
+            UiAction::SettingsJumpSection { section } => self.saltar_a_seccion(section),
+            UiAction::SettingsReset { row } => self.restablecer_ajuste(*row, buzon),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
             UiAction::ExtensionGovern { row, id, change } => {
                 self.gobernar_por_raton(*row, id, (*change).into(), backend, buzon)

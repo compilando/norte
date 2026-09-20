@@ -3097,6 +3097,61 @@ pub(super) async fn host_con_capas(
     host_con_capas_y_favoritos(dir_usuario, Vec::new()).await
 }
 
+/// Un host con DOS capas: sistema debajo, usuario encima.
+///
+/// Lo pide «restablecer»: quitar la clave de la capa del usuario no devuelve
+/// el valor de fábrica si la de abajo fija la misma, y eso no se puede
+/// comprobar con una sola capa. La configuración de arranque se toma del
+/// tema que el usuario escribió, que es lo que la ventana tendría puesto.
+pub(super) async fn host_con_capas_apiladas(
+    dir_sistema: &std::path::Path,
+    dir_usuario: &std::path::Path,
+) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
+    let mut ajustes = ajustes_de_prueba();
+    ajustes.common.ui_theme = Some("tokyonight".to_owned());
+    UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        attach: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes,
+        paths: HostPaths {
+            config_layers: vec![
+                (
+                    ConfigLayer::System,
+                    HostPath {
+                        path: dir_sistema.to_path_buf(),
+                        missing: false,
+                    },
+                ),
+                (
+                    ConfigLayer::User,
+                    HostPath {
+                        path: dir_usuario.to_path_buf(),
+                        missing: false,
+                    },
+                ),
+            ],
+            ..HostPaths::default()
+        },
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca")
+}
+
 /// El mismo, con favoritos YA cargados: la ventana los lee al arrancar, así
 /// que un test que solo escriba el `norte.toml` monta un host que no los ve.
 pub(super) async fn host_con_capas_y_favoritos(

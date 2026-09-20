@@ -22,14 +22,98 @@
 use crate::config::FrontendConfig;
 use norte_i18n::t;
 
-/// Which group of the settings UI an entry renders under.
+/// Bajo qué grupo de la pantalla de ajustes se pinta una entrada.
+///
+/// Nació con dos variantes —`General` y `Plugins`— y una de las dos ni
+/// siquiera aparecía en [`catalog`]: las 33 entradas eran `General`, así que
+/// la pantalla se leía como una lista plana con un rótulo encima. El orden
+/// de [`Self::ORDER`] es el de la pantalla, y es deliberado: lo que se toca
+/// el primer día arriba, lo que es diagnóstico abajo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
-    /// The curated list in [`catalog`].
-    General,
+    /// Tema, fuentes y lo que se ve.
+    Appearance,
+    /// Qué enseña un panel y qué cromo lo rodea.
+    Panes,
+    /// Con qué programa se abre un fichero.
+    OpenWith,
+    /// Teclado y ratón.
+    Input,
+    /// Lo que norte hace sin que se lo pidan.
+    Behavior,
     /// Built from an approved plugin's manifest (S3/S4) — no entries of this
     /// kind live in [`catalog`] itself.
     Plugins,
+    /// Las ubicaciones (configuración, estado, logs, socket). Tampoco sale
+    /// del catálogo: la proyecta quien hospeda. Es una sección del MODELO
+    /// para que el índice la liste como una más y para que la terminal la
+    /// gane sin copiar la proyección de la ventana.
+    Paths,
+}
+
+impl Section {
+    /// Las secciones en el orden en el que se pintan.
+    pub const ORDER: &'static [Section] = &[
+        Section::Appearance,
+        Section::Panes,
+        Section::OpenWith,
+        Section::Input,
+        Section::Behavior,
+        Section::Plugins,
+        Section::Paths,
+    ];
+
+    /// Su nombre ESTABLE, sin traducir.
+    ///
+    /// Lo acepta `@section:` en cualquier idioma, y es lo que viaja por el
+    /// puente hacia la ventana: un fichero de traducción a medias no puede
+    /// volver una sección inencontrable ni romper un salto.
+    ///
+    /// ```
+    /// use norte_frontend::settings::Section;
+    /// assert_eq!(Section::OpenWith.stable_key(), "open-with");
+    /// ```
+    #[must_use]
+    pub fn stable_key(self) -> &'static str {
+        match self {
+            Section::Appearance => "appearance",
+            Section::Panes => "panes",
+            Section::OpenWith => "open-with",
+            Section::Input => "input",
+            Section::Behavior => "behavior",
+            Section::Plugins => "plugins",
+            Section::Paths => "paths",
+        }
+    }
+
+    /// La clave Fluent de su rótulo, derivada de [`Self::stable_key`]: dos
+    /// listas de nombres es una lista que se desincroniza.
+    ///
+    /// ```
+    /// use norte_frontend::settings::Section;
+    /// assert_eq!(Section::Appearance.label_key(), "settings-section-appearance");
+    /// ```
+    #[must_use]
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Section::Appearance => "settings-section-appearance",
+            Section::Panes => "settings-section-panes",
+            Section::OpenWith => "settings-section-open-with",
+            Section::Input => "settings-section-input",
+            Section::Behavior => "settings-section-behavior",
+            Section::Plugins => "settings-section-plugins",
+            Section::Paths => "settings-section-paths",
+        }
+    }
+
+    /// La sección anterior/siguiente en [`Self::ORDER`], sin dar la vuelta.
+    #[must_use]
+    pub fn step(self, delta: i32) -> Option<Section> {
+        let pos = Section::ORDER.iter().position(|s| *s == self)?;
+        let destino = i32::try_from(pos).ok()?.checked_add(delta)?;
+        let destino = usize::try_from(destino).ok()?;
+        Section::ORDER.get(destino).copied()
+    }
 }
 
 /// The editing widget a setting needs, and (for [`Self::Enum`]) its valid
@@ -96,13 +180,220 @@ pub struct SettingDef {
     /// across releases: it is also the seed for the Fluent key pair via
     /// [`fluent_name_id`]/[`fluent_desc_id`].
     pub id: &'static str,
-    /// [`Section::General`] for every entry in [`catalog`].
-    pub section: Section,
     /// The editing widget.
     pub kind: SettingKind,
     /// Whether a live edit applies without a restart, from the TUI's point
     /// of view (see the struct doc for the GUI's per-entry split).
     pub applies_live: bool,
+}
+
+impl SettingDef {
+    /// La sección bajo la que se pinta.
+    ///
+    /// Sale de [`section_of`] y no de un campo por entrada: escrito 33
+    /// veces al lado de cada `id`, el reparto no se puede leer de un
+    /// vistazo ni auditar de una vez — que es exactamente cómo las 33
+    /// entradas acabaron diciendo `General`.
+    ///
+    /// ```
+    /// use norte_frontend::settings::{catalog, Section};
+    /// let tema = catalog().iter().find(|d| d.id == "ui.theme").expect("ui.theme");
+    /// assert_eq!(tema.section(), Section::Appearance);
+    /// ```
+    #[must_use]
+    pub fn section(&self) -> Section {
+        // El invariante lo fija `cada_entrada_del_catalogo_tiene_seccion`:
+        // ningún id del catálogo cae aquí. Un id nuevo sin sección aterriza
+        // en «Comportamiento» —visible, no escondido— y el test lo caza.
+        section_of(self.id).unwrap_or(Section::Behavior)
+    }
+}
+
+/// El filtro de la pantalla de ajustes, ya interpretado.
+///
+/// El texto libre busca donde siempre —id, nombre y descripción, plegados—,
+/// y encima hay dos operadores, copiados de donde el lector ya los conoce:
+/// `@modified` (solo lo que no es de fábrica) y `@section:<x>`.
+///
+/// `@section:` casa contra la clave ESTABLE de la sección y contra su
+/// rótulo en **los dos** idiomas, no solo en el activo: un fichero de
+/// traducción no puede ser la diferencia entre encontrar algo y no
+/// encontrarlo.
+///
+/// Una arroba que no abre operador conocido es texto normal. Nadie tiene
+/// que escapar nada para buscar una arroba, y un filtro que se come lo que
+/// no entiende deja al lector mirando una lista vacía sin saber por qué.
+#[derive(Debug, Default)]
+struct Query {
+    /// El texto libre, ya plegado. Vacío = no filtra por texto.
+    text: String,
+    /// `@modified` estaba en la consulta.
+    only_modified: bool,
+    /// Las secciones nombradas con `@section:`. Vacío = todas.
+    sections: Vec<Section>,
+    /// `@section:` nombró algo que no existe. No filtra a «todas»: filtra a
+    /// NADA, que es la respuesta honesta a «enséñame los ajustes de algo que
+    /// no hay». Ignorar el operador enseñaría la lista entera y el lector
+    /// leería eso como «aquí está todo lo que pediste».
+    imposible: bool,
+}
+
+impl Query {
+    /// Interpreta la consulta cruda (bytes, como se teclean).
+    fn parse(raw: &[u8]) -> Self {
+        let mut q = Query::default();
+        // El texto libre se conserva TAL CUAL mientras no haya operadores, y
+        // eso no es pereza: `ui.font ` con el espacio final aísla una fila
+        // que `ui.font` no aísla, porque el heno lleva el id seguido del
+        // nombre. Trocear y volver a juntar por un espacio se come esa
+        // precisión, y un filtro que enseña dos filas donde antes enseñaba
+        // una es una regresión silenciosa.
+        if !raw.contains(&b'@') {
+            q.text = crate::nav::fold(raw);
+            return q;
+        }
+        // Con operadores por medio: se sacan sus tokens y el resto se pliega
+        // junto, ya sin la precisión del espacio de los bordes — combinar
+        // `@modified` con un fragmento que dependa de un espacio final no es
+        // una consulta que nadie escriba.
+        let mut resto: Vec<&[u8]> = Vec::new();
+        // Por bytes y separando por espacio ASCII: la consulta es entrada de
+        // usuario cruda (pegado incluido) y no tiene por qué ser UTF-8
+        // válido. `from_utf8_lossy` para mirar un token no lo escribe en
+        // ningún sitio.
+        for token in raw.split(|b| *b == b' ').filter(|t| !t.is_empty()) {
+            let texto = String::from_utf8_lossy(token);
+            // Plegado, como todo lo demás de esta pantalla: `@Modified` y
+            // `@MODIFIED` son lo mismo, y dos operadores con dos reglas de
+            // comparación es una trampa.
+            if crate::nav::fold(token) == "@modified" {
+                q.only_modified = true;
+            } else if let Some(nombre) = texto.strip_prefix("@section:") {
+                match section_by_name(nombre) {
+                    Some(s) => q.sections.push(s),
+                    None => q.imposible = true,
+                }
+            } else {
+                resto.push(token);
+            }
+        }
+        q.text = crate::nav::fold(resto.join(&b' ').as_slice());
+        q
+    }
+
+    /// ¿Esta fila pasa el filtro? `fold` es su heno ya plegado.
+    fn matches(&self, row: &Row, fold: &str) -> bool {
+        if self.imposible {
+            return false;
+        }
+        if self.only_modified && !row.modified {
+            return false;
+        }
+        if !self.sections.is_empty() && !self.sections.contains(&row.section) {
+            return false;
+        }
+        self.text.is_empty() || fold.contains(&self.text)
+    }
+}
+
+/// La sección cuyo nombre estable, o cuyo rótulo en CUALQUIERA de los dos
+/// idiomas, EMPIEZA por `nombre` (plegando acentos y mayúsculas).
+///
+/// Por prefijo y no por igualdad, por dos motivos que son el mismo: la
+/// consulta se trocea por espacios, así que `@section:abrir con` solo trae
+/// `abrir` —y cinco de las siete secciones tienen el rótulo de dos palabras,
+/// o sea que con igualdad eran inalcanzables—, y quien teclea espera ver el
+/// efecto según escribe, no al poner la última letra.
+///
+/// Ambigüedad: gana la primera de [`Section::ORDER`], que es el orden de la
+/// pantalla. Ninguna pareja de rótulos comparte prefijo hoy en ninguno de
+/// los dos idiomas.
+fn section_by_name(nombre: &str) -> Option<Section> {
+    let buscado = crate::nav::fold(nombre.as_bytes());
+    if buscado.is_empty() {
+        return None;
+    }
+    Section::ORDER.iter().copied().find(|s| {
+        if crate::nav::fold(s.stable_key().as_bytes()).starts_with(&buscado) {
+            return true;
+        }
+        [norte_i18n::Lang::Es, norte_i18n::Lang::En]
+            .into_iter()
+            .any(|l| {
+                crate::nav::fold(norte_i18n::t_in(l, s.label_key()).as_bytes())
+                    .starts_with(&buscado)
+            })
+    })
+}
+
+/// Una sección tal y como la pinta el índice: su rótulo ya traducido,
+/// cuántas filas visibles tiene con el filtro puesto, y en cuál empieza.
+///
+/// Se proyecta, no se guarda: el estado es el filtro, y un índice guardado
+/// al lado sería una segunda copia que se queda vieja en cuanto alguien
+/// teclea una letra.
+#[derive(Debug, Clone)]
+pub struct SectionView {
+    /// Qué sección es.
+    pub section: Section,
+    /// Su rótulo, traducido al idioma activo.
+    pub title: String,
+    /// Cuántas de sus filas se ven con el filtro puesto. Cero con
+    /// [`Self::total`] mayor que cero = apagada en el índice, nunca ausente.
+    pub visible: usize,
+    /// Cuántas filas tiene en total, filtre lo que filtre.
+    ///
+    /// Distingue «la tapó el filtro» de «esta superficie no la tiene»: la
+    /// terminal no proyecta ubicaciones, y un índice que anuncia una sección
+    /// que nunca va a tener nada promete algo que no va a cumplir.
+    pub total: usize,
+    /// Posición de su primera fila visible dentro de
+    /// [`SettingsState::visible`] — la unidad del cursor. `None` si el
+    /// filtro la dejó vacía.
+    pub first_row: Option<usize>,
+}
+
+/// La configuración DE FÁBRICA: la que sale de cero capas.
+///
+/// Es contra esto contra lo que se decide si una fila está «modificada», y
+/// se calcula con [`current_value`], la misma función que pinta el valor —
+/// una tabla de defectos escrita a mano se desincroniza del esquema en
+/// cuanto alguien cambia uno.
+///
+/// Cacheada porque las 33 entradas se comparan contra la misma y
+/// [`crate::config::load`] con cero capas no toca el disco (recorre una
+/// lista vacía). Si alguna vez fallara, `None` degrada a «nada está
+/// modificado»: un punto de menos es un fallo inerte, y uno de más señala
+/// como tocado algo que nadie tocó.
+fn factory_config() -> Option<&'static FrontendConfig> {
+    static FABRICA: std::sync::OnceLock<Option<FrontendConfig>> = std::sync::OnceLock::new();
+    FABRICA
+        .get_or_init(|| crate::config::load(&norte_config::Layers { dirs: vec![] }).ok())
+        .as_ref()
+}
+
+/// El reparto del catálogo en secciones, en UN sitio.
+///
+/// `None` para un id que no es del catálogo. Un id del catálogo que
+/// devuelva `None` es un bug que caza el test de cobertura: la alternativa
+/// —un `_ =>` que le dé una sección cualquiera— archiva mal en silencio.
+#[must_use]
+pub fn section_of(id: &str) -> Option<Section> {
+    let s = match id {
+        "ui.theme" | "ui.theme-light" | "ui.theme-dark" | "ui.font" | "ui.mono-font"
+        | "ui.font-size" | "ui.reduce-motion" | "ui.row-stripes" | "ui.images" => {
+            Section::Appearance
+        }
+        "ui.show-hidden" | "ui.parent-entry" | "ui.dir-indicator" | "ui.pane-footer"
+        | "ui.date-format" | "ui.panel-bar" | "ui.panel-bar-style" | "ui.menu-bar"
+        | "ui.key-bar" | "ui.splash" | "ui.processes-panel" => Section::Panes,
+        "ui.editor" | "ui.editor-detached" | "ui.diff" | "ui.diff-detached" => Section::OpenWith,
+        "keymap.preset" | "ui.mouse" | "ui.alt-menu" | "ui.quick-search" => Section::Input,
+        "ui.confirm-quit" | "ui.dialog-buttons" | "ui.notice-seconds" | "ui.history-size"
+        | "ui.lang" => Section::Behavior,
+        _ => return None,
+    };
+    Some(s)
 }
 
 /// The curated GENERAL settings (v1). Order is DISPLAY order (S3/S4 render
@@ -111,43 +402,36 @@ pub struct SettingDef {
 const CATALOG: &[SettingDef] = &[
     SettingDef {
         id: "ui.theme",
-        section: Section::General,
         kind: SettingKind::ThemeName,
         applies_live: true,
     },
     SettingDef {
         id: "ui.lang",
-        section: Section::General,
         kind: SettingKind::Enum(&["es", "en"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.font",
-        section: Section::General,
         kind: SettingKind::Text,
         applies_live: true,
     },
     SettingDef {
         id: "ui.mono-font",
-        section: Section::General,
         kind: SettingKind::Text,
         applies_live: true,
     },
     SettingDef {
         id: "ui.font-size",
-        section: Section::General,
         kind: SettingKind::Int { min: 8, max: 32 },
         applies_live: true,
     },
     SettingDef {
         id: "ui.quick-search",
-        section: Section::General,
         kind: SettingKind::Enum(&["filter", "jump"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.reduce-motion",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -159,7 +443,6 @@ const CATALOG: &[SettingDef] = &[
         // topic) — and a setting you only learn about from a config file
         // you did not know existed is not discoverable.
         id: "ui.mouse",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -168,7 +451,6 @@ const CATALOG: &[SettingDef] = &[
         // defecto nadie la encontraría, y quien la busca es quien acaba de
         // pulsar Alt en el terminal y no ha pasado nada.
         id: "ui.alt-menu",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -178,7 +460,6 @@ const CATALOG: &[SettingDef] = &[
         // recuperar esa fila, y un ajuste del que solo te enteras leyendo un
         // fichero de config que no sabías que existía no es descubrible.
         id: "ui.menu-bar",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -188,7 +469,6 @@ const CATALOG: &[SettingDef] = &[
         // Dejar su interruptor solo en un fichero de config sería cometer el
         // mismo error una capa más arriba.
         id: "ui.panel-bar",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -197,7 +477,6 @@ const CATALOG: &[SettingDef] = &[
         // tiene comando ni tecla, así que el fichero era el ÚNICO sitio desde
         // el que se podía apagar o encender.
         id: "ui.parent-entry",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -206,7 +485,6 @@ const CATALOG: &[SettingDef] = &[
         // la SESIÓN y no persiste nada, así que sin esta fila el valor con el
         // que norte abre solo se podía cambiar escribiendo el fichero.
         id: "ui.show-hidden",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -216,7 +494,6 @@ const CATALOG: &[SettingDef] = &[
         // hasta ahora se elegía por variable de entorno, que es el sitio donde
         // menos se busca la configuración de un programa.
         id: "ui.editor",
-        section: Section::General,
         kind: SettingKind::Args,
         applies_live: true,
     },
@@ -225,7 +502,6 @@ const CATALOG: &[SettingDef] = &[
         // gráfico deja la terminal en blanco y no hay nada en pantalla que
         // explique por qué.
         id: "ui.editor-detached",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -234,20 +510,17 @@ const CATALOG: &[SettingDef] = &[
         // editor: sin fila, el que compara dos ficheros solo se elige
         // escribiendo el fichero de configuración.
         id: "ui.diff",
-        section: Section::General,
         kind: SettingKind::Args,
         applies_live: true,
     },
     SettingDef {
         // Y si ese comparador abre ventana propia (Meld, Kompare).
         id: "ui.diff-detached",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
         id: "ui.confirm-quit",
-        section: Section::General,
         kind: SettingKind::Enum(&["auto", "always", "never"]),
         applies_live: true,
     },
@@ -256,43 +529,36 @@ const CATALOG: &[SettingDef] = &[
     //     el fichero es un interruptor que no encuentra nadie.
     SettingDef {
         id: "ui.key-bar",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
         id: "ui.panel-bar-style",
-        section: Section::General,
         kind: SettingKind::Enum(&["names", "letters"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.pane-footer",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
         id: "ui.row-stripes",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
         id: "ui.date-format",
-        section: Section::General,
         kind: SettingKind::Enum(&["smart", "relative", "iso"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.notice-seconds",
-        section: Section::General,
         kind: SettingKind::Int { min: 0, max: 600 },
         applies_live: true,
     },
     SettingDef {
         id: "ui.history-size",
-        section: Section::General,
         kind: SettingKind::Int { min: 5, max: 64 },
         applies_live: true,
     },
@@ -300,13 +566,11 @@ const CATALOG: &[SettingDef] = &[
     // que se abre solo y la `/` de las carpetas.
     SettingDef {
         id: "ui.splash",
-        section: Section::General,
         kind: SettingKind::Enum(&["brief", "off", "home"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.processes-panel",
-        section: Section::General,
         kind: SettingKind::Enum(&["auto", "manual"]),
         applies_live: true,
     },
@@ -314,19 +578,16 @@ const CATALOG: &[SettingDef] = &[
     // TERMINAL — la ventana pinta imágenes por su propia webview y no la lee.
     SettingDef {
         id: "ui.images",
-        section: Section::General,
         kind: SettingKind::Enum(&["auto", "kitty", "blocks", "off"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.dir-indicator",
-        section: Section::General,
         kind: SettingKind::Enum(&["auto", "slash", "none"]),
         applies_live: true,
     },
     SettingDef {
         id: "ui.dialog-buttons",
-        section: Section::General,
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -335,19 +596,16 @@ const CATALOG: &[SettingDef] = &[
     //     es la misma en los dos frontends.
     SettingDef {
         id: "ui.theme-light",
-        section: Section::General,
         kind: SettingKind::Text,
         applies_live: true,
     },
     SettingDef {
         id: "ui.theme-dark",
-        section: Section::General,
         kind: SettingKind::Text,
         applies_live: true,
     },
     SettingDef {
         id: "keymap.preset",
-        section: Section::General,
         kind: SettingKind::PresetName,
         applies_live: true,
     },
@@ -529,6 +787,23 @@ pub struct Row {
     /// Current value as display text; empty for a row with nothing single
     /// to show (the informational fallback).
     pub value: String,
+    /// La sección bajo la que se pinta: la del catálogo para una entrada
+    /// curada, [`Section::Plugins`] para un resumen de plugin.
+    ///
+    /// Va en la fila y no se re-deriva del id en cada frontend: dos cuentas
+    /// de «dónde va esto» son dos pantallas que se desordenan por separado.
+    pub section: Section,
+    /// El valor efectivo NO es el de fábrica.
+    ///
+    /// «No es el de fábrica», y no «lo has tocado tú»: una clave que solo
+    /// fija la capa del sistema enciende el punto sin que el lector haya
+    /// hecho nada, y una que escribió a mano con el valor que ya traía no lo
+    /// enciende. La etiqueta de la pantalla dice lo primero, que es lo que
+    /// esto mide.
+    ///
+    /// Falso siempre para una fila que no sale del catálogo: no hay valor
+    /// de fábrica con el que compararla.
+    pub modified: bool,
 }
 
 impl Row {
@@ -577,6 +852,8 @@ fn plugin_summary_rows(summaries: &[PluginConfigSummary], lang: norte_i18n::Lang
             name: norte_i18n::t_in(lang, "settings-plugins-name"),
             desc: norte_i18n::t_in(lang, "settings-plugins-note"),
             value: String::new(),
+            section: Section::Plugins,
+            modified: false,
         }];
     }
     summaries
@@ -591,6 +868,8 @@ fn plugin_summary_rows(summaries: &[PluginConfigSummary], lang: norte_i18n::Lang
                 "settings-plugins-key-count",
                 &[("count", &s.key_count.to_string())],
             ),
+            section: Section::Plugins,
+            modified: false,
         })
         .collect()
 }
@@ -619,17 +898,38 @@ pub fn build_rows_in(
     plugin_summaries: &[PluginConfigSummary],
     lang: norte_i18n::Lang,
 ) -> Vec<Row> {
+    let fabrica = factory_config();
     let mut rows: Vec<Row> = catalog()
         .iter()
         .enumerate()
-        .map(|(i, def)| Row {
-            def_index: Some(i),
-            plugin_id: None,
-            name: norte_i18n::t_in(lang, &fluent_name_id(def.id)),
-            desc: norte_i18n::t_in(lang, &fluent_desc_id(def.id)),
-            value: current_value(def, cfg),
+        .map(|(i, def)| {
+            let value = current_value(def, cfg);
+            Row {
+                def_index: Some(i),
+                plugin_id: None,
+                name: norte_i18n::t_in(lang, &fluent_name_id(def.id)),
+                desc: norte_i18n::t_in(lang, &fluent_desc_id(def.id)),
+                modified: fabrica.is_some_and(|f| value != current_value(def, f)),
+                value,
+                section: def.section(),
+            }
         })
         .collect();
+    // En orden de PANTALLA: por sección primero, y dentro de cada una el
+    // orden del catálogo. El catálogo va agrupado por sección de
+    // `norte.toml` (`[ui]` y luego `[keymap]`), que no es el mismo reparto:
+    // `ui.lang` es Comportamiento y `ui.quick-search` es Teclado, y están a
+    // dos filas la una de la otra. Sin ordenar aquí, una lista con cabeceras
+    // pintaría la misma sección siete veces.
+    //
+    // `sort_by_key` es ESTABLE, que es lo que conserva el orden del catálogo
+    // dentro de cada sección sin escribir un segundo criterio.
+    rows.sort_by_key(|r| {
+        Section::ORDER
+            .iter()
+            .position(|s| *s == r.section)
+            .unwrap_or(usize::MAX)
+    });
     rows.extend(plugin_summary_rows(plugin_summaries, lang));
     rows
 }
@@ -677,6 +977,33 @@ impl PendingWrite {
             display: value.to_owned(),
         }
     }
+}
+
+/// Una clave que hay que QUITAR de la capa de escritura, producida por
+/// [`SettingsState::reset`].
+///
+/// Como [`PendingWrite`], es pura: quien la recibe llama a
+/// `norte_config::persist_unset` fuera del hilo de pintado (regla 2) y
+/// anuncia el resultado. No lleva valor porque no hay ninguno que escribir
+/// — restablecer es dejar de decir nada, no decir el defecto: escribir el
+/// valor de fábrica en el fichero lo congelaría contra un cambio futuro del
+/// defecto, que es justo lo contrario de lo que el lector pidió.
+#[derive(Debug, Clone)]
+pub struct PendingReset {
+    /// `[section]` de `norte.toml`.
+    pub section: &'static str,
+    /// La clave dentro de esa sección (`snake_case`, ya convertida).
+    pub key: String,
+    /// El id del catálogo (`ui.theme`), para volver a encontrar la fila
+    /// después de releer.
+    ///
+    /// Viaja porque la vuelta —de `(section, key)` al id— NO es una
+    /// biyección: un id futuro con `_` volvería con `-` y no casaría con
+    /// ninguna fila, y quien busca contestaría «vuelve al valor de fábrica»
+    /// para todo, que es la respuesta equivocada y muda.
+    pub id: &'static str,
+    /// El nombre traducido del ajuste, para el aviso.
+    pub name: String,
 }
 
 /// Why [`SettingsState::edit_commit`] rejected the buffer — WITHOUT
@@ -815,17 +1142,14 @@ impl SettingsState {
     }
 
     fn recompute(&mut self) {
-        self.visible = if self.query.is_empty() {
-            (0..self.rows.len()).collect()
-        } else {
-            let q = crate::nav::fold(&self.query);
-            self.folds
-                .iter()
-                .enumerate()
-                .filter(|(_, f)| f.contains(&q))
-                .map(|(i, _)| i)
-                .collect()
-        };
+        let filtro = Query::parse(&self.query);
+        self.visible = self
+            .folds
+            .iter()
+            .enumerate()
+            .filter(|(i, f)| filtro.matches(&self.rows[*i], f))
+            .map(|(i, _)| i)
+            .collect();
         self.clamp_cursor();
     }
 
@@ -848,6 +1172,23 @@ impl SettingsState {
         let mut buf = [0u8; 4];
         self.query
             .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        self.recompute();
+    }
+
+    /// Pone la consulta ENTERA de golpe y recomputa.
+    ///
+    /// La ventana la necesita: su buscador es un `<input>` del navegador y
+    /// lo que cruza el puente es el texto completo, no la tecla. El terminal
+    /// sigue con [`Self::push_char`] porque su overlay sí recibe teclas.
+    ///
+    /// El texto llega como bytes de una caja de texto: no se valida ni se
+    /// recorta aquí — plegar y filtrar es todo lo que se hace con él, y
+    /// pintarlo es de quien pinta ([`Self::query_display`] lo enmascara).
+    pub fn set_query(&mut self, text: &str) {
+        if self.edit.is_some() {
+            return;
+        }
+        self.query = text.as_bytes().to_vec();
         self.recompute();
     }
 
@@ -915,10 +1256,102 @@ impl SettingsState {
         &self.rows
     }
 
+    /// El índice de secciones que pinta la pantalla: TODAS, en el orden de
+    /// [`Section::ORDER`], con cuántas filas visibles tiene cada una y en
+    /// cuál empieza.
+    ///
+    /// Una sección que el filtro deja a cero **sigue en la lista**, apagada:
+    /// un índice que cambia de largo mientras escribes es un índice que no
+    /// se puede usar como mapa.
+    ///
+    /// `first_row` es una posición dentro de [`Self::visible`] —la misma
+    /// unidad que [`Self::cursor`]— y NO un índice dentro de [`Self::rows`].
+    /// Mezclar las dos unidades es un cursor que apunta a otra fila.
+    #[must_use]
+    pub fn sections(&self) -> Vec<SectionView> {
+        Section::ORDER
+            .iter()
+            .map(|s| {
+                let mut visible = 0;
+                let mut first_row = None;
+                for (pos, &real) in self.visible.iter().enumerate() {
+                    if self.rows[real].section == *s {
+                        visible += 1;
+                        if first_row.is_none() {
+                            first_row = Some(pos);
+                        }
+                    }
+                }
+                SectionView {
+                    section: *s,
+                    title: t(s.label_key()),
+                    visible,
+                    total: self.rows.iter().filter(|r| r.section == *s).count(),
+                    first_row,
+                }
+            })
+            .collect()
+    }
+
+    /// Lleva el cursor a la sección anterior (`delta` negativo) o siguiente,
+    /// SALTÁNDOSE las que el filtro dejó vacías. Devuelve a cuál fue, o
+    /// `None` si no había ninguna con filas hacia ese lado.
+    ///
+    /// Vive aquí y no en cada frontend porque las dos pantallas tienen que
+    /// moverse igual: con el recorrido escrito dos veces, la octava sección
+    /// —o un cambio de orden— las separa en silencio y solo una tiene test.
+    /// Saltarse las vacías es lo que hace que la tecla sirva con un filtro
+    /// puesto: parar en una obligaría a pulsar dos veces sin que nada pase.
+    pub fn step_section(&mut self, delta: i32) -> Option<Section> {
+        let &real = self.visible.get(self.cursor)?;
+        let mut actual = self.rows[real].section;
+        let index = self.sections();
+        while let Some(siguiente) = actual.step(delta) {
+            if index
+                .iter()
+                .any(|v| v.section == siguiente && v.visible > 0)
+            {
+                self.jump_to(siguiente);
+                return Some(siguiente);
+            }
+            actual = siguiente;
+        }
+        None
+    }
+
+    /// Lleva el cursor a la primera fila visible de `section`.
+    ///
+    /// Una sección sin filas visibles no mueve nada: un salto que aterriza
+    /// en la fila de otra sección es peor que un salto que no ocurre.
+    pub fn jump_to(&mut self, section: Section) {
+        let destino = self
+            .visible
+            .iter()
+            .position(|&real| self.rows[real].section == section);
+        if let Some(pos) = destino {
+            self.set_cursor(pos);
+        }
+    }
+
     /// Selection position WITHIN [`Self::visible`].
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    /// Cuántas filas hay en total, filtre lo que filtre.
+    #[must_use]
+    pub fn total(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Cuántas se ven con el filtro puesto.
+    ///
+    /// Va con [`Self::total`] a la pantalla («7 de 33») porque sin la
+    /// segunda cifra «no hay nada» y «lo tapé con una letra» se leen igual.
+    #[must_use]
+    pub fn shown(&self) -> usize {
+        self.visible.len()
     }
 
     /// The localized description of the row under the cursor, if any is
@@ -1034,6 +1467,41 @@ impl SettingsState {
                 None
             }
         }
+    }
+
+    /// Restablecer la fila del cursor: la clave que hay que QUITAR de la
+    /// capa de escritura, o `None` si no hay nada que quitar.
+    ///
+    /// `None` cuando la fila ya está en su valor de fábrica (quitar una
+    /// clave que no está es un no-op que no merece un aviso), cuando no sale
+    /// del catálogo (un resumen de plugin no tiene valor de fábrica), o
+    /// mientras se edita — igual que el resto de esta máquina, editar
+    /// congela todo lo demás.
+    ///
+    /// **Quitar la clave de TU capa no siempre devuelve el valor de
+    /// fábrica**: si el sistema, el perfil o el proyecto fijan la misma, el
+    /// valor cambia y sigue sin ser el defecto. Esta función no lo sabe;
+    /// quien la llama reconstruye las filas después —ya lo hace tras cada
+    /// escritura— y mira el punto: si la fila sigue `modified`, lo dice con
+    /// `settings-still-set-elsewhere`, y si no, con `settings-reset-done`.
+    /// El punto encendido es verdad sin maquinaria de procedencia.
+    pub fn reset(&mut self) -> Option<PendingReset> {
+        if self.edit.is_some() {
+            return None;
+        }
+        let &real = self.visible.get(self.cursor)?;
+        let row = &self.rows[real];
+        if !row.modified {
+            return None;
+        }
+        let id = row.id()?;
+        let (section, key) = wire_key(id);
+        Some(PendingReset {
+            section,
+            key,
+            id,
+            name: row.name.clone(),
+        })
     }
 
     /// Confirms the inline edit buffer: `Int` parses the buffer as `f64`
@@ -1411,9 +1879,18 @@ mod tests {
     fn build_rows_valores_coinciden_con_current_value() {
         let cfg = cfg_vacia();
         let rows = build_rows(&cfg, &[]);
-        for (i, def) in catalog().iter().enumerate() {
-            assert_eq!(rows[i].value, current_value(def, &cfg));
+        // Por ID, no por posición: las filas salen en orden de PANTALLA
+        // (sección primero) y el catálogo va agrupado por sección de
+        // `norte.toml`, que es otro orden.
+        for def in catalog() {
+            let row = rows
+                .iter()
+                .find(|r| r.id() == Some(def.id))
+                .unwrap_or_else(|| panic!("«{}» no está en las filas", def.id));
+            assert_eq!(row.value, current_value(def, &cfg));
         }
+        // El catálogo entero, más la fila informativa de Plugins.
+        assert_eq!(rows.len(), catalog().len() + 1);
     }
 
     /// The Plugins informational row carries no value (nothing to edit) and
@@ -1781,6 +2258,349 @@ mod tests {
     }
 
     #[test]
+    fn restablecer_una_fila_tocada_pide_quitar_su_clave() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_theme = Some("nord".to_owned());
+        let mut s = SettingsState::new(build_rows(&cfg, &[]));
+        let pos = s
+            .visible()
+            .iter()
+            .position(|&i| s.rows()[i].id() == Some("ui.theme"))
+            .expect("ui.theme visible");
+        s.set_cursor(pos);
+        let r = s.reset().expect("hay algo que quitar");
+        assert_eq!((r.section, r.key.as_str()), ("ui", "theme"));
+    }
+
+    #[test]
+    fn restablecer_lo_que_ya_es_de_fabrica_no_pide_nada() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        s.set_cursor(0);
+        assert!(s.reset().is_none());
+    }
+
+    #[test]
+    fn una_fila_de_plugins_no_se_restablece() {
+        let resumen = PluginConfigSummary {
+            plugin_id: "org.a".into(),
+            name: "A".into(),
+            key_count: 2,
+        };
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[resumen]));
+        let ultima = s.visible().len() - 1;
+        s.set_cursor(ultima);
+        assert!(s.reset().is_none());
+    }
+
+    /// Editando, restablecer no hace nada: igual que el resto de esta
+    /// máquina, una edición abierta congela todo lo demás.
+    #[test]
+    fn editando_no_se_restablece() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_font = Some("Inter".to_owned());
+        let mut s = SettingsState::new(build_rows(&cfg, &[]));
+        let pos = s
+            .visible()
+            .iter()
+            .position(|&i| s.rows()[i].id() == Some("ui.font"))
+            .expect("ui.font visible");
+        s.set_cursor(pos);
+        s.activate(&[], &[]);
+        assert!(s.is_editing());
+        assert!(s.reset().is_none());
+    }
+
+    #[test]
+    fn el_operador_modified_deja_solo_lo_tocado() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_theme = Some("nord".to_owned());
+        let mut s = SettingsState::new(build_rows(&cfg, &[]));
+        for c in "@modified".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 1);
+        assert_eq!(s.rows()[s.visible()[0]].id(), Some("ui.theme"));
+    }
+
+    /// En los DOS idiomas, y por la clave estable: un fichero de traducción
+    /// no puede ser la diferencia entre encontrar algo y no encontrarlo.
+    #[test]
+    fn el_operador_section_acepta_el_nombre_traducido_y_el_estable() {
+        for q in ["@section:appearance", "@section:apariencia"] {
+            let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+            for c in q.chars() {
+                s.push_char(c);
+            }
+            assert!(s.shown() > 0, "«{q}» no encontró nada");
+            assert!(
+                s.visible()
+                    .iter()
+                    .all(|&i| s.rows()[i].section == Section::Appearance)
+            );
+        }
+    }
+
+    /// CADA sección, en los DOS idiomas, por su rótulo entero y por un
+    /// prefijo. Cinco de las siete tienen el rótulo de dos palabras, y la
+    /// consulta se trocea por espacios: con igualdad exacta eran
+    /// inencontrables, y el test que solo probaba «apariencia» —la única de
+    /// una palabra en ambos idiomas— no lo veía.
+    #[test]
+    fn cada_seccion_se_encuentra_por_su_rotulo_en_los_dos_idiomas() {
+        for s in Section::ORDER {
+            let mut consultas = vec![s.stable_key().to_owned()];
+            for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+                let rotulo = norte_i18n::t_in(lang, s.label_key());
+                // La primera palabra: es lo que sobrevive al troceo.
+                let primera = rotulo.split(' ').next().unwrap_or(&rotulo).to_owned();
+                consultas.push(primera);
+            }
+            for q in consultas {
+                assert_eq!(
+                    section_by_name(&q),
+                    Some(*s),
+                    "«{q}» tenía que llevar a {s:?}"
+                );
+            }
+        }
+    }
+
+    /// Y el otro operador se compara igual: plegado. Dos operadores con dos
+    /// reglas de mayúsculas es una trampa.
+    #[test]
+    fn el_operador_modified_no_distingue_mayusculas() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_theme = Some("nord".to_owned());
+        for q in ["@modified", "@Modified", "@MODIFIED"] {
+            let mut s = SettingsState::new(build_rows(&cfg, &[]));
+            for c in q.chars() {
+                s.push_char(c);
+            }
+            assert_eq!(s.shown(), 1, "«{q}»");
+        }
+    }
+
+    #[test]
+    fn los_operadores_se_combinan_con_el_texto() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_theme = Some("nord".to_owned());
+        cfg.common.ui_show_hidden = Some(true);
+        let mut s = SettingsState::new(build_rows(&cfg, &[]));
+        for c in "@modified".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 2, "dos tocadas");
+        for c in " theme".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 1, "y con el texto, una");
+    }
+
+    /// Una arroba que no abre operador conocido es TEXTO. Nadie tiene que
+    /// escapar nada para buscar una arroba.
+    #[test]
+    fn una_arroba_suelta_es_texto_normal() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        for c in "@nada".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 0);
+        assert_eq!(s.total(), s.rows().len(), "el total no lo toca el filtro");
+    }
+
+    /// Una sección que no existe filtra a NADA. Ignorar el operador
+    /// enseñaría la lista entera, y el lector la leería como «esto es todo
+    /// lo que pediste».
+    #[test]
+    fn una_seccion_que_no_existe_no_ensena_la_lista_entera() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        for c in "@section:loquesea".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.shown(), 0);
+    }
+
+    #[test]
+    fn el_indice_lista_todas_las_secciones_aunque_el_filtro_vacie_alguna() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        // Por el ID, no por el rótulo: estos tests corren en el locale por
+        // defecto, y un filtro escrito en español no casa nada en inglés.
+        for c in "theme".chars() {
+            s.push_char(c);
+        }
+        let idx = s.sections();
+        assert_eq!(
+            idx.len(),
+            Section::ORDER.len(),
+            "el índice no encoge al filtrar"
+        );
+        let apariencia = idx
+            .iter()
+            .find(|v| v.section == Section::Appearance)
+            .expect("apariencia");
+        assert!(apariencia.visible > 0);
+        let abrir = idx
+            .iter()
+            .find(|v| v.section == Section::OpenWith)
+            .expect("abrir con");
+        assert_eq!(abrir.visible, 0);
+        assert_eq!(abrir.first_row, None);
+    }
+
+    #[test]
+    fn saltar_a_una_seccion_pone_el_cursor_en_su_primera_fila_visible() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        s.jump_to(Section::Input);
+        let fila = &s.rows()[s.visible()[s.cursor()]];
+        assert_eq!(fila.section, Section::Input);
+        // Y es la PRIMERA de la sección, no una cualquiera.
+        assert!(s.cursor() == 0 || s.rows()[s.visible()[s.cursor() - 1]].section != Section::Input);
+    }
+
+    /// El recorrido de secciones, que es el MISMO en las dos pantallas.
+    #[test]
+    fn el_paso_de_seccion_va_y_vuelve() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        let seccion = |s: &SettingsState| s.rows()[s.visible()[s.cursor()]].section;
+        assert_eq!(seccion(&s), Section::Appearance);
+        assert_eq!(s.step_section(1), Some(Section::Panes));
+        assert_eq!(seccion(&s), Section::Panes);
+        assert_eq!(s.step_section(-1), Some(Section::Appearance));
+    }
+
+    /// En el extremo no hay a dónde ir y el cursor se queda: fingir que da
+    /// la vuelta es un cursor que se teletransporta.
+    #[test]
+    fn el_paso_de_seccion_para_en_el_extremo() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        assert_eq!(s.step_section(-1), None);
+        assert_eq!(s.cursor(), 0);
+    }
+
+    /// Una sección que el filtro vació se ATRAVIESA, y si no queda ninguna
+    /// con filas, no se mueve nada.
+    #[test]
+    fn el_paso_de_seccion_se_salta_las_vacias() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        // «theme» solo deja filas en Apariencia — ni la nota de Plugins,
+        // cuyo heno no lleva esa palabra.
+        for c in "theme".chars() {
+            s.push_char(c);
+        }
+        let antes = s.cursor();
+        assert_eq!(s.step_section(1), None);
+        assert_eq!(s.cursor(), antes);
+    }
+
+    #[test]
+    fn saltar_a_una_seccion_vacia_no_mueve_nada() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        for c in "theme".chars() {
+            s.push_char(c);
+        }
+        let antes = s.cursor();
+        s.jump_to(Section::OpenWith);
+        assert_eq!(
+            s.cursor(),
+            antes,
+            "una sección sin filas visibles no mueve el cursor"
+        );
+    }
+
+    /// El punto de «esto lo has tocado tú» se calcula contra el valor DE
+    /// FÁBRICA, con la misma función que pinta el valor: una tabla de
+    /// defectos escrita a mano se desincroniza del esquema en cuanto alguien
+    /// cambia uno.
+    #[test]
+    fn sobre_la_config_por_defecto_no_hay_nada_modificado() {
+        for r in build_rows(&cfg_vacia(), &[]) {
+            assert!(!r.modified, "«{}» no debería salir modificada", r.name);
+        }
+    }
+
+    #[test]
+    fn cambiar_un_campo_enciende_el_punto_de_esa_fila_y_de_ninguna_otra() {
+        let mut cfg = cfg_vacia();
+        cfg.common.ui_theme = Some("nord".to_owned());
+        let filas = build_rows(&cfg, &[]);
+        let tocadas: Vec<_> = filas
+            .iter()
+            .filter(|r| r.modified)
+            .map(super::Row::id)
+            .collect();
+        assert_eq!(tocadas, vec![Some("ui.theme")]);
+    }
+
+    /// Una fila que no sale del catálogo nunca está modificada: no hay valor
+    /// de fábrica con el que compararla.
+    #[test]
+    fn una_fila_de_plugins_no_esta_modificada() {
+        let resumen = PluginConfigSummary {
+            plugin_id: "org.a".into(),
+            name: "A".into(),
+            key_count: 2,
+        };
+        let filas = build_rows(&cfg_vacia(), &[resumen]);
+        let fila = filas.last().expect("hay fila de plugin");
+        assert_eq!(fila.section, Section::Plugins);
+        assert!(!fila.modified);
+    }
+
+    /// Ninguna entrada se queda sin sitio. Un id nuevo sin sección cae en
+    /// «Comportamiento» por el `unwrap_or` de `SettingDef::section`, y este
+    /// test es lo único que separa ese apaño de un archivado en silencio.
+    #[test]
+    fn cada_entrada_del_catalogo_tiene_seccion() {
+        for d in catalog() {
+            assert!(
+                section_of(d.id).is_some(),
+                "«{}» no está repartida en ninguna sección",
+                d.id
+            );
+        }
+    }
+
+    /// Y ninguna sección del catálogo se queda vacía: una sección que el
+    /// índice lista y nunca tiene nada es una promesa rota.
+    #[test]
+    fn cada_seccion_del_catalogo_tiene_al_menos_una_entrada() {
+        for s in Section::ORDER {
+            if matches!(s, Section::Plugins | Section::Paths) {
+                continue; // No salen del catálogo.
+            }
+            assert!(
+                catalog().iter().any(|d| d.section() == *s),
+                "la sección {s:?} no tiene ninguna entrada"
+            );
+        }
+    }
+
+    /// Cada sección se dice en los dos idiomas. Media pantalla traducida es
+    /// peor que ninguna.
+    #[test]
+    fn cada_seccion_tiene_su_rotulo_en_ambos_locales() {
+        for s in Section::ORDER {
+            for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+                let txt = norte_i18n::t_in(lang, s.label_key());
+                assert!(
+                    !txt.is_empty() && !txt.contains(s.label_key()),
+                    "{s:?} sin traducir en {lang:?}: {txt}"
+                );
+            }
+        }
+    }
+
+    /// Avanzar y retroceder por el índice no da la vuelta: en los extremos
+    /// no hay a dónde ir, y fingir que sí es un cursor que se teletransporta.
+    #[test]
+    fn el_paso_entre_secciones_para_en_los_extremos() {
+        assert_eq!(Section::Appearance.step(-1), None);
+        assert_eq!(Section::Appearance.step(1), Some(Section::Panes));
+        assert_eq!(Section::Paths.step(1), None);
+        assert_eq!(Section::Paths.step(-1), Some(Section::Plugins));
+    }
+
+    #[test]
     fn set_cursor_clampa_al_ultimo_visible() {
         let mut s = SettingsState::new(rows());
         let last = s.visible().len() - 1;
@@ -1794,12 +2614,16 @@ mod tests {
     fn set_cursor_es_no_op_mientras_se_edita() {
         let mut s = SettingsState::new(rows());
         // Sin filtrar: TODAS las filas siguen visibles, así que si el guard
-        // de edición fallara habría a dónde moverse de verdad. `down()` dos
-        // veces aterriza en "ui.font" (índice 2 del catálogo: theme, lang,
-        // font), una fila `Text` — activarla abre edición.
-        s.down();
-        s.down();
-        let idx = s.cursor();
+        // de edición fallara habría a dónde moverse de verdad. Se busca
+        // `ui.font` por su ID —una fila `Text`, que al activarse abre
+        // edición—, no por su posición: las filas salen en orden de
+        // pantalla, que no es el del catálogo.
+        let idx = s
+            .visible()
+            .iter()
+            .position(|&i| s.rows()[i].id() == Some("ui.font"))
+            .expect("ui.font visible");
+        s.set_cursor(idx);
         assert_eq!(s.rows()[s.visible()[idx]].name, t("setting-ui-font-name"));
         s.activate(&[], &[]);
         assert!(s.is_editing());
@@ -1814,8 +2638,15 @@ mod tests {
     #[test]
     fn row_id_devuelve_el_id_del_catalogo_o_none_para_la_nota_de_plugins() {
         let rows = rows();
-        for (i, def) in catalog().iter().enumerate() {
-            assert_eq!(rows[i].id(), Some(def.id));
+        // Cada id del catálogo sale UNA vez; el orden es el de pantalla
+        // (sección primero), no el del catálogo.
+        for def in catalog() {
+            assert_eq!(
+                rows.iter().filter(|r| r.id() == Some(def.id)).count(),
+                1,
+                "«{}» tiene que salir exactamente una vez",
+                def.id
+            );
         }
         assert_eq!(rows.last().unwrap().id(), None);
     }

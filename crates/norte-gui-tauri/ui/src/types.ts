@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 80;
+export const BRIDGE_VERSION = 81;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -966,6 +966,8 @@ export interface SettingRowView {
   /** El valor se pinta DISTINTO de lo que es. */
   hostile: boolean;
   restart_required: boolean;
+  /** No es el valor de fábrica: el punto de «esto lo has tocado tú». */
+  modified: boolean;
 }
 
 export interface PathRowView {
@@ -979,9 +981,24 @@ export type SettingsSectionView =
   | { section: "settings"; title: string; rows: SettingRowView[] }
   | { section: "paths"; title: string; rows: PathRowView[] };
 
+/** Una sección en el índice de la izquierda. */
+export interface SectionIndexView {
+  /** Su clave ESTABLE: es lo que vuelve en `settings_jump_section`. */
+  key: string;
+  title: string;
+  /** Cuántas de sus filas se ven con el filtro puesto. Cero = apagada. */
+  visible: number;
+}
+
 export interface SettingsView {
+  /** Solo las secciones con filas que enseñar. */
   sections: SettingsSectionView[];
+  /** TODAS las que esta superficie tiene, tape o no el filtro sus filas. */
+  index: SectionIndexView[];
   cursor: number;
+  query: string;
+  shown: number;
+  total: number;
 }
 
 export interface ExtensionRowView {
@@ -1577,6 +1594,11 @@ export type UiAction =
   | { action: "settings_select_row"; row: number }
   /** El doble clic sobre una fila de los ajustes: lo que hace `enter` (puente 60). */
   | { action: "settings_activate"; row: number }
+  /** El texto ENTERO del buscador: las teclas imprimibles no llegan al host. */
+  | { action: "settings_query"; text: string }
+  /** Por la clave ESTABLE de la sección, no por su rótulo traducido. */
+  | { action: "settings_jump_section"; section: string }
+  | { action: "settings_reset"; row: number }
   | { action: "extension_select_row"; row: number }
   /**
    * Un BOTÓN del gestor sobre una fila (puente 61): la señala y hace lo que

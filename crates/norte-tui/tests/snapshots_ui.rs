@@ -37,7 +37,14 @@ fn render(app: &App) -> String {
 /// pantalla de 16 usada en el resto del archivo para pintar su lista
 /// completa sin recorte vertical.
 fn render_80x24(app: &App) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+    render_en(app, 80, 24)
+}
+
+/// El mismo pintado a un tamaño DADO: lo que degrada con el ancho (el índice
+/// de secciones de los ajustes, por ejemplo) no se puede comprobar a uno
+/// solo.
+fn render_en(app: &App, ancho: u16, alto: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(ancho, alto)).expect("terminal");
     terminal.draw(|f| ui::draw(f, app)).expect("draw");
     terminal.backend().to_string()
 }
@@ -2462,6 +2469,10 @@ fn la_lista_de_ajustes_sigue_al_cursor() {
 /// general que este caso —si el cursor está en la PRIMERA fila de su sección,
 /// la cabecera de esa sección entra en la ventana con él— y esto la fija por
 /// su síntoma.
+///
+/// «General» ya no existe: las 33 entradas se repartieron en siete
+/// secciones. La regla del ancla sí, y sigue siendo la que vale para las
+/// cabeceras que SCROLLEAN — la clavada de arriba es otra pieza.
 #[test]
 fn la_cabecera_de_la_seccion_vuelve_al_subir() {
     let mut app = app_base();
@@ -2477,9 +2488,87 @@ fn la_cabecera_de_la_seccion_vuelve_al_subir() {
     app.settings.as_mut().expect("ajustes").set_cursor(0);
     ui::before_frame(&mut app, area);
     let pantalla = render_80x24(&app);
+    let primera = norte_i18n::t("settings-section-appearance");
     assert!(
-        pantalla.contains("General"),
-        "la cabecera de la sección tiene que volver al subir:\n{pantalla}"
+        pantalla.contains(&primera),
+        "al volver arriba se tiene que ver de qué sección es la fila:\n{pantalla}"
+    );
+}
+
+/// La cabecera de la sección del cursor va CLAVADA arriba: se ve estés donde
+/// estés dentro de ella, y cambia al cruzar a la siguiente.
+///
+/// Es la pieza que hace imposible el bug que Oscar vio («General no vuelve a
+/// subir»): el rótulo que dice dónde estás deja de depender del scroll.
+#[test]
+fn la_cabecera_clavada_sigue_a_la_seccion_del_cursor() {
+    let mut app = app_base();
+    app.settings = Some(norte_tui::app::Settings::new(
+        norte_tui::settings::build_rows(&cfg_vacia(), &[]),
+    ));
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    ui::before_frame(&mut app, area);
+    let arriba = render_80x24(&app);
+    let primera = norte_i18n::t("settings-section-appearance");
+    assert!(
+        arriba.contains(&primera),
+        "arriba manda la primera sección («{primera}»):\n{arriba}"
+    );
+
+    // Hasta la última fila: la clavada tiene que ser OTRA.
+    let ultima = app.settings.as_ref().expect("ajustes").visible().len() - 1;
+    app.settings.as_mut().expect("ajustes").set_cursor(ultima);
+    ui::before_frame(&mut app, area);
+    let abajo = render_80x24(&app);
+    let ultima_seccion = norte_i18n::t("settings-section-plugins");
+    assert!(
+        abajo.contains(&ultima_seccion),
+        "al final manda la suya («{ultima_seccion}»):\n{abajo}"
+    );
+}
+
+/// Con sitio, el índice está; sin sitio, se va. La misma degradación que
+/// hacen las columnas de un panel: una columna que no cabe no se encoge
+/// hasta ser ilegible, se va.
+#[test]
+fn el_indice_de_secciones_desaparece_en_una_terminal_estrecha() {
+    let mut app = app_base();
+    app.settings = Some(norte_tui::app::Settings::new(
+        norte_tui::settings::build_rows(&cfg_vacia(), &[]),
+    ));
+    let abrir_con = norte_i18n::t("settings-section-open-with");
+
+    let ancha = ratatui::layout::Rect::new(0, 0, 110, 24);
+    ui::before_frame(&mut app, ancha);
+    let pantalla = render_en(&app, 110, 24);
+    assert!(
+        pantalla.contains(&abrir_con),
+        "el índice lista las secciones a las que el cursor no ha ido:\n{pantalla}"
+    );
+
+    let estrecha = ratatui::layout::Rect::new(0, 0, 50, 24);
+    ui::before_frame(&mut app, estrecha);
+    let pantalla = render_en(&app, 50, 24);
+    assert!(
+        !pantalla.contains(&abrir_con),
+        "a 50 columnas no cabe el índice y manda la lista:\n{pantalla}"
+    );
+}
+
+/// La cuenta del filtro. Sin la segunda cifra, «no hay nada» y «lo tapé con
+/// una letra» se leen igual.
+#[test]
+fn el_pie_dice_cuantos_ajustes_se_ven_de_cuantos() {
+    let mut app = app_base();
+    let settings =
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
+    let total = settings.total();
+    app.settings = Some(settings);
+    ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
+    let pantalla = render_80x24(&app);
+    assert!(
+        pantalla.contains(&total.to_string()),
+        "el total ({total}) se dice siempre:\n{pantalla}"
     );
 }
 

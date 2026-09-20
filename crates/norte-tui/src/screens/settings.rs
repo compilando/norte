@@ -35,6 +35,9 @@ enum SettingsKeyOutcome {
     /// el resto (clippy `large_enum_variant`) — indirección, no un tipo
     /// distinto.
     Write(Box<PendingWrite>),
+    /// `Ctrl+R`: quitar la clave de este ajuste de la capa de escritura.
+    /// Boxed por lo mismo que [`Self::Write`].
+    Reset(Box<norte_frontend::settings::PendingReset>),
     /// `Settings::edit_commit` rechazó el buffer — anunciar el error, sin
     /// tocar nada (el buffer se queda, `Settings` ya lo conserva).
     Invalid(SettingsEditError),
@@ -86,6 +89,20 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
             }
         } else {
             match code {
+                // ANTES del brazo genérico de `Char`, que se las comería: el
+                // filtro de este overlay captura TODO imprimible. Son teclas
+                // LOCALES, no comandos del catálogo — un comando obligaría a
+                // bindearlo en los siete presets, y el precio de aquí es que
+                // no se puede buscar un corchete, que no aparece en el nombre
+                // de ningún ajuste.
+                KeyCode::Char('[') if plain => {
+                    settings.step_section(-1);
+                    SettingsKeyOutcome::None
+                }
+                KeyCode::Char(']') if plain => {
+                    settings.step_section(1);
+                    SettingsKeyOutcome::None
+                }
                 KeyCode::Char(c) if plain => {
                     settings.push_char(c);
                     SettingsKeyOutcome::None
@@ -101,6 +118,12 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
                 KeyCode::Char('k') if mods == KeyModifiers::CONTROL => {
                     SettingsKeyOutcome::OpenShortcuts
                 }
+                // Restablecer. `Ctrl+R` y no una letra suelta por lo mismo
+                // que `Ctrl+K`: aquí una `r` es texto del filtro.
+                KeyCode::Char('r') if mods == KeyModifiers::CONTROL => match settings.reset() {
+                    Some(reset) => SettingsKeyOutcome::Reset(Box::new(reset)),
+                    None => SettingsKeyOutcome::None,
+                },
                 KeyCode::Up if plain => {
                     settings.up();
                     SettingsKeyOutcome::None
@@ -138,9 +161,71 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
         SettingsKeyOutcome::None => {}
         SettingsKeyOutcome::Close => app.settings = None,
         SettingsKeyOutcome::Write(write) => persist_setting(app, *write).await,
+        SettingsKeyOutcome::Reset(reset) => reset_setting(app, *reset).await,
         SettingsKeyOutcome::Invalid(e) => app.message = Some(settings_edit_error_message(&e)),
         SettingsKeyOutcome::OpenShortcuts => {
             app.shortcuts = Some(Shortcuts::new(shortcut_rows(maps)));
+        }
+    }
+}
+
+/// Quita la clave de un ajuste de la capa de escritura (`Ctrl+R`) y dice
+/// QUÉ pasó de verdad.
+///
+/// Quitar la clave de tu capa no siempre devuelve el valor de fábrica: si el
+/// sistema, el perfil o el proyecto fijan la misma, el valor cambia y sigue
+/// sin ser el defecto. Así que después de escribir se relee la configuración
+/// y se mira la fila: si sigue modificada, lo dice. Sin esto, «restablecido»
+/// sería mentira la mitad de las veces y el lector iría a buscar el bug a
+/// donde no está.
+async fn reset_setting(app: &mut App, reset: norte_frontend::settings::PendingReset) {
+    let Some(dir) = app.config_write_dir() else {
+        app.message = Some(t("msg-settings-no-config-dir"));
+        return;
+    };
+    let norte_frontend::settings::PendingReset {
+        section,
+        key,
+        id,
+        name,
+    } = reset;
+    // Las MISMAS capas con las que se escribe, perfil incluido: releer con
+    // otras contestaría sobre una configuración que este proceso no usa.
+    let capas = config::standard_layers_with_profile(app.active_profile.as_deref());
+    match tokio::task::spawn_blocking(move || {
+        config::persist_unset(&dir, section, &key).map(|out| {
+            // La relectura va en el MISMO hilo de fondo: es I/O de fichero
+            // y aquí es donde se puede hacer (regla 2).
+            let sigue = config::load(&capas).ok().map(|cfg| {
+                norte_frontend::settings::build_rows(&cfg, &[])
+                    .into_iter()
+                    .find(|r| r.id() == Some(id))
+                    .is_some_and(|r| r.modified)
+            });
+            (out, sigue)
+        })
+    })
+    .await
+    {
+        Ok(Ok((_out, sigue))) => {
+            // `None` = la relectura falló; se dice lo que sí se sabe (la
+            // clave se quitó) en vez de afirmar de dónde viene el valor.
+            let clave = if sigue == Some(true) {
+                "settings-still-set-elsewhere"
+            } else {
+                "settings-reset-done"
+            };
+            app.message = Some(ta(clave, &[("name", &name)]));
+        }
+        Ok(Err(e)) => {
+            app.message = Some(ta(
+                "msg-settings-save-failed",
+                &[("error", &io_error_category(&e))],
+            ));
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "tarea de fondo de reset_setting no terminó");
+            app.message = Some(t("msg-settings-save-crashed"));
         }
     }
 }
@@ -257,6 +342,17 @@ mod settings_message_tests {
                 "msg-settings-save-crashed",
                 "falta la clave en {lang:?}"
             );
+        }
+    }
+
+    /// Las dos claves de restablecer, por lo mismo: la que dice que otra
+    /// capa lo fija es justo la que nadie prueba a mano.
+    #[test]
+    fn las_claves_de_restablecer_existen_en_ambos_locales() {
+        for clave in ["settings-reset-done", "settings-still-set-elsewhere"] {
+            for lang in [Lang::Es, Lang::En] {
+                assert_ne!(t_in(lang, clave), clave, "falta «{clave}» en {lang:?}");
+            }
         }
     }
 }

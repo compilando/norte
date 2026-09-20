@@ -70,6 +70,16 @@ export class Screen {
   dialogoPintado: number | null = null;
   /// El campo de texto vivo del diálogo de arriba, para REUSARLO.
   dialogoInput: HTMLInputElement | null = null;
+  /**
+   * La barra de búsqueda de los ajustes, conservada entre repintados.
+   *
+   * Cada tecla del buscador provoca un parche del host, o sea un repintado:
+   * si el `<input>` se recreara, se destruiría con el primer carácter y el
+   * foco y el caret se irían con él. Es el tercer sitio de esta ventana con
+   * el mismo fallo —el campo de un diálogo y el filtro del registro fueron
+   * los otros dos— y la misma cura: conservar el nodo.
+   */
+  settingsBarra: HTMLElement | null = null;
   /** Los mandos del registro, conservados entre repintados (#326). */
   logControles: HTMLElement | null = null;
   /** El hueco al que pertenecen: otro hueco, otros mandos. */

@@ -9,6 +9,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The settings screen has sections** (ADR 0129, bridge 81). The 33 options
+  were all under one heading called `General`; they are now split into
+  appearance, panes and listing, open with, keyboard and mouse, behaviour,
+  plugins, and where things live. The heading of the section you are in
+  stays pinned at the top, an index on the left says how many options each
+  section is showing and jumps to them (`[` and `]` in the terminal, a click
+  in the window), and the search grows two operators: `@modified` for what
+  you have changed and `@section:appearance` for one section — in either
+  language, so a translation file cannot be the difference between finding
+  something and not. A dot marks every option that is not at its factory
+  value, and `ctrl+r` — or the row's button in the window — puts it back.
+  Putting it back removes the key from your file rather than writing the
+  default: if a layer below sets the same key, the value changes and still
+  is not the factory one, and norte says so instead of letting you think it
+  did not work.
 - **Search can be narrowed** (protocol 0.81.0). `fs.search` grows ten
   optional filters and the terminal's dialog grows the fields for them: skip
   folders by name at any level (`target, node_modules, .git`), a size range

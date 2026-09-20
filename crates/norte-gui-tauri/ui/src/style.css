@@ -2138,6 +2138,88 @@ body {
   border-bottom: 1px solid var(--separator, var(--border));
 }
 
+/* El buscador y las dos cifras. La cuenta va SIEMPRE: sin la segunda, «no
+   hay nada» y «lo tapé con una letra» se leen igual. */
+.settings-search-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+}
+
+.settings-search {
+  flex: 1;
+  padding: 4px 8px;
+  color: var(--fg);
+  font: inherit;
+  background: var(--input-bg, var(--bg));
+  border: 1px solid var(--border);
+}
+
+.settings-count {
+  color: var(--muted-fg, var(--fg));
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dos paneles: índice e lista. Por debajo de 700px el índice pasa arriba,
+   en horizontal — a ese ancho una columna de secciones deja el nombre de
+   cada ajuste sin sitio. */
+.settings-body {
+  display: grid;
+  grid-template-columns: 22ch 1fr;
+  gap: 0 12px;
+  min-height: 0;
+  flex: 1;
+}
+
+@media (width <= 700px) {
+  .settings-body {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-index {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+}
+
+.settings-index {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  border-right: 1px solid var(--separator, var(--border));
+}
+
+.settings-index-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 8px 3px 4px;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.settings-index-item:hover:not(:disabled) {
+  background: var(--hover-bg, var(--panel-bg));
+}
+
+/* Vacía por el filtro: se queda, apagada. Un índice que cambia de largo
+   mientras escribes no se puede usar como mapa. */
+.settings-index-item[data-empty="true"] {
+  color: var(--muted-fg, var(--fg));
+  opacity: 0.55;
+  cursor: default;
+}
+
+.settings-index-count {
+  font-variant-numeric: tabular-nums;
+}
+
 .settings-rows {
   margin: 0;
   padding: 0;
@@ -2145,9 +2227,30 @@ body {
   overflow: auto;
 }
 
+/* PEGAJOSA: al desplazar, el rótulo de la sección en la que estás se queda
+   arriba. Con fondo opaco — una cabecera translúcida con filas pasando por
+   debajo es ilegible. */
 .settings-group {
-  padding: 8px 0 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 0 2px;
   color: var(--title-fg);
+  background: var(--panel-bg);
+}
+
+/* El punto de «esto lo has tocado tú», y el botón que lo deshace. */
+.settings-dot {
+  color: var(--accent, var(--title-fg));
+}
+
+.settings-reset {
+  padding: 0 6px;
+  color: var(--fg);
+  font: inherit;
+  background: none;
+  border: 1px solid var(--border);
+  cursor: pointer;
 }
 
 .settings-row {

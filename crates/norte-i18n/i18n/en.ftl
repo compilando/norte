@@ -795,10 +795,25 @@ msg-palette-no-help = no help page documents this command yet
 # --- Settings overlay (S3) — same free-text-filter idiom as the palette
 # above (decision 8): search is always active, Enter toggles/cycles/edits.
 settings-title = Settings
-settings-hint = [↑/↓/pgup/pgdn] navigate · [enter] edit · [esc] close
+settings-hint = [[/]] section · [enter] edit · [ctrl+r] reset · [esc] close
 settings-edit-hint = [enter] save · [esc] cancel
+# obsolete: all 33 entries used to live here. Removed next cycle.
 settings-section-general = General
+settings-section-appearance = Appearance
+settings-section-panes = Panes and listing
+settings-section-open-with = Open with
+settings-section-input = Keyboard and mouse
+settings-section-behavior = Behaviour
 settings-section-plugins = Plugins
+settings-count = {$shown} of {$total}
+settings-modified = not the factory value
+settings-reset = Reset
+settings-reset-done = "{$name}" is back to its factory value
+# Removing the key from YOUR layer does not always restore the factory
+# value: if the profile or the project set the same one, the value changes
+# and still is not the default. Say so, rather than leave the reader
+# thinking it did not work.
+settings-still-set-elsewhere = "{$name}" is still set by another layer (profile or project): it does not go back to the factory value
 settings-plugins-name = Plugin settings
 settings-plugins-note = No installed plugin declares configurable settings.
 settings-plugins-open-hint = [enter] open this plugin's settings

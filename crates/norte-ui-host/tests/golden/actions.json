@@ -299,6 +299,18 @@
     "action": "settings_activate",
     "row": 2
   },
+  "settings_jump_section": {
+    "action": "settings_jump_section",
+    "section": "open-with"
+  },
+  "settings_query": {
+    "action": "settings_query",
+    "text": "@modified fira"
+  },
+  "settings_reset": {
+    "action": "settings_reset",
+    "row": 2
+  },
   "settings_select_row": {
     "action": "settings_select_row",
     "row": 2

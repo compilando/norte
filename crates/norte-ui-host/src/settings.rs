@@ -13,12 +13,14 @@
 use std::path::PathBuf;
 
 use norte_frontend::settings::{
-    PendingWrite, Row, SettingsEditError, SettingsState, build_rows_in,
+    PendingWrite, Row, Section, SettingsEditError, SettingsState, build_rows_in,
 };
 use norte_i18n::Lang;
 
 use crate::bridge::clamp_display;
-use crate::dto::{PathRowView, SettingRowView, SettingsSectionView, SettingsView};
+use crate::dto::{
+    PathRowView, SectionIndexView, SettingRowView, SettingsSectionView, SettingsView,
+};
 
 /// Una capa de configuración, nombrada como la nombra el usuario.
 ///
@@ -105,8 +107,14 @@ pub(crate) enum Activacion {
         nombre: String,
         /// Qué dice ahora.
         actual: String,
-        /// Sobre qué fila PLANA se preguntó, para volver a ella al confirmar.
-        fila: usize,
+        /// SOBRE QUÉ se preguntó, por su id del catálogo.
+        ///
+        /// Un id y no un número de fila: el diálogo se queda abierto
+        /// mientras el buscador de detrás sigue vivo, y una posición deja de
+        /// nombrar la misma fila en cuanto el filtro cambia — confirmar
+        /// escribiría el valor tecleado en OTRO ajuste. Una posición no
+        /// nombra una fila en una lista que se mueve.
+        id: &'static str,
     },
 }
 
@@ -157,9 +165,98 @@ impl Ajustes {
         self.estado.refresh(filas_de(cfg, lang));
     }
 
-    /// Cuántas filas elegibles hay en total.
+    /// Cuántas filas elegibles hay AHORA: las que el filtro deja ver, más
+    /// las ubicaciones, que no se filtran (son diagnóstico, no ajustes).
     fn total(&self) -> usize {
-        self.estado.rows().len() + self.rutas.len()
+        self.estado.shown() + self.rutas.len()
+    }
+
+    /// La fila plana `fila` como posición dentro de las VISIBLES del editor,
+    /// o `None` si cae en las ubicaciones (o fuera).
+    ///
+    /// Es la traducción que el `debug_assert` de antes decía que haría falta
+    /// el día que esta ventana filtrara: con filtro puesto, la fila plana
+    /// tercera no es la tercera del registro.
+    fn fila_visible(&self, fila: usize) -> Option<usize> {
+        (fila < self.estado.shown()).then_some(fila)
+    }
+
+    /// Pone la consulta del buscador.
+    ///
+    /// El cursor se re-encaja: filtrando, la fila a la que apuntaba puede
+    /// haberse ido, y un cursor fuera de la lista es un Enter que activa
+    /// otra cosa.
+    pub(crate) fn consultar(&mut self, texto: &str) {
+        self.estado.set_query(texto);
+        let total = self.total();
+        self.cursor = if total == 0 {
+            0
+        } else {
+            self.cursor.min(total - 1)
+        };
+    }
+
+    /// Lleva el cursor a la primera fila de una sección, nombrada por su
+    /// clave estable. Una que no existe, o que el filtro vació, no mueve
+    /// nada.
+    pub(crate) fn saltar(&mut self, clave: &str) {
+        let Some(seccion) = Section::ORDER
+            .iter()
+            .copied()
+            .find(|s| s.stable_key() == clave)
+        else {
+            return;
+        };
+        if seccion == Section::Paths {
+            // Las ubicaciones van detrás de todo y no las lleva el editor.
+            if !self.rutas.is_empty() {
+                self.cursor = self.estado.shown();
+            }
+            return;
+        }
+        // Se decide con la PROYECCIÓN, no comparando el cursor del editor
+        // antes y después: ese cursor y el de esta ventana son dos, y solo
+        // `activar` los sincroniza — así que «no se movió» no significaba
+        // nada, y saltar a una sección vacía movía el cursor a la primera
+        // fila de la lista.
+        let Some(vista) = self
+            .estado
+            .sections()
+            .into_iter()
+            .find(|v| v.section == seccion)
+        else {
+            return;
+        };
+        let Some(primera) = vista.first_row else {
+            return; // Vacía por el filtro: no es un sitio al que ir.
+        };
+        self.estado.set_cursor(primera);
+        self.cursor = primera;
+    }
+
+    /// ¿La fila de este id sigue diciendo que no es de fábrica?
+    ///
+    /// Se pregunta DESPUÉS de releer, y es lo que distingue «restablecido»
+    /// de «lo fija otra capa» sin construir procedencia de capas.
+    pub(crate) fn sigue_modificada(&self, id: &str) -> bool {
+        self.estado
+            .rows()
+            .iter()
+            .find(|r| r.id() == Some(id))
+            .is_some_and(|r| r.modified)
+    }
+
+    /// Restablecer la fila `fila`: la clave que hay que quitar, o `None`.
+    ///
+    /// Una ubicación no se restablece —no es un ajuste— y una fila que ya
+    /// está en su valor de fábrica tampoco.
+    pub(crate) fn restablecer(
+        &mut self,
+        fila: usize,
+    ) -> Option<norte_frontend::settings::PendingReset> {
+        let visible = self.fila_visible(fila)?;
+        self.estado.set_cursor(visible);
+        self.estado.reset()
     }
 
     /// Enter sobre la fila del cursor.
@@ -167,19 +264,11 @@ impl Ajustes {
     /// Las listas de temas y presets llegan de fuera y VIVAS, como en el
     /// terminal: el tema efectivo puede haber cambiado en caliente.
     pub(crate) fn activar(&mut self, temas: &[String], presets: &[&str]) -> Activacion {
-        let fila = self.cursor;
-        // El cursor plano indexa `rows()` directamente, y eso solo vale
-        // mientras el editor no filtre: sin consulta, `visible()` es la
-        // identidad. Quien le dé un filtro a esta ventana tiene que pasar de
-        // fila plana a fila visible, y esto es lo que se lo recuerda.
-        debug_assert_eq!(
-            self.estado.visible().len(),
-            self.estado.rows().len(),
-            "el editor no filtra en la ventana"
-        );
-        if fila >= self.estado.rows().len() {
+        // De fila PLANA a fila VISIBLE: con el buscador puesto, la tercera
+        // fila de la pantalla no es la tercera del registro.
+        let Some(fila) = self.fila_visible(self.cursor) else {
             return Activacion::Nada;
-        }
+        };
         self.estado.set_cursor(fila);
         if let Some(write) = self.estado.activate(temas, presets) {
             return Activacion::Escribir(Box::new(write));
@@ -193,33 +282,48 @@ impl Ajustes {
         // misma fila, y un diálogo cancelado no deja nada que cerrar.
         let actual = self.estado.edit_buffer().unwrap_or_default().to_owned();
         self.estado.edit_cancel();
-        let nombre = self.estado.rows()[fila].name.clone();
-        Activacion::PedirTexto {
-            nombre,
-            actual,
-            fila,
-        }
+        // Por `visible[fila]`, no por `fila`: `fila` es una posición entre
+        // las VISIBLES, y con filtro puesto indexar `rows()` con ella daba
+        // el nombre de otro ajuste — el diálogo decía «Tema» y escribía el
+        // editor.
+        let real = self.estado.visible()[fila];
+        let fila_actual = &self.estado.rows()[real];
+        let nombre = fila_actual.name.clone();
+        let Some(id) = fila_actual.id() else {
+            return Activacion::Nada;
+        };
+        Activacion::PedirTexto { nombre, actual, id }
     }
 
-    /// El valor que el diálogo trajo para la fila `fila`.
+    /// El valor que el diálogo trajo para el ajuste `id`.
     ///
     /// Vuelve a entrar en la edición de esa fila, pone el texto entero y
     /// confirma: la validación —rango de un entero, forma de una línea de
     /// órdenes— es la del editor compartido, no una copia.
     ///
+    /// Se busca POR ID y no por posición: el buscador de detrás sigue vivo
+    /// mientras el diálogo está abierto, y una posición deja de nombrar la
+    /// misma fila en cuanto el filtro cambia.
+    ///
     /// # Errors
-    /// Lo que el editor rechaza, sin escribir nada. Una fila que ya no pide
-    /// texto —el registro cambió bajo el diálogo— se rechaza como un entero
-    /// inválido: es el fallo inerte del editor, y no hay nada que escribir.
+    /// Lo que el editor rechaza, sin escribir nada. Un ajuste que ya no está
+    /// visible —el filtro cambió bajo el diálogo— o que ya no pide texto se
+    /// rechaza como un entero inválido: es el fallo inerte del editor, y no
+    /// hay nada que escribir.
     pub(crate) fn confirmar_texto(
         &mut self,
-        fila: usize,
+        id: &str,
         texto: &str,
     ) -> Result<PendingWrite, SettingsEditError> {
-        if fila >= self.estado.rows().len() {
+        let Some(visible) = self
+            .estado
+            .visible()
+            .iter()
+            .position(|&i| self.estado.rows()[i].id() == Some(id))
+        else {
             return Err(SettingsEditError::NotAnInt);
-        }
-        self.estado.set_cursor(fila);
+        };
+        self.estado.set_cursor(visible);
         // Sin listas: una fila de texto no las mira, y una que las mirara
         // giraría en vez de editar, que es justo lo que el guard de abajo
         // rechaza. Con la lista vacía `cycle` devuelve el valor que había, así
@@ -257,19 +361,64 @@ impl Ajustes {
         }
     }
 
-    /// La proyección.
+    /// La proyección: una sección por cada una que tenga filas, en el orden
+    /// de la pantalla, más el índice y las dos cifras del buscador.
+    ///
+    /// Una sección que el FILTRO vació sigue en el índice, apagada; una que
+    /// esta superficie no tiene no aparece. Las ubicaciones van al final y
+    /// no las toca el filtro: son diagnóstico, no ajustes.
     pub(crate) fn vista(&self, lang: Lang) -> SettingsView {
-        let general = SettingsSectionView::Settings {
-            title: clamp_display(norte_i18n::t_in(lang, "settings-section-general")),
-            rows: self.estado.rows().iter().map(proyectar_fila).collect(),
-        };
-        let rutas = SettingsSectionView::Paths {
-            title: clamp_display(norte_i18n::t_in(lang, "settings-section-paths")),
-            rows: self.rutas.clone(),
-        };
+        let indice = self.estado.sections();
+        let mut sections = Vec::new();
+        for v in &indice {
+            if v.section == Section::Paths || v.total == 0 {
+                continue;
+            }
+            let filas: Vec<_> = self
+                .estado
+                .visible()
+                .iter()
+                .map(|&i| &self.estado.rows()[i])
+                .filter(|r| r.section == v.section)
+                .map(proyectar_fila)
+                .collect();
+            if filas.is_empty() {
+                continue;
+            }
+            sections.push(SettingsSectionView::Settings {
+                title: clamp_display(norte_i18n::t_in(lang, v.section.label_key())),
+                rows: filas,
+            });
+        }
+        if !self.rutas.is_empty() {
+            sections.push(SettingsSectionView::Paths {
+                title: clamp_display(norte_i18n::t_in(lang, "settings-section-paths")),
+                rows: self.rutas.clone(),
+            });
+        }
+        let mut index: Vec<SectionIndexView> = indice
+            .iter()
+            .filter(|v| v.section != Section::Paths && v.total > 0)
+            .map(|v| SectionIndexView {
+                key: v.section.stable_key().to_owned(),
+                title: clamp_display(norte_i18n::t_in(lang, v.section.label_key())),
+                visible: v.visible as u64,
+            })
+            .collect();
+        if !self.rutas.is_empty() {
+            index.push(SectionIndexView {
+                key: Section::Paths.stable_key().to_owned(),
+                title: clamp_display(norte_i18n::t_in(lang, "settings-section-paths")),
+                visible: self.rutas.len() as u64,
+            });
+        }
         SettingsView {
-            sections: vec![general, rutas],
+            sections,
+            index,
             cursor: self.cursor as u64,
+            query: clamp_display(self.estado.query_display()),
+            shown: self.estado.shown() as u64,
+            total: self.estado.total() as u64,
         }
     }
 }
@@ -334,6 +483,7 @@ fn proyectar_fila(r: &Row) -> SettingRowView {
         // Decir que una entrada se aplica sola cuando no lo hace es la clase
         // de mentira que manda al usuario a buscar un bug que no existe.
         restart_required: r.id().is_none_or(pide_reinicio),
+        modified: r.modified,
     }
 }
 

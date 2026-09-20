@@ -314,9 +314,9 @@ impl Estado {
             }
             // El valor de una entrada de texto de los ajustes: lo valida el
             // editor compartido y, si vale, se escribe.
-            Some(Pendiente::EditarAjuste { fila }) => {
+            Some(Pendiente::EditarAjuste { id }) => {
                 let (motivo, partes) =
-                    self.confirmar_valor_de_ajuste(fila, dialogo.tecleado.texto(), buzon);
+                    self.confirmar_valor_de_ajuste(id, dialogo.tecleado.texto(), buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }

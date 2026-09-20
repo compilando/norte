@@ -438,7 +438,24 @@ use serde::{Deserialize, Serialize};
 ///   quien tiene el hueco; el host lleva la cuenta de los peldaños. Con
 ///   `serde(default)` a 100, que es ajustada: un host anterior no lo manda y
 ///   el renderer pinta lo que pintaba.
-pub const BRIDGE_VERSION: u32 = 80;
+/// - 81: los ajustes, por secciones. `SettingsView` gana `index` —todas las
+///   secciones que esta superficie tiene, con cuántas filas se ven de cada
+///   una—, `query`, `shown` y `total`; `SettingRowView` gana `modified`, el
+///   punto de «esto no es de fábrica», que se calcula contra el valor por
+///   defecto y no contra «hay una clave en tu fichero». `sections` deja de
+///   ser una lista de dos —General y las rutas— y pasa a llevar una por
+///   sección con filas que enseñar.
+///
+///   El índice viaja APARTE de `sections` porque una sección que el filtro
+///   vació sigue en el índice, apagada, y no tiene nada que pintar debajo:
+///   un índice que cambia de largo mientras escribes no vale como mapa.
+///
+///   Y tres acciones: `settings_query` (el texto ENTERO del buscador, no la
+///   tecla — las imprimibles no llegan al host, que es por lo que esta
+///   pantalla no tuvo filtro hasta ahora), `settings_jump_section` (por la
+///   clave ESTABLE de la sección, para que el salto no dependa del idioma) y
+///   `settings_reset` (quitar la clave de la capa de escritura).
+pub const BRIDGE_VERSION: u32 = 81;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///
