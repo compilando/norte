@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 82;
+export const BRIDGE_VERSION = 83;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -966,6 +966,15 @@ export interface SettingRowView {
   /** El valor se pinta DISTINTO de lo que es. */
   hostile: boolean;
   restart_required: boolean;
+  /** Su valor DE FÁBRICA: lo que un campo vacío enseña como marcador. */
+  default: string;
+  /** Qué control pide esta fila. `none` = no se edita desde aquí. */
+  control: "toggle" | "choice" | "number" | "text" | "args" | "none";
+  /** Los valores admitidos si es `choice`; vacío si no. Ya resueltos. */
+  choices: string[];
+  /** Topes de un `number`, los dos incluidos. */
+  min: number | null;
+  max: number | null;
   /** No es el valor de fábrica: el punto de «esto lo has tocado tú». */
   modified: boolean;
 }
@@ -1602,6 +1611,8 @@ export type UiAction =
   /** Por la clave ESTABLE de la sección, no por su rótulo traducido. */
   | { action: "settings_jump_section"; section: string }
   | { action: "settings_reset"; row: number }
+  /** Pone un valor concreto: lo que manda un interruptor o un desplegable. */
+  | { action: "settings_set"; id: string; value: string }
   | { action: "extension_select_row"; row: number }
   /**
    * Un BOTÓN del gestor sobre una fila (puente 61): la señala y hace lo que

@@ -495,6 +495,24 @@ pub enum UiAction {
         /// Fila, contando TODAS las de todas las secciones en orden.
         row: u32,
     },
+    /// Pone un valor CONCRETO en un ajuste: lo que manda un interruptor, un
+    /// desplegable o un campo numérico de la ventana.
+    ///
+    /// Por el ID del catálogo y no por la fila: un control tarda lo que
+    /// tarda el lector en soltarlo, y el filtro de detrás puede haber
+    /// cambiado qué filas hay. Una posición no nombra una fila en una lista
+    /// que se mueve.
+    ///
+    /// Y es PONER, no activar: `settings_activate` cicla, así que elegir el
+    /// séptimo tema de un desplegable serían siete viajes y seis escrituras
+    /// en el `norte.toml`. El valor lo valida el editor compartido, nunca el
+    /// renderer.
+    SettingsSet {
+        /// El id del catálogo (`ui.theme`).
+        id: String,
+        /// El valor, como texto. Un booleano viaja como `true`/`false`.
+        value: String,
+    },
     /// Pone delante la pestaña de este hueco (un click).
     SelectTab {
         /// El hueco que hay dentro de la pestaña elegida.

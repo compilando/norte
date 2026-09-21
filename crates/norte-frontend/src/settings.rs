@@ -386,6 +386,83 @@ fn factory_config() -> Option<&'static FrontendConfig> {
         .as_ref()
 }
 
+/// Qué clase de control pide un ajuste, y con qué valores.
+///
+/// Es lo que un frontend GRÁFICO necesita para pintar un interruptor en vez
+/// de la palabra `true`: el terminal se apaña con el ciclo de
+/// [`SettingsState::activate`], pero una ventana tiene controles de verdad y
+/// no puede adivinar de qué clase es cada fila mirando su texto.
+///
+/// Las listas vivas —temas y presets— NO salen de aquí: las resuelve quien
+/// llama, como en [`SettingsState::activate`], porque cambian en caliente.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Control {
+    /// Un interruptor.
+    Toggle,
+    /// Una lista cerrada, con sus valores.
+    Choice(&'static [&'static str]),
+    /// Una lista cuyos valores resuelve quien llama: los temas.
+    ThemeChoice,
+    /// Lo mismo con los presets de teclado.
+    PresetChoice,
+    /// Un número entre dos topes, los dos incluidos.
+    Number {
+        /// Tope inferior.
+        min: i64,
+        /// Tope superior.
+        max: i64,
+    },
+    /// Texto libre.
+    Text,
+    /// Una línea de órdenes: se teclea como texto y se guarda troceada.
+    Args,
+}
+
+/// El control que pide el ajuste `id`, o `None` si no es del catálogo.
+///
+/// ```
+/// use norte_frontend::settings::{control_of, Control};
+/// assert_eq!(control_of("ui.mouse"), Some(Control::Toggle));
+/// assert!(matches!(control_of("ui.font-size"), Some(Control::Number { .. })));
+/// assert_eq!(control_of("ni.idea"), None);
+/// ```
+#[must_use]
+pub fn control_of(id: &str) -> Option<Control> {
+    let def = catalog().iter().find(|d| d.id == id)?;
+    Some(match def.kind {
+        SettingKind::Bool => Control::Toggle,
+        SettingKind::Enum(v) => Control::Choice(v),
+        SettingKind::ThemeName => Control::ThemeChoice,
+        SettingKind::PresetName => Control::PresetChoice,
+        SettingKind::Int { min, max } => Control::Number { min, max },
+        SettingKind::Text => Control::Text,
+        SettingKind::Args => Control::Args,
+    })
+}
+
+/// El valor DE FÁBRICA de una entrada, como texto de pantalla.
+///
+/// Es [`current_value`] sobre la configuración de cero capas: la misma
+/// función que pinta el valor, no una segunda tabla de defectos que se
+/// desincronice. Vacío si la configuración de fábrica no se pudo cargar,
+/// que es lo mismo que enseña una fila sin valor.
+///
+/// Lo pinta la ventana como marcador de un campo vacío: «vacío» no es un
+/// hueco, es este valor, y decir cuál informa — decirlo con una frase ocupa
+/// el sitio del dato sin darlo.
+///
+/// ```
+/// use norte_frontend::settings::{catalog, default_value};
+/// let tema = catalog().iter().find(|d| d.id == "ui.theme").expect("ui.theme");
+/// assert_eq!(default_value(tema), "default");
+/// ```
+#[must_use]
+pub fn default_value(def: &SettingDef) -> String {
+    factory_config()
+        .map(|f| current_value(def, f))
+        .unwrap_or_default()
+}
+
 /// El reparto del catálogo en secciones, en UN sitio.
 ///
 /// `None` para un id que no es del catálogo. Un id del catálogo que
@@ -1529,6 +1606,96 @@ impl SettingsState {
         }
     }
 
+    /// Pone un valor CONCRETO en la fila `id` — lo que necesita un control
+    /// de ventana (un interruptor, un desplegable, un campo numérico).
+    ///
+    /// Existe porque [`Self::activate`] **cicla**: con un desplegable de
+    /// diez temas, elegir el séptimo serían siete viajes y seis escrituras
+    /// en el `norte.toml`. Aquí el control dice a qué valor va y se escribe
+    /// una vez.
+    ///
+    /// La validación es la MISMA que la del teclado: un entero pasa por el
+    /// rango del catálogo, una línea de órdenes se trocea igual, y un valor
+    /// que no está en la lista de un enum se rechaza. Nada de esto vive en
+    /// el renderer — un frontend que validara por su cuenta sería una
+    /// segunda regla que se separa de la primera.
+    ///
+    /// `theme_names`/`preset_names` llegan VIVAS, como en [`Self::activate`].
+    ///
+    /// # Errors
+    /// [`SettingsEditError`] con el mismo criterio que [`Self::edit_commit`];
+    /// una fila que no existe, que no sale del catálogo, o un valor fuera de
+    /// la lista de su enum se rechazan como un entero inválido — el fallo
+    /// inerte que el editor ya usa para «esto no se puede escribir».
+    pub fn set_value(
+        &mut self,
+        id: &str,
+        valor: &str,
+        theme_names: &[String],
+        preset_names: &[&str],
+    ) -> Result<PendingWrite, SettingsEditError> {
+        if self.edit.is_some() {
+            return Err(SettingsEditError::NotAnInt);
+        }
+        let Some(pos) = self
+            .visible
+            .iter()
+            .position(|&i| self.rows[i].id() == Some(id))
+        else {
+            return Err(SettingsEditError::NotAnInt);
+        };
+        let real = self.visible[pos];
+        let Some(idx) = self.rows[real].def_index else {
+            return Err(SettingsEditError::NotAnInt);
+        };
+        let def = &catalog()[idx];
+        match def.kind {
+            SettingKind::Bool => {
+                let b = match valor {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(SettingsEditError::NotAnInt),
+                };
+                Ok(self.commit_row(real, def, b.to_string(), toml_edit::Value::from(b)))
+            }
+            SettingKind::Enum(values) => {
+                if !values.contains(&valor) {
+                    return Err(SettingsEditError::NotAnInt);
+                }
+                let v = toml_edit::Value::from(valor);
+                Ok(self.commit_row(real, def, valor.to_owned(), v))
+            }
+            SettingKind::ThemeName => {
+                if !theme_names.iter().any(|t| t == valor) {
+                    return Err(SettingsEditError::NotAnInt);
+                }
+                let v = toml_edit::Value::from(valor);
+                Ok(self.commit_row(real, def, valor.to_owned(), v))
+            }
+            SettingKind::PresetName => {
+                if !preset_names.contains(&valor) {
+                    return Err(SettingsEditError::NotAnInt);
+                }
+                let v = toml_edit::Value::from(valor);
+                Ok(self.commit_row(real, def, valor.to_owned(), v))
+            }
+            // Los que ya sabe validar el editor de línea: se le pasa el
+            // texto entero por su mismo camino, en vez de copiar el troceo
+            // de una línea de órdenes o el rango de un entero.
+            SettingKind::Int { .. } | SettingKind::Text | SettingKind::Args => {
+                let antes = self.cursor;
+                self.cursor = pos;
+                self.edit = Some(valor.to_owned());
+                let salida = self.edit_commit();
+                self.edit = None;
+                if salida.is_err() {
+                    self.cursor = antes;
+                }
+                salida
+            }
+        }
+    }
+
     /// Restablecer la fila del cursor: la clave que hay que QUITAR de la
     /// capa de escritura, o `None` si no hay nada que quitar.
     ///
@@ -2515,6 +2682,70 @@ mod tests {
         assert_eq!(fila.section, Section::Input);
         // Y es la PRIMERA de la sección, no una cualquiera.
         assert!(s.cursor() == 0 || s.rows()[s.visible()[s.cursor() - 1]].section != Section::Input);
+    }
+
+    /// Poner un valor concreto valida con las MISMAS reglas que el teclado:
+    /// es lo que hace que un control de ventana no sea una segunda regla.
+    #[test]
+    fn set_value_valida_como_el_editor() {
+        let temas = vec!["default".to_owned(), "nord".to_owned()];
+        let presets = ["orthodox", "vim"];
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+
+        // Un booleano, sin ciclar.
+        let w = s
+            .set_value("ui.mouse", "false", &temas, &presets)
+            .expect("bool");
+        assert_eq!(
+            (w.section, w.key.as_str(), w.display.as_str()),
+            ("ui", "mouse", "false")
+        );
+        assert_eq!(w.value.as_bool(), Some(false));
+
+        // Un tema de la lista VIVA, y uno que no está.
+        assert!(s.set_value("ui.theme", "nord", &temas, &presets).is_ok());
+        assert!(
+            s.set_value("ui.theme", "inventado", &temas, &presets)
+                .is_err()
+        );
+
+        // Un entero fuera de rango se rechaza CON sus topes, como el editor.
+        let e = s
+            .set_value("ui.font-size", "999", &temas, &presets)
+            .expect_err("fuera de rango");
+        assert!(matches!(e, SettingsEditError::OutOfRange { .. }));
+
+        // Y una línea de órdenes se trocea igual: array, no cadena.
+        let w = s
+            .set_value("ui.editor", "zed %f", &temas, &presets)
+            .expect("args");
+        assert!(w.value.as_array().is_some(), "se guarda troceada");
+    }
+
+    /// Un valor que no es de una lista cerrada no entra, venga de donde
+    /// venga: el renderer no valida, y un puente puede traer cualquier cosa.
+    #[test]
+    fn set_value_rechaza_lo_que_no_esta_en_la_lista() {
+        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        assert!(s.set_value("ui.confirm-quit", "quizas", &[], &[]).is_err());
+        assert!(s.set_value("ui.mouse", "SI", &[], &[]).is_err());
+        assert!(s.set_value("no.existe", "1", &[], &[]).is_err());
+    }
+
+    #[test]
+    fn el_control_de_cada_entrada_sale_del_catalogo() {
+        assert_eq!(control_of("ui.mouse"), Some(Control::Toggle));
+        assert_eq!(control_of("ui.theme"), Some(Control::ThemeChoice));
+        assert_eq!(control_of("keymap.preset"), Some(Control::PresetChoice));
+        assert!(matches!(control_of("ui.editor"), Some(Control::Args)));
+        assert!(matches!(
+            control_of("ui.confirm-quit"),
+            Some(Control::Choice(_))
+        ));
+        // Y ninguna entrada del catálogo se queda sin control.
+        for d in catalog() {
+            assert!(control_of(d.id).is_some(), "«{}» sin control", d.id);
+        }
     }
 
     /// Con el foco en el índice, las flechas recorren SECCIONES y la lista

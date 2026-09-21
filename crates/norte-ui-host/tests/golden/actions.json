@@ -315,6 +315,11 @@
     "action": "settings_select_row",
     "row": 2
   },
+  "settings_set": {
+    "action": "settings_set",
+    "id": "ui.theme",
+    "value": "nord"
+  },
   "sort_by": {
     "action": "sort_by",
     "column": "size",

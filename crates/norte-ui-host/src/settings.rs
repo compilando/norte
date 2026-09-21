@@ -234,6 +234,20 @@ impl Ajustes {
         self.cursor = primera;
     }
 
+    /// Pone un valor concreto en el ajuste `id` — lo que manda un control.
+    ///
+    /// # Errors
+    /// Lo que el editor compartido rechaza, sin escribir nada.
+    pub(crate) fn poner(
+        &mut self,
+        id: &str,
+        valor: &str,
+        temas: &[String],
+        presets: &[&str],
+    ) -> Result<PendingWrite, SettingsEditError> {
+        self.estado.set_value(id, valor, temas, presets)
+    }
+
     /// ¿La fila de este id sigue diciendo que no es de fábrica?
     ///
     /// Se pregunta DESPUÉS de releer, y es lo que distingue «restablecido»
@@ -394,7 +408,7 @@ impl Ajustes {
     /// Una sección que el FILTRO vació sigue en el índice, apagada; una que
     /// esta superficie no tiene no aparece. Las ubicaciones van al final y
     /// no las toca el filtro: son diagnóstico, no ajustes.
-    pub(crate) fn vista(&self, lang: Lang) -> SettingsView {
+    pub(crate) fn vista(&self, lang: Lang, temas: &[String], presets: &[&str]) -> SettingsView {
         let indice = self.estado.sections();
         let mut sections = Vec::new();
         for v in &indice {
@@ -407,7 +421,7 @@ impl Ajustes {
                 .iter()
                 .map(|&i| &self.estado.rows()[i])
                 .filter(|r| r.section == v.section)
-                .map(proyectar_fila)
+                .map(|r| proyectar_fila(r, temas, presets))
                 .collect();
             if filas.is_empty() {
                 continue;
@@ -494,8 +508,46 @@ fn pide_reinicio(id: &str) -> bool {
     )
 }
 
+/// El control de una fila, con sus valores ya RESUELTOS.
+///
+/// Las listas vivas se resuelven aquí y no en el renderer: los temas
+/// instalados y los presets cambian en caliente, y un desplegable que
+/// llevara la lista cocida enseñaría la de hace dos recargas.
+fn proyectar_control(
+    r: &Row,
+    temas: &[String],
+    presets: &[&str],
+) -> (String, Vec<String>, Option<i64>, Option<i64>) {
+    use norte_frontend::settings::{Control, control_of};
+    let Some(control) = r.id().and_then(control_of) else {
+        // Una fila que no sale del catálogo —el resumen de un plugin— no se
+        // edita desde aquí: se entra en ella.
+        return ("none".to_owned(), Vec::new(), None, None);
+    };
+    match control {
+        Control::Toggle => ("toggle".to_owned(), Vec::new(), None, None),
+        Control::Choice(v) => (
+            "choice".to_owned(),
+            v.iter().map(|s| (*s).to_owned()).collect(),
+            None,
+            None,
+        ),
+        Control::ThemeChoice => ("choice".to_owned(), temas.to_vec(), None, None),
+        Control::PresetChoice => (
+            "choice".to_owned(),
+            presets.iter().map(|s| (*s).to_owned()).collect(),
+            None,
+            None,
+        ),
+        Control::Number { min, max } => ("number".to_owned(), Vec::new(), Some(min), Some(max)),
+        Control::Text => ("text".to_owned(), Vec::new(), None, None),
+        Control::Args => ("args".to_owned(), Vec::new(), None, None),
+    }
+}
+
 /// Una fila del registro, proyectada.
-fn proyectar_fila(r: &Row) -> SettingRowView {
+fn proyectar_fila(r: &Row, temas: &[String], presets: &[&str]) -> SettingRowView {
+    let (control, choices, min, max) = proyectar_control(r, temas, presets);
     let (valor, hostile) = norte_frontend::display_name(r.value.as_bytes());
     SettingRowView {
         // El id es una IDENTIDAD del catálogo compartido, no prosa: viaja
@@ -516,6 +568,21 @@ fn proyectar_fila(r: &Row) -> SettingRowView {
         // Decir que una entrada se aplica sola cuando no lo hace es la clase
         // de mentira que manda al usuario a buscar un bug que no existe.
         restart_required: r.id().is_none_or(pide_reinicio),
+        // El valor de fábrica, enmascarado como cualquier otro: sale del
+        // catálogo, pero se pinta en la misma columna que uno del fichero.
+        default: r
+            .id()
+            .and_then(|id| {
+                norte_frontend::settings::catalog()
+                    .iter()
+                    .find(|d| d.id == id)
+            })
+            .map(|d| clamp_display(norte_frontend::settings::default_value(d)))
+            .unwrap_or_default(),
+        control,
+        choices,
+        min,
+        max,
         modified: r.modified,
     }
 }

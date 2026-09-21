@@ -60,6 +60,23 @@ texto. Una arroba que no abre operador es texto normal.
 
 En la ventana, el índice se pincha y el buscador es una caja de texto.
 
+# La ventana tiene controles
+
+Lo que en la terminal es una palabra que gira con Intro, en la ventana es el
+control que le toca: un interruptor para lo que se enciende y se apaga, un
+desplegable para una lista —con los temas que tengas instalados dentro—, y
+un campo numérico con sus topes. El texto y las líneas de órdenes se
+escriben en la fila y se guardan al salir del campo o con Intro; `esc` deja
+el campo como estaba.
+
+Cada ajuste enseña su descripción siempre, y una barra a la izquierda marca
+lo que no está en su valor de fábrica. Un campo vacío enseña ese valor de
+fábrica: si no enseña nada es que norte no fija ninguno y manda el sistema.
+
+Lo que un ajuste admite lo decide el mismo catálogo en las dos superficies,
+y lo valida el mismo editor: un número fuera de rango se rechaza igual
+tecleado en la ventana que en la terminal.
+
 # Restablecer, y lo que no puede hacer
 
 Un punto delante del nombre significa «esto no es el valor de fábrica».

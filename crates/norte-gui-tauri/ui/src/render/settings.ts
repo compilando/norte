@@ -7,6 +7,7 @@ import type {
   LayoutPickerView,
   ProfilePickerView,
   PickerView,
+  SettingRowView,
   SettingsView,
   ThemeView,
 } from "../types";
@@ -123,32 +124,40 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
     if (sec.section === "settings") {
       for (const r of sec.rows) {
         const fila = this.settingsRow(i, settings.cursor);
+        // CUATRO celdas fijas y en este orden, siempre: punto, nombre,
+        // valor, acciones. La rejilla tiene cuatro columnas, así que colgar
+        // un hijo de más manda lo que sobra a una fila nueva — así salía
+        // «Restablecer» como una caja de ancho completo y el punto suelto
+        // contra el borde derecho.
+        const punto = document.createElement("span");
+        punto.className = "settings-dot";
+        punto.dataset["on"] = String(r.modified);
+        if (r.modified) {
+          // Un punto CON etiqueta, no color a secas: el color no es
+          // información para quien no lo distingue.
+          punto.setAttribute("aria-label", this.t("settings-modified"));
+          punto.textContent = "●";
+        }
         const nombre = document.createElement("span");
         nombre.className = "settings-name";
         nombre.textContent = r.name;
-        const valor = document.createElement("span");
-        valor.className = "settings-value";
-        valor.dataset["hostile"] = String(r.hostile);
-        valor.textContent = r.value;
-        if (r.hostile) {
-          // La fila de RUTA de esta misma lista siempre lo dijo; la de
-          // ajuste no, y las dos pintan en la misma columna.
-          valor.append(badge(this.t("hostile-name")));
-        }
-        fila.append(nombre, valor);
+        const valor = controlDeAjuste.call(this, r);
+        // Las acciones van JUNTAS en una celda: hoy, si está tocado, el
+        // botón que lo deshace. La insignia de reinicio NO está aquí: es
+        // información que solo importa al cambiar esa fila, y repetida en
+        // seis líneas a la vez deja de leerse (ver `settings-desc`).
+        const acciones = document.createElement("span");
+        acciones.className = "settings-actions";
         if (r.modified) {
-          // Un punto CON etiqueta, no color a secas: el color no es
-          // información para quien no lo distingue. Y con él, el botón que
-          // lo deshace — un punto que dice «esto lo tocaste tú» y no ofrece
-          // volver atrás es media función.
-          const punto = document.createElement("span");
-          punto.className = "settings-dot";
-          punto.setAttribute("aria-label", this.t("settings-modified"));
-          punto.textContent = "●";
           const volver = document.createElement("button");
           volver.className = "settings-reset";
           volver.type = "button";
-          volver.textContent = this.t("settings-reset");
+          // Un ICONO con su etiqueta y su título: el texto se comía treinta
+          // celdas de cada fila para decir lo mismo que una flecha de
+          // deshacer, y estaba en todas las filas tocadas a la vez.
+          volver.textContent = "↺";
+          volver.setAttribute("aria-label", this.t("settings-reset"));
+          volver.title = this.t("settings-reset");
           // El índice de ESTA fila, copiado: `i` es UNA variable del bucle,
           // y una clausura que la leyera al pulsar vería la última.
           const cual = i;
@@ -158,24 +167,34 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
             e.stopPropagation();
             this.send({ action: "settings_reset", row: cual });
           });
-          fila.append(punto, volver);
+          acciones.append(volver);
         }
-        if (r.restart_required && !todas) {
-          const marca = document.createElement("span");
-          marca.className = "settings-badge";
-          marca.textContent = this.t("settings-restart-badge");
-          fila.append(marca);
-        }
+        // La descripción va SIEMPRE, atenuada y bajo el nombre, no solo en
+        // la fila elegida: es lo que dice qué hace un ajuste, y esconderla
+        // obliga a recorrer la lista para leerla. Con ella, y al final, lo
+        // que hoy era una pastilla repetida en cada fila.
         const desc = document.createElement("span");
         desc.className = "settings-desc";
         desc.textContent = r.desc;
-        fila.append(desc);
+        if (r.restart_required && !todas) {
+          const cuando = document.createElement("span");
+          cuando.className = "settings-when";
+          cuando.textContent = this.t("settings-restart-badge");
+          desc.append(" ", cuando);
+        }
+        fila.append(punto, nombre, valor, acciones, desc);
         lista.append(fila);
         i += 1;
       }
     } else {
       for (const r of sec.rows) {
         const fila = this.settingsRow(i, settings.cursor);
+        // Las MISMAS cuatro celdas que una fila de ajuste, para que las dos
+        // clases de fila formen columna: una ubicación no tiene punto, así
+        // que el suyo va vacío en vez de faltar.
+        const punto = document.createElement("span");
+        punto.className = "settings-dot";
+        punto.dataset["on"] = "false";
         const nombre = document.createElement("span");
         nombre.className = "settings-name";
         nombre.textContent = r.label;
@@ -183,18 +202,20 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
         valor.className = "settings-value";
         valor.dataset["hostile"] = String(r.hostile);
         valor.textContent = r.display;
-        fila.append(nombre, valor);
         if (r.hostile) {
           valor.append(badge(this.t("hostile-name")));
         }
+        const acciones = document.createElement("span");
+        acciones.className = "settings-actions";
         if (r.missing) {
           // Que un sitio no exista es un HECHO del diagnóstico y no un
           // error: una capa que nadie ha creado es lo normal.
           const falta = document.createElement("span");
           falta.className = "settings-missing";
           falta.textContent = this.t("settings-path-missing");
-          fila.append(falta);
+          acciones.append(falta);
         }
+        fila.append(punto, nombre, valor, acciones);
         lista.append(fila);
         i += 1;
       }
@@ -220,6 +241,175 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   }
   lista.scrollTop = scroll;
   revelar(objetivoRevelado(lista, settings.cursor));
+}
+
+/**
+ * Un icono por sección, por su clave ESTABLE.
+ *
+ * Unicode a secas, no Nerd Font: el índice tiene que leerse en una máquina
+ * sin fuentes de iconos instaladas, y una sección cuya clave no esté aquí
+ * simplemente no lleva icono — el rótulo, que es lo que se lee, sigue ahí.
+ */
+const ICONO_DE_SECCION: Record<string, string> = {
+  appearance: "◐",
+  panes: "▤",
+  "open-with": "↗",
+  input: "⌨",
+  behavior: "⚙",
+  plugins: "✦",
+  paths: "⌂",
+};
+
+/**
+ * El CONTROL de una fila: interruptor, desplegable, número o campo de texto,
+ * según lo que el host diga que es.
+ *
+ * La clase la manda el host (`control`) y los valores admitidos también
+ * (`choices`, ya resueltos): aquí no se decide qué admite un ajuste ni se
+ * valida nada. Lo que se teclea o se elige se manda con `settings_set` y lo
+ * acepta o lo rechaza el editor compartido, que es el mismo que usa el
+ * teclado del terminal.
+ *
+ * Ninguno de estos controles burbujea su interacción: el `<li>` lleva un
+ * click que SEÑALA y un doble click que ACTIVA, y mover un interruptor no es
+ * ninguna de las dos.
+ */
+function controlDeAjuste(this: Screen, r: SettingRowView): HTMLElement {
+  const caja = document.createElement("span");
+  caja.className = "settings-value";
+  caja.dataset["control"] = r.control;
+  const poner = (value: string): void => {
+    this.send({ action: "settings_set", id: r.id, value });
+  };
+
+  if (r.control === "toggle") {
+    const sw = document.createElement("button");
+    sw.className = "settings-switch";
+    sw.type = "button";
+    sw.setAttribute("role", "switch");
+    const on = r.value === "true";
+    sw.setAttribute("aria-checked", String(on));
+    sw.dataset["on"] = String(on);
+    // El estado se dice con TEXTO además de con la posición: un interruptor
+    // que solo se distingue por dónde está el pomo no se lee sin verlo.
+    const bolita = document.createElement("span");
+    bolita.className = "settings-switch-knob";
+    sw.append(bolita);
+    sw.addEventListener("click", (e) => {
+      e.stopPropagation();
+      poner(on ? "false" : "true");
+    });
+    caja.append(sw);
+    return caja;
+  }
+
+  if (r.control === "choice" && r.choices.length > 0) {
+    const sel = document.createElement("select");
+    sel.className = "settings-select";
+    for (const c of r.choices) {
+      const op = document.createElement("option");
+      op.value = c;
+      op.textContent = c;
+      op.selected = c === r.value;
+      sel.append(op);
+    }
+    // Un valor que el fichero trae y la lista ya no reconoce —un tema
+    // borrado, un preset renombrado— se AÑADE al final en vez de
+    // desaparecer: un desplegable que enseña otra cosa de la que hay puesta
+    // miente sobre la configuración.
+    if (!r.choices.includes(r.value) && r.value !== "") {
+      const huerfano = document.createElement("option");
+      huerfano.value = r.value;
+      huerfano.textContent = r.value;
+      huerfano.selected = true;
+      sel.append(huerfano);
+    }
+    sel.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
+    sel.addEventListener("change", () => {
+      poner(sel.value);
+    });
+    caja.append(sel);
+    return caja;
+  }
+
+  if (r.control === "number") {
+    const num = document.createElement("input");
+    num.className = "settings-number";
+    num.type = "number";
+    num.value = r.value;
+    num.placeholder = r.default;
+    if (r.min !== null) {
+      num.min = String(r.min);
+    }
+    if (r.max !== null) {
+      num.max = String(r.max);
+    }
+    campoQueGuarda.call(this, num, r, poner);
+    caja.append(num);
+    return caja;
+  }
+
+  if (r.control === "text" || r.control === "args") {
+    const campo = document.createElement("input");
+    campo.className = "settings-text";
+    campo.type = "text";
+    // Vacío NO es un hueco: es el valor de fábrica, y se dice CUÁL. Una
+    // frase («lo que norte trae») ocupa el sitio del dato sin darlo.
+    campo.placeholder = r.default;
+    // El valor que se EDITA es el real, no el enmascarado: lo que se pinta
+    // en una lista pasa por la máscara, pero un campo que devolviera el
+    // texto saneado guardaría el reemplazo en el fichero.
+    campo.value = r.value;
+    campoQueGuarda.call(this, campo, r, poner);
+    caja.append(campo);
+    return caja;
+  }
+
+  // Lo que no se edita desde aquí —el resumen de un plugin— se queda como
+  // texto, con su marca si el valor vino hostil.
+  caja.dataset["hostile"] = String(r.hostile);
+  caja.textContent = r.value;
+  if (r.hostile) {
+    caja.append(badge(this.t("hostile-name")));
+  }
+  return caja;
+}
+
+/**
+ * Un campo que guarda al salir de él o con Intro, y se rinde con Escape.
+ *
+ * No con cada tecla: cada pulsación sería una escritura en el `norte.toml`
+ * y una recarga de la configuración entera. Y no burbujea: el `<li>` de
+ * debajo mueve el cursor con el click.
+ */
+function campoQueGuarda(
+  this: Screen,
+  campo: HTMLInputElement,
+  r: SettingRowView,
+  poner: (v: string) => void,
+): void {
+  campo.addEventListener("click", (e) => {
+    e.stopPropagation();
+  });
+  campo.addEventListener("blur", () => {
+    if (campo.value !== r.value) {
+      poner(campo.value);
+    }
+  });
+  campo.addEventListener("keydown", (e) => {
+    // Las teclas de un campo son SUYAS: sin esto, las flechas mueven el
+    // cursor de la lista de detrás mientras se escribe, y `esc` cierra los
+    // ajustes enteros en vez de rendir el campo.
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      campo.blur();
+    } else if (e.key === "Escape") {
+      campo.value = r.value;
+      campo.blur();
+    }
+  });
 }
 
 /**
@@ -260,9 +450,17 @@ function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
       // teclado está en la lista.
       item.setAttribute("aria-current", "true");
     }
+    // El icono es DECORACIÓN: el rótulo va al lado y es lo que se lee. Por
+    // eso `aria-hidden` — un lector de pantalla que dijera «paleta,
+    // Apariencia» estaría leyendo dos veces lo mismo, la segunda mal.
+    const icono = document.createElement("span");
+    icono.className = "settings-index-icon";
+    icono.setAttribute("aria-hidden", "true");
+    icono.textContent = ICONO_DE_SECCION[s.key] ?? "";
     const titulo = document.createElement("span");
     titulo.className = "settings-index-title";
     titulo.textContent = s.title;
+    item.append(icono);
     const cuantas = document.createElement("span");
     cuantas.className = "settings-index-count";
     cuantas.textContent = String(s.visible);
