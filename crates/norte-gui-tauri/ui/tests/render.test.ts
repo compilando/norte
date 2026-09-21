@@ -2231,6 +2231,37 @@ describe("mover un panel arrastrándolo (ADR 0138)", () => {
   const puntero = (tipo: string, x: number, y: number): MouseEvent =>
     new MouseEvent(tipo, { button: 0, clientX: x, clientY: y, bubbles: true });
 
+  // Regresión (captura del 2026-09-21): cada paso del arrastre de un borde
+  // cambia el reparto y rehace los tiradores; con la captura en el tirador,
+  // el arrastre moría en el primer paso y el borde no subía ni bajaba.
+  it("arrastrar un borde sobrevive a que el reparto rehaga los tiradores", () => {
+    const { screen, enviadas } = montar();
+    const v = dosListados();
+    screen.paint(v);
+    const tirador = document.querySelector(".resize-handle.col") as HTMLElement;
+    tirador.dispatchEvent(puntero("pointerdown", 480, 100));
+    window.dispatchEvent(puntero("pointermove", 400, 100));
+    // El host contesta con otro reparto: se rehacen huecos y tiradores.
+    const otro = dosListados();
+    otro.layout.placements = [
+      { slot_id: 1, x: 0, y: 0, width: 50, height: 38, role: "active", focus_index: 0 },
+      { slot_id: 2, x: 50, y: 0, width: 70, height: 38, role: null, focus_index: 1 },
+      { slot_id: 4, x: 0, y: 39, width: 120, height: 1, role: null, focus_index: 2 },
+    ];
+    screen.paint(otro);
+    expect(document.body.contains(tirador)).toBe(false);
+    window.dispatchEvent(puntero("pointermove", 320, 100));
+    window.dispatchEvent(puntero("pointermove", 321, 100));
+    window.dispatchEvent(puntero("pointerup", 320, 100));
+    window.dispatchEvent(puntero("pointermove", 200, 100));
+    const pasos = enviadas.filter((a) => a.action === "resize_slot");
+    expect(pasos).toEqual([
+      { action: "resize_slot", slot_id: 1, cells: 50 },
+      { action: "resize_slot", slot_id: 1, cells: 40 },
+    ]);
+    expect(document.documentElement.dataset["dragging"]).toBeUndefined();
+  });
+
   it("zonaDe: el lado más cercano a menos de un cuarto, si no el centro", () => {
     const r = { left: 0, top: 0, width: 100, height: 100 };
     expect(zonaDe(5, 50, r)).toBe("left");

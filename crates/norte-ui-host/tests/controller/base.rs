@@ -693,6 +693,37 @@ pub(super) async fn host_con_layout(
     .expect("arranca")
 }
 
+/// Arranca con un ÁRBOL dado: el de una sesión real, para reproducir lo que
+/// alguien vio.
+pub(super) async fn host_con_arbol(
+    backend: Arc<Falso>,
+    layout: norte_frontend::layout::Node,
+    viewport: (u16, u16),
+) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        attach: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout,
+        viewport,
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca")
+}
+
 /// Las cinco disposiciones de fábrica resuelven a tamaños razonables, y
 /// ninguna deja una pantalla sin listado.
 #[tokio::test]
