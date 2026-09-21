@@ -147,6 +147,10 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Marking in a very large folder no longer walks it three times per key.**
+  The window's pane header counted the marked bytes, the marked folders and
+  the marks ruler in three separate passes over the whole listing, on every
+  keystroke; it is now one pass, and none when nothing is marked.
 - **A plugin's binary is checked every time it is loaded** (ADR 0142).
   Approval covers the plugin's `.wasm` by its digest, but only providers
   compared it when loading; any other plugin whose binary was replaced after

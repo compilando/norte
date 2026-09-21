@@ -11,6 +11,18 @@ use super::{
     unicode_glob_regex,
 };
 
+/// Lo que se sabe de las marcas de un listado en una sola pasada
+/// ([`PaneState::marks_summary`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MarksSummary {
+    /// Lo que pesan los FICHEROS marcados que declaran tamaño.
+    pub bytes: u64,
+    /// Cuántos de los marcados son directorios.
+    pub dirs: usize,
+    /// La regla de marcas: los tramos con alguna, en orden.
+    pub ruler: Vec<u16>,
+}
+
 /// La extensión de un nombre BASE, en bytes y sin el punto; `None` si no
 /// tiene.
 ///
@@ -233,6 +245,42 @@ impl PaneState {
     #[must_use]
     pub fn marks_len(&self) -> usize {
         self.marks.len()
+    }
+
+    /// Lo que la cabecera de un listado dice de sus marcas, en UNA pasada:
+    /// cuánto pesan los ficheros marcados, cuántos directorios hay entre
+    /// ellos y la regla de marcas de `tramos` tramos.
+    ///
+    /// Es [`Self::marked_bytes`], [`Self::marked_dirs`] y
+    /// [`Self::mark_ruler`] juntas, y por eso existe: las tres recorrían el
+    /// listado entero cada una, y la cabecera las pide con cada tecla —
+    /// marcar en un directorio de veinte mil entradas costaba tres pasadas
+    /// por pulsación.
+    #[must_use]
+    pub fn marks_summary(&self, tramos: u16) -> MarksSummary {
+        let mut out = MarksSummary::default();
+        let total = self.entries.len();
+        if self.marks.is_empty() || total == 0 {
+            return out;
+        }
+        for (i, e) in self.entries.iter().enumerate() {
+            if !self.marks.contains(&e.path) {
+                continue;
+            }
+            if e.kind == EntryKind::Dir {
+                out.dirs += 1;
+            } else {
+                out.bytes = out.bytes.saturating_add(e.size.unwrap_or(0));
+            }
+            if tramos > 0 {
+                // `i < total`, así que el cociente es `< tramos`.
+                let tramo = u16::try_from(i * usize::from(tramos) / total).unwrap_or(tramos - 1);
+                if out.ruler.last() != Some(&tramo) {
+                    out.ruler.push(tramo);
+                }
+            }
+        }
+        out
     }
 
     /// Qué tramos del listado llevan alguna marca, para la regla junto a la
@@ -929,6 +977,12 @@ impl PaneState {
     /// computed.
     #[must_use]
     pub fn marked_bytes(&self) -> u64 {
+        // Sin marcas no hay nada que sumar: recorrer veinte mil entradas
+        // resumiendo cada ruta, por cada tecla, era la mitad del coste de
+        // mover el cursor en un directorio grande.
+        if self.marks.is_empty() {
+            return 0;
+        }
         self.entries
             .iter()
             .filter(|e| e.kind != EntryKind::Dir && self.marks.contains(&e.path))
@@ -944,6 +998,9 @@ impl PaneState {
     /// separately instead of folding it into a total nobody computed.
     #[must_use]
     pub fn marked_dirs(&self) -> usize {
+        if self.marks.is_empty() {
+            return 0;
+        }
         self.entries
             .iter()
             .filter(|e| e.kind == EntryKind::Dir && self.marks.contains(&e.path))

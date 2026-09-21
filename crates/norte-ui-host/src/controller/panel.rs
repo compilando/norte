@@ -588,6 +588,8 @@ impl Estado {
         // lector no puede saber si el comando hizo algo (#57, #293).
         let (path, hostil) =
             norte_frontend::path_display_with(hueco.pane.dir(), hueco.pane.name_encoding());
+        // Una pasada por las marcas para las tres cosas que las cuentan.
+        let marcas = hueco.pane.marks_summary(crate::dto::MARK_RULER_SPANS);
         crate::dto::ViewChange::BrowserHeader {
             slot_id: id,
             path_display: clamp_display(path),
@@ -621,18 +623,18 @@ impl Estado {
             )),
             marked_note: clamp_display(norte_frontend::notes::marked(
                 hueco.pane.marks_len(),
-                hueco.pane.marked_bytes(),
-                hueco.pane.marked_dirs(),
+                marcas.bytes,
+                marcas.dirs,
                 self.lang,
             )),
-            footer: clamp_display(self.pie_de(hueco)),
+            footer: clamp_display(self.pie_con(hueco, &marcas)),
             path_segments: Self::migas_de(hueco),
             used_ratio: norte_frontend::space::used_ratio_for(
                 hueco.pane.dir(),
                 &self.volumenes_pie,
             ),
             marks: hueco.pane.marks_len() as u64,
-            mark_ruler: hueco.pane.mark_ruler(crate::dto::MARK_RULER_SPANS),
+            mark_ruler: marcas.ruler,
         }
     }
 
@@ -661,12 +663,21 @@ impl Estado {
         if !self.config.common.ui_chrome.pane_footer() {
             return String::new();
         }
+        self.pie_con(hueco, &hueco.pane.marks_summary(0))
+    }
+
+    /// El pie con las marcas ya resumidas: la cabecera lo pide junto con
+    /// su propio resumen y no tiene por qué recorrer el listado otra vez.
+    fn pie_con(&self, hueco: &Hueco, marcas: &norte_frontend::MarksSummary) -> String {
+        if !self.config.common.ui_chrome.pane_footer() {
+            return String::new();
+        }
         let counts =
             norte_frontend::footer::counts(hueco.pane.entries(), hueco.pane.is_parent_row(0));
         let marked = norte_frontend::footer::Marked {
             n: hueco.pane.marks_len(),
-            bytes: hueco.pane.marked_bytes(),
-            dirs: hueco.pane.marked_dirs(),
+            bytes: marcas.bytes,
+            dirs: marcas.dirs,
         };
         let free = norte_frontend::space::free_for(hueco.pane.dir(), &self.volumenes_pie);
         norte_frontend::footer::pane_footer(counts, marked, free, self.lang)
