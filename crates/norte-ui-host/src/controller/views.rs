@@ -364,8 +364,7 @@ impl Estado {
         crate::dto::PanelBarView {
             // Por defecto ENCENDIDA, igual que la de menús y que la TUI.
             bar: self.config.common.ui_panel_bar.unwrap_or(true),
-            names: self.config.common.ui_chrome.panel_bar_style()
-                == norte_config::PanelBarStyle::Names,
+            names: self.config.common.ui_chrome.panel_bar_style().shows_names(),
             // `auto` = columna: la ventana va corta de alto, no de ancho.
             vertical: self
                 .config

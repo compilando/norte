@@ -67,6 +67,11 @@ independently through `PROTOCOL_VERSION`.
   until a template is chosen from the layout picker; the window no longer
   loses them because the terminal wrote its own in between. A handoff
   still hands the current screen over.
+- **The terminal's panel column draws icons** (ADR 0140). With
+  `panel_bar_position = "left"`, each panel is an icon — ★ ⋔ ◉ ∿ ⓘ ≡ ◔ ◷ —
+  with a `▎` on the one that has the keyboard and a count for news, spaced
+  out when there is room, as in VS Code. `panel_bar_style = "nerd"` uses
+  Nerd Font glyphs; `"letters"` keeps the letters.
 - **Window polish.** The root of a path's breadcrumbs (the provider's
   scheme) is dimmed, since it is in every path of the pane, and the handle
   between two panes lights up when the pointer is on it or dragging it —

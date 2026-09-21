@@ -35,7 +35,10 @@ one with news: how many tasks are running, how many warnings the log holds.
 
 `panel_bar_position` chooses where it goes: `top` (a row), `left` (a
 column), or `auto`, which is top in the terminal and left in the window.
-`panel_bar = false` removes it.
+`panel_bar = false` removes it. In the terminal's column every panel is an
+icon — ★ ⋔ ◉ ∿ ⓘ ≡ ◔ ◷ — with a bar on the one that has the keyboard and a
+count on the one with news; `panel_bar_style = "nerd"` uses Nerd Font glyphs
+and `"letters"` goes back to letters.
 
 In the window, `titlebar = "custom"` removes the desktop's title bar and the
 menu bar does its job, as in VS Code: drag it to move the window,

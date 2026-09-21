@@ -653,7 +653,7 @@
         },
         "panel_bar_style": {
           "default": null,
-          "description": "How the panel bar names its buttons: `\"names\"` (default) paints the\nlocalized panel name with its access letter underlined; `\"letters\"`\npaints only the letter, the row's original form. Below 60 usable\ncells `names` falls back to letters on its own.\n\n[`crate::load::load`] rejects other values (same pattern as\n`quick_search`) so its diagnostic can include the source path.",
+          "description": "How the panel bar names its buttons: `\"names\"` (default) paints the\nlocalized panel name with its access letter underlined; `\"letters\"`\npaints only the letter, the row's original form. Below 60 usable\ncells `names` falls back to letters on its own. `\"icons\"` and\n`\"nerd\"` draw the terminal's COLUMN (`panel_bar_position = \"left\"`)\nwith Unicode symbols or Nerd Font glyphs; in a row they are `names`.\nIn the column, `names` draws the Unicode icons too.\n\n[`crate::load::load`] rejects other values (same pattern as\n`quick_search`) so its diagnostic can include the source path.",
           "type": [
             "string",
             "null"

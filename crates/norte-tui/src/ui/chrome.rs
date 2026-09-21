@@ -434,7 +434,7 @@ pub(crate) fn draw_key_bar(frame: &mut Frame<'_>, app: &App) {
 /// respuesta para el pintado y para las zonas del ratón, que así miden lo
 /// mismo.
 fn con_nombres(app: &App, buttons: &[norte_frontend::panelbar::PanelButton], bar: Rect) -> bool {
-    app.chrome.panel_bar_style() == norte_config::PanelBarStyle::Names
+    app.chrome.panel_bar_style().shows_names()
         && norte_frontend::panelbar::names_fit(buttons, usize::from(bar.width))
 }
 
@@ -605,6 +605,26 @@ fn zonas_de_tiras(app: &App, area: Rect) -> Vec<PanelZone> {
     out
 }
 
+/// Las filas de la COLUMNA de paneles (ADR 0140): una por botón, y con aire
+/// —una fila en blanco entre dos, y otra arriba— si caben todos así, como
+/// la barra de actividad de VS Code; apretados si no. Una cuenta para el
+/// pintado y para el ratón.
+fn filas_del_rail(n: usize, bar: Rect) -> Vec<u16> {
+    let alto = usize::from(bar.height);
+    let (desde, paso) = if n > 0 && 2 * n <= alto {
+        (1, 2)
+    } else if n > 0 && 2 * n - 1 <= alto {
+        (0, 2)
+    } else {
+        (0, 1)
+    };
+    (0..n)
+        .map(|i| desde + i * paso)
+        .take_while(|f| *f < alto)
+        .map(|f| bar.y.saturating_add(u16::try_from(f).unwrap_or(u16::MAX)))
+        .collect()
+}
+
 /// Las casillas de la barra de paneles, sola.
 fn panel_bar_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     let Some(bar) = crate::ui::geometry::panel_bar_visible(app, area) else {
@@ -616,7 +636,7 @@ fn panel_bar_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     // En columna, un botón por fila y el raíl entero de ancho: las mismas
     // filas que pinta `draw_panel_bar`.
     if crate::ui::geometry::barra_en_columna(app) {
-        for (y, b) in (bar.y..bar.y.saturating_add(bar.height)).zip(botones) {
+        for (y, b) in filas_del_rail(botones.len(), bar).into_iter().zip(botones) {
             out.push(PanelZone {
                 row: y,
                 x0: bar.x,
@@ -654,6 +674,10 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
         return;
     };
     clear_themed(frame, bar, &app.theme);
+    if crate::ui::geometry::barra_en_columna(app) {
+        draw_rail(frame, app, bar);
+        return;
+    }
     let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
     let mut ancho = 0_u16;
     let botones = panel_buttons(app, frame.area());
@@ -732,6 +756,65 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
         lineas.push(ratatui::text::Line::from(spans));
     }
     frame.render_widget(Paragraph::new(lineas), bar);
+}
+
+/// La COLUMNA de paneles (ADR 0140), a la manera de la barra de actividad
+/// de VS Code: tres celdas por fila —la raya del foco, el icono y la
+/// insignia— y aire entre iconos si cabe ([`filas_del_rail`]).
+///
+/// - El panel con el TECLADO lleva la raya `▎` en el color del foco y el
+///   icono encendido; uno abierto, el icono encendido sin raya; uno
+///   cerrado, el icono apagado. La misma escala que la ventana.
+/// - La insignia es la CIFRA (tareas, avisos) en el color de aviso, y `+`
+///   pasadas las nueve: una celda no da para más.
+/// - El icono sale de `[ui] panel_bar_style`: Unicode con `names` o
+///   `icons`, Nerd Fonts con `nerd`, la letra con `letters`. Un panel sin
+///   icono —el de un plugin— pinta su letra.
+fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
+    use norte_frontend::panelbar::{IconSet, PanelState};
+    use ratatui::style::Modifier;
+    use ratatui::text::{Line, Span};
+    let botones = panel_buttons(app, frame.area());
+    let juego = match app.chrome.panel_bar_style() {
+        norte_config::PanelBarStyle::Letters => None,
+        norte_config::PanelBarStyle::Nerd => Some(IconSet::Nerd),
+        norte_config::PanelBarStyle::Names | norte_config::PanelBarStyle::Icons => {
+            Some(IconSet::Unicode)
+        }
+    };
+    let filas = filas_del_rail(botones.len(), bar);
+    for (y, b) in filas.into_iter().zip(botones) {
+        let apagado = app.theme.role(Role::Regular).add_modifier(Modifier::DIM);
+        let encendido = app.theme.role(Role::Title).add_modifier(Modifier::BOLD);
+        let (raya, icono_estilo) = match b.state {
+            PanelState::Focused => (
+                Span::styled("▎", app.theme.role(Role::BorderFocus)),
+                encendido,
+            ),
+            PanelState::Open => (Span::raw(" "), encendido),
+            PanelState::Closed => (Span::raw(" "), apagado),
+        };
+        let glifo = juego
+            .and_then(|j| norte_frontend::panelbar::icon(&b.kind, j))
+            .map_or_else(|| b.letter.to_string(), str::to_owned);
+        let insignia = match b.attention {
+            0 => Span::raw(" "),
+            n @ 1..=9 => Span::styled(n.to_string(), app.theme.role(Role::Warning)),
+            _ => Span::styled("+", app.theme.role(Role::Warning)),
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                raya,
+                Span::styled(glifo, icono_estilo),
+                insignia,
+            ])),
+            Rect {
+                y,
+                height: 1,
+                ..bar
+            },
+        );
+    }
 }
 
 /// Pinta la barra de menús y su desplegable.

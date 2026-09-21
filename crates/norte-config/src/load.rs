@@ -1324,6 +1324,13 @@ pub enum PanelBarStyle {
     Names,
     /// Only the access letter — the row's original form.
     Letters,
+    /// Unicode symbols that any terminal font draws in one cell (ADR 0140).
+    /// In a row it is the same as `names`; in the terminal's column it is
+    /// what `names` already draws there, since names do not fit.
+    Icons,
+    /// Nerd Font glyphs, closer to VS Code's icons, for a font that has
+    /// them (ADR 0140).
+    Nerd,
 }
 
 impl PanelBarStyle {
@@ -1333,7 +1340,16 @@ impl PanelBarStyle {
         match self {
             Self::Names => "names",
             Self::Letters => "letters",
+            Self::Icons => "icons",
+            Self::Nerd => "nerd",
         }
+    }
+
+    /// Does a ROW paint the names? Everything but `letters`: the icon
+    /// styles change the terminal's column, not the row.
+    #[must_use]
+    pub fn shows_names(self) -> bool {
+        !matches!(self, Self::Letters)
     }
 }
 
@@ -2267,7 +2283,13 @@ fn merge_panel_bar(acc: &mut UiChrome, ui: &crate::schema::UiSection) -> Result<
         acc.panel_bar_style = Some(match raw.as_str() {
             "names" => PanelBarStyle::Names,
             "letters" => PanelBarStyle::Letters,
-            _ => return Err("[ui] panel_bar_style inválido: solo se admite «names» o «letters»"),
+            "icons" => PanelBarStyle::Icons,
+            "nerd" => PanelBarStyle::Nerd,
+            _ => {
+                return Err(
+                    "[ui] panel_bar_style inválido: solo se admite «names», «letters», «icons» o «nerd»",
+                );
+            }
         });
     }
     if let Some(raw) = &ui.panel_bar_position {
@@ -3923,7 +3945,7 @@ format = "exact"
         assert_eq!(empty.dir_indicator(), DirIndicator::Auto);
 
         for bad in [
-            "panel_bar_style = \"icons\"",
+            "panel_bar_style = \"emoji\"",
             "panel_bar_position = \"right\"",
             "titlebar = \"frameless\"",
             "status_items = [\"git\"]",

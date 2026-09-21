@@ -132,6 +132,49 @@ pub fn names_fit(buttons: &[PanelButton], width: usize) -> bool {
         <= width
 }
 
+/// Con qué juego de iconos pinta el terminal su columna de paneles (ADR
+/// 0140).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IconSet {
+    /// Símbolos Unicode de una celda en cualquier fuente de terminal, sin
+    /// presentación de emoji (un emoji mide dos en muchos terminales y
+    /// descuadra la columna).
+    Unicode,
+    /// Glifos de Nerd Fonts (Font Awesome, en el área privada): más cerca
+    /// de los iconos de VS Code, para quien tenga una de esas fuentes.
+    Nerd,
+}
+
+/// El icono de un panel de serie, o `None` para uno que no tiene (el de un
+/// plugin): entonces se pinta su LETRA, que es lo que ya se sabe de él.
+///
+/// Los mismos sujetos que los iconos de la ventana (`render/iconos.ts`):
+/// estrella, ramas, ojo, pulso, «i», líneas, queso, reloj.
+///
+/// ```
+/// use norte_frontend::panelbar::{IconSet, icon};
+/// assert_eq!(icon("places", IconSet::Unicode), Some("★"));
+/// assert_eq!(icon("plugin:x:y", IconSet::Nerd), None);
+/// ```
+#[must_use]
+pub fn icon(kind: &str, set: IconSet) -> Option<&'static str> {
+    let (unicode, nerd) = match kind {
+        "places" => ("★", "\u{f005}"),
+        "tree" => ("⋔", "\u{f0e8}"),
+        "viewer" => ("◉", "\u{f06e}"),
+        "processes" => ("∿", "\u{f21e}"),
+        "metadata" => ("ⓘ", "\u{f05a}"),
+        "log" => ("≡", "\u{f03a}"),
+        "disk-map" => ("◔", "\u{f200}"),
+        "timeline" => ("◷", "\u{f017}"),
+        _ => return None,
+    };
+    Some(match set {
+        IconSet::Unicode => unicode,
+        IconSet::Nerd => nerd,
+    })
+}
+
 /// Una cuenta para la insignia de un botón: satura en vez de truncar, porque
 /// una cifra que da la vuelta diría «nada» con el registro lleno.
 ///
@@ -359,6 +402,36 @@ mod tests {
 
     fn registro() -> KindRegistry {
         KindRegistry::builtin()
+    }
+
+    /// Cada panel de serie que es botón tiene icono en los dos juegos, y
+    /// cada icono mide UNA celda: la columna del terminal es de tres, y uno
+    /// de dos empujaría la insignia fuera.
+    #[test]
+    fn cada_boton_de_serie_tiene_icono_de_una_celda() {
+        use unicode_width::UnicodeWidthStr;
+        let reg = registro();
+        let kinds = [
+            "places",
+            "tree",
+            "viewer",
+            "processes",
+            "metadata",
+            "log",
+            "disk-map",
+            "timeline",
+        ];
+        for k in kinds {
+            assert!(
+                reg.get(&KindId::new(k)).is_some(),
+                "{k} es un kind de serie"
+            );
+            for set in [IconSet::Unicode, IconSet::Nerd] {
+                let i = icon(k, set).unwrap_or_else(|| panic!("{k} {set:?} sin icono"));
+                assert_eq!(i.width(), 1, "{k} {set:?}: {i:?}");
+                assert_eq!(i.chars().count(), 1, "sin selectores de variación");
+            }
+        }
     }
 
     /// La barra enseña TODO panel que se abre y se cierra, y ninguno de los
