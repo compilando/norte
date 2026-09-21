@@ -3771,6 +3771,45 @@ async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
     );
 }
 
+/// ADR 0134 (fase F): dos paneles del mismo borde comparten sitio como
+/// pestañas; el grupo es de PANELES y sus pestañas llevan el nombre del
+/// panel. Pulsar el escondido lo pone delante, y pulsarlo a la vista lo
+/// cierra y deshace el grupo.
+#[tokio::test]
+async fn los_paneles_de_un_borde_comparten_sitio_en_pestanas() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "layout.timeline").await;
+    ejecutar_por_paleta(&h, &mut sub, "layout.metadata").await;
+    let foto = foto_hasta(&h, &mut sub, "un grupo de paneles", |s| {
+        s.layout.tabs.iter().find(|g| g.panels).cloned()
+    })
+    .await;
+    let titulos: Vec<&str> = foto.tabs.iter().map(|t| t.title.as_str()).collect();
+    // Los nombres de la barra de paneles, no los ids de kind.
+    assert_eq!(titulos, ["Historial", "Detalles"], "{foto:?}");
+    assert_eq!(foto.active, 1, "el que llega queda delante");
+
+    // La línea de tiempo está escondida: pulsarla la ENSEÑA.
+    ejecutar_por_paleta(&h, &mut sub, "layout.timeline").await;
+    let g = foto_hasta(&h, &mut sub, "la línea de tiempo delante", |s| {
+        s.layout
+            .tabs
+            .iter()
+            .find(|g| g.panels && g.active == 0)
+            .cloned()
+    })
+    .await;
+    assert_eq!(g.tabs.len(), 2, "no se cerró nada");
+
+    // A la vista: ahora sí la cierra, y el grupo de uno se deshace.
+    ejecutar_por_paleta(&h, &mut sub, "layout.timeline").await;
+    let () = foto_hasta(&h, &mut sub, "el grupo deshecho", |s| {
+        s.layout.tabs.iter().all(|g| !g.panels).then_some(())
+    })
+    .await;
+}
+
 /// ADR 0133: la foto trae los cuatro botones de disposición con su nombre,
 /// pulsar «partir» coloca un listado más, y un id o una pestaña que no
 /// existen son una carrera que pide foto.

@@ -321,7 +321,22 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.hueco_de_kind(kind).is_some() {
+        if let Some(id) = self.hueco_de_kind(kind) {
+            // Escondido detrás de otra pestaña de su grupo (fase F): pulsarlo
+            // lo PONE DELANTE, no lo cierra — para el lector, un panel que no
+            // ve está cerrado, y cerrarlo sería la única de las acciones que
+            // no se puede deshacer mirando. Es la regla de la TUI (#329).
+            //
+            // Del ÁRBOL y no del reparto: un grupo que no cupo no se colocó,
+            // y con el reparto la pestaña de delante se «revelaba» a sí misma
+            // sin cambiar nada — el botón ya no la cerraba nunca.
+            let detras = self
+                .arbol
+                .tabs_of(id)
+                .is_some_and(|(t, a)| t.get(a) != Some(&id));
+            if detras {
+                return self.elegir_pestana(id.0, backend, buzon);
+            }
             return self.cerrar_hueco_de_kind(kind, backend, buzon);
         }
         self.abrir_hueco_de_kind(kind, backend, buzon)
@@ -414,9 +429,11 @@ impl Estado {
             super::preview::KIND => (Edge::Right, Size::Weight(1)),
             _ => (Edge::Right, Size::Fixed(30)),
         };
+        // Agrupado (fase F): un panel que llega a un borde con otro panel se
+        // une a él como pestaña, como en VS Code.
         let nuevo = self
             .arbol
-            .dock(SlotId(self.enfocado()), borde, tamano, &hoja);
+            .dock_grouped(SlotId(self.enfocado()), borde, tamano, &hoja);
         let salida = self.aplicar_disposicion(nuevo, backend, buzon);
         if kind == "tree" {
             // ANCLAR es solo aquí: es la única vez que se elige de dónde

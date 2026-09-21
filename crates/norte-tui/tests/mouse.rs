@@ -607,6 +607,63 @@ fn los_botones_de_disposicion_caen_en_el_borde_derecho() {
     assert!(!lineas[0].contains("[#]"), "{:?}", lineas[0]);
 }
 
+/// ADR 0134: dos paneles del mismo borde comparten sitio como pestañas, y
+/// la primera fila de su hueco es la TIRA con los dos nombres. Pulsar la
+/// escondida corre su orden (que la enseña); la de delante no es zona.
+#[test]
+fn los_paneles_de_un_borde_se_agrupan_con_su_tira() {
+    let mut app = app_pintada(5);
+    // Los dos van a la DERECHA.
+    app.toggle_preview();
+    app.toggle_metadata();
+    let (huecos, activo) = app
+        .layout
+        .tabs_of(app.metadata_slot().expect("detalles abiertos"))
+        .expect("en un grupo");
+    assert_eq!(huecos.len(), 2, "el visor y los detalles juntos");
+    assert_eq!(activo, 1, "el que llega, delante");
+    let lineas = pintar_en(&mut app, 120, 20);
+    // Los nombres de la barra de paneles, en el idioma de la suite.
+    let lang = norte_i18n::active();
+    let visor = norte_frontend::panelbar::label_in(lang, "viewer", "layout.preview");
+    let detalles = norte_frontend::panelbar::label_in(lang, "metadata", "layout.metadata");
+    // Desde el cuerpo: las filas 0 y 1 son el menú y la barra de paneles, y
+    // la barra también dice «Visor» y «Detalles».
+    let fila = lineas
+        .iter()
+        .enumerate()
+        .skip(2)
+        .find(|(_, l)| l.contains(&visor) && l.contains(&detalles))
+        .map_or_else(
+            || panic!("una fila con las dos pestañas: {lineas:#?}"),
+            |(i, _)| i,
+        );
+    // La columna de un texto en la fila: `TestBackend` pone la línea entre
+    // comillas, así que el carácter 0 es la comilla.
+    let texto_de_fila: String = lineas[fila].chars().skip(1).collect();
+    let col = |texto: &str| {
+        let byte = texto_de_fila.find(texto).expect("está");
+        u16::try_from(texto_de_fila[..byte].chars().count()).expect("cabe")
+    };
+    let fila = u16::try_from(fila).expect("cabe");
+    // La escondida (Visor) se pulsa; la de delante, no.
+    app.pending_panel_command = None;
+    let _ = mouse::handle(&mut app, ev(ABAJO, col(&visor), fila));
+    assert_eq!(app.pending_panel_command.as_deref(), Some("layout.preview"));
+    app.pending_panel_command = None;
+    let _ = mouse::handle(&mut app, ev(ABAJO, col(&detalles), fila));
+    assert!(
+        app.pending_panel_command.is_none(),
+        "la de delante no cierra con un clic en su pestaña: {:?}",
+        app.pending_panel_command
+    );
+    // Y el ratón mide el contenido donde se pinta: bajo la tira. Con dos
+    // cuentas, un clic en el mapa de disco agrupado elegía el hijo de al lado.
+    let metadata = app.metadata_slot().expect("detalles abiertos");
+    let hueco = app.mouse.slot_rect(metadata).expect("colocado");
+    assert_eq!(hueco.y, fila + 1, "el contenido empieza bajo la tira");
+}
+
 /// REGRESIÓN de un BLOCKER: con un overlay delante, la barra ni se pinta ni se
 /// puede pulsar.
 ///

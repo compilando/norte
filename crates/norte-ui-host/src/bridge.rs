@@ -506,7 +506,11 @@ use serde::{Deserialize, Serialize};
 ///   (`places::drive_name`, el de la TUI) y gana `mount` —el montaje
 ///   entero, para el título—, `free` —el libre corto de la columna
 ///   derecha— y `kind`, que elige el icono.
-pub const BRIDGE_VERSION: u32 = 87;
+/// - **88**: los paneles de un mismo borde se agrupan en pestañas (ADR
+///   0134). `TabGroupView.panels`: el grupo es de paneles, no de listados,
+///   y no lleva `+`. El rótulo de una pestaña de panel es su nombre de la
+///   barra de paneles, no el id del kind.
+pub const BRIDGE_VERSION: u32 = 88;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

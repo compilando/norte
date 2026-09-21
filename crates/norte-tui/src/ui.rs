@@ -62,8 +62,8 @@ pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
 pub(crate) use chrome::panel_buttons;
 use chrome::{draw_key_bar, draw_menu, draw_panel_bar};
 pub(crate) use geometry::{
-    body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_rect,
-    visor_split,
+    body_rect, centered, chrome_body, contenido_de_hueco, pane_cols, placed_of_kind,
+    resolved_frame, slot_rect, visor_split,
 };
 use modals::draw_modal;
 #[cfg(test)]
@@ -238,6 +238,9 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
         }
     }
     draw_laterales(frame, &res, app, tasks_area, status_area);
+    // Las tiras de los grupos de paneles (ADR 0134), encima de la fila que
+    // `placed_of_kind` les reservó.
+    chrome::draw_tiras_de_paneles(frame, app);
 }
 
 /// Los paneles LATERALES, que salen del mismo reparto que los listados.
@@ -348,6 +351,7 @@ fn draw_laterales(
     if let Some(id) = app.panel_slot()
         && let Some(rect) = geometry::slot_rect(res, id)
     {
+        let rect = geometry::contenido_de_hueco(&app.layout, id, rect);
         let con_teclado = app.key_owner() == crate::app::KeyOwner::Panel;
         draw_plugin_panel(frame, rect, app, id, con_teclado);
     }

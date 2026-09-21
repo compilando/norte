@@ -2280,6 +2280,29 @@ describe("la barra de menús", () => {
     expect(enviadas).toEqual([{ action: "layout_button_activate", id: "pick" }]);
   });
 
+  it("un grupo de PANELES no lleva + ni × y se marca para su estilo", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.layout.tabs = [
+      {
+        slot_id: 1,
+        active: 1,
+        panels: true,
+        tabs: [
+          { slot_id: 7, title: "Historial", title_hostile: false },
+          { slot_id: 1, title: "Detalles", title_hostile: false },
+        ],
+      },
+    ];
+    screen.paint(v);
+    expect(document.querySelector(".tab-new")).toBeNull();
+    expect(document.querySelector(".tab-close")).toBeNull();
+    const tira = document.querySelector(".slot-tabs") as HTMLElement;
+    expect(tira.dataset["panels"]).toBe("true");
+    (document.querySelectorAll(".tab")[0] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "select_tab", slot_id: 7 }]);
+  });
+
   it("las pestañas de un grupo llevan su × y el grupo su +, y la × no elige", () => {
     const { screen, enviadas } = montar();
     const v = vista({});

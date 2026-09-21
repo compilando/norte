@@ -920,6 +920,7 @@ fn disposicion_de_referencia() -> LayoutView {
                 },
             ],
             active: 0,
+            panels: false,
         }],
         placements: colocaciones_de_referencia(),
     }
@@ -2857,7 +2858,8 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // 0133).
     // Puente 87: la unidad de la barra de sitios gana `free`, `mount` y
     // `kind` (captura del 2026-09-21).
-    const FORMA: u64 = 17_608_722_998_706_144_277;
+    // Puente 88: `TabGroupView.panels`, el grupo de paneles (ADR 0134).
+    const FORMA: u64 = 6_330_243_143_821_114_742;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

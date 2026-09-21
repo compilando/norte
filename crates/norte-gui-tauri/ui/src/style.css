@@ -3213,6 +3213,56 @@ button.status-item:hover {
   border-bottom: 2px solid var(--border-focus);
 }
 
+/* Un grupo de PANELES (ADR 0134): sus pestañas se leen como las del panel de
+   VS Code —la fuente del cromo, pequeñas, la de delante subrayada— y hacen
+   de título: el título del panel de delante sobra y se esconde. */
+.slot-tabs[data-panels="true"] {
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--separator, var(--border)) 70%, transparent);
+}
+
+.slot-tabs[data-panels="true"] .tabs {
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.slot-tabs[data-panels="true"] .tab {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 10px;
+  color: var(--muted, var(--title-fg));
+  opacity: 1;
+  border-bottom: 2px solid transparent;
+  transition:
+    color 0.12s,
+    border-color 0.12s;
+}
+
+.slot-tabs[data-panels="true"] .tab:hover {
+  color: var(--fg);
+}
+
+.slot-tabs[data-panels="true"] .tab[data-active="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--border-focus);
+}
+
+.slot-tabs[data-open="true"][data-panels="true"] + .slot-title {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slot-tabs[data-panels="true"] .tab {
+    transition: none;
+  }
+}
+
+:root[data-reduce-motion="true"] .slot-tabs[data-panels="true"] .tab {
+  transition: none;
+}
+
 /* La barra de pestañas y su `+` en una fila (ADR 0133). */
 .slot-tabs[data-open="true"] {
   display: flex;

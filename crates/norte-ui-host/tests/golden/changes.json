@@ -610,6 +610,7 @@
     "tabs": [
       {
         "active": 0,
+        "panels": false,
         "slot_id": 1,
         "tabs": [
           {

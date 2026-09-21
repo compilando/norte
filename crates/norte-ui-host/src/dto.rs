@@ -1842,6 +1842,12 @@ pub struct TabGroupView {
     pub tabs: Vec<TabView>,
     /// Cuál está delante, como índice en `tabs`.
     pub active: u64,
+    /// Es un grupo de PANELES (fase F, puente 88), no de listados: los
+    /// paneles de un mismo borde comparten sitio. Sin `+`: una pestaña nueva
+    /// es un listado, y en un grupo de paneles no pinta nada. Ausente en un
+    /// host anterior = de listados.
+    #[serde(default)]
+    pub panels: bool,
 }
 
 /// Una pestaña.

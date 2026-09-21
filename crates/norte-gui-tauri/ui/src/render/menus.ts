@@ -582,8 +582,18 @@ export function paintTabs(
       e.stopPropagation();
       this.send({ action: "tab_action", slot_id: t.slot_id, verb: "close" });
     });
-    li.append(cerrar);
+    if (grupo.panels !== true) {
+      li.append(cerrar);
+    }
     lista.append(li);
+  }
+  // Un grupo de PANELES (ADR 0134) no lleva `+` ni `×`: abren y cierran
+  // listados. Sus paneles se abren y se cierran desde la barra de
+  // actividad, como las vistas del panel de VS Code.
+  dom.tabs.dataset["panels"] = String(grupo.panels === true);
+  if (grupo.panels === true) {
+    dom.tabs.replaceChildren(lista);
+    return;
   }
   // Abrir una pestaña EN ESTE GRUPO: se elige la activa del grupo y se abre
   // detrás, igual que el `[+]` de la barra de la TUI.

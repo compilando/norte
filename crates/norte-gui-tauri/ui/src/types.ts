@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 87;
+export const BRIDGE_VERSION = 88;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -58,6 +58,9 @@ export interface TabGroupView {
   tabs: TabView[];
   /** Cuál está delante, como índice en `tabs`. */
   active: number;
+  /** Grupo de PANELES de un mismo borde (ADR 0134, puente 88): sin `+` ni
+   *  `×`, que abren y cierran listados. Opcional: host anterior = listados. */
+  panels?: boolean;
 }
 
 export interface TabView {

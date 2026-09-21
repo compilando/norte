@@ -311,7 +311,7 @@ impl App {
                 let id = self.mint_slot();
                 self.panes
                     .insert_places(id, norte_frontend::places::PlacesState::new());
-                self.layout = self.layout.dock(
+                self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
                     Edge::Left,
                     // 16 celdas: el mínimo del kind son 14 y un `Fixed` gana
@@ -507,7 +507,7 @@ impl App {
                 let id = self.mint_slot();
                 self.panes
                     .insert_preview(id, crate::preview::Preview::new());
-                self.layout = self.layout.dock(
+                self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
                     Edge::Right,
                     Size::Weight(1),
@@ -566,7 +566,7 @@ impl App {
                 // Cerca del listado y no EN él (captura del 2026-09-21).
                 tree.anchor_near(self.focused().dir(), &norte_frontend::shell::home_vpath());
                 self.panes.insert_tree(id, tree);
-                self.layout = self.layout.dock(
+                self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
                     Edge::Left,
                     // A la izquierda y con el ancho del sidebar: es el mismo
@@ -712,7 +712,7 @@ impl App {
         let id = self.mint_slot();
         self.panes
             .insert_timeline(id, norte_frontend::timeline::Timeline::default());
-        self.layout = self.layout.dock(
+        self.layout = self.layout.dock_grouped(
             self.focused_slot(),
             Edge::Bottom,
             // Doce filas: una lista de la que se elige un punto necesita ver
@@ -775,7 +775,7 @@ impl App {
         let id = self.mint_slot();
         self.panes
             .insert_disk_map(id, norte_frontend::diskmap::DiskMap::new());
-        self.layout = self.layout.dock(
+        self.layout = self.layout.dock_grouped(
             self.focused_slot(),
             Edge::Bottom,
             // Doce filas: un treemap necesita alto para repartir en tiras —con
@@ -856,7 +856,7 @@ impl App {
         let id = self.mint_slot();
         self.panes
             .insert_processes(id, crate::processes::Processes::default());
-        self.layout = self.layout.dock(
+        self.layout = self.layout.dock_grouped(
             self.focused_slot(),
             Edge::Bottom,
             // Ocho filas: seis de tareas —el tope del `TaskBoard`— más el
@@ -1009,7 +1009,7 @@ impl App {
             }
             None => {
                 let id = self.mint_slot();
-                self.layout = self.layout.dock(
+                self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
                     Edge::Bottom,
                     // Diez filas: ocho de mensajes más el marco. Un log de
@@ -1239,7 +1239,7 @@ impl App {
         } else {
             let id = self.mint_slot();
             self.panes.insert_metadata(id, None);
-            self.layout = self.layout.dock(
+            self.layout = self.layout.dock_grouped(
                 self.focused_slot(),
                 Edge::Right,
                 // Treinta celdas: la etiqueta más larga con su valor al lado.

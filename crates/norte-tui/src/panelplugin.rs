@@ -154,6 +154,7 @@ pub fn pedir_marco(
     let Some(rect) = crate::ui::slot_rect(&res, slot) else {
         return;
     };
+    let rect = crate::ui::contenido_de_hueco(&app.layout, slot, rect);
     let firma = Firma {
         kind: kind.clone(),
         dir: app.focused().dir().clone(),

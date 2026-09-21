@@ -33,6 +33,12 @@ independently through `PROTOCOL_VERSION`.
   in a terminal wide enough. In the window every tab has a `×` and each tab
   group ends with a `+`, as the terminal's tab strip already had. They run
   the same commands as their keys.
+- **Panels on one edge share it as tabs** (ADR 0134, bridge 88). Opening
+  the viewer beside the timeline no longer splits the right edge in thin
+  strips: the second panel joins the first as a tab and gets the whole
+  edge, in the window and in the terminal. A panel's key on a tab in the
+  background brings it forward; on the one in front it closes it, and a
+  group of one goes back to a plain panel.
 - **Window polish.** The root of a path's breadcrumbs (the provider's
   scheme) is dimmed, since it is in every path of the pane, and the handle
   between two panes lights up when the pointer is on it or dragging it —
