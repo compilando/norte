@@ -166,7 +166,15 @@ impl Estado {
         let columnas = self
             .huecos
             .get(&slot)
-            .map(|h| self.columnas.plugin_ids_for(h.pane.dir().scheme()))
+            // Las pintadas y las de la barra de estado (ADR 0137): la MISMA
+            // lista que pide la TUI.
+            .map(|h| {
+                norte_frontend::columns::plugin_requests(
+                    &self.columnas,
+                    &self.config.common.ui_status_plugins,
+                    h.pane.dir().scheme(),
+                )
+            })
             .unwrap_or_default();
         let Some(hueco) = self.huecos.get_mut(&slot) else {
             return;

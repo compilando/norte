@@ -62,9 +62,10 @@ impl StatusInput {
 /// Un elemento, ya redactado.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusItemView {
-    /// El id estable (`position`, `marks`…): el de `norte.toml`, y el que
-    /// vuelve con un clic.
-    pub id: &'static str,
+    /// El id estable (`position`, `marks`…, o `plugin:<plugin>/<columna>`
+    /// para el de un plugin): el de `norte.toml`, y el que vuelve con un
+    /// clic.
+    pub id: String,
     /// El texto, en el idioma pedido.
     pub text: String,
     /// Qué es y, si se pulsa, qué hace.
@@ -124,12 +125,91 @@ fn item(input: &StatusInput, which: StatusItem, lang: Lang) -> Option<StatusItem
         &[("n", &tip_count(input, which))],
     );
     Some(StatusItemView {
-        id,
+        id: id.to_owned(),
         text,
         tooltip,
         command,
         priority,
     })
+}
+
+/// Lo más que ocupa el texto de un elemento de plugin, en celdas: el valor
+/// es de un tercero, y uno largo no se puede comer la barra.
+pub const PLUGIN_ITEM_MAX_CELLS: usize = 32;
+
+/// Los elementos que aportan los PLUGINS (ADR 0137): el valor de cada
+/// columna `(plugin, columna)` para la entrada bajo el cursor, en su orden.
+///
+/// Van a la IZQUIERDA de la mitad derecha —donde VS Code pone la rama— y son
+/// los primeros en ceder: lo del programa manda sobre lo de un tercero. No se
+/// pulsan: un plugin de columnas pinta, no conduce el gestor.
+///
+/// El texto sale de [`crate::PaneState::plugin_cell`], que lo sirve
+/// re-enmascarado, y además se acota a [`PLUGIN_ITEM_MAX_CELLS`]. Sin
+/// valor —plugin sin consentir, columna que no declara, entrada sin dato— el
+/// elemento no sale.
+#[must_use]
+pub fn plugin_items(
+    pane: &crate::PaneState,
+    pairs: &[(String, String)],
+    lang: Lang,
+) -> Vec<StatusItemView> {
+    let Some(entrada) = pane.selected() else {
+        return Vec::new();
+    };
+    pairs
+        .iter()
+        .filter_map(|(plugin, column)| {
+            let id = crate::columns::plugin_display_id(plugin, column);
+            let valor = pane.plugin_cell(&id, &entrada.path)?;
+            let text = acotar(&valor, PLUGIN_ITEM_MAX_CELLS);
+            let (plugin_visible, _) = crate::display_name(plugin.as_bytes());
+            let (column_visible, _) = crate::display_name(column.as_bytes());
+            let tooltip = ta_in(
+                lang,
+                "status-item-plugin-tip",
+                &[("plugin", &plugin_visible), ("column", &column_visible)],
+            );
+            Some(StatusItemView {
+                id,
+                text,
+                tooltip,
+                command: None,
+                priority: 10,
+            })
+        })
+        .collect()
+}
+
+/// `s` en `max` celdas como mucho, con `…` al final si no cabía. Por CELDAS
+/// y no por caracteres: un ideograma ocupa dos.
+fn acotar(s: &str, max: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if s.width() <= max {
+        return s.to_owned();
+    }
+    let mut out = String::new();
+    let mut ancho = 0;
+    for c in s.chars() {
+        let w = c.width().unwrap_or(0);
+        // Una celda para la elipsis.
+        if ancho + w + 1 > max {
+            break;
+        }
+        ancho += w;
+        out.push(c);
+    }
+    // Sin anchura cero al final: un ZWJ o una marca combinante cortados se
+    // pegarían a la elipsis (la misma trampa que `ellipsis_at_bytes`).
+    while out
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.width() == Some(0))
+    {
+        out.pop();
+    }
+    out.push('…');
+    out
 }
 
 /// La cifra que el tooltip de un elemento necesita, si alguna.
@@ -164,8 +244,8 @@ fn sort_text(s: SortSpec, lang: Lang) -> String {
 ///
 /// ```
 /// use norte_frontend::statusbar::{StatusItemView, fit};
-/// let v = |id, text: &str, priority| StatusItemView {
-///     id, text: text.into(), tooltip: String::new(), command: None, priority,
+/// let v = |id: &str, text: &str, priority| StatusItemView {
+///     id: id.into(), text: text.into(), tooltip: String::new(), command: None, priority,
 /// };
 /// let items = [v("a", "aaaa", 10), v("b", "bb", 90), v("c", "cc", 50)];
 /// assert_eq!(fit(&items, 100, 2), [0, 1, 2]);
@@ -220,7 +300,7 @@ mod tests {
     fn sigue_el_orden_configurado_y_calla_lo_vacio() {
         let lista = StatusItems::parse(&["encoding", "tasks", "position", "marks"]).unwrap();
         let v = items(&input(), lista, Lang::Es);
-        let ids: Vec<_> = v.iter().map(|i| i.id).collect();
+        let ids: Vec<_> = v.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, ["encoding", "position"], "sin tareas ni marcas");
         assert_eq!(v[0].text, "UTF-8");
         assert_eq!(v[1].text, "3/120");

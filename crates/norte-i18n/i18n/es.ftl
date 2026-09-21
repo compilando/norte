@@ -577,6 +577,8 @@ status-item-sort-tip = Orden del listado. Pulsa para cambiarlo
 status-item-encoding-tip = Cómo se leen los nombres. Pulsa para reinterpretarlos
 status-item-tasks-tip = { $n } tareas en marcha. Pulsa para ver los procesos
 status-item-notices-tip = { $n } avisos sin leer. Pulsa para abrir el registro
+# Un elemento aportado por un plugin (ADR 0137): de quién es y qué columna.
+status-item-plugin-tip = Del plugin { $plugin }, columna { $column }, para la entrada bajo el cursor
 status-marks-pruned = { $n } marcas caídas, sus entradas ya no están
 status-watch-degraded = vigilancia de directorios degradada a sondeo (¿límite de inotify?) — crear/borrar/renombrar se ve en segundos; editar un fichero existente no se detecta
 msg-names-encoding = nombres mostrados como { $enc } (solo display; los bytes no cambian)

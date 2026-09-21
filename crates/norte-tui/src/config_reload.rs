@@ -83,6 +83,9 @@ pub async fn reload_config(
                 app.panel_bar = cfg.common.ui_panel_bar.unwrap_or(true);
                 // El cromo entero, por lo mismo: cada frame lo lee.
                 app.chrome = cfg.common.ui_chrome;
+                // Los elementos de plugin (ADR 0137): la barra los lee cada
+                // frame, y el siguiente listado pide sus columnas.
+                app.status_plugins.clone_from(&cfg.common.ui_status_plugins);
                 // Hallazgo 3 (revisión de rama, fase 5): `[ui] images` vive
                 // en el cromo que acaba de reasignarse arriba —
                 // `App::viewer_modo` se fijó al ABRIR el visor, y sin este

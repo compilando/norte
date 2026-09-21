@@ -742,6 +742,10 @@ pub struct App {
     /// y el pie APAGADOS por lo mismo que la barra de paneles: una fila que
     /// aparece sola cambiaría los índices de ochenta tests que no van de esto.
     pub chrome: norte_config::UiChrome,
+    /// `[ui] status_plugins` (ADR 0137): las columnas de plugin que la barra
+    /// de estado enseña para la entrada bajo el cursor. Vacío en un `App` de
+    /// test, como el resto del cromo.
+    pub status_plugins: Vec<(String, String)>,
     /// Los volúmenes del host, cacheados para el pie de cada panel (spec
     /// 2026-09-10). Los pide el bucle cuando [`Self::volumes_stale`] lo
     /// dice —al aterrizar un listado y al refrescar—, nunca un frame:
@@ -1319,6 +1323,7 @@ impl App {
                 pane_footer: Some(false),
                 ..Default::default()
             },
+            status_plugins: Vec::new(),
             volumes: Vec::new(),
             volumes_stale: true,
             pending_panel_command: None,

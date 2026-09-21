@@ -24,6 +24,10 @@ pub const COLUMN_VALUE_MAX_CHARS: usize = 32;
 /// `plugin.column_values` por listado, así que el cap acota trabajo, no
 /// wire. Pintado == pedido; el excedente es diagnóstico
 /// (`plugins_over_cap`, doctor lo nombra), jamás una columna en blanco.
+///
+/// Es el tope de las PINTADAS. Lo que un listado pide en total
+/// ([`plugin_requests`]) suma los elementos de la barra de estado (ADR
+/// 0137), hasta `STATUS_PLUGINS_MAX` más: doce llamadas como mucho.
 pub const PLUGIN_COLUMNS_MAX_REQUEST: usize = 8;
 
 /// Masks a column HEADER ([`norte_proto::methods::PluginColumnInfo::header`],
@@ -86,6 +90,30 @@ pub fn plugin_display_id(plugin: &str, column: &str) -> String {
         column: column.to_owned(),
     }
     .to_string()
+}
+
+/// Las columnas de plugin que un listado de `scheme` tiene que PEDIR: las
+/// que se pintan como columna más las que la barra de estado enseña
+/// (`[ui] status_plugins`, ADR 0137), sin repetir, y en ese orden.
+///
+/// Una sola lista para los dos frontends: el elemento de estado es el valor
+/// de la columna para la entrada bajo el cursor, así que tiene que llegar
+/// por el MISMO viaje que las celdas —y con la misma validación de
+/// consentimiento, [`validated_plugin_requests`]—. Con una lista por
+/// frontend, uno pediría la columna y el otro enseñaría un elemento vacío.
+#[must_use]
+pub fn plugin_requests(
+    settings: &ColumnsSettings,
+    status: &[(String, String)],
+    scheme: &str,
+) -> Vec<(String, String)> {
+    let mut out = settings.plugin_ids_for(scheme);
+    for par in status.iter().take(norte_config::load::STATUS_PLUGINS_MAX) {
+        if !out.contains(par) {
+            out.push(par.clone());
+        }
+    }
+    out
 }
 
 /// Filtra los pares (plugin, columna) CONFIGURADOS contra el catálogo vivo

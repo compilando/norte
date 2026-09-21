@@ -61,6 +61,10 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         // barra de paneles, el pie del panel, el formato de fecha, la
         // caducidad de los avisos y los botones de diálogo. Cada foto los lee.
         ui_chrome: _,
+        // Los elementos de plugin de la barra (ADR 0137): cada foto los lee
+        // (`elementos_de_estado`) y cada tanda de un listado pide sus
+        // columnas (`columns::plugin_requests`).
+        ui_status_plugins: _,
 
         // ─── La lee la cáscara al ARRANCAR con el resolutor compartido, así
         //     que acepta un preset o la ruta a un `.toml` (ADR 0020).

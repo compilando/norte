@@ -736,6 +736,17 @@
             "null"
           ]
         },
+        "status_plugins": {
+          "default": null,
+          "description": "Status items contributed by PLUGINS (ADR 0137): plugin columns, as\n`\"plugin:<plugin>/<column>\"`, whose value for the entry under the\ncursor goes at the left of the status bar's right half. At most\nfour. A plugin that is not approved and enabled, or does not declare\nthat column, shows nothing.\n\n[`crate::load::load`] rejects malformed and repeated ids.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "theme": {
           "default": null,
           "description": "Theme preset name or a path to a custom TOML theme (ADR 0020). When\nabsent, use `default`.\n\nThe bundled presets are `default`, `vscode-dark`, `vscode-light`,\n`catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`,\n`gruvbox-light`, `nord`, `retro-crt` and `retro-crt-amber`.\n`norte_theme::preset_names()` is the source of truth; this list is a\ncopy for readers of the schema, and it had gone stale before (it named\nsix of the eight that existed).",

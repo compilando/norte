@@ -49,6 +49,12 @@ independently through `PROTOCOL_VERSION`.
   move the window, double-click to maximize, and minimize, maximize and
   close at its right end. The default stays `native`. Takes effect the
   next time the window opens.
+- **Plugins in the status bar** (ADR 0137). `[ui] status_plugins =
+  ["plugin:git/branch"]` shows a plugin column's value for the entry under
+  the cursor as a status item — the git plugin's branch, for instance — in
+  the terminal and the window. Up to four; only approved plugins that
+  declare the column; they are the first to give way when the bar is short,
+  and they are not clickable.
 - **Window polish.** The root of a path's breadcrumbs (the provider's
   scheme) is dimmed, since it is in every path of the pane, and the handle
   between two panes lights up when the pointer is on it or dragging it —

@@ -124,7 +124,10 @@ pub fn request_decorations(
         .collect();
     let kinds: Vec<norte_proto::EntryKind> =
         app.panes[pane].entries().iter().map(|e| e.kind).collect();
-    let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+    // Las columnas pintadas y las de la barra de estado (ADR 0137): UNA
+    // lista para los dos frontends.
+    let plugin_cols =
+        norte_frontend::columns::plugin_requests(&app.columns, &app.status_plugins, dir.scheme());
     decorate_fetch.set(
         app.panes.slot_of(pane),
         crate::probes::spawn_decorate_fetch(

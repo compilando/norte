@@ -2044,6 +2044,11 @@ pub struct CommonConfig {
     /// format, notice expiry, dialog buttons), last-wins per key from ALL
     /// layers including Project: presentation-only, like the scalars above.
     pub ui_chrome: UiChrome,
+    /// `[ui] status_plugins` (ADR 0137), validated `(plugin, column)` pairs
+    /// in screen order; last-present-wins. Empty = none. From every layer:
+    /// it only chooses what to SHOW, and a plugin runs only if the user
+    /// approved it, whoever names it.
+    pub ui_status_plugins: Vec<(String, String)>,
     /// `[daemon]` merged (last-wins per key; never from Project or a profile
     /// — fail-closed, review MAJOR-1). Startup only.
     pub daemon: crate::DaemonSettings,
@@ -2219,6 +2224,39 @@ fn merge_ui_flags(
     *ui_panel_bar = ui.panel_bar.or(*ui_panel_bar);
     *ui_parent_entry = ui.parent_entry.or(*ui_parent_entry);
     *ui_layout = ui.layout.clone().or(ui_layout.take());
+}
+
+/// At most this many plugin status items (ADR 0137): each one is a plugin
+/// call per listing, and the bar is one row.
+pub const STATUS_PLUGINS_MAX: usize = 4;
+
+/// `[ui] status_plugins` (ADR 0137): `"plugin:<plugin>/<column>"` ids into
+/// `(plugin, column)` pairs, in order. The same shape as a plugin column id
+/// in `[columns]`; the characters are not restricted here because the pair
+/// is only ever compared against what an approved plugin declares.
+///
+/// # Errors
+/// A neutral message (never the raw value, #73) on a malformed, repeated
+/// or excess id.
+fn parse_status_plugins(ids: &[String]) -> Result<Vec<(String, String)>, &'static str> {
+    const MSG: &str = "[ui] status_plugins inválido: cada id una vez, con la forma \
+                       «plugin:<plugin>/<columna>», y como mucho cuatro";
+    if ids.len() > STATUS_PLUGINS_MAX {
+        return Err(MSG);
+    }
+    let mut out: Vec<(String, String)> = Vec::with_capacity(ids.len());
+    for id in ids {
+        let (plugin, column) = id
+            .strip_prefix("plugin:")
+            .and_then(|r| r.split_once('/'))
+            .filter(|(p, c)| !p.is_empty() && !c.is_empty())
+            .ok_or(MSG)?;
+        if out.iter().any(|(p, c)| p == plugin && c == column) {
+            return Err(MSG);
+        }
+        out.push((plugin.to_owned(), column.to_owned()));
+    }
+    Ok(out)
 }
 
 /// The panel bar's two enums, `panel_bar_style` and `panel_bar_position`.
@@ -2839,6 +2877,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_layout: Option<String> = None;
     let mut ui_columns = ColumnsConfig::default();
     let mut ui_chrome = UiChrome::default();
+    let mut ui_status_plugins: Vec<(String, String)> = Vec::new();
     let mut daemon = crate::DaemonSettings::default();
     let mut log = crate::LogSettings::default();
     let mut hotlist: Vec<HotlistItem> = Vec::new();
@@ -2906,6 +2945,13 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             }
             // Antes de todo lo que MUEVE campos fuera de `parsed.ui`.
             merge_ui_chrome(&mut ui_chrome, &parsed.ui, &norte)?;
+            if let Some(ids) = &parsed.ui.status_plugins {
+                ui_status_plugins =
+                    parse_status_plugins(ids).map_err(|message| ConfigError::Toml {
+                        path: norte.clone(),
+                        message: message.to_owned(),
+                    })?;
+            }
             if let Some(l) = parsed.ui.lang {
                 ui_lang = Some(l);
             }
@@ -3022,6 +3068,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_diff_detached,
         ui_columns,
         ui_chrome,
+        ui_status_plugins,
         daemon,
         log,
         hotlist,
@@ -3769,6 +3816,48 @@ format = "exact"
             };
             let cfg = load(&layers).expect("carga");
             assert_eq!(cfg.ui_confirm_quit, expected, "raw={raw}");
+        }
+    }
+
+    /// `[ui] status_plugins` (ADR 0137): pairs in order, last layer wins,
+    /// and a malformed, repeated or fifth id names the file.
+    #[test]
+    fn status_plugins_carga_y_valida() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "[ui]\nstatus_plugins = [\"plugin:git/branch\", \"plugin:net.x/estado\"]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let c = load(&layers).expect("carga");
+        assert_eq!(
+            c.ui_status_plugins,
+            vec![
+                ("git".to_owned(), "branch".to_owned()),
+                ("net.x".to_owned(), "estado".to_owned())
+            ]
+        );
+        assert!(
+            load(&Layers { dirs: vec![] })
+                .expect("carga")
+                .ui_status_plugins
+                .is_empty()
+        );
+        for bad in [
+            "status_plugins = [\"git/branch\"]",
+            "status_plugins = [\"plugin:git\"]",
+            "status_plugins = [\"plugin:/branch\"]",
+            "status_plugins = [\"plugin:git/\"]",
+            "status_plugins = [\"plugin:git/a\", \"plugin:git/a\"]",
+            "status_plugins = [\"plugin:a/a\", \"plugin:a/b\", \"plugin:a/c\", \
+             \"plugin:a/d\", \"plugin:a/e\"]",
+        ] {
+            std::fs::write(dir.path().join("norte.toml"), format!("[ui]\n{bad}\n")).unwrap();
+            let err = load(&layers).expect_err(bad);
+            assert!(err.to_string().contains("norte.toml"), "{bad}: {err}");
         }
     }
 

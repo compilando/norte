@@ -576,6 +576,8 @@ status-item-sort-tip = Order of the listing. Click to change it
 status-item-encoding-tip = How names are read. Click to reinterpret them
 status-item-tasks-tip = { $n } tasks running. Click to see the jobs
 status-item-notices-tip = { $n } unread notices. Click to open the log
+# An item contributed by a plugin (ADR 0137): whose it is and which column.
+status-item-plugin-tip = From plugin { $plugin }, column { $column }, for the entry under the cursor
 status-marks-pruned = { $n } marks dropped, their entries are gone
 status-watch-degraded = directory watching degraded to polling (inotify limit?) — creates/deletes/renames show up within seconds; edits to existing files are not detected
 msg-names-encoding = names shown as { $enc } (display only; bytes unchanged)

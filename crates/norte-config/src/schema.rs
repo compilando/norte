@@ -418,6 +418,15 @@ pub struct UiSection {
     /// [`crate::load::load`] rejects unknown and repeated ids.
     #[serde(default)]
     pub status_items: Option<Vec<String>>,
+    /// Status items contributed by PLUGINS (ADR 0137): plugin columns, as
+    /// `"plugin:<plugin>/<column>"`, whose value for the entry under the
+    /// cursor goes at the left of the status bar's right half. At most
+    /// four. A plugin that is not approved and enabled, or does not declare
+    /// that column, shows nothing.
+    ///
+    /// [`crate::load::load`] rejects malformed and repeated ids.
+    #[serde(default)]
+    pub status_plugins: Option<Vec<String>>,
     /// Whether every listing carries a footer with its counts (directories,
     /// files, bytes), what is marked, and the free space of the volume the
     /// directory lives on. Absent = `true`.

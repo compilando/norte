@@ -66,6 +66,12 @@ in what order, for example `status_items = ["tasks", "position"]`; an empty
 list leaves the right half blank. The ones that do not fit give way by
 importance, and always before a warning on the left.
 
+A columns plugin can speak there too: `status_plugins =
+["plugin:git/branch"]` shows that column's value for the entry under the
+cursor — the branch, in the example — to the left of the others. Up to
+four, only from approved plugins that declare the column; they are the
+first to give way and are not clickable.
+
 Striped rows
 ------------
 

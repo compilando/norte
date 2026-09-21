@@ -67,6 +67,12 @@ orden, por ejemplo `status_items = ["tasks", "position"]`; una lista vacía
 deja la mitad derecha en blanco. Los que no caben ceden por importancia, y
 siempre antes que un aviso de la izquierda.
 
+Un plugin de columnas también puede hablar ahí: `status_plugins =
+["plugin:git/branch"]` enseña el valor de esa columna para la entrada bajo
+el cursor —la rama, en el ejemplo—, a la izquierda de los demás. Hasta
+cuatro, solo de plugins aprobados que declaren la columna; son los primeros
+en ceder y no se pulsan.
+
 Filas a rayas
 -------------
 

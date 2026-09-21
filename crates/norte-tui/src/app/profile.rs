@@ -168,6 +168,10 @@ mod tests {
             // — Se aplica en caliente: `reload_config` copia el cromo a `App`
             //   y cada frame lo lee (spec 2026-09-10).
             ui_chrome: _,
+            // — Se aplica en caliente: `reload_config` los copia a `App`, la
+            //   barra los lee cada frame y el siguiente listado pide sus
+            //   columnas (ADR 0137).
+            ui_status_plugins: _,
             // — Se aplica en caliente: la recarga se la pasa a los dos panes
             //   y la fila aparece o desaparece en el siguiente pintado.
             ui_parent_entry: _,

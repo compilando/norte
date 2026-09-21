@@ -414,11 +414,19 @@ impl Estado {
             self.filas_de_tablero(),
             self.status.notices_unread,
         );
-        norte_frontend::statusbar::items(
+        // Los de los plugins primero (ADR 0137), como en la TUI: a la
+        // izquierda de la mitad derecha, y los primeros en ceder.
+        let mut lista = norte_frontend::statusbar::plugin_items(
+            &self.hueco().pane,
+            &self.config.common.ui_status_plugins,
+            self.lang,
+        );
+        lista.extend(norte_frontend::statusbar::items(
             &input,
             self.config.common.ui_chrome.status_items(),
             self.lang,
-        )
+        ));
+        lista
     }
 
     /// La proyección de la mitad derecha de la barra de estado (ADR 0132):
@@ -432,7 +440,7 @@ impl Estado {
             .map(|i| {
                 let v = &lista[i];
                 crate::dto::StatusItemView {
-                    id: v.id.to_owned(),
+                    id: clamp_display(v.id.clone()),
                     text: clamp_display(v.text.clone()),
                     tooltip: clamp_display(v.tooltip.clone()),
                     clickable: v.command.is_some(),

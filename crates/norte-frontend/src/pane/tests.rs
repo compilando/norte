@@ -3292,6 +3292,63 @@ fn plugin_columns_clava_por_bytes_no_por_display() {
     );
 }
 
+/// ADR 0137: el elemento de estado de un plugin es el valor de su columna
+/// para la entrada bajo el CURSOR, enmascarado y acotado; sin valor, no
+/// sale; y no se pulsa.
+#[test]
+fn los_elementos_de_plugin_dicen_la_columna_bajo_el_cursor() {
+    use crate::statusbar::{PLUGIN_ITEM_MAX_CELLS, plugin_items};
+    let mut p = pane(&["a", "b", "c"]);
+    let mut per_path = std::collections::HashMap::new();
+    per_path.insert(VPath::parse("mem:///a").unwrap(), "main".to_owned());
+    per_path.insert(
+        VPath::parse("mem:///b").unwrap(),
+        format!("x\u{202E}{}", "rama".repeat(20)),
+    );
+    let mut cols = std::collections::HashMap::new();
+    cols.insert("plugin:git/branch".to_owned(), per_path);
+    p.set_plugin_columns(cols);
+    let pares = [
+        ("git".to_owned(), "branch".to_owned()),
+        ("git".to_owned(), "nada".to_owned()),
+    ];
+
+    p.set_cursor(0);
+    let v = plugin_items(&p, &pares, norte_i18n::Lang::Es);
+    assert_eq!(v.len(), 1, "la columna sin valor no sale: {v:?}");
+    assert_eq!(v[0].id, "plugin:git/branch");
+    assert_eq!(v[0].text, "main");
+    assert_eq!(v[0].command, None, "un plugin de columnas no conduce");
+    assert!(v[0].tooltip.contains("git") && v[0].tooltip.contains("branch"));
+
+    p.set_cursor(1);
+    let largo = &plugin_items(&p, &pares, norte_i18n::Lang::Es)[0].text;
+    assert!(!largo.contains('\u{202E}'), "enmascarado: {largo:?}");
+    assert!(largo.ends_with('…'), "acotado: {largo:?}");
+    assert!(unicode_width::UnicodeWidthStr::width(largo.as_str()) <= PLUGIN_ITEM_MAX_CELLS);
+
+    p.set_cursor(2);
+    assert!(
+        plugin_items(&p, &pares, norte_i18n::Lang::Es).is_empty(),
+        "entrada sin dato"
+    );
+}
+
+/// ADR 0137: lo que se pide al plugin es lo pintado MÁS lo de la barra, sin
+/// repetir.
+#[test]
+fn las_columnas_pedidas_suman_las_de_la_barra() {
+    let st = crate::columns::ColumnsSettings::default();
+    let pares = [
+        ("git".to_owned(), "branch".to_owned()),
+        ("git".to_owned(), "branch".to_owned()),
+    ];
+    assert_eq!(
+        crate::columns::plugin_requests(&st, &pares, "file"),
+        vec![("git".to_owned(), "branch".to_owned())]
+    );
+}
+
 #[test]
 fn la_regla_de_marcas_dice_que_tramos_llevan_alguna() {
     let nombres: Vec<String> = (0..100).map(|i| format!("f{i:03}")).collect();
