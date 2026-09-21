@@ -746,6 +746,10 @@ pub struct App {
     /// de estado enseña para la entrada bajo el cursor. Vacío en un `App` de
     /// test, como el resto del cromo.
     pub status_plugins: Vec<(String, String)>,
+    /// El área del último frame (ADR 0138): mover o girar un panel resuelve
+    /// el árbol nuevo contra ella antes de quedárselo, para no esconder un
+    /// listado. `None` antes del primero: no saber no es saber que no.
+    pub ultimo_frame: Option<ratatui::layout::Rect>,
     /// Los volúmenes del host, cacheados para el pie de cada panel (spec
     /// 2026-09-10). Los pide el bucle cuando [`Self::volumes_stale`] lo
     /// dice —al aterrizar un listado y al refrescar—, nunca un frame:
@@ -1324,6 +1328,7 @@ impl App {
                 ..Default::default()
             },
             status_plugins: Vec::new(),
+            ultimo_frame: None,
             volumes: Vec::new(),
             volumes_stale: true,
             pending_panel_command: None,

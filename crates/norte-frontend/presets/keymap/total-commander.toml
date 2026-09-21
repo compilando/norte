@@ -44,6 +44,10 @@
 # root (Ctrl+< / Ctrl+\, no such concept exists); target-window navigation
 # (Ctrl+Left/Right); per-letter quicksearch (AltGr+Letter / Ctrl+Alt+Letter
 # — not one chord, cannot be expressed).
+#
+# `layout.flip` (ADR 0138) is unbound in all seven presets on purpose: the
+# transcribed KEYBOARD.TXT itemises no such action, and it lives on the
+# `[/]` layout button, the Panels menu and the palette.
 
 # `pane.compare-files` (#312) se queda SIN ATAR aquí. Total Commander tiene la
 # función («Compare files by content»), pero `tc-11.58-KEYBOARD.TXT` —la fuente

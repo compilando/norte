@@ -273,23 +273,23 @@ pub(crate) fn layout_button_cells(
     if !app.menu_bar || app.menu.is_some() || crate::mouse::overlay_open(app) {
         return Vec::new();
     }
-    let total = norte_frontend::layoutbar::width();
     let usado: usize = menu_titles(area)
         .iter()
         .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
         .map(|(l, _, _)| UnicodeWidthStr::width(l.as_str()))
         .sum();
-    // Un título vale más que un botón: sin sitio para los cuatro enteros y
-    // un espacio de separación, no sale ninguno.
-    if usize::from(area.width) < usado + total + 1 {
-        return Vec::new();
-    }
+    // Un título vale más que un botón: lo que queda, menos un espacio de
+    // separación, decide cuáles caben enteros — y el primero en ceder es
+    // girar (ADR 0138), la regla compartida.
+    let botones =
+        norte_frontend::layoutbar::fitting(usize::from(area.width).saturating_sub(usado + 1));
+    let total = norte_frontend::layoutbar::width_of(&botones);
     let mut x = area
         .x
         .saturating_add(area.width)
         .saturating_sub(u16::try_from(total).unwrap_or(u16::MAX));
     let mut out = Vec::new();
-    for b in &norte_frontend::layoutbar::BUTTONS {
+    for b in botones {
         out.push((x, b));
         x = x.saturating_add(u16::try_from(b.glyph.len() + 1).unwrap_or(u16::MAX));
     }
@@ -315,10 +315,12 @@ fn draw_layout_buttons(frame: &mut Frame<'_>, app: &App, area: Rect, bar: Rect) 
             },
         );
     }
-    if botones.is_empty() {
+    let pintados: Vec<&norte_frontend::layoutbar::LayoutButton> =
+        botones.iter().map(|(_, b)| *b).collect();
+    if pintados.is_empty() {
         0
     } else {
-        u16::try_from(norte_frontend::layoutbar::width() + 1).unwrap_or(u16::MAX)
+        u16::try_from(norte_frontend::layoutbar::width_of(&pintados) + 1).unwrap_or(u16::MAX)
     }
 }
 

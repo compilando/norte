@@ -3817,7 +3817,7 @@ async fn los_paneles_de_un_borde_comparten_sitio_en_pestanas() {
 async fn los_botones_de_disposicion_y_de_pestana_se_pulsan() {
     let (h, snap) = host_arbol(arbol()).await;
     let ids: Vec<&str> = snap.layout_buttons.iter().map(|b| b.id.as_str()).collect();
-    assert_eq!(ids, ["split-h", "split-v", "equalize", "pick"]);
+    assert_eq!(ids, ["split-h", "split-v", "equalize", "flip", "pick"]);
     assert_eq!(snap.layout_buttons[0].label, "Partir lado a lado");
     let listados = |s: &norte_ui_host::ViewSnapshot| {
         s.slots
@@ -3852,6 +3852,70 @@ async fn los_botones_de_disposicion_y_de_pestana_se_pulsan() {
         let ack = h.dispatch(accion).await.expect("host vivo");
         assert!(matches!(ack, ActionAck::Stale { .. }), "fue {ack:?}");
     }
+}
+
+/// ADR 0138: soltar un listado debajo del otro los apila; `layout.flip` los
+/// vuelve a poner lado a lado.
+#[tokio::test]
+async fn mover_y_girar_reparten_los_listados() {
+    let (h, _) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let listados = |s: &norte_ui_host::ViewSnapshot| -> Vec<u32> {
+        s.slots
+            .iter()
+            .filter_map(|v| match v {
+                SlotView::Browser(b) => Some(b.slot_id),
+                _ => None,
+            })
+            .collect()
+    };
+    let _ = h
+        .dispatch(UiAction::LayoutButtonActivate {
+            id: "split-h".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    let snap = foto_hasta(&h, &mut sub, "dos listados", |s| {
+        (listados(s).len() == 2).then(|| s.clone())
+    })
+    .await;
+    let [a, b] = listados(&snap)[..] else {
+        unreachable!("dos, por la espera")
+    };
+    let sitio = |s: &norte_ui_host::ViewSnapshot, id: u32| {
+        s.layout
+            .placements
+            .iter()
+            .find(|p| p.slot_id == id)
+            .map(|p| (p.x, p.y))
+    };
+    let (ax, ay) = sitio(&snap, a).expect("a colocado");
+    let (bx, by) = sitio(&snap, b).expect("b colocado");
+    assert!(ay == by && ax < bx, "lado a lado de partida");
+
+    let ack = h
+        .dispatch(UiAction::MoveSlot {
+            slot_id: a,
+            target: b,
+            zone: norte_frontend::layout::DropZone::Bottom,
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "fue {ack:?}");
+    let () = foto_hasta(&h, &mut sub, "a debajo de b", |s| {
+        let (ax, ay) = sitio(s, a)?;
+        let (bx, by) = sitio(s, b)?;
+        (ax == bx && ay > by).then_some(())
+    })
+    .await;
+
+    ejecutar_por_paleta(&h, &mut sub, "layout.flip").await;
+    let () = foto_hasta(&h, &mut sub, "otra vez lado a lado", |s| {
+        let (ax, ay) = sitio(s, a)?;
+        let (bx, by) = sitio(s, b)?;
+        (ay == by && ax != bx).then_some(())
+    })
+    .await;
 }
 
 /// ADR 0132: la foto trae la mitad derecha de la barra de estado, con los

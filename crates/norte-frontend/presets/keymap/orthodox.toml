@@ -1,5 +1,8 @@
 # Preset orthodox (mc clásico) — el default del producto (decisión 2026-07-10).
 # Tab entre panes es sagrado (spec §12). F5/F6/F7/F8 llegan con la fase 5.
+#
+# `layout.flip` (ADR 0138) va sin tecla a propósito, como en los siete: vive
+# en el botón `[/]` de la barra de disposición, el menú Paneles y la paleta.
 
 [global]
 keymap = [

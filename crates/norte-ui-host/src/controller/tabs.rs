@@ -25,6 +25,7 @@ impl Estado {
         match efecto {
             Efecto::Tamano(delta) => self.redimensionar(delta, backend, buzon),
             Efecto::Igualar => self.igualar(backend, buzon),
+            Efecto::Girar => self.girar(backend, buzon),
             Efecto::Partir { vertical } => self.partir(vertical, backend, buzon),
             Efecto::CerrarHueco => self.cerrar_hueco(backend, buzon),
             Efecto::AlternarHueco { kind } => self.alternar_hueco(kind, backend, buzon),

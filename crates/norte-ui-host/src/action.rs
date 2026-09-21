@@ -796,6 +796,18 @@ pub enum UiAction {
         /// La posición del puntero en el eje del reparto, en celdas.
         cells: u16,
     },
+    /// Suelta el hueco `slot_id`, arrastrado por su título, sobre `target`
+    /// (puente 90, ADR 0138): a uno de sus lados, o en el centro para unirse
+    /// a él como pestaña. Qué pasa con el árbol lo decide el host
+    /// (`Node::move_slot`); un id que ya no está no cambia nada.
+    MoveSlot {
+        /// El hueco que se arrastra.
+        slot_id: u32,
+        /// El hueco sobre el que se suelta.
+        target: u32,
+        /// Dónde, dentro de `target`.
+        zone: norte_frontend::layout::DropZone,
+    },
     /// Elige una fila del selector de PERFILES y la activa (un click).
     ///
     /// Selecciona y activa a la vez, como la barra lateral: un selector de

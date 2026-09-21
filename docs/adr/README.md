@@ -138,3 +138,4 @@ edits.
 | [0135](0135-the-scrollbar-carries-a-marks-ruler.md) | The scrollbar carries a marks ruler | accepted |
 | [0136](0136-an-optional-custom-title-bar.md) | An optional custom title bar | accepted |
 | [0137](0137-plugins-contribute-status-items-through-their-columns.md) | Plugins contribute status items through their columns | accepted |
+| [0138](0138-panels-move-by-dragging-and-splits-flip.md) | Panels move by dragging, and splits flip | accepted |

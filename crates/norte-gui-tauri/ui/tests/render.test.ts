@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
 import { MARK_RULER_COLOR, OVERSCAN, markRulerImage } from "../src/render/dom";
+import { zonaDe } from "../src/render/mover";
 import { objetivoRevelado } from "../src/render/settings";
 import { catalogoReal } from "./fixtures";
 import { BRIDGE_VERSION } from "../src/types";
@@ -2187,6 +2188,106 @@ describe("which-key", () => {
     const { screen } = montar();
     screen.paint(vista({}));
     expect(document.querySelector(".whichkey")).toBeNull();
+  });
+});
+
+describe("mover un panel arrastrándolo (ADR 0138)", () => {
+  /** Dos listados lado a lado, 600×400 px cada uno. */
+  function dosListados(): ViewSnapshot {
+    const v = vista({});
+    const primero = v.slots[0];
+    if (primero === undefined || primero.kind !== "browser") {
+      throw new Error("la vista de partida trae un listado");
+    }
+    v.slots.push({ ...primero, slot_id: 2 });
+    v.layout.placements = [
+      { slot_id: 1, x: 0, y: 0, width: 60, height: 38, role: "active", focus_index: 0 },
+      { slot_id: 2, x: 60, y: 0, width: 60, height: 38, role: null, focus_index: 1 },
+      { slot_id: 4, x: 0, y: 39, width: 120, height: 1, role: null, focus_index: 2 },
+    ];
+    return v;
+  }
+
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const id = this.dataset["slotId"];
+      const x = id === "1" ? 0 : id === "2" ? 600 : id === "4" ? 0 : 0;
+      const [w, h] =
+        id === "1" || id === "2" ? [600, 400] : id === "4" ? [1200, 20] : [0, 0];
+      const y = id === "4" ? 400 : 0;
+      return new DOMRect(x, y, w, h);
+    });
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    // El trago del clic que sigue a un arrastre se quita en un temporizador
+    // de cero: sin dejarlo correr, se comería el primer clic del test de al
+    // lado.
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  const puntero = (tipo: string, x: number, y: number): MouseEvent =>
+    new MouseEvent(tipo, { button: 0, clientX: x, clientY: y, bubbles: true });
+
+  it("zonaDe: el lado más cercano a menos de un cuarto, si no el centro", () => {
+    const r = { left: 0, top: 0, width: 100, height: 100 };
+    expect(zonaDe(5, 50, r)).toBe("left");
+    expect(zonaDe(95, 50, r)).toBe("right");
+    expect(zonaDe(50, 3, r)).toBe("top");
+    expect(zonaDe(50, 90, r)).toBe("bottom");
+    expect(zonaDe(50, 50, r)).toBe("center");
+  });
+
+  it("arrastrar el título y soltar sobre otro manda move_slot con la zona", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(dosListados());
+    enviadas.length = 0;
+    const titulo = document.querySelector(
+      '[data-slot-id="1"] .slot-title',
+    ) as HTMLElement;
+    titulo.dispatchEvent(puntero("pointerdown", 10, 5));
+    window.dispatchEvent(puntero("pointermove", 900, 200));
+    expect(document.documentElement.dataset["dragging"]).toBe("slot");
+    const velo = document.querySelector(".drop-target") as HTMLElement;
+    expect(velo.hidden).toBe(false);
+    expect(velo.dataset["zone"]).toBe("center");
+    window.dispatchEvent(puntero("pointermove", 1150, 200));
+    expect(velo.dataset["zone"]).toBe("right");
+    window.dispatchEvent(puntero("pointerup", 1150, 200));
+    expect(enviadas.filter((a) => a.action === "move_slot")).toEqual([
+      { action: "move_slot", slot_id: 1, target: 2, zone: "right" },
+    ]);
+    expect(document.querySelector(".drop-target")).toBeNull();
+    expect(document.documentElement.dataset["dragging"]).toBeUndefined();
+  });
+
+  it("un clic, soltar sobre sí mismo o sobre el cromo, y Esc no mueven nada", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(dosListados());
+    const titulo = document.querySelector(
+      '[data-slot-id="1"] .slot-title',
+    ) as HTMLElement;
+    const intento = (pasos: [number, number][], antesDeSoltar?: () => void): void => {
+      titulo.dispatchEvent(puntero("pointerdown", 10, 5));
+      for (const [x, y] of pasos) {
+        window.dispatchEvent(puntero("pointermove", x, y));
+      }
+      antesDeSoltar?.();
+      window.dispatchEvent(puntero("pointerup", 0, 0));
+    };
+    intento([[12, 6]]);
+    intento([[300, 200]]);
+    intento([[300, 410]]);
+    intento([[900, 200]], () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    intento([[900, 200]], () => {
+      window.dispatchEvent(new Event("pointercancel"));
+    });
+    expect(enviadas.filter((a) => a.action === "move_slot")).toEqual([]);
+    expect(document.querySelector(".drop-target")).toBeNull();
   });
 });
 

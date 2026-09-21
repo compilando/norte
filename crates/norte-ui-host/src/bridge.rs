@@ -513,7 +513,10 @@ use serde::{Deserialize, Serialize};
 /// - **89**: la regla de marcas (ADR 0135). `BrowserSlotView.mark_ruler` y
 ///   `ViewChange::BrowserHeader.mark_ruler`: qué tramos del listado, de
 ///   `MARK_RULER_SPANS`, llevan alguna marca.
-pub const BRIDGE_VERSION: u32 = 89;
+/// - **90**: mover un panel arrastrándolo (ADR 0138). La acción
+///   `move_slot { slot_id, target, zone }`, con `zone` uno de `left`,
+///   `right`, `top`, `bottom` o `center`.
+pub const BRIDGE_VERSION: u32 = 90;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

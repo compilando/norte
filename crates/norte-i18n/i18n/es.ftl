@@ -1070,6 +1070,7 @@ menu-item-layout-close-slot = Cerrar panel
 menu-item-layout-grow = Agrandar
 menu-item-layout-shrink = Encoger
 menu-item-layout-equalize = Igualar
+menu-item-layout-flip = Girar (lado a lado ↔ arriba y abajo)
 menu-item-layout-set-target = Fijar destino
 # Nombres CORTOS para la barra de paneles (#324). Aparte de las etiquetas del
 # menú a propósito: aquellas son frases («Panel de sitios») y sus iniciales no
@@ -1240,6 +1241,7 @@ help-cmd-layout-close-slot = cerrar panel
 help-cmd-layout-grow = agrandar panel
 help-cmd-layout-shrink = encoger panel
 help-cmd-layout-equalize = igualar paneles
+help-cmd-layout-flip = girar el reparto del panel: lado a lado o uno encima del otro
 help-cmd-layout-set-target = fijar destino
 help-cmd-layout-places = enseñar u ocultar el panel de sitios
 help-cmd-layout-preview = enseñar u ocultar el visor acoplado
@@ -1263,6 +1265,7 @@ msg-no-target-designated = hay más de un panel: designa antes un destino
 # Partir un hueco que ya no da para dos: la tecla se niega en vez de crear un
 # panel que el reparto esconde en el mismo frame.
 msg-layout-split-no-room = no cabe otro panel aquí
+msg-layout-move-no-room = así no cabe: algún panel dejaría de verse
 msg-transfer-dest-invalid = eso no es una dirección: {$err}
 msg-transfer-dest-same = ahí es donde ya están: teclea otro destino
 msg-layout-load-failed = no se pudo cargar el layout «{$name}»: {$err}

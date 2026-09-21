@@ -591,9 +591,11 @@ fn los_botones_de_disposicion_caen_en_el_borde_derecho() {
         let _ = mouse::handle(app, ev(ABAJO, col, 0));
         app.pending_panel_command.clone()
     };
+    // Los cinco a 120 columnas: `[|] [-] [=] [/] [#]` desde la 101.
     assert_eq!(pulsa(&mut app, 119).as_deref(), Some("layout.pick"));
-    assert_eq!(pulsa(&mut app, 105).as_deref(), Some("layout.split-h"));
-    assert_eq!(pulsa(&mut app, 108), None, "el hueco entre dos botones");
+    assert_eq!(pulsa(&mut app, 101).as_deref(), Some("layout.split-h"));
+    assert_eq!(pulsa(&mut app, 114).as_deref(), Some("layout.flip"));
+    assert_eq!(pulsa(&mut app, 104), None, "el hueco entre dos botones");
     // Con un overlay delante (la revisión lo cazó): ni se pintan ni se
     // pulsan. Pintados y muertos era la clase de BLOCKER que ya tuvo la
     // barra de paneles.
@@ -602,9 +604,84 @@ fn los_botones_de_disposicion_caen_en_el_borde_derecho() {
     assert!(!lineas[0].contains("[#]"), "{:?}", lineas[0]);
     assert_eq!(pulsa(&mut app, 119), None);
     app.theme_picker = None;
+    // Estrechando, el primero en ceder es girar, y los cuatro de siempre
+    // siguen ahí (ADR 0138). El ancho exacto depende del idioma de los
+    // títulos, así que se busca.
+    let cede = (60..120)
+        .rev()
+        .find(|w| !pintar_en(&mut app, *w, H)[0].contains("[/]"))
+        .expect("en algún ancho cede");
+    let lineas = pintar_en(&mut app, cede, H);
+    assert!(lineas[0].contains("[|] [-] [=] [#]"), "{:?}", lineas[0]);
     // A sesenta columnas los títulos se quedan el sitio.
     let lineas = pintar(&mut app);
     assert!(!lineas[0].contains("[#]"), "{:?}", lineas[0]);
+}
+
+/// Agarra el título de `desde` y lo suelta en la mitad de abajo de `sobre`.
+fn soltar_debajo(
+    app: &mut App,
+    desde: norte_frontend::layout::Rect,
+    sobre: norte_frontend::layout::Rect,
+) {
+    let (x, y) = (sobre.x + sobre.width / 2, sobre.y + sobre.height - 2);
+    let _ = mouse::handle(app, ev(ABAJO, desde.x + 4, desde.y));
+    let _ = mouse::handle(app, ev(ARRASTRE, x, y));
+    let _ = mouse::handle(app, ev(ARRIBA, x, y));
+}
+
+/// ADR 0138: donde apilar dos listados esconde uno, soltar no hace nada y
+/// lo dice: el panel no puede desaparecer por moverlo.
+#[test]
+fn mover_donde_no_cabe_se_rehusa_y_se_dice() {
+    let mut app = app_pintada(5);
+    let _ = pintar_en(&mut app, 120, H);
+    let a = app.mouse.slot_rect(app.panes.slot_of(0)).expect("colocado");
+    let b = app.mouse.slot_rect(app.panes.slot_of(1)).expect("colocado");
+    let antes = app.layout.clone();
+    app.message = None;
+    soltar_debajo(&mut app, a, b);
+    assert_eq!(app.layout, antes, "a {H} filas no caben apilados");
+    assert!(app.message.is_some(), "y se dice");
+}
+
+/// ADR 0138: arrastrar un listado por la fila de su título y soltarlo en la
+/// mitad de abajo del otro los apila; pulsar sin arrastrar solo enfoca.
+#[test]
+fn arrastrar_el_titulo_mueve_el_panel() {
+    let mut app = app_pintada(5);
+    // Alto de sobra: a `H` filas dos listados apilados no caben.
+    let _ = pintar_en(&mut app, 120, 50);
+    let izq = app.panes.slot_of(0);
+    let der = app.panes.slot_of(1);
+    let rect = |app: &norte_tui::app::App, s| {
+        app.mouse
+            .slot_rect(s)
+            .unwrap_or_else(|| panic!("{s:?} sin colocar: {:?}", app.layout))
+    };
+    let (a, b) = (rect(&app, izq), rect(&app, der));
+    assert_eq!(a.y, b.y, "lado a lado de partida");
+    let antes = app.layout.clone();
+
+    // Un clic en el título no mueve nada.
+    let _ = mouse::handle(&mut app, ev(ABAJO, a.x + 4, a.y));
+    let _ = mouse::handle(&mut app, ev(ARRIBA, a.x + 4, a.y));
+    assert_eq!(app.layout, antes, "un clic no es un arrastre");
+
+    // Agarrar, arrastrar a la mitad de abajo del otro: se resalta.
+    let destino_y = b.y + b.height - 2;
+    let destino_x = b.x + b.width / 2;
+    let _ = mouse::handle(&mut app, ev(ABAJO, a.x + 4, a.y));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, destino_x, destino_y));
+    assert!(app.mouse.move_target().is_some(), "se resalta el destino");
+    let _ = mouse::handle(&mut app, ev(ARRIBA, destino_x, destino_y));
+    assert!(app.mouse.move_target().is_none());
+    let foco = app.focused_slot();
+    let _ = pintar_en(&mut app, 120, 50);
+    let (a, b) = (rect(&app, izq), rect(&app, der));
+    assert!(a.y > b.y && a.x == b.x, "apilados: {a:?} bajo {b:?}");
+    // El foco sigue en su HUECO, aunque su posición haya cambiado.
+    assert_eq!(app.focused_slot(), foco);
 }
 
 /// ADR 0134: dos paneles del mismo borde comparten sitio como pestañas, y

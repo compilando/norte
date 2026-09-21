@@ -6,6 +6,9 @@
 # todo, DIVERGIRÍA del Ctrl-C hardcodeado que aborta el cd / refresh_panes
 # (esos loops transitorios no consultan el keymap). Copy se queda en F5.
 # Ctrl+Q y F10 también salen.
+#
+# `layout.flip` (ADR 0138) va sin tecla a propósito, como en los siete: vive
+# en el botón `[/]` de la barra de disposición, el menú Paneles y la paleta.
 
 [global]
 keymap = [

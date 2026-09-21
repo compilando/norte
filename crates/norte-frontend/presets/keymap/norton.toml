@@ -49,6 +49,10 @@
 # Far's Alt+Del); select-all/deselect-all and pattern-scoped selection
 # variants beyond the plain Gray +/-/* already bound (undocumented at this
 # level of certainty).
+#
+# `layout.flip` (ADR 0138) is unbound in all seven presets on purpose: NC
+# has no such action, and it lives on the `[/]` layout button, the Panels
+# menu and the palette.
 
 # `pane.compare-files` (#312) se queda SIN ATAR aquí, por la misma regla que
 # deja fuera a `pane.compare-dirs`: la fuente de este preset no le atribuye

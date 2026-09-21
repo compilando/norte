@@ -51,6 +51,15 @@ const FIGURAS: Record<string, Figura> = {
   "layout:equalize": {
     paths: ["M3.5 5h17v14h-17z", "M12 5v14", "M6.5 12h3", "M14.5 12h3"],
   },
+  // Girar (ADR 0138): el marco partido, con una flecha que da la vuelta.
+  "layout:flip": {
+    paths: [
+      "M3.5 5h17v14h-17z",
+      "M12 5v14",
+      "M7 15.5a5 5 0 0 1 10 0",
+      "M15 13.5l2 2 2-2",
+    ],
+  },
   // Elegir disposición: una rejilla de cuatro.
   "layout:pick": {
     paths: ["M4 4h7v7H4z", "M13 4h7v7h-7z", "M4 13h7v7H4z", "M13 13h7v7h-7z"],

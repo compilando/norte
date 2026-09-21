@@ -268,6 +268,7 @@ pub const MENUS: &[Menu] = &[
                     "layout.grow",
                     "layout.shrink",
                     "layout.equalize",
+                    "layout.flip",
                 ],
             ),
             sec(None, &["layout.set-target", "app.toggle-panels"]),

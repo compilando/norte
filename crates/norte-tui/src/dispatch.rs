@@ -158,6 +158,7 @@ pub async fn dispatch(
         Command::LayoutGrow => app.layout_resize(1),
         Command::LayoutShrink => app.layout_resize(-1),
         Command::LayoutEqualize => app.layout_equalize(),
+        Command::LayoutFlip => app.layout_flip(),
         Command::LayoutSetTarget => app.layout_set_target(),
         // L3: abrir el sidebar es el momento de pedir los volúmenes, y el
         // ÚNICO junto con desplegar su sección. Si ya estaba abierto no se

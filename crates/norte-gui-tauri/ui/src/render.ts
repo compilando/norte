@@ -37,6 +37,7 @@ import {
   taskNode,
 } from "./render/dom";
 import type { Send, SlotDom } from "./render/dom";
+import { hacerArrastrable } from "./render/mover";
 import * as dialogs from "./render/dialogs";
 import * as sync from "./render/sync";
 import * as ai from "./render/ai";
@@ -588,6 +589,8 @@ export class Screen {
     // ha enfocado el panel y el host solo acepta el rastro del hueco activo; y
     // con `preventDefault`, para que el webview no los tome por navegación de
     // la página.
+    // Arrastrar el panel por su TÍTULO lo mueve (ADR 0138).
+    hacerArrastrable(this, dom.title, slotId);
     dom.root.addEventListener("mouseup", (e) => {
       if (e.button !== 3 && e.button !== 4) {
         return;

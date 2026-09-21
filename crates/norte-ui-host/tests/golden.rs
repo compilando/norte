@@ -232,6 +232,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::LayoutButtonActivate { .. } => "layout_button_activate",
         UiAction::TabAction { .. } => "tab_action",
         UiAction::ResizeSlot { .. } => "resize_slot",
+        UiAction::MoveSlot { .. } => "move_slot",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
         UiAction::RequestQuit => "request_quit",
@@ -582,6 +583,14 @@ fn acciones_de_cromo() -> Vec<(&'static str, UiAction)> {
             UiAction::ResizeSlot {
                 slot_id: 1,
                 cells: 42,
+            },
+        ),
+        (
+            "move_slot",
+            UiAction::MoveSlot {
+                slot_id: 1,
+                target: 2,
+                zone: norte_frontend::layout::DropZone::Center,
             },
         ),
     ]

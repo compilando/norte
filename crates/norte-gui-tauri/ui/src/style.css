@@ -3614,6 +3614,42 @@ button.status-item:hover {
   cursor: col-resize;
 }
 
+/* Mover un panel (ADR 0138): el título se agarra, y mientras se arrastra
+   la zona donde caería se tiñe del color del foco, como en VS Code. El velo
+   no recibe el puntero: el destino se calcula por geometría. */
+.slot-title {
+  cursor: grab;
+}
+
+:root[data-dragging="slot"],
+:root[data-dragging="slot"] * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.drop-target {
+  position: absolute;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--border-focus) 22%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--border-focus) 70%, transparent);
+  outline-offset: -1px;
+  transition:
+    left 80ms ease-out,
+    top 80ms ease-out,
+    width 80ms ease-out,
+    height 80ms ease-out;
+}
+
+:root[data-reduce-motion="true"] .drop-target {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drop-target {
+    transition: none;
+  }
+}
+
 .resize-handle.row {
   cursor: row-resize;
 }

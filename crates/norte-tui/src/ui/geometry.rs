@@ -57,6 +57,7 @@ pub fn pane_list_rows(app: &App, area: Rect) -> u16 {
 /// frame de retraso, y el frame retrasado es justo el que el usuario mira
 /// cuando el cursor toca el borde.
 pub fn before_frame(app: &mut App, area: Rect) {
+    app.ultimo_frame = Some(area);
     let res = resolved_frame(app, area);
     // Quién se ve dónde: con pestañas, el hueco de cada lado cambia.
     let vis = visible_browsers(&res, &app.layout);
