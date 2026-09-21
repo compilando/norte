@@ -1123,6 +1123,7 @@ menu-item-layout-close-slot = Close panel
 menu-item-layout-grow = Grow
 menu-item-layout-shrink = Shrink
 menu-item-layout-equalize = Equalise
+menu-item-layout-flip = Flip (side by side ↔ stacked)
 menu-item-layout-set-target = Set destination
 # SHORT names for the panel bar (#324). Separate from the menu labels on
 # purpose: those are phrases ("Places sidebar") and their initials would not
@@ -1292,6 +1293,7 @@ help-cmd-layout-close-slot = close panel
 help-cmd-layout-grow = grow panel
 help-cmd-layout-shrink = shrink panel
 help-cmd-layout-equalize = equalise panels
+help-cmd-layout-flip = flip the panel's split: side by side or stacked
 help-cmd-layout-set-target = set destination
 help-cmd-layout-places = show or hide the places sidebar
 help-cmd-layout-preview = show or hide the docked viewer
@@ -1315,6 +1317,7 @@ msg-no-target-designated = more than one panel: designate a destination first
 # Splitting a slot that no longer fits two: the key refuses instead of making a
 # panel the layout hides in the same frame.
 msg-layout-split-no-room = no room for another panel here
+msg-layout-move-no-room = no room for that: a panel would disappear from view
 msg-transfer-dest-invalid = that is not an address: {$err}
 msg-transfer-dest-same = that is where they already are: type another destination
 msg-layout-load-failed = could not load layout "{$name}": {$err}

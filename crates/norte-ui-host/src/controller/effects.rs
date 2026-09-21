@@ -110,6 +110,7 @@ impl Estado {
             }
             Efecto::Tamano(_)
             | Efecto::Igualar
+            | Efecto::Girar
             | Efecto::Disposiciones
             | Efecto::Partir { .. }
             | Efecto::CerrarHueco

@@ -289,6 +289,8 @@ pub struct MouseState {
     last_click: Option<(Instant, Spot)>,
     /// La [`Validity`] del frame anterior, para detectar el cambio.
     validity: Validity,
+    /// El panel que se está MOVIENDO por su título (ADR 0138), si hay uno.
+    moviendo: Option<MoveDrag>,
     /// Los modificadores del ÚLTIMO evento de ratón, para que [`drop_hint`]
     /// pueda preguntarle a [`Drag::pending`] qué haría soltar AHORA.
     ///
@@ -302,7 +304,36 @@ pub struct MouseState {
     last_mods: Mods,
 }
 
+/// Un panel que se arrastra por la fila de su título (ADR 0138).
+#[derive(Debug, Clone, Copy)]
+struct MoveDrag {
+    /// El hueco que se arrastra.
+    slot: norte_frontend::layout::SlotId,
+    /// Dónde se agarró.
+    x0: u16,
+    /// Dónde se agarró.
+    y0: u16,
+    /// Pasó el umbral: ya no es un clic.
+    activo: bool,
+    /// Dónde caería si se soltara ahora, y la parte que se resalta.
+    destino: Option<(
+        norte_frontend::layout::SlotId,
+        norte_frontend::layout::DropZone,
+        norte_frontend::layout::Rect,
+    )>,
+}
+
 impl MouseState {
+    /// La parte del panel donde caería el que se está moviendo, para
+    /// resaltarla; `None` si no se mueve nada o no cae en ningún sitio.
+    #[must_use]
+    pub fn move_target(&self) -> Option<norte_frontend::layout::Rect> {
+        self.moviendo
+            .filter(|m| m.activo)
+            .and_then(|m| m.destino)
+            .map(|(_, _, r)| r)
+    }
+
     /// La geometría del último frame, un `PaneGeometry` por panel visible.
     #[must_use]
     pub fn geometry(&self) -> Option<&[PaneGeometry]> {
@@ -861,6 +892,95 @@ fn resize_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
     }
 }
 
+/// Celdas que hay que mover antes de que pulsar el título sea un arrastre:
+/// un clic en el título enfoca el panel, y eso no puede dejar de pasar.
+const UMBRAL_MOVER: u16 = 2;
+
+/// ¿Es `slot` de cromo (barra de estado, tareas)? Ni se mueve ni recibe.
+fn es_cromo(app: &App, slot: norte_frontend::layout::SlotId) -> bool {
+    app.layout
+        .kind_of(slot)
+        .is_some_and(|k| matches!(k.as_str(), "status" | "tasks"))
+}
+
+/// El gesto de MOVER un panel (ADR 0138): se agarra por la fila de su
+/// título, se arrastra sobre otro y se suelta en uno de sus lados o en el
+/// centro, como en la ventana. `None` = el evento no es del gesto.
+///
+/// Pulsar no se come el evento: el clic en el título sigue enfocando el
+/// panel. Solo al pasar [`UMBRAL_MOVER`] celdas el gesto se hace suyo, y
+/// soltar sin haberlo pasado es el clic de siempre.
+fn move_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
+    match ev.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            // Un gesto que no vio su `Up` —se soltó fuera del terminal— no
+            // puede seguir armado en el siguiente clic.
+            app.mouse.moviendo = None;
+            let s = app
+                .mouse
+                .slots
+                .iter()
+                .find(|s| s.y == ev.row && ev.column >= s.x && ev.column < s.x + s.width)?;
+            if es_cromo(app, s.slot) {
+                return None;
+            }
+            app.mouse.moviendo = Some(MoveDrag {
+                slot: s.slot,
+                x0: ev.column,
+                y0: ev.row,
+                activo: false,
+                destino: None,
+            });
+            None
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            let mut m = app.mouse.moviendo?;
+            if !m.activo {
+                if ev.column.abs_diff(m.x0) < UMBRAL_MOVER && ev.row.abs_diff(m.y0) < UMBRAL_MOVER {
+                    return Some(After::Nothing);
+                }
+                m.activo = true;
+                app.mouse.drag.cancel();
+                app.mouse.last_click = None;
+            }
+            m.destino = app
+                .mouse
+                .slots
+                .iter()
+                .find(|s| {
+                    ev.column >= s.x
+                        && ev.column < s.x + s.width
+                        && ev.row >= s.y
+                        && ev.row < s.y + s.height
+                })
+                .filter(|s| s.slot != m.slot && !es_cromo(app, s.slot))
+                .map(|s| {
+                    let r = norte_frontend::layout::Rect {
+                        x: s.x,
+                        y: s.y,
+                        width: s.width,
+                        height: s.height,
+                    };
+                    let zona = norte_frontend::layout::DropZone::at(ev.column, ev.row, r);
+                    (s.slot, zona, zona.part_of(r))
+                });
+            app.mouse.moviendo = Some(m);
+            Some(After::Nothing)
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            let m = app.mouse.moviendo.take()?;
+            if !m.activo {
+                return None;
+            }
+            if let Some((target, zona, _)) = m.destino {
+                app.layout_move(m.slot, target, zona);
+            }
+            Some(After::Nothing)
+        }
+        _ => None,
+    }
+}
+
 /// Un arrastre de columna en vuelo.
 #[derive(Debug, Clone)]
 struct ColumnDrag {
@@ -1144,6 +1264,12 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     // listado, y el puntero sale de la celda del borde en el primer
     // movimiento.
     if let Some(after) = column_gesture(app, ev) {
+        return after;
+    }
+    // MOVER un panel por su título (ADR 0138), después de los bordes: el
+    // borde de arriba de un panel apilado es a la vez su título, y
+    // agarrarlo es redimensionar, como siempre fue.
+    if let Some(after) = move_gesture(app, ev) {
         return after;
     }
     if let Some(after) = pulsar_panel(app, ev) {

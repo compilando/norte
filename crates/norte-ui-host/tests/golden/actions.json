@@ -166,6 +166,12 @@
     "delta": -1,
     "slot_id": 1
   },
+  "move_slot": {
+    "action": "move_slot",
+    "slot_id": 1,
+    "target": 2,
+    "zone": "center"
+  },
   "organize_decide": {
     "action": "organize_decide",
     "approve": true

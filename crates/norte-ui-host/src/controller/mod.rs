@@ -3802,6 +3802,11 @@ impl Estado {
             UiAction::TabAction { slot_id, verb } => {
                 self.boton_de_pestana(*slot_id, *verb, backend, buzon)
             }
+            UiAction::MoveSlot {
+                slot_id,
+                target,
+                zone,
+            } => self.mover_hueco(*slot_id, *target, *zone, backend, buzon),
             UiAction::ResizeSlot { slot_id, cells } => {
                 self.arrastrar_borde(*slot_id, *cells, backend, buzon)
             }

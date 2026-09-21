@@ -1,5 +1,8 @@
 # Preset vim-like. Prefix-free (ADR 0006): sin pares tipo `d`/`d d` — los
 # modos visual/normal de la spec llegarán como CONTEXTOS, no timeouts.
+#
+# `layout.flip` (ADR 0138) va sin tecla a propósito, como en los siete: vive
+# en el botón `[/]` de la barra de disposición, el menú Paneles y la paleta.
 
 # Prefijo numérico (`5j`): vim lo tiene, así que este preset lo tiene. Es
 # opt-in POR PRESET y no por gusto: encenderlo aquí le quita a `1`..`9` la

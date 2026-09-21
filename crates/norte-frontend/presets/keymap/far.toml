@@ -87,6 +87,10 @@
 # (Shift+F12); the archive management submenu (Shift+F3) — several
 # operations behind one menu, not a single action; save configuration
 # (Shift+F9).
+#
+# `layout.flip` (ADR 0138) is unbound in all seven presets on purpose: Far
+# has no such action to transcribe, and it lives on the `[/]` layout button,
+# the Panels menu and the palette.
 
 # `pane.compare-files` (#312) se queda SIN ATAR aquí, por la misma regla que
 # deja fuera a `pane.compare-dirs`: la fuente de este preset no le atribuye

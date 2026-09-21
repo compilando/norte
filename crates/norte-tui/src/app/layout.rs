@@ -1331,6 +1331,62 @@ impl App {
         self.layout = self.layout.equalize(focus);
     }
 
+    /// Gira el reparto del panel que tiene el teclado: lado a lado pasa a
+    /// uno encima del otro (ADR 0138). Un reparto con cromo no se gira.
+    pub fn layout_flip(&mut self) {
+        let target = self.resize_target();
+        let nuevo = self.layout.flip(target);
+        self.cambiar_disposicion(nuevo, None);
+    }
+
+    /// Mueve el hueco `id` junto a `target` (ADR 0138): lo que hace soltar
+    /// un panel arrastrado por su título.
+    pub fn layout_move(
+        &mut self,
+        id: norte_frontend::layout::SlotId,
+        target: norte_frontend::layout::SlotId,
+        zona: norte_frontend::layout::DropZone,
+    ) {
+        let nuevo = self.layout.move_slot(id, target, zona);
+        // En el centro, el destino se va detrás de una pestaña a propósito.
+        let tolerado = (zona == norte_frontend::layout::DropZone::Center).then_some(target);
+        self.cambiar_disposicion(nuevo, tolerado);
+    }
+
+    /// Se queda con `nuevo` si deja a la vista lo que se veía
+    /// (`keeps_on_screen`, sobre el ÚLTIMO frame), y pone al día los panes,
+    /// sus historias y el dueño del teclado, con el foco en el MISMO hueco.
+    /// Si no cabe, no toca nada y lo dice en la barra, como partir.
+    fn cambiar_disposicion(
+        &mut self,
+        nuevo: norte_frontend::layout::Node,
+        tolerado: Option<norte_frontend::layout::SlotId>,
+    ) {
+        if nuevo == self.layout {
+            return;
+        }
+        let viejo = std::mem::replace(&mut self.layout, nuevo);
+        if let Some(area) = self.ultimo_frame {
+            let despues = crate::ui::resolved_for(self, area);
+            let actual = std::mem::replace(&mut self.layout, viejo);
+            let antes = crate::ui::resolved_for(self, area);
+            if !norte_frontend::layout::keeps_on_screen(&antes, &despues, &actual, tolerado) {
+                self.message = Some(t("msg-layout-move-no-room"));
+                return;
+            }
+            self.layout = actual;
+        }
+        // El foco se queda en su HUECO: la posición de un hueco cambia al
+        // moverlo, y un índice viejo nombraría el panel de al lado.
+        let enfocado = self.focused_slot();
+        self.panes.refresh_visible(&self.layout);
+        self.podar_por_arbol();
+        self.settle_key_owner();
+        if let Some(i) = (0..self.panes.len()).find(|i| self.panes.slot_of(*i) == enfocado) {
+            self.set_focus(i);
+        }
+    }
+
     /// Designa el OTRO lado visible como destino de las operaciones.
     ///
     /// Con dos paneles el destino ya es el otro y esto no cambia nada; existe

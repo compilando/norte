@@ -62,6 +62,10 @@
 # chord grammar has no Super/Meta modifier token (only ctrl/alt/shift/cmd/
 # mod), so `pane.sort-*` has no key at all in this preset; and the Plasma
 # global "bring window to top" (Meta+K).
+#
+# `layout.flip` (ADR 0138) is unbound in all seven presets on purpose: the
+# source does not attest it, and it lives on the `[/]` layout button, the
+# Panels menu and the palette.
 
 # `pane.compare-files` (#312) se queda SIN ATAR aquí, y en los otros tres
 # presets importados, por la misma regla que ya deja fuera a `pane.compare-dirs`

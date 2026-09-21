@@ -92,6 +92,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.grow",
     "layout.shrink",
     "layout.equalize",
+    "layout.flip",
     "layout.pick",
     "layout.split-h",
     "layout.split-v",
@@ -425,6 +426,8 @@ pub enum Efecto {
     Tamano(i64),
     /// Iguala el peso de los hermanos del hueco con el foco.
     Igualar,
+    /// Gira el reparto del hueco con el foco (ADR 0138).
+    Girar,
     /// Abre el selector de disposiciones.
     Disposiciones,
     /// Abre el selector de columnas.
@@ -803,6 +806,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.grow" => Efecto::Tamano(n),
         "layout.shrink" => Efecto::Tamano(-n),
         "layout.equalize" => Efecto::Igualar,
+        "layout.flip" => Efecto::Girar,
         "layout.pick" => Efecto::Disposiciones,
         "layout.split-h" => Efecto::Partir { vertical: false },
         "layout.split-v" => Efecto::Partir { vertical: true },

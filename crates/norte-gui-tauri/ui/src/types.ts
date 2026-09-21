@@ -9,7 +9,11 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 89;
+export const BRIDGE_VERSION = 90;
+
+/** Dónde se suelta un panel arrastrado sobre otro (ADR 0138): a un lado, o
+ *  en el centro para unirse a él como pestaña. */
+export type DropZone = "left" | "right" | "top" | "bottom" | "center";
 
 /** Lo que la barra de título propia le pide a su ventana (ADR 0136); el
  *  mismo vocabulario cerrado que `commands::WindowVerb` en Rust. */
@@ -1701,6 +1705,7 @@ export type UiAction =
   | { action: "layout_button_activate"; id: string }
   | { action: "tab_action"; slot_id: number; verb: "new" | "close" }
   | { action: "resize_slot"; slot_id: number; cells: number }
+  | { action: "move_slot"; slot_id: number; target: number; zone: DropZone }
   | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };
 

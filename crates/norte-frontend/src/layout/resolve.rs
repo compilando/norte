@@ -117,6 +117,37 @@ fn minimo_visible(decls: &KindRegistry, kind: &super::KindId) -> (u16, u16) {
     (mw.min(CONTENIDO.0), mh.min(CONTENIDO.1))
 }
 
+/// ¿Sigue a la vista, en el reparto `despues`, todo lo que `antes` enseñaba?
+/// (ADR 0138)
+///
+/// Lo pregunta quien MUEVE o GIRA un panel antes de quedarse con el árbol
+/// nuevo: soltar un listado debajo de otro en un terminal bajo lo deja sin
+/// sitio, el reparto lo esconde y el lector ve que su panel desapareció.
+/// `tolerado` es el que se va detrás de una pestaña a propósito —el destino
+/// de soltar en el centro—. Además, si antes se veían dos listados o más,
+/// después tienen que verse dos: «el otro panel» es el destino de copiar, y
+/// con uno solo a la vista no hay otro.
+#[must_use]
+pub fn keeps_on_screen(
+    antes: &Resolved,
+    despues: &Resolved,
+    arbol: &Node,
+    tolerado: Option<SlotId>,
+) -> bool {
+    let colocado = |r: &Resolved, id: SlotId| r.placements.iter().any(|(s, _)| *s == id);
+    let perdido = antes
+        .placements
+        .iter()
+        .any(|(id, _)| Some(*id) != tolerado && !colocado(despues, *id));
+    let listados = |r: &Resolved| {
+        r.placements
+            .iter()
+            .filter(|(id, _)| arbol.kind_of(*id).is_some_and(|k| k.as_str() == "browser"))
+            .count()
+    };
+    !perdido && listados(despues) >= listados(antes).min(2)
+}
+
 /// ¿Cabrían DOS huecos de `kind` si se parte `rect` a lo largo de `dir`?
 ///
 /// Lo pregunta quien va a partir, ANTES de tocar el árbol. Sin esto, partir un
@@ -725,6 +756,31 @@ mod tests {
             &k,
             &reg()
         ));
+    }
+
+    /// ADR 0138: apilar dos listados donde no caben esconde uno, y eso se
+    /// rehúsa; con sitio, no. Juntarlos en pestañas deja uno a la vista, y
+    /// con dos antes eso también se rehúsa.
+    #[test]
+    fn mover_no_puede_dejar_nada_fuera_de_la_vista() {
+        use crate::layout::DropZone;
+        let b = |id| Node::slot(SlotId(id), KindId::browser());
+        let arbol = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
+        let apilado = arbol.move_slot(SlotId(1), SlotId(2), DropZone::Bottom);
+        let juntos = arbol.move_slot(SlotId(1), SlotId(2), DropZone::Center);
+        let bajo = r(0, 0, 100, 8);
+        let alto = r(0, 0, 100, 40);
+        let ok = |area, nuevo: &Node, tolerado| {
+            keeps_on_screen(
+                &resolve(area, &arbol, &reg()),
+                &resolve(area, nuevo, &reg()),
+                nuevo,
+                tolerado,
+            )
+        };
+        assert!(!ok(bajo, &apilado, None), "a 8 filas uno se esconde");
+        assert!(ok(alto, &apilado, None));
+        assert!(!ok(alto, &juntos, Some(SlotId(2))), "uno solo a la vista");
     }
 
     /// Y lo que dice cuadra con lo que hace el reparto: si dice que sí, los

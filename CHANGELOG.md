@@ -55,6 +55,13 @@ independently through `PROTOCOL_VERSION`.
   the terminal and the window. Up to four; only approved plugins that
   declare the column; they are the first to give way when the bar is short,
   and they are not clickable.
+- **Move panels by dragging them, and flip a split** (ADR 0138, bridge
+  90). Take a panel by its title — or a tab — and drop it on another: on
+  one of its sides, or in its middle to join it as a tab. Where it would
+  land is marked while dragging, in the window and in the terminal. The
+  new `layout.flip` turns the focused panel's split from side by side to
+  one above the other and back; it is a fifth layout button, in the
+  Panels menu and in the palette, with no key.
 - **Window polish.** The root of a path's breadcrumbs (the provider's
   scheme) is dimmed, since it is in every path of the pane, and the handle
   between two panes lights up when the pointer is on it or dragging it —

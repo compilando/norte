@@ -29,6 +29,7 @@ commands = [
     "layout.grow",
     "layout.shrink",
     "layout.equalize",
+    "layout.flip",
     "layout.set-target",
     "layout.places",
     "layout.preview",
@@ -148,7 +149,11 @@ archivos de sistema incluidos, y el pie dice en cuál de los dos estás.
 
 Los paneles se pueden redimensionar y cerrar. {{cmd:layout.grow}} y
 {{cmd:layout.shrink}} le dan o le quitan sitio al panel enfocado, y
-{{cmd:layout.equalize}} los devuelve a todos al mismo tamaño.
+{{cmd:layout.equalize}} los devuelve a todos al mismo tamaño, y
+{{cmd:layout.flip}} gira el reparto del enfocado: lado a lado pasa a uno
+encima del otro, y al revés. Con el ratón, un panel se mueve arrastrándolo
+por su título y soltándolo sobre otro: a uno de sus lados, o en el centro
+para unirse a él como pestaña; mientras se arrastra, se marca dónde caería.
 {{cmd:layout.close-slot}} cierra el enfocado, y **se niega a cerrar el
 último**: una pantalla sin ningún listado no es un layout, es un cuelgue con
 bordes.

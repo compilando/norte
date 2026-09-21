@@ -18,6 +18,7 @@ import type {
 import { badge, colVar, revelar, sinCambios } from "./dom";
 import type { SlotDom } from "./dom";
 import { cifraDeInsignia, icono as iconoDePanel } from "./iconos";
+import { hacerArrastrable } from "./mover";
 
 /**
  * La barra de paneles (#324): un botón por panel que se abre y se cierra,
@@ -656,6 +657,8 @@ export function paintTabs(
       // ningún grupo en vez de acertar por casualidad.
       this.send({ action: "select_tab", slot_id: t.slot_id });
     });
+    // Arrastrar la pestaña saca ESE hueco del grupo (ADR 0138).
+    hacerArrastrable(this, li, t.slot_id);
     // Cerrar ESTA pestaña (ADR 0133): la `×` de cada una, visible en la
     // activa y al pasar por encima, como en VS Code. El host la elige y
     // luego la cierra, por el despacho de `pane.tab-close`.

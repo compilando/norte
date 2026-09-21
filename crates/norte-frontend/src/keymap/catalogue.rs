@@ -212,6 +212,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("layout.grow", true, Inert),
     live("layout.shrink", true, Inert),
     live("layout.equalize", false, Inert),
+    // ADR 0138: girar el reparto del panel con foco. Sin tecla en ningún
+    // preset a propósito: vive en el botón de disposición, el menú y la
+    // paleta, y cada preset lo dice en su cabecera.
+    live("layout.flip", false, Inert),
     live("layout.set-target", false, Inert),
     // L3: el sidebar de sitios. En la familia `layout.*` y no en `pane.*`
     // porque lo que hace es REORGANIZAR la pantalla —acopla un panel nuevo—,

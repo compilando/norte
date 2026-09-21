@@ -516,6 +516,60 @@ impl Estado {
         self.aplicar_arbol(nuevo, backend, buzon)
     }
 
+    /// Gira el reparto del hueco con el foco (ADR 0138): lado a lado pasa a
+    /// uno encima del otro. Un reparto con cromo no se gira, y entonces
+    /// `aplicar_arbol` no manda nada.
+    pub(super) fn girar(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let nuevo = self.arbol.flip(SlotId(self.enfocado()));
+        self.aplicar_si_cabe(nuevo, None, backend, buzon)
+    }
+
+    /// Mueve el hueco `slot` junto a `target` (ADR 0138): soltar un panel
+    /// arrastrado por su título. Un id que no está —la disposición cambió
+    /// entre el arrastre y el soltar— deja el árbol como estaba, y
+    /// `aplicar_arbol` no manda nada.
+    pub(super) fn mover_hueco(
+        &mut self,
+        slot: u32,
+        target: u32,
+        zona: norte_frontend::layout::DropZone,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let nuevo = self.arbol.move_slot(SlotId(slot), SlotId(target), zona);
+        // En el centro, el destino se va detrás de una pestaña a propósito.
+        let tolerado = (zona == norte_frontend::layout::DropZone::Center).then_some(SlotId(target));
+        self.aplicar_si_cabe(nuevo, tolerado, backend, buzon)
+    }
+
+    /// Como [`Self::aplicar_arbol`], pero solo si `nuevo` deja a la vista lo
+    /// que se veía (`keeps_on_screen`, la MISMA regla que la TUI). Si no, no
+    /// toca nada y lo dice en la barra, como partir sin sitio.
+    fn aplicar_si_cabe(
+        &mut self,
+        nuevo: Node,
+        tolerado: Option<SlotId>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let despues = resolve(rect(self.viewport), &nuevo, &self.kinds);
+        if nuevo != self.arbol
+            && !norte_frontend::layout::keeps_on_screen(&self.reparto, &despues, &nuevo, tolerado)
+        {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-layout-move-no-room".to_owned(),
+                },
+                self.decir("msg-layout-move-no-room"),
+            );
+        }
+        self.aplicar_arbol(nuevo, backend, buzon)
+    }
+
     /// Sustituye el árbol y vuelve a repartir.
     ///
     /// Si el reparto no cambia —el hueco estaba en su tope, o no tiene
@@ -529,9 +583,13 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let antes = self.reparto.clone();
-        self.arbol = nuevo;
+        let arbol_antes = std::mem::replace(&mut self.arbol, nuevo);
         self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
-        if self.reparto.placements == antes.placements {
+        // Lo mismo en pantalla Y en el árbol: nada que decir. Solo el
+        // reparto no basta — reordenar las pestañas de un grupo (ADR 0138)
+        // no mueve un rectángulo, y sin parche ni sesión el orden nuevo no
+        // llegaba a la ventana ni se guardaba.
+        if self.reparto.placements == antes.placements && self.arbol == arbol_antes {
             return (self.aplicada(), Vec::new());
         }
         self.reconcilia_roles();

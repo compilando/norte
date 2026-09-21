@@ -241,6 +241,17 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
     // Las tiras de los grupos de paneles (ADR 0134), encima de la fila que
     // `placed_of_kind` les reservó.
     chrome::draw_tiras_de_paneles(frame, app);
+    // Mover un panel (ADR 0138): la parte donde caería, marcada con el
+    // borde del foco, como el velo de la ventana.
+    if let Some(r) = app.mouse.move_target() {
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Double)
+                .border_style(app.theme.role(Role::BorderFocus)),
+            crate::panel::to_ratatui(r),
+        );
+    }
 }
 
 /// Los paneles LATERALES, que salen del mismo reparto que los listados.

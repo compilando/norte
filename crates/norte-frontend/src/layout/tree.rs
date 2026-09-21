@@ -267,6 +267,107 @@ fn es_panel(n: &Node) -> bool {
         if !matches!(kind.as_str(), "browser" | "status" | "tasks"))
 }
 
+/// Una fila de CROMO: la barra de estado o la franja de tareas. No se
+/// mueven ni reciben, y un reparto que las contiene no se gira: la barra de
+/// estado de lado dejaría de ser una barra (ADR 0138).
+fn es_cromo(n: &Node) -> bool {
+    matches!(n, Node::Slot { kind, .. } if matches!(kind.as_str(), "status" | "tasks"))
+}
+
+/// Lo que devuelve buscar qué girar (ADR 0138): tres casos y no un
+/// `Option`, porque «aquí no se gira» tiene que PARAR la búsqueda y «aquí
+/// no está» tiene que dejarla seguir. Con un `Option` la negativa subía y
+/// se giraba el reparto de fuera.
+enum Giro {
+    /// Girado: el árbol nuevo.
+    Hecho(Node),
+    /// Encontrado, y no se gira.
+    Rehusado,
+    /// El hueco no está en este subárbol, o no hay reparto que girar.
+    NoEsta,
+}
+
+/// Dónde cae un hueco que se suelta sobre otro (ADR 0138): a uno de sus
+/// cuatro lados, o en el CENTRO, que es unirse a él como pestaña.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DropZone {
+    /// A la izquierda del destino.
+    Left,
+    /// A la derecha.
+    Right,
+    /// Encima.
+    Top,
+    /// Debajo.
+    Bottom,
+    /// Como pestaña del destino.
+    Center,
+}
+
+impl DropZone {
+    /// La zona de un rectángulo bajo el punto `(x, y)`: el lado más cercano
+    /// si está a menos de un CUARTO de él, y si no el centro. La misma regla
+    /// que `zonaDe` en la ventana (`render/mover.ts`).
+    #[must_use]
+    pub fn at(x: u16, y: u16, rect: Rect) -> Self {
+        let frac = |p: u16, o: u16, largo: u16| {
+            if largo == 0 {
+                0.5
+            } else {
+                (f32::from(p.saturating_sub(o)) + 0.5) / f32::from(largo)
+            }
+        };
+        let fx = frac(x, rect.x, rect.width);
+        let fy = frac(y, rect.y, rect.height);
+        let lados = [
+            (Self::Left, fx),
+            (Self::Right, 1.0 - fx),
+            (Self::Top, fy),
+            (Self::Bottom, 1.0 - fy),
+        ];
+        let (lado, d) =
+            lados.into_iter().fold(
+                (Self::Center, f32::INFINITY),
+                |m, l| if l.1 < m.1 { l } else { m },
+            );
+        if d < 0.25 { lado } else { Self::Center }
+    }
+
+    /// La parte de `rect` que ocupa la zona: una mitad, o el rectángulo
+    /// entero para el centro. Es lo que se resalta mientras se arrastra.
+    #[must_use]
+    pub fn part_of(self, rect: Rect) -> Rect {
+        let (w2, h2) = (rect.width / 2, rect.height / 2);
+        match self {
+            Self::Left => Rect { width: w2, ..rect },
+            Self::Right => Rect {
+                x: rect.x + w2,
+                width: rect.width - w2,
+                ..rect
+            },
+            Self::Top => Rect { height: h2, ..rect },
+            Self::Bottom => Rect {
+                y: rect.y + h2,
+                height: rect.height - h2,
+                ..rect
+            },
+            Self::Center => rect,
+        }
+    }
+
+    /// El borde de la zona; `None` para el centro.
+    #[must_use]
+    pub const fn edge(self) -> Option<Edge> {
+        match self {
+            Self::Left => Some(Edge::Left),
+            Self::Right => Some(Edge::Right),
+            Self::Top => Some(Edge::Top),
+            Self::Bottom => Some(Edge::Bottom),
+            Self::Center => None,
+        }
+    }
+}
+
 /// Un panel suelto, o un grupo de pestañas hecho SOLO de paneles: lo que un
 /// panel nuevo del mismo borde puede unirse (fase F). Un grupo con un
 /// listado dentro es el de las pestañas de un listado, y ahí no se mete un
@@ -716,6 +817,231 @@ impl Node {
             Self::Tabs { .. } => self.close_tab(id),
             Self::Slot { .. } => None,
         }
+    }
+
+    /// Mueve el hueco `id` junto a `target`: a su lado `zona`, o como
+    /// pestaña suya si la zona es el centro (ADR 0138). Es arrastrar un
+    /// panel por su título y soltarlo sobre otro, como en VS Code.
+    ///
+    /// La UNIDAD de destino es el hueco, o el grupo de pestañas donde vive:
+    /// soltar a la derecha de una pestaña parte el grupo entero, no la mete
+    /// dentro de él. Si el padre de esa unidad ya reparte en el eje de la
+    /// zona y la unidad es ponderada, el hueco entra como hermano con el
+    /// mismo peso —tres listados quedan en tercios, no en 1/2, 1/4, 1/4—; si
+    /// no, la unidad se envuelve en un reparto nuevo a partes iguales, y un
+    /// panel de ancho fijo conserva su ancho por fuera.
+    ///
+    /// No hace nada —devuelve el árbol tal cual— si `id` y `target` son el
+    /// mismo, si alguno falta o es cromo (estado, tareas), o si `id` es el
+    /// único hueco. Nada se crea ni se pierde: el hueco movido conserva su
+    /// id, su kind, sus parámetros y sus vínculos.
+    #[must_use]
+    pub fn move_slot(&self, id: SlotId, target: SlotId, zona: DropZone) -> Self {
+        let movible = |s: SlotId| self.find_slot(s).is_some_and(|n| !es_cromo(n));
+        if id == target || !movible(id) || !movible(target) {
+            return self.clone();
+        }
+        let Some(nodo) = self.find_slot(id).cloned() else {
+            return self.clone();
+        };
+        // El CENTRO solo junta lo que ya es de la misma familia: un listado
+        // con listados, un panel con paneles (ADR 0134). Un listado metido
+        // en las pestañas de los sitios viviría en dieciséis columnas, y un
+        // grupo mezclado dejaría de ser un grupo de paneles para siempre.
+        if zona == DropZone::Center
+            && self
+                .find_slot(target)
+                .is_none_or(|t| es_panel(t) != es_panel(&nodo))
+        {
+            return self.clone();
+        }
+        let Some(resto) = self.close_slot(id) else {
+            return self.clone();
+        };
+        match zona.edge() {
+            None => resto.add_tab(target, &nodo),
+            Some(edge) => resto
+                .place_beside(target, edge, &nodo)
+                .unwrap_or_else(|| self.clone()),
+        }
+    }
+
+    /// El nodo HOJA del hueco `id`.
+    fn find_slot(&self, id: SlotId) -> Option<&Self> {
+        match self {
+            Self::Slot { id: i, .. } if *i == id => Some(self),
+            Self::Slot { .. } => None,
+            Self::Split { children, .. } | Self::Tabs { children, .. } => {
+                children.iter().find_map(|c| c.find_slot(id))
+            }
+        }
+    }
+
+    /// ¿Es este nodo la unidad que representa a `target` en su padre: el
+    /// propio hueco, o el grupo de pestañas del que es hijo directo?
+    fn es_unidad_de(&self, target: SlotId) -> bool {
+        match self {
+            Self::Slot { id, .. } => *id == target,
+            Self::Tabs { children, .. } => children
+                .iter()
+                .any(|c| matches!(c, Self::Slot { id, .. } if *id == target)),
+            Self::Split { .. } => false,
+        }
+    }
+
+    /// `nodo` al lado `edge` de la unidad de `target`; `None` si no está.
+    fn place_beside(&self, target: SlotId, edge: Edge, nodo: &Self) -> Option<Self> {
+        if self.es_unidad_de(target) {
+            let (children, sizes) = if edge.is_front() {
+                (vec![nodo.clone(), self.clone()], vec![Size::Weight(1); 2])
+            } else {
+                (vec![self.clone(), nodo.clone()], vec![Size::Weight(1); 2])
+            };
+            return Some(Self::Split {
+                dir: edge.axis(),
+                children,
+                sizes,
+            });
+        }
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return None,
+        };
+        let pos = hijos.iter().position(|c| c.contains(target))?;
+        // Hermano en el MISMO reparto, si corre en el eje y la unidad pesa:
+        // así se parte a partes iguales, como `split_slot`. Nunca en el
+        // reparto del cromo: ese no se gira, y lo que se soltara ahí ya no
+        // se podría girar de vuelta con `layout.flip`.
+        if let Self::Split {
+            dir,
+            children,
+            sizes,
+        } = self
+            && *dir == edge.axis()
+            && !children.iter().any(es_cromo)
+            && children[pos].es_unidad_de(target)
+        {
+            // Junto a un panel de ancho FIJO tambien entra como hermano, con
+            // peso: partirlo por dentro le daría la mitad de sus dieciséis
+            // columnas a un listado.
+            let tam = match sizes.get(pos).copied().unwrap_or(Size::Weight(1)) {
+                Size::Weight(peso) => Size::Weight(peso),
+                Size::Fixed(_) | Size::Auto => peso_entre_hermanos(Size::Weight(1), sizes),
+            };
+            let mut nc = children.clone();
+            let mut ns = sizes.clone();
+            ns.resize(nc.len(), Size::Weight(1));
+            let at = if edge.is_front() { pos } else { pos + 1 };
+            nc.insert(at, nodo.clone());
+            ns.insert(at, tam);
+            return Some(Self::Split {
+                dir: *dir,
+                children: nc,
+                sizes: ns,
+            });
+        }
+        let dentro = hijos[pos].place_beside(target, edge, nodo)?;
+        Some(self.with_child(pos, dentro))
+    }
+
+    /// Gira el reparto más interior que contiene `id`: lado a lado pasa a
+    /// uno encima del otro, y al revés (ADR 0138, `layout.flip`).
+    ///
+    /// Lo que se gira es la RACHA de hermanos ponderados que rodea al hueco:
+    /// en `H[sitios Fijo(16), a, b]` se apilan `a` y `b` y los sitios siguen
+    /// siendo una columna de dieciséis — girar la fila entera los habría
+    /// convertido en una banda y el ancho no volvería al girar de nuevo. Si
+    /// la racha es el reparto entero, se gira el reparto; si es solo una
+    /// parte, esa parte pasa a un reparto propio, con el peso que sumaba.
+    ///
+    /// Un reparto con cromo dentro (barra de estado, tareas) no se gira —la
+    /// barra de lado dejaría de ser una barra—, ni una racha de uno. Entonces
+    /// no pasa NADA: la negativa no sube a probar con el reparto de fuera.
+    #[must_use]
+    pub fn flip(&self, id: SlotId) -> Self {
+        match self.flip_inner(id) {
+            Giro::Hecho(n) => n,
+            Giro::Rehusado | Giro::NoEsta => self.clone(),
+        }
+    }
+
+    fn flip_inner(&self, id: SlotId) -> Giro {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return Giro::NoEsta,
+        };
+        let Some(pos) = hijos.iter().position(|c| c.contains(id)) else {
+            return Giro::NoEsta;
+        };
+        match hijos[pos].flip_inner(id) {
+            Giro::Hecho(dentro) => return Giro::Hecho(self.with_child(pos, dentro)),
+            Giro::Rehusado => return Giro::Rehusado,
+            Giro::NoEsta => {}
+        }
+        let Self::Split {
+            dir,
+            children,
+            sizes,
+        } = self
+        else {
+            return Giro::NoEsta;
+        };
+        if children.iter().any(es_cromo) {
+            return Giro::Rehusado;
+        }
+        let otro = match dir {
+            Dir::Horizontal => Dir::Vertical,
+            Dir::Vertical => Dir::Horizontal,
+        };
+        let pesa = |i: usize| matches!(sizes.get(i), Some(Size::Weight(_)) | None);
+        if !pesa(pos) {
+            return Giro::Rehusado;
+        }
+        let mut desde = pos;
+        while desde > 0 && pesa(desde - 1) {
+            desde -= 1;
+        }
+        let mut hasta = pos + 1;
+        while hasta < children.len() && pesa(hasta) {
+            hasta += 1;
+        }
+        if hasta - desde < 2 {
+            return Giro::Rehusado;
+        }
+        if desde == 0 && hasta == children.len() {
+            return Giro::Hecho(Self::Split {
+                dir: otro,
+                children: children.clone(),
+                sizes: sizes.clone(),
+            });
+        }
+        let cuanto = |i: usize| match sizes.get(i) {
+            Some(Size::Weight(w)) => u32::from(*w),
+            _ => 1,
+        };
+        let total = u16::try_from((desde..hasta).map(cuanto).sum::<u32>()).unwrap_or(u16::MAX);
+        let racha = Self::Split {
+            dir: otro,
+            children: children[desde..hasta].to_vec(),
+            sizes: (desde..hasta)
+                .map(|i| sizes.get(i).copied().unwrap_or(Size::Weight(1)))
+                .collect(),
+        };
+        let mut nc = children[..desde].to_vec();
+        nc.push(racha);
+        nc.extend_from_slice(&children[hasta..]);
+        let mut ns: Vec<Size> = (0..desde)
+            .map(|i| sizes.get(i).copied().unwrap_or(Size::Weight(1)))
+            .collect();
+        ns.push(Size::Weight(total.max(1)));
+        ns.extend(
+            (hasta..children.len()).map(|i| sizes.get(i).copied().unwrap_or(Size::Weight(1))),
+        );
+        Giro::Hecho(Self::Split {
+            dir: *dir,
+            children: nc,
+            sizes: ns,
+        })
     }
 
     /// Cambia el tamaño del hijo que contiene `id` en `delta`.
@@ -2454,5 +2780,225 @@ mod tests {
         );
         assert_eq!(ancho(&arbol.resize(SlotId(1), 1)), Size::Weight(2));
         assert_eq!(ancho(&arbol.resize(SlotId(1), -1)), Size::Weight(1));
+    }
+
+    /// El `orthodox` de siempre: dos listados lado a lado sobre las filas de
+    /// cromo.
+    fn ortodoxo() -> Node {
+        Node::Split {
+            dir: Dir::Vertical,
+            children: vec![
+                Node::split(Dir::Horizontal, vec![b(1), b(2)]),
+                Node::slot(SlotId(3), KindId::new("tasks")),
+                Node::slot(SlotId(4), KindId::new("status")),
+            ],
+            sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
+        }
+    }
+
+    /// ADR 0138: soltar a un lado reparte con el destino a partes iguales, y
+    /// en el centro se une como pestaña. Nada se pierde.
+    #[test]
+    fn mover_un_hueco_lo_suelta_al_lado_o_como_pestana() {
+        let t = ortodoxo();
+        // El 1 debajo del 2: el reparto horizontal se disuelve, y el 2 se
+        // parte en vertical DENTRO de su sitio — no como hermano en la raíz,
+        // que es la del cromo y no se gira: así `flip` lo deshace.
+        let abajo = t.move_slot(SlotId(1), SlotId(2), DropZone::Bottom);
+        let Node::Split { children, .. } = &abajo else {
+            panic!("raíz")
+        };
+        assert_eq!(
+            children[0],
+            Node::Split {
+                dir: Dir::Vertical,
+                children: vec![b(2), b(1)],
+                sizes: vec![Size::Weight(1); 2],
+            }
+        );
+        assert_eq!(children.len(), 3, "el cromo sigue igual");
+        assert_eq!(
+            abajo.flip(SlotId(1)),
+            t.move_slot(SlotId(1), SlotId(2), DropZone::Right),
+            "girar lo que se soltó abajo es soltarlo a la derecha"
+        );
+        // Un tercero a la derecha del 1 entra como HERMANO: tercios.
+        let tres = Node::split(Dir::Horizontal, vec![b(1), b(2), b(5)]);
+        let movido = tres.move_slot(SlotId(5), SlotId(1), DropZone::Right);
+        let Node::Split {
+            children, sizes, ..
+        } = &movido
+        else {
+            panic!("split")
+        };
+        assert_eq!(children, &vec![b(1), b(5), b(2)]);
+        assert_eq!(sizes, &vec![Size::Weight(1); 3]);
+        // En el centro: pestaña del destino, delante.
+        let centro = t.move_slot(SlotId(1), SlotId(2), DropZone::Center);
+        assert_eq!(
+            centro.tabs_of(SlotId(1)),
+            Some((vec![SlotId(2), SlotId(1)], 1))
+        );
+        // Los mismos huecos, siempre.
+        for m in [&abajo, &movido, &centro] {
+            let mut ids = m.slot_ids();
+            ids.sort_unstable();
+            assert!(m.duplicate_slot_ids().is_empty());
+            assert!(ids.windows(2).all(|w| w[0] != w[1]));
+        }
+    }
+
+    /// Soltar al lado de una pestaña parte el GRUPO, no lo invade.
+    #[test]
+    fn soltar_junto_a_una_pestana_parte_su_grupo() {
+        let grupo = Node::Tabs {
+            children: vec![b(1), b(2)],
+            active: 0,
+        };
+        let t = Node::split(Dir::Horizontal, vec![grupo.clone(), b(3)]);
+        let m = t.move_slot(SlotId(3), SlotId(2), DropZone::Top);
+        assert_eq!(
+            m,
+            Node::Split {
+                dir: Dir::Vertical,
+                children: vec![b(3), grupo],
+                sizes: vec![Size::Weight(1); 2],
+            }
+        );
+    }
+
+    /// Lo que no se mueve: a sí mismo, el cromo, el único hueco, un id que
+    /// no está.
+    #[test]
+    fn mover_lo_que_no_se_mueve_no_cambia_nada() {
+        let t = ortodoxo();
+        assert_eq!(t.move_slot(SlotId(1), SlotId(1), DropZone::Left), t);
+        assert_eq!(t.move_slot(SlotId(4), SlotId(1), DropZone::Top), t);
+        assert_eq!(t.move_slot(SlotId(1), SlotId(4), DropZone::Top), t);
+        assert_eq!(t.move_slot(SlotId(9), SlotId(1), DropZone::Top), t);
+        assert_eq!(b(1).move_slot(SlotId(1), SlotId(2), DropZone::Left), b(1));
+    }
+
+    /// La zona bajo el puntero, en celdas: la regla del cuarto, como la
+    /// ventana; y la parte que se resalta.
+    #[test]
+    fn la_zona_de_soltar_sale_del_cuarto_mas_cercano() {
+        let r = Rect {
+            x: 10,
+            y: 0,
+            width: 40,
+            height: 20,
+        };
+        assert_eq!(DropZone::at(11, 10, r), DropZone::Left);
+        assert_eq!(DropZone::at(48, 10, r), DropZone::Right);
+        assert_eq!(DropZone::at(30, 1, r), DropZone::Top);
+        assert_eq!(DropZone::at(30, 18, r), DropZone::Bottom);
+        assert_eq!(DropZone::at(30, 10, r), DropZone::Center);
+        assert_eq!(
+            DropZone::Right.part_of(r),
+            Rect {
+                x: 30,
+                y: 0,
+                width: 20,
+                height: 20
+            }
+        );
+        assert_eq!(DropZone::Center.part_of(r), r);
+    }
+
+    /// Junto a un panel de ancho fijo, lo soltado entra como HERMANO con
+    /// peso: partir el fijo por dentro le daría ocho columnas a un listado.
+    #[test]
+    fn soltar_junto_a_un_fijo_entra_como_hermano() {
+        let t = Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![Node::slot(SlotId(7), KindId::new("places")), b(1), b(2)],
+            sizes: vec![Size::Fixed(16), Size::Weight(1), Size::Weight(1)],
+        };
+        let m = t.move_slot(SlotId(2), SlotId(7), DropZone::Right);
+        let Node::Split {
+            sizes, children, ..
+        } = &m
+        else {
+            panic!("split")
+        };
+        assert_eq!(sizes[0], Size::Fixed(16), "los sitios conservan su ancho");
+        assert_eq!(children[1], b(2));
+        assert!(matches!(sizes[1], Size::Weight(_)));
+    }
+
+    /// El centro solo junta familias iguales (ADR 0134): un listado no
+    /// entra en las pestañas de los sitios, ni un panel en las de un
+    /// listado.
+    #[test]
+    fn el_centro_no_mezcla_listados_y_paneles() {
+        let t = Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![Node::slot(SlotId(7), KindId::new("places")), b(1), b(2)],
+            sizes: vec![Size::Fixed(16), Size::Weight(1), Size::Weight(1)],
+        };
+        assert_eq!(t.move_slot(SlotId(1), SlotId(7), DropZone::Center), t);
+        assert_eq!(t.move_slot(SlotId(7), SlotId(1), DropZone::Center), t);
+        assert_ne!(t.move_slot(SlotId(1), SlotId(2), DropZone::Center), t);
+    }
+
+    /// ADR 0138: girar pasa lado a lado a uno encima del otro y vuelve; no
+    /// gira el reparto del cromo, y un fijo pasa a peso.
+    #[test]
+    fn girar_cambia_el_eje_del_reparto_interior() {
+        let t = ortodoxo();
+        let g = t.flip(SlotId(1));
+        let Node::Split { children, .. } = &g else {
+            panic!("raíz")
+        };
+        assert!(matches!(
+            &children[0],
+            Node::Split {
+                dir: Dir::Vertical,
+                ..
+            }
+        ));
+        assert_eq!(g.flip(SlotId(2)), t, "girar dos veces es no girar");
+        // Un solo listado sobre el cromo: nada que girar.
+        let solo = Node::Split {
+            dir: Dir::Vertical,
+            children: vec![b(1), Node::slot(SlotId(4), KindId::new("status"))],
+            sizes: vec![Size::Weight(1), Size::Fixed(1)],
+        };
+        assert_eq!(solo.flip(SlotId(1)), solo);
+        // Solo la RACHA ponderada: los sitios siguen siendo una columna de
+        // dieciséis, y los dos listados se apilan a su lado.
+        let con_sitios = Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![Node::slot(SlotId(7), KindId::new("places")), b(1), b(2)],
+            sizes: vec![Size::Fixed(16), Size::Weight(1), Size::Weight(1)],
+        };
+        let g = con_sitios.flip(SlotId(1));
+        assert_eq!(
+            g,
+            Node::Split {
+                dir: Dir::Horizontal,
+                children: vec![
+                    Node::slot(SlotId(7), KindId::new("places")),
+                    Node::split(Dir::Vertical, vec![b(1), b(2)]),
+                ],
+                sizes: vec![Size::Fixed(16), Size::Weight(2)],
+            }
+        );
+        // Y de vuelta: los sitios no pierden su ancho.
+        let Node::Split { sizes, .. } = g.flip(SlotId(2)) else {
+            panic!("split")
+        };
+        assert_eq!(sizes[0], Size::Fixed(16));
+        // Una racha de uno no se gira, y la negativa NO sube a girar el
+        // reparto de fuera.
+        let solo_uno = Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![Node::slot(SlotId(7), KindId::new("places")), b(1)],
+            sizes: vec![Size::Fixed(30), Size::Weight(1)],
+        };
+        assert_eq!(solo_uno.flip(SlotId(1)), solo_uno);
+        let anidado = Node::split(Dir::Vertical, vec![solo_uno.clone(), b(9)]);
+        assert_eq!(anidado.flip(SlotId(1)), anidado);
     }
 }

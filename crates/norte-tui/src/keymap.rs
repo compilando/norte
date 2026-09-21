@@ -171,6 +171,7 @@ commands! {
     "layout.grow" => LayoutGrow,
     "layout.shrink" => LayoutShrink,
     "layout.equalize" => LayoutEqualize,
+    "layout.flip" => LayoutFlip,
     "layout.set-target" => LayoutSetTarget,
     "layout.places" => LayoutPlaces,
     "layout.preview" => LayoutPreview,
