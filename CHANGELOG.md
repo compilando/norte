@@ -137,6 +137,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Dragging a border between two weighted panels could not shrink the
+  one on the right, and squashed their neighbours.** A panel moved beside
+  a listing (ADR 0138) arrives weighted; dragging its border rescaled the
+  pair against the rest of the row and measured only the two panels that
+  touch. The pair now keeps its sum and is measured whole, in both
+  frontends.
 - **The window's status bar was invisible.** Its one-row slot was taken
   entirely by the slot's title, so none of it showed. It is now a real row
   at the bottom, in the chrome font, and panels docked at the bottom (log,
