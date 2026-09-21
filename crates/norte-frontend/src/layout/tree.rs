@@ -274,6 +274,82 @@ fn es_cromo(n: &Node) -> bool {
     matches!(n, Node::Slot { kind, .. } if matches!(kind.as_str(), "status" | "tasks"))
 }
 
+/// Los tamaños de un reparto con el borde entre `pos` y `pos + 1` en la
+/// fracción `frac` de los `celdas` que ocupan los dos (ver
+/// [`Node::drag_border`]).
+///
+/// Dos PONDERADOS conservan su suma: lo que uno gana lo pierde el otro, y
+/// el resto del reparto no se entera. Renormalizar la pareja a cien sin más
+/// —lo que hacía— dejaba a un tercer hermano de peso uno contra una pareja
+/// de cien: agarrar el borde entre dos listados aplastaba al de al lado.
+/// Si la pareja suma poco para tener grano, se multiplica el reparto ENTERO
+/// por el mismo factor, que no cambia ninguna proporción.
+fn arrastrar_pareja(sizes: &[Size], pos: usize, frac: f32, celdas_del_par: u16) -> Vec<Size> {
+    /// Peso mínimo de la pareja para que el arrastre tenga grano.
+    const PESO_FINO: u32 = 100;
+    /// Lo mínimo que le queda a cada lado, en tanto por uno.
+    const MARGEN: f32 = 0.05;
+    let frac = frac.clamp(MARGEN, 1.0 - MARGEN);
+    let mut ns = sizes.to_vec();
+    let Some(siguiente) = ns.get(pos + 1).copied() else {
+        // El último no tiene borde a su derecha: el que se arrastra es el
+        // suyo con el anterior, y quien llama nombra el hueco de la
+        // IZQUIERDA del borde.
+        return ns;
+    };
+    // En celdas, y acotado a que a cada lado le quede una: el reparto ya
+    // sabe colapsar lo que no cabe, pero un cero escrito en el árbol se
+    // queda escrito.
+    let celdas = f32::from(celdas_del_par);
+    // El redondeo y el corte, en UN sitio: `f32` a `u16` trunca y no tiene
+    // signo, así que el clamp va antes de convertir y no después — un `as`
+    // sobre un negativo o sobre 70000 no avisa.
+    let entero = |v: f32| -> u16 {
+        let v = v.round().clamp(1.0, f32::from(u16::MAX));
+        // Ya está entre 1 y `u16::MAX` y sin parte fraccionaria: la
+        // conversión no puede perder nada.
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "el clamp de la línea de arriba deja el valor dentro de u16 y entero"
+        )]
+        let v = v as u16;
+        v
+    };
+    let izq_celdas = (celdas * frac).round().clamp(1.0, (celdas - 1.0).max(1.0));
+    match (ns[pos], siguiente) {
+        (Size::Fixed(_), Size::Fixed(_)) => {
+            ns[pos] = Size::Fixed(entero(izq_celdas));
+            ns[pos + 1] = Size::Fixed(entero(celdas - izq_celdas));
+        }
+        // Un fijo contra un ponderado: se escribe el FIJO y el otro se queda
+        // con lo que sobre, que es lo que el reparto ya hacía. Escribir los
+        // dos convertiría un ponderado en fijo por arrastrar su borde, y con
+        // eso dejaría de estirarse al cambiar el tamaño de la ventana.
+        (Size::Fixed(_), _) => ns[pos] = Size::Fixed(entero(izq_celdas)),
+        (_, Size::Fixed(_)) => {
+            ns[pos + 1] = Size::Fixed(entero(celdas - izq_celdas));
+        }
+        (Size::Weight(wa), Size::Weight(wb)) => {
+            let suma = u32::from(wa) + u32::from(wb);
+            let factor = PESO_FINO.div_ceil(suma.max(1)).max(1);
+            if factor > 1 {
+                for s in &mut ns {
+                    if let Size::Weight(w) = s {
+                        *w = u16::try_from(u32::from(*w) * factor).unwrap_or(u16::MAX);
+                    }
+                }
+            }
+            let suma = f32::from(u16::try_from(suma * factor).unwrap_or(u16::MAX));
+            let izq = (suma * frac).round().clamp(1.0, (suma - 1.0).max(1.0));
+            ns[pos] = Size::Weight(entero(izq));
+            ns[pos + 1] = Size::Weight(entero(suma - izq));
+        }
+        _ => {}
+    }
+    ns
+}
+
 /// Lo que devuelve buscar qué girar (ADR 0138): tres casos y no un
 /// `Option`, porque «aquí no se gira» tiene que PARAR la búsqueda y «aquí
 /// no está» tiene que dejarla seguir. Con un `Option` la negativa subía y
@@ -1107,62 +1183,76 @@ impl Node {
     /// y una fracción sola no basta para escribirlo.
     #[must_use]
     pub fn drag_border(&self, id: SlotId, frac: f32, celdas_del_par: u16) -> Self {
-        /// Peso total al que se renormaliza una pareja arrastrada.
-        const PESO_FINO: u16 = 100;
-        /// Lo mínimo que le queda a cada lado, en tanto por uno.
-        const MARGEN: f32 = 0.05;
-        let frac = frac.clamp(MARGEN, 1.0 - MARGEN);
         self.map_split_of(id, &|sizes, pos| {
-            let mut ns = sizes.to_vec();
-            let Some(siguiente) = ns.get(pos + 1).copied() else {
-                // El último no tiene borde a su derecha: el que se arrastra
-                // es el suyo con el anterior, y quien llama nombra el hueco
-                // de la IZQUIERDA del borde.
-                return ns;
-            };
-            // En celdas, y acotado a que a cada lado le quede una: el reparto
-            // ya sabe colapsar lo que no cabe, pero un cero escrito en el
-            // árbol se queda escrito.
-            let celdas = f32::from(celdas_del_par);
-            // El redondeo y el corte, en UN sitio: `f32` a `u16` trunca y no
-            // tiene signo, así que el clamp va antes de convertir y no
-            // después — un `as` sobre un negativo o sobre 70000 no avisa.
-            let entero = |v: f32| -> u16 {
-                let v = v.round().clamp(1.0, f32::from(u16::MAX));
-                // Ya está entre 1 y `u16::MAX` y sin parte fraccionaria: la
-                // conversión no puede perder nada.
-                #[allow(
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    reason = "el clamp de la línea de arriba deja el valor dentro de u16 y entero"
-                )]
-                let v = v as u16;
-                v
-            };
-            let izq_celdas = (celdas * frac).round().clamp(1.0, (celdas - 1.0).max(1.0));
-            match (ns[pos], siguiente) {
-                (Size::Fixed(_), Size::Fixed(_)) => {
-                    ns[pos] = Size::Fixed(entero(izq_celdas));
-                    ns[pos + 1] = Size::Fixed(entero(celdas - izq_celdas));
-                }
-                // Un fijo contra un ponderado: se escribe el FIJO y el otro se
-                // queda con lo que sobre, que es lo que el reparto ya hacía.
-                // Escribir los dos convertiría un ponderado en fijo por
-                // arrastrar su borde, y con eso dejaría de estirarse al
-                // cambiar el tamaño de la ventana.
-                (Size::Fixed(_), _) => ns[pos] = Size::Fixed(entero(izq_celdas)),
-                (_, Size::Fixed(_)) => {
-                    ns[pos + 1] = Size::Fixed(entero(celdas - izq_celdas));
-                }
-                (Size::Weight(_), Size::Weight(_)) => {
-                    let izq = (f32::from(PESO_FINO) * frac).round().max(1.0);
-                    ns[pos] = Size::Weight(entero(izq));
-                    ns[pos + 1] = Size::Weight(entero(f32::from(PESO_FINO) - izq));
-                }
-                _ => {}
-            }
-            ns
+            arrastrar_pareja(sizes, pos, frac, celdas_del_par)
         })
+    }
+
+    /// Los dos lados del borde entre `a` y `b`: los huecos del hijo que
+    /// contiene a `a` y los del hijo SIGUIENTE, que contiene a `b`, en el
+    /// reparto donde los dos son hermanos consecutivos.
+    ///
+    /// Es lo que quien arrastra tiene que MEDIR: el borde entre un listado y
+    /// el panel de detalles no separa a ese listado de los detalles, separa
+    /// el CUERPO entero (los dos listados) de los detalles, y medir solo el
+    /// listado daba una fracción de otra pareja — el borde saltaba o no
+    /// seguía al puntero. `None` si no son vecinos en ningún reparto.
+    #[must_use]
+    pub fn border_pair(&self, a: SlotId, b: SlotId) -> Option<(Vec<SlotId>, Vec<SlotId>)> {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return None,
+        };
+        let pos = hijos.iter().position(|c| c.contains(a))?;
+        if hijos[pos].contains(b) {
+            return hijos[pos].border_pair(a, b);
+        }
+        if matches!(self, Self::Split { .. })
+            && let Some(siguiente) = hijos.get(pos + 1)
+            && siguiente.contains(b)
+        {
+            return Some((hijos[pos].slot_ids(), siguiente.slot_ids()));
+        }
+        None
+    }
+
+    /// Como [`Self::drag_border`], pero sobre el borde entre `a` y `b` en el
+    /// reparto donde son vecinos ([`Self::border_pair`]), con `frac` y
+    /// `celdas_del_par` medidos sobre los DOS hijos enteros. Así se mueve el
+    /// borde que se agarró, aunque `a` sea el último de su propio reparto.
+    #[must_use]
+    pub fn drag_border_between(
+        &self,
+        a: SlotId,
+        b: SlotId,
+        frac: f32,
+        celdas_del_par: u16,
+    ) -> Self {
+        let hijos = match self {
+            Self::Split { children, .. } | Self::Tabs { children, .. } => children,
+            Self::Slot { .. } => return self.clone(),
+        };
+        let Some(pos) = hijos.iter().position(|c| c.contains(a)) else {
+            return self.clone();
+        };
+        if hijos[pos].contains(b) {
+            let dentro = hijos[pos].drag_border_between(a, b, frac, celdas_del_par);
+            return self.with_child(pos, dentro);
+        }
+        if let Self::Split {
+            dir,
+            children,
+            sizes,
+        } = self
+            && children.get(pos + 1).is_some_and(|c| c.contains(b))
+        {
+            return Self::Split {
+                dir: *dir,
+                children: children.clone(),
+                sizes: arrastrar_pareja(sizes, pos, frac, celdas_del_par),
+            };
+        }
+        self.clone()
     }
 
     /// Deja a todos los hermanos ponderados del hueco `id` con el mismo peso.
@@ -2877,6 +2967,62 @@ mod tests {
         assert_eq!(t.move_slot(SlotId(1), SlotId(4), DropZone::Top), t);
         assert_eq!(t.move_slot(SlotId(9), SlotId(1), DropZone::Top), t);
         assert_eq!(b(1).move_slot(SlotId(1), SlotId(2), DropZone::Left), b(1));
+    }
+
+    /// El borde entre el segundo listado y los detalles separa el CUERPO de
+    /// los detalles: la pareja se mide entera, y arrastrarlo mueve los
+    /// detalles aunque el listado sea el último de su propio reparto.
+    #[test]
+    fn el_borde_entre_primos_mueve_su_pareja() {
+        let t = Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![
+                Node::split(Dir::Horizontal, vec![b(1), b(2)]),
+                Node::slot(SlotId(7), KindId::new("metadata")),
+            ],
+            sizes: vec![Size::Weight(1), Size::Fixed(50)],
+        };
+        assert_eq!(
+            t.border_pair(SlotId(2), SlotId(7)),
+            Some((vec![SlotId(1), SlotId(2)], vec![SlotId(7)]))
+        );
+        assert_eq!(
+            t.border_pair(SlotId(1), SlotId(2)),
+            Some((vec![SlotId(1)], vec![SlotId(2)]))
+        );
+        assert_eq!(
+            t.border_pair(SlotId(2), SlotId(1)),
+            None,
+            "el orden importa"
+        );
+        // Cuerpo de 100 celdas y detalles de 50: el borde a 120 deja 30.
+        let m = t.drag_border_between(SlotId(2), SlotId(7), 120.0 / 150.0, 150);
+        let Node::Split { sizes, .. } = &m else {
+            panic!("split")
+        };
+        assert_eq!(sizes[1], Size::Fixed(30));
+    }
+
+    /// Arrastrar el borde entre dos ponderados no aplasta a un tercero: la
+    /// pareja conserva su suma.
+    #[test]
+    fn arrastrar_una_pareja_no_aplasta_al_tercero() {
+        let t = Node::split(Dir::Horizontal, vec![b(1), b(2), b(3)]);
+        let m = t.drag_border_between(SlotId(1), SlotId(2), 0.25, 60);
+        let Node::Split { sizes, .. } = &m else {
+            panic!("split")
+        };
+        let w: Vec<u16> = sizes
+            .iter()
+            .map(|s| match s {
+                Size::Weight(w) => *w,
+                _ => 0,
+            })
+            .collect();
+        let total: u16 = w.iter().sum();
+        assert_eq!(w[0] + w[1], w[2] * 2, "la pareja sigue sumando dos tercios");
+        assert_eq!(w[2] * 3, total);
+        assert!(w[0] < w[1]);
     }
 
     /// La zona bajo el puntero, en celdas: la regla del cuarto, como la
