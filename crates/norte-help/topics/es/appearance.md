@@ -38,6 +38,11 @@ cuántos avisos guarda el registro.
 o `auto`, que es arriba en el terminal y a la izquierda en la ventana.
 `panel_bar = false` la quita.
 
+En la ventana, `titlebar = "custom"` quita la barra de título del escritorio
+y la de menús hace su papel, como en VS Code: se arrastra para mover la
+ventana, un doble clic la maximiza, y a la derecha van minimizar, maximizar
+y cerrar. De serie es `native`. Se aplica al volver a abrir la ventana.
+
 El pie del panel
 ----------------
 
@@ -61,6 +66,12 @@ reinterpreta), `tasks` (tareas en marcha; abre los procesos) y `notices`
 orden, por ejemplo `status_items = ["tasks", "position"]`; una lista vacía
 deja la mitad derecha en blanco. Los que no caben ceden por importancia, y
 siempre antes que un aviso de la izquierda.
+
+Un plugin de columnas también puede hablar ahí: `status_plugins =
+["plugin:git/branch"]` enseña el valor de esa columna para la entrada bajo
+el cursor —la rama, en el ejemplo—, a la izquierda de los demás. Hasta
+cuatro, solo de plugins aprobados que declaren la columna; son los primeros
+en ceder y no se pulsan.
 
 Filas a rayas
 -------------

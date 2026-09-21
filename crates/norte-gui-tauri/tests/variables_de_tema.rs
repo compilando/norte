@@ -56,6 +56,10 @@ const NO_SON_COLOR: &[&str] = &[
     // lleva ya dividido entre cien (puente 80). `1` es ajustada. Pedirle un
     // rol al tema sería pedirle un color para un multiplicador.
     "zoom",
+    // Una IMAGEN: la regla de marcas ya compuesta (ADR 0135), un degradado
+    // con una banda por racha de tramos marcados. Su color sale de
+    // `--mark-bg` y `--fg`, que sí son del tema.
+    "mark-ruler",
 ];
 
 /// Huérfanas CONOCIDAS, con dueño y fecha. Vacía desde que los roles `muted`

@@ -619,6 +619,7 @@ impl Estado {
                 &self.volumenes_pie,
             ),
             marks: hueco.pane.marks_len() as u64,
+            mark_ruler: hueco.pane.mark_ruler(crate::dto::MARK_RULER_SPANS),
         }
     }
 
@@ -726,6 +727,7 @@ impl Estado {
             path_segments,
             used_ratio,
             marks,
+            mark_ruler,
         } = self.cabecera_de(id, hueco)
         else {
             unreachable!("`cabecera_de` construye esa variante")
@@ -742,6 +744,7 @@ impl Estado {
             cursor: (!hueco.pane.entries().is_empty())
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
             marks,
+            mark_ruler,
             hidden_note,
             skipped_note,
             names_note,

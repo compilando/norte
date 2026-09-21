@@ -184,6 +184,53 @@ export interface SlotDom {
   generation: number;
 }
 
+/**
+ * El color de la regla de marcas: el de la marca, aclarado hacia el texto
+ * para que una banda de tres píxeles se lea. De dos roles del tema, sin
+ * variable propia que el tema no alimentaría.
+ */
+export const MARK_RULER_COLOR = "color-mix(in srgb, var(--mark-bg) 55%, var(--fg))";
+
+/**
+ * La regla de marcas como imagen de fondo (ADR 0135): una banda por cada
+ * racha de tramos seguidos con marca, en porcentaje del alto. Cadena vacía
+ * = sin regla.
+ *
+ * Un FONDO del desplazable y no un nodo: el fondo de un elemento con scroll
+ * se queda quieto mientras su contenido se mueve, que es justo lo que una
+ * regla del listado entero tiene que hacer, y así no hay que medir nada al
+ * pintar.
+ */
+export function markRulerImage(tramos: readonly number[], spans: number): string {
+  if (tramos.length === 0 || spans <= 0) {
+    return "";
+  }
+  // Cuatro decimales: sobran para cualquier alto de pantalla, y sin ellos
+  // `11/20` sale `55.00000000000001%`.
+  const pct = (t: number): string =>
+    `${String(Number(((Math.min(t, spans) / spans) * 100).toFixed(4)))}%`;
+  const c = MARK_RULER_COLOR;
+  const stops: string[] = ["transparent 0%"];
+  let i = 0;
+  while (i < tramos.length) {
+    const desde = tramos[i] ?? 0;
+    let hasta = desde;
+    // Rachas: tramos seguidos son UNA banda, no doscientas paradas.
+    while (i + 1 < tramos.length && tramos[i + 1] === hasta + 1) {
+      hasta += 1;
+      i += 1;
+    }
+    stops.push(
+      `transparent ${pct(desde)}`,
+      `${c} ${pct(desde)}`,
+      `${c} ${pct(hasta + 1)}`,
+      `transparent ${pct(hasta + 1)}`,
+    );
+    i += 1;
+  }
+  return `linear-gradient(to bottom, ${stops.join(", ")})`;
+}
+
 export function place(
   el: HTMLElement,
   p: SlotPlacement,

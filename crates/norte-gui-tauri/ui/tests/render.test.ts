@@ -6,10 +6,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
-import { OVERSCAN } from "../src/render/dom";
+import { MARK_RULER_COLOR, OVERSCAN, markRulerImage } from "../src/render/dom";
 import { objetivoRevelado } from "../src/render/settings";
 import { catalogoReal } from "./fixtures";
 import { BRIDGE_VERSION } from "../src/types";
@@ -21,6 +21,7 @@ import type {
   RowView,
   UiAction,
   ViewSnapshot,
+  WindowVerb,
 } from "../src/types";
 
 const CELL_H = 20;
@@ -404,7 +405,12 @@ describe("repintar sin cambios (el parpadeo al desplazarse)", () => {
   });
 });
 
-function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
+function montar(
+  opciones: {
+    imageBytes?: () => Promise<ArrayBuffer>;
+    windowControl?: (verb: WindowVerb) => void;
+  } = {},
+): {
   screen: Screen;
   enviadas: UiAction[];
   root: HTMLElement;
@@ -489,6 +495,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     catalogo(),
     (a: UiAction) => enviadas.push(a),
     opciones.imageBytes ?? (() => Promise.resolve(new ArrayBuffer(0))),
+    opciones.windowControl,
   );
   return { screen, enviadas, root };
 }
@@ -742,6 +749,34 @@ describe("Screen", () => {
     const name = root.querySelector(".cell-name") as HTMLElement;
     expect(name.style.color).toBe("");
     expect(name.style.fontWeight).toBe("");
+  });
+
+  it("la regla de marcas se pinta con marcas y se quita sin ellas (ADR 0135)", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({ marks: 3, mark_ruler: [0, 1, 128] }));
+    const grid = root.querySelector(".scroller") as HTMLElement;
+    expect(grid.dataset["ruler"]).toBe("true");
+    const regla = grid.style.getPropertyValue("--mark-ruler");
+    // Los tramos 0 y 1 son UNA banda; el 128, otra, a mitad del listado.
+    const c = MARK_RULER_COLOR;
+    expect(regla).toContain(`${c} 0%`);
+    expect(regla).toContain(`${c} 0.7813%`);
+    expect(regla).toContain(`${c} 50%`);
+    screen.paint(vista({ marks: 0, mark_ruler: [] }));
+    expect(grid.dataset["ruler"]).toBeUndefined();
+    expect(grid.style.getPropertyValue("--mark-ruler")).toBe("");
+  });
+
+  it("markRulerImage: rachas en una banda, nada sin tramos", () => {
+    expect(markRulerImage([], 256)).toBe("");
+    expect(markRulerImage([3], 0)).toBe("");
+    const img = markRulerImage([2, 3, 4, 10], 20);
+    expect(img.startsWith("linear-gradient(to bottom, transparent 0%")).toBe(true);
+    // [2..=4] va de 10% a 25%; [10] de 50% a 55%.
+    const c = MARK_RULER_COLOR;
+    expect(img).toContain(`${c} 10%, ${c} 25%`);
+    expect(img).toContain(`${c} 50%, ${c} 55%`);
+    expect(img.match(/transparent/g)).toHaveLength(5);
   });
 
   it("un listado vacío lo dice", () => {
@@ -2221,6 +2256,77 @@ describe("la barra de menús", () => {
     expect(document.querySelector(".menu-items")).toBeNull();
   });
 
+  describe("con la barra de título propia (ADR 0136)", () => {
+    beforeEach(() => {
+      document.documentElement.dataset["titlebar"] = "custom";
+    });
+    afterEach(() => {
+      delete document.documentElement.dataset["titlebar"];
+    });
+
+    it("lleva los tres botones de la ventana y cada uno pide su verbo", () => {
+      const pedidos: WindowVerb[] = [];
+      const { screen, enviadas } = montar({ windowControl: (v) => pedidos.push(v) });
+      screen.paint(conMenu(null));
+      const botones = [
+        ...document.querySelectorAll(".menubar .window-controls .window-control"),
+      ] as HTMLButtonElement[];
+      expect(botones.map((b) => b.dataset["verb"])).toEqual([
+        "minimize",
+        "toggle_maximize",
+        "close",
+      ]);
+      expect(botones.every((b) => b.querySelector("svg.panelbar-icon") !== null)).toBe(
+        true,
+      );
+      expect(botones[2]?.getAttribute("aria-label")).toBe("Cerrar");
+      for (const b of botones) {
+        b.click();
+      }
+      expect(pedidos).toEqual(["minimize", "toggle_maximize", "close"]);
+      // Nada de esto es del host: no es estado de pantalla.
+      expect(enviadas).toEqual([]);
+    });
+
+    it("el hueco libre arrastra y un doble clic maximiza; un título no", () => {
+      const pedidos: WindowVerb[] = [];
+      const { screen } = montar({ windowControl: (v) => pedidos.push(v) });
+      screen.paint(conMenu(null));
+      const barra = document.querySelector(".menubar") as HTMLElement;
+      barra.dispatchEvent(
+        new MouseEvent("mousedown", { button: 0, detail: 1, bubbles: true }),
+      );
+      barra.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      const titulo = document.querySelector(".menubar-title") as HTMLElement;
+      titulo.dispatchEvent(
+        new MouseEvent("mousedown", { button: 0, detail: 1, bubbles: true }),
+      );
+      titulo.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(pedidos).toEqual(["drag", "toggle_maximize"]);
+    });
+
+    it("con el menú apagado la fila sigue: es lo único que mueve y cierra", () => {
+      const { screen } = montar();
+      const v = conMenu(null);
+      v.menu.bar = false;
+      screen.paint(v);
+      expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe(
+        "var(--cell-h)",
+      );
+      expect(document.querySelectorAll(".menubar-title")).toHaveLength(0);
+      expect(document.querySelectorAll(".window-control")).toHaveLength(3);
+    });
+  });
+
+  it("con la barra nativa no hay botones de ventana", () => {
+    const { screen } = montar();
+    screen.paint(conMenu(null));
+    expect(document.querySelector(".window-controls")).toBeNull();
+    expect(
+      (document.querySelector(".menubar") as HTMLElement).dataset["titlebar"],
+    ).toBeUndefined();
+  });
+
   it("con la barra apagada no reserva nada", () => {
     const { screen } = montar();
     const v = conMenu(null);
@@ -2278,6 +2384,29 @@ describe("la barra de menús", () => {
     expect(botones[1]?.getAttribute("aria-label")).toBe("Disposición...");
     botones[1]?.click();
     expect(enviadas).toEqual([{ action: "layout_button_activate", id: "pick" }]);
+  });
+
+  it("un grupo de PANELES no lleva + ni × y se marca para su estilo", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.layout.tabs = [
+      {
+        slot_id: 1,
+        active: 1,
+        panels: true,
+        tabs: [
+          { slot_id: 7, title: "Historial", title_hostile: false },
+          { slot_id: 1, title: "Detalles", title_hostile: false },
+        ],
+      },
+    ];
+    screen.paint(v);
+    expect(document.querySelector(".tab-new")).toBeNull();
+    expect(document.querySelector(".tab-close")).toBeNull();
+    const tira = document.querySelector(".slot-tabs") as HTMLElement;
+    expect(tira.dataset["panels"]).toBe("true");
+    (document.querySelectorAll(".tab")[0] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "select_tab", slot_id: 7 }]);
   });
 
   it("las pestañas de un grupo llevan su × y el grupo su +, y la × no elige", () => {

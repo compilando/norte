@@ -1448,6 +1448,28 @@ impl StatusItems {
     }
 }
 
+/// `[ui] titlebar`: who draws the window's title bar (ADR 0136).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Titlebar {
+    /// The desktop's own. Default: it is the one every other window has,
+    /// and it works with whatever the window manager does.
+    #[default]
+    Native,
+    /// None from the desktop: the menu bar doubles as the title bar.
+    Custom,
+}
+
+impl Titlebar {
+    /// The wire string this variant round-trips from/to.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Custom => "custom",
+        }
+    }
+}
+
 /// `[ui] panel_bar_position`: where the panel bar sits.
 ///
 /// `Auto` is not a third place: it is "what this frontend does best", and
@@ -1636,6 +1658,8 @@ pub struct UiChrome {
     pub panel_bar_style: Option<PanelBarStyle>,
     /// `[ui] panel_bar_position` (None = auto), validated.
     pub panel_bar_position: Option<PanelBarPosition>,
+    /// `[ui] titlebar` (None = native), validated.
+    pub titlebar: Option<Titlebar>,
     /// `[ui] status_items` (None = [`StatusItems::DEFAULT`]), validated.
     pub status_items: Option<StatusItems>,
     /// `[ui] pane_footer` (None = shown).
@@ -1747,6 +1771,11 @@ impl UiChrome {
     #[must_use]
     pub fn panel_bar_position(self) -> PanelBarPosition {
         self.panel_bar_position.unwrap_or_default()
+    }
+    /// Effective `titlebar` (absent = native).
+    #[must_use]
+    pub fn titlebar(self) -> Titlebar {
+        self.titlebar.unwrap_or_default()
     }
     /// Effective `status_items` (absent = all six).
     #[must_use]
@@ -2015,6 +2044,11 @@ pub struct CommonConfig {
     /// format, notice expiry, dialog buttons), last-wins per key from ALL
     /// layers including Project: presentation-only, like the scalars above.
     pub ui_chrome: UiChrome,
+    /// `[ui] status_plugins` (ADR 0137), validated `(plugin, column)` pairs
+    /// in screen order; last-present-wins. Empty = none. From every layer:
+    /// it only chooses what to SHOW, and a plugin runs only if the user
+    /// approved it, whoever names it.
+    pub ui_status_plugins: Vec<(String, String)>,
     /// `[daemon]` merged (last-wins per key; never from Project or a profile
     /// — fail-closed, review MAJOR-1). Startup only.
     pub daemon: crate::DaemonSettings,
@@ -2192,6 +2226,39 @@ fn merge_ui_flags(
     *ui_layout = ui.layout.clone().or(ui_layout.take());
 }
 
+/// At most this many plugin status items (ADR 0137): each one is a plugin
+/// call per listing, and the bar is one row.
+pub const STATUS_PLUGINS_MAX: usize = 4;
+
+/// `[ui] status_plugins` (ADR 0137): `"plugin:<plugin>/<column>"` ids into
+/// `(plugin, column)` pairs, in order. The same shape as a plugin column id
+/// in `[columns]`; the characters are not restricted here because the pair
+/// is only ever compared against what an approved plugin declares.
+///
+/// # Errors
+/// A neutral message (never the raw value, #73) on a malformed, repeated
+/// or excess id.
+fn parse_status_plugins(ids: &[String]) -> Result<Vec<(String, String)>, &'static str> {
+    const MSG: &str = "[ui] status_plugins inválido: cada id una vez, con la forma \
+                       «plugin:<plugin>/<columna>», y como mucho cuatro";
+    if ids.len() > STATUS_PLUGINS_MAX {
+        return Err(MSG);
+    }
+    let mut out: Vec<(String, String)> = Vec::with_capacity(ids.len());
+    for id in ids {
+        let (plugin, column) = id
+            .strip_prefix("plugin:")
+            .and_then(|r| r.split_once('/'))
+            .filter(|(p, c)| !p.is_empty() && !c.is_empty())
+            .ok_or(MSG)?;
+        if out.iter().any(|(p, c)| p == plugin && c == column) {
+            return Err(MSG);
+        }
+        out.push((plugin.to_owned(), column.to_owned()));
+    }
+    Ok(out)
+}
+
 /// The panel bar's two enums, `panel_bar_style` and `panel_bar_position`.
 /// Split out of [`merge_ui_chrome`] only for length; the error is the
 /// message, and the caller attaches the file.
@@ -2213,6 +2280,13 @@ fn merge_panel_bar(acc: &mut UiChrome, ui: &crate::schema::UiSection) -> Result<
                     "[ui] panel_bar_position inválido: solo se admite «auto», «top» o «left»",
                 );
             }
+        });
+    }
+    if let Some(raw) = &ui.titlebar {
+        acc.titlebar = Some(match raw.as_str() {
+            "native" => Titlebar::Native,
+            "custom" => Titlebar::Custom,
+            _ => return Err("[ui] titlebar inválido: solo se admite «native» o «custom»"),
         });
     }
     Ok(())
@@ -2803,6 +2877,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_layout: Option<String> = None;
     let mut ui_columns = ColumnsConfig::default();
     let mut ui_chrome = UiChrome::default();
+    let mut ui_status_plugins: Vec<(String, String)> = Vec::new();
     let mut daemon = crate::DaemonSettings::default();
     let mut log = crate::LogSettings::default();
     let mut hotlist: Vec<HotlistItem> = Vec::new();
@@ -2870,6 +2945,13 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             }
             // Antes de todo lo que MUEVE campos fuera de `parsed.ui`.
             merge_ui_chrome(&mut ui_chrome, &parsed.ui, &norte)?;
+            if let Some(ids) = &parsed.ui.status_plugins {
+                ui_status_plugins =
+                    parse_status_plugins(ids).map_err(|message| ConfigError::Toml {
+                        path: norte.clone(),
+                        message: message.to_owned(),
+                    })?;
+            }
             if let Some(l) = parsed.ui.lang {
                 ui_lang = Some(l);
             }
@@ -2986,6 +3068,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_diff_detached,
         ui_columns,
         ui_chrome,
+        ui_status_plugins,
         daemon,
         log,
         hotlist,
@@ -3736,6 +3819,48 @@ format = "exact"
         }
     }
 
+    /// `[ui] status_plugins` (ADR 0137): pairs in order, last layer wins,
+    /// and a malformed, repeated or fifth id names the file.
+    #[test]
+    fn status_plugins_carga_y_valida() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "[ui]\nstatus_plugins = [\"plugin:git/branch\", \"plugin:net.x/estado\"]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let c = load(&layers).expect("carga");
+        assert_eq!(
+            c.ui_status_plugins,
+            vec![
+                ("git".to_owned(), "branch".to_owned()),
+                ("net.x".to_owned(), "estado".to_owned())
+            ]
+        );
+        assert!(
+            load(&Layers { dirs: vec![] })
+                .expect("carga")
+                .ui_status_plugins
+                .is_empty()
+        );
+        for bad in [
+            "status_plugins = [\"git/branch\"]",
+            "status_plugins = [\"plugin:git\"]",
+            "status_plugins = [\"plugin:/branch\"]",
+            "status_plugins = [\"plugin:git/\"]",
+            "status_plugins = [\"plugin:git/a\", \"plugin:git/a\"]",
+            "status_plugins = [\"plugin:a/a\", \"plugin:a/b\", \"plugin:a/c\", \
+             \"plugin:a/d\", \"plugin:a/e\"]",
+        ] {
+            std::fs::write(dir.path().join("norte.toml"), format!("[ui]\n{bad}\n")).unwrap();
+            let err = load(&layers).expect_err(bad);
+            assert!(err.to_string().contains("norte.toml"), "{bad}: {err}");
+        }
+    }
+
     /// `[ui]` chrome: the six keys land, the two enums validate, the project
     /// layer is honored (presentation-only), and a bad value names the file.
     #[test]
@@ -3746,7 +3871,8 @@ format = "exact"
             "[ui]\nkey_bar = false\npanel_bar_style = \"letters\"\ndate_format = \"iso\"\n\
              panel_bar_position = \"left\"\nstatus_items = [\"tasks\", \"position\"]\n\
              notice_seconds = 30\nhistory_size = 12\nsplash = \"home\"\n\
-             processes_panel = \"manual\"\nimages = \"blocks\"\ndir_indicator = \"slash\"\n",
+             processes_panel = \"manual\"\nimages = \"blocks\"\ndir_indicator = \"slash\"\n\
+             titlebar = \"custom\"\n",
         )
         .unwrap();
         let project = tempfile::tempdir().unwrap();
@@ -3765,6 +3891,7 @@ format = "exact"
         assert_eq!(c.key_bar, Some(false));
         assert_eq!(c.panel_bar_style(), PanelBarStyle::Letters);
         assert_eq!(c.panel_bar_position(), PanelBarPosition::Left);
+        assert_eq!(c.titlebar(), Titlebar::Custom);
         assert_eq!(c.status_items().to_ids(), ["tasks", "position"]);
         assert_eq!(c.date_format(), DateFormat::Relative, "la última capa gana");
         assert_eq!(c.notice_seconds(), 30);
@@ -3781,6 +3908,11 @@ format = "exact"
         assert!(empty.key_bar() && empty.pane_footer() && empty.dialog_buttons());
         assert_eq!(empty.panel_bar_style(), PanelBarStyle::Names);
         assert_eq!(empty.panel_bar_position(), PanelBarPosition::Auto);
+        assert_eq!(
+            empty.titlebar(),
+            Titlebar::Native,
+            "la del escritorio, de serie"
+        );
         assert_eq!(empty.status_items(), StatusItems::DEFAULT);
         assert_eq!(empty.date_format(), DateFormat::Smart);
         assert_eq!(empty.notice_seconds(), 8);
@@ -3793,6 +3925,7 @@ format = "exact"
         for bad in [
             "panel_bar_style = \"icons\"",
             "panel_bar_position = \"right\"",
+            "titlebar = \"frameless\"",
             "status_items = [\"git\"]",
             "status_items = [\"marks\", \"marks\"]",
             "date_format = \"unix\"",

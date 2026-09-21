@@ -33,6 +33,28 @@ independently through `PROTOCOL_VERSION`.
   in a terminal wide enough. In the window every tab has a `×` and each tab
   group ends with a `+`, as the terminal's tab strip already had. They run
   the same commands as their keys.
+- **Panels on one edge share it as tabs** (ADR 0134, bridge 88). Opening
+  the viewer beside the timeline no longer splits the right edge in thin
+  strips: the second panel joins the first as a tab and gets the whole
+  edge, in the window and in the terminal. A panel's key on a tab in the
+  background brings it forward; on the one in front it closes it, and a
+  group of one goes back to a plain panel.
+- **A marks ruler beside the scrollbar** (ADR 0135, bridge 89). In the
+  window, a thin band next to a listing's scrollbar shows where in the
+  whole directory the marked entries are, as VS Code's overview ruler
+  does — including the ones out of view.
+- **An optional custom title bar** (ADR 0136). `[ui] titlebar = "custom"`
+  (also on the settings screen, under Appearance) removes the desktop's
+  title bar and lets the menu bar do its job, as in VS Code: drag it to
+  move the window, double-click to maximize, and minimize, maximize and
+  close at its right end. The default stays `native`. Takes effect the
+  next time the window opens.
+- **Plugins in the status bar** (ADR 0137). `[ui] status_plugins =
+  ["plugin:git/branch"]` shows a plugin column's value for the entry under
+  the cursor as a status item — the git plugin's branch, for instance — in
+  the terminal and the window. Up to four; only approved plugins that
+  declare the column; they are the first to give way when the bar is short,
+  and they are not clickable.
 - **Window polish.** The root of a path's breadcrumbs (the provider's
   scheme) is dimmed, since it is in every path of the pane, and the handle
   between two panes lights up when the pointer is on it or dragging it —

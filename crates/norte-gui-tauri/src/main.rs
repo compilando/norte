@@ -120,6 +120,40 @@ fn catalog(
     Ok(state.bridge()?.catalog())
 }
 
+/// La barra de título propia (ADR 0136): minimizar, maximizar, cerrar o
+/// arrastrar la ventana que LLAMA.
+///
+/// Rechaza con la barra nativa: entonces el escritorio ya hace todo esto, y
+/// una puerta que nadie necesita no se deja abierta.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "`tauri::command` exige `State` y la ventana por valor"
+)]
+#[tauri::command]
+fn window_control(
+    state: tauri::State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    verb: norte_gui_tauri::commands::WindowVerb,
+) -> Result<(), String> {
+    use norte_gui_tauri::commands::WindowVerb;
+    if !state.bridge()?.catalog().appearance.custom_titlebar {
+        return Err("la barra de título es la del escritorio".to_owned());
+    }
+    let hecho = match verb {
+        WindowVerb::Minimize => window.minimize(),
+        WindowVerb::ToggleMaximize => match window.is_maximized() {
+            Ok(true) => window.unmaximize(),
+            Ok(false) => window.maximize(),
+            Err(e) => Err(e),
+        },
+        // `close` pasa por `CloseRequested`, así que `[ui] confirm_quit`
+        // pregunta igual que con la X del escritorio.
+        WindowVerb::Close => window.close(),
+        WindowVerb::Drag => window.start_dragging(),
+    };
+    hecho.map_err(|e| e.to_string())
+}
+
 /// Los comandos registrados. Con `metrics`, uno más — y solo entonces.
 #[cfg(not(feature = "metrics"))]
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
@@ -128,7 +162,8 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         dispatch,
         request_snapshot,
         catalog,
-        image_bytes
+        image_bytes,
+        window_control
     ]
 }
 
@@ -140,6 +175,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         request_snapshot,
         catalog,
         image_bytes,
+        window_control,
         metrics
     ]
 }
@@ -203,6 +239,16 @@ fn main() -> ExitCode {
                 let _ = v.set_title(&format!("norte {}", norte_frontend::version::VERSION_LINE));
             }
             let estado: tauri::State<'_, AppState> = app.state();
+            // La barra de título propia (ADR 0136): sin la del escritorio.
+            // Aquí, al crearla, y no en `tauri.conf.json`: allí es fija, y
+            // la de serie tiene que seguir siendo la nativa.
+            if estado
+                .bridge()
+                .is_ok_and(|b| b.catalog().appearance.custom_titlebar)
+                && let Some(v) = app.get_webview_window("main")
+            {
+                let _ = v.set_decorations(false);
+            }
             if let Ok(bridge) = estado.bridge() {
                 let sub = bridge.host().subscribe();
                 let sink = VentanaSink {

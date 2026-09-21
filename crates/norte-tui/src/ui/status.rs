@@ -145,11 +145,18 @@ pub fn session_zone(app: &App, area: Rect) -> Option<SessionZone> {
 /// —espera, arrastre, mensaje, búsqueda, ruta con sus avisos— sobre el
 /// ancho que quede, y es la que cede: recortada, nunca empujada fuera.
 fn compose(app: &App, area: Rect) -> Composed {
-    let lista = norte_frontend::statusbar::items(
+    // Los de los plugins primero, a la izquierda de la mitad derecha (ADR
+    // 0137); son los primeros en ceder, así que el orden no les da sitio.
+    let mut lista = norte_frontend::statusbar::plugin_items(
+        app.focused().state(),
+        &app.status_plugins,
+        norte_i18n::active(),
+    );
+    lista.extend(norte_frontend::statusbar::items(
         &status_input(app),
         app.chrome.status_items(),
         norte_i18n::active(),
-    );
+    ));
     let ancho = usize::from(area.width);
     // Un aviso persistente (sesión suelta, journal) tiene que caber ENTERO
     // en la izquierda: la derecha es información y cede antes que un aviso.
@@ -476,6 +483,33 @@ mod tests {
         // Sin elementos, la línea es la de siempre y no hay nada que pulsar.
         app.chrome.status_items = Some(norte_config::StatusItems::parse::<&str>(&[]).unwrap());
         assert!(super::compose(&app, area).items.is_empty());
+    }
+
+    /// ADR 0137: el elemento de un plugin es el valor de su columna para la
+    /// entrada bajo el cursor, va a la izquierda de la mitad derecha y no se
+    /// pulsa.
+    #[test]
+    fn el_elemento_de_un_plugin_dice_su_columna_y_no_se_pulsa() {
+        let mut app = app_dos_panes();
+        app.chrome.status_items =
+            Some(norte_config::StatusItems::parse(&["position"]).expect("válida"));
+        app.status_plugins = vec![("git".to_owned(), "branch".to_owned())];
+        let bajo_el_cursor = app.focused().selected().expect("hay entradas").path.clone();
+        let mut valores = std::collections::HashMap::new();
+        valores.insert(bajo_el_cursor, "main".to_owned());
+        let mut columnas = std::collections::HashMap::new();
+        columnas.insert("plugin:git/branch".to_owned(), valores);
+        app.focused_mut().set_plugin_columns(columnas);
+        let area = ratatui::layout::Rect::new(0, 0, 70, 1);
+        let c = super::compose(&app, area);
+        let rama = c.text.find("main").expect("la rama se pinta");
+        let posicion = c.text.rfind('/').expect("y la posición");
+        assert!(rama < posicion, "el del plugin va primero: {:?}", c.text);
+        assert!(
+            c.items.is_empty(),
+            "ninguno de los dos se pulsa: {:?}",
+            c.items
+        );
     }
 
     /// Una ventana suelta lleva su indicador en la barra, y la barra sabe

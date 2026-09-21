@@ -261,6 +261,23 @@ pub enum Node {
     },
 }
 
+/// Una hoja que es un PANEL: ni un listado ni una fila de cromo.
+fn es_panel(n: &Node) -> bool {
+    matches!(n, Node::Slot { kind, .. }
+        if !matches!(kind.as_str(), "browser" | "status" | "tasks"))
+}
+
+/// Un panel suelto, o un grupo de pestañas hecho SOLO de paneles: lo que un
+/// panel nuevo del mismo borde puede unirse (fase F). Un grupo con un
+/// listado dentro es el de las pestañas de un listado, y ahí no se mete un
+/// panel.
+fn es_grupo_de_paneles(n: &Node) -> bool {
+    match n {
+        Node::Tabs { children, .. } => !children.is_empty() && children.iter().all(es_panel),
+        otro => es_panel(otro),
+    }
+}
+
 /// El tamaño con que entra un hijo nuevo en un reparto que ya tiene
 /// `hermanos`.
 ///
@@ -500,10 +517,38 @@ impl Node {
     /// queda con un hijo: acoplar y desacoplar devuelve el árbol de partida.
     #[must_use]
     pub fn dock(&self, anchor: SlotId, edge: Edge, size: Size, nuevo: &Self) -> Self {
+        self.dock_con(anchor, edge, size, nuevo, false)
+    }
+
+    /// Como [`Self::dock`], pero un PANEL que llega a un borde donde ya hay
+    /// un panel —o un grupo de paneles— se une a él como pestaña, delante, en
+    /// vez de abrir otra columna o fila (spec 2026-09-21, fase F).
+    ///
+    /// Es lo que hace VS Code: las vistas de un mismo borde comparten sitio
+    /// y la barra de actividad elige cuál se ve. Con `dock` a secas, cuatro
+    /// paneles a la derecha eran cuatro columnas de treinta celdas y los
+    /// listados se quedaban con lo que sobrase. El grupo conserva su tamaño;
+    /// cerrar una pestaña de un grupo de dos lo deshace ([`Self::close_slot`]).
+    ///
+    /// Un listado nunca se agrupa, ni hace de grupo: dos listados lado a lado
+    /// son el gestor ortodoxo.
+    #[must_use]
+    pub fn dock_grouped(&self, anchor: SlotId, edge: Edge, size: Size, nuevo: &Self) -> Self {
+        self.dock_con(anchor, edge, size, nuevo, true)
+    }
+
+    fn dock_con(
+        &self,
+        anchor: SlotId,
+        edge: Edge,
+        size: Size,
+        nuevo: &Self,
+        agrupar: bool,
+    ) -> Self {
         if !self.contains(anchor) {
             return self.clone();
         }
-        self.dock_inner(anchor, edge, size, nuevo)
+        self.dock_inner(anchor, edge, size, nuevo, agrupar)
             .unwrap_or_else(|| {
                 let (children, sizes) = if edge.is_front() {
                     (
@@ -526,7 +571,14 @@ impl Node {
 
     /// `Some` si algún `Split` del camino a `anchor` corría en el eje pedido y
     /// se quedó con `nuevo`; `None` si ninguno, y entonces decide [`Self::dock`].
-    fn dock_inner(&self, anchor: SlotId, edge: Edge, size: Size, nuevo: &Self) -> Option<Self> {
+    fn dock_inner(
+        &self,
+        anchor: SlotId,
+        edge: Edge,
+        size: Size,
+        nuevo: &Self,
+        agrupar: bool,
+    ) -> Option<Self> {
         let hijos = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return None,
@@ -534,7 +586,7 @@ impl Node {
         let pos = hijos.iter().position(|c| c.contains(anchor))?;
         // Primero hacia dentro: el reparto que manda es el más PROFUNDO que
         // corre en el eje, no el primero que se encuentra bajando.
-        if let Some(dentro) = hijos[pos].dock_inner(anchor, edge, size, nuevo) {
+        if let Some(dentro) = hijos[pos].dock_inner(anchor, edge, size, nuevo, agrupar) {
             return Some(self.with_child(pos, dentro));
         }
         // Una `Tabs` no acepta el acople: meterlo dentro de una pestaña haría
@@ -569,6 +621,48 @@ impl Node {
                     })
                     .count()
         };
+        // Fase F: si en ese borde ya hay un PANEL (o un grupo de paneles),
+        // el nuevo se une a él como pestaña, delante.
+        let vecino = if edge.is_front() {
+            Some(0)
+        } else {
+            at.checked_sub(1)
+        };
+        if agrupar
+            && es_panel(nuevo)
+            && let Some(v) = vecino
+            && nc.get(v).is_some_and(es_grupo_de_paneles)
+        {
+            let grupo = match &nc[v] {
+                Self::Tabs { children, .. } => {
+                    let mut h = children.clone();
+                    h.push(nuevo.clone());
+                    h
+                }
+                otro => vec![otro.clone(), nuevo.clone()],
+            };
+            let active = grupo.len() - 1;
+            nc[v] = Self::Tabs {
+                children: grupo,
+                active,
+            };
+            // El sitio del grupo es el MAYOR de los que piden sus paneles:
+            // los detalles fijos a treinta y el visor detrás no pueden dejar
+            // al visor en treinta columnas. Un peso gana a un fijo (el que
+            // pide sitio proporcional es el que más necesita).
+            if let Some(actual) = ns.get(v).copied() {
+                ns[v] = match (actual, size) {
+                    (Size::Fixed(a), Size::Fixed(b)) => Size::Fixed(a.max(b)),
+                    (Size::Fixed(_), Size::Weight(_)) => peso_entre_hermanos(size, sizes),
+                    _ => actual,
+                };
+            }
+            return Some(Self::Split {
+                dir: *dir,
+                children: nc,
+                sizes: ns,
+            });
+        }
         nc.insert(at, nuevo.clone());
         ns.insert(at.min(ns.len()), peso_entre_hermanos(size, sizes));
         Some(Self::Split {
@@ -2124,6 +2218,97 @@ mod tests {
         let ids: Vec<_> = children.iter().filter_map(Node::first_slot_id).collect();
         assert_eq!(ids, [SlotId(1), SlotId(9), SlotId(3), SlotId(4)]);
         assert_eq!(sizes[1], Size::Fixed(12), "el tamaño va con su hijo");
+    }
+
+    /// Los paneles de un mismo borde se AGRUPAN en pestañas (spec 2026-09-21,
+    /// fase F): el segundo panel a la derecha no abre otra columna, se une a
+    /// la del primero y queda delante; el tamaño es el del grupo. Un listado
+    /// no se agrupa nunca, y cerrar una pestaña deshace el grupo.
+    #[test]
+    fn los_paneles_de_un_mismo_borde_se_agrupan_en_pestanas() {
+        let cuerpo = Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
+        };
+        let hoja = |id: u32, k: &str| Node::slot(SlotId(id), KindId::new(k));
+        // El primero: una columna, como siempre (su vecino es un listado).
+        let uno = cuerpo.dock_grouped(
+            SlotId(1),
+            Edge::Right,
+            Size::Fixed(30),
+            &hoja(7, "timeline"),
+        );
+        let Node::Split { children, .. } = &uno else {
+            panic!("split")
+        };
+        assert_eq!(children.len(), 3);
+        // El segundo: pestaña del primero, delante, y el grupo toma el
+        // sitio del que más pide — el visor es proporcional, y en las
+        // treinta columnas del primero no se leería.
+        let dos = uno.dock_grouped(SlotId(1), Edge::Right, Size::Weight(1), &hoja(9, "viewer"));
+        let Node::Split {
+            children, sizes, ..
+        } = &dos
+        else {
+            panic!("split")
+        };
+        assert_eq!(children.len(), 3, "no abre otra columna");
+        assert_eq!(
+            dos.tabs_of(SlotId(9)),
+            Some((vec![SlotId(7), SlotId(9)], 1))
+        );
+        assert_eq!(sizes[2], Size::Weight(1));
+        // El tercero se une al mismo grupo, y un fijo no le quita el peso.
+        let tres = dos.dock_grouped(
+            SlotId(1),
+            Edge::Right,
+            Size::Fixed(30),
+            &hoja(8, "metadata"),
+        );
+        assert_eq!(
+            tres.tabs_of(SlotId(8)),
+            Some((vec![SlotId(7), SlotId(9), SlotId(8)], 2))
+        );
+        // Abajo, por encima de la barra de estado, igual.
+        let raiz = Node::Split {
+            dir: Dir::Vertical,
+            children: vec![tres, hoja(4, "status")],
+            sizes: vec![Size::Weight(1), Size::Fixed(1)],
+        };
+        let r = raiz
+            .dock_grouped(SlotId(1), Edge::Bottom, Size::Fixed(12), &hoja(10, "log"))
+            .dock_grouped(
+                SlotId(1),
+                Edge::Bottom,
+                Size::Fixed(8),
+                &hoja(11, "processes"),
+            );
+        assert_eq!(
+            r.tabs_of(SlotId(11)),
+            Some((vec![SlotId(10), SlotId(11)], 1))
+        );
+        // Dos fijos: el mayor, que el registro no encoja a las ocho filas
+        // de los procesos.
+        let Node::Split { sizes, .. } = &r else {
+            panic!("split")
+        };
+        assert_eq!(sizes[1], Size::Fixed(12));
+        // Cerrar una pestaña de un grupo de dos lo deshace: vuelve la hoja.
+        let cerrado = r.close_slot(SlotId(11)).expect("cerrable");
+        assert_eq!(cerrado.tabs_of(SlotId(10)), None);
+        // Y `dock` a secas sigue sin agrupar: es el de las disposiciones
+        // escritas a mano y los presets.
+        let suelto = dos.dock(
+            SlotId(1),
+            Edge::Right,
+            Size::Fixed(30),
+            &hoja(8, "metadata"),
+        );
+        assert_eq!(suelto.tabs_of(SlotId(8)), None);
     }
 
     /// Sin ancestro en el eje pedido, se ENVUELVE. Un solo pane es el caso

@@ -400,6 +400,15 @@ pub struct UiSection {
     /// [`crate::load::load`] rejects other values.
     #[serde(default)]
     pub panel_bar_position: Option<String>,
+    /// The window's title bar: `"native"` (default), the desktop's own;
+    /// `"custom"`, none from the desktop, and the menu bar doubles as the
+    /// title bar with its own minimize, maximize and close buttons, as in
+    /// VS Code. Read at start-up. The terminal has no title bar and ignores
+    /// it.
+    ///
+    /// [`crate::load::load`] rejects other values.
+    #[serde(default)]
+    pub titlebar: Option<String>,
     /// The items on the right half of the status bar, in screen order:
     /// any of `"position"`, `"marks"`, `"sort"`, `"encoding"`, `"tasks"`,
     /// `"notices"`, each at most once. Absent = all six in that order; an
@@ -409,6 +418,15 @@ pub struct UiSection {
     /// [`crate::load::load`] rejects unknown and repeated ids.
     #[serde(default)]
     pub status_items: Option<Vec<String>>,
+    /// Status items contributed by PLUGINS (ADR 0137): plugin columns, as
+    /// `"plugin:<plugin>/<column>"`, whose value for the entry under the
+    /// cursor goes at the left of the status bar's right half. At most
+    /// four. A plugin that is not approved and enabled, or does not declare
+    /// that column, shows nothing.
+    ///
+    /// [`crate::load::load`] rejects malformed and repeated ids.
+    #[serde(default)]
+    pub status_plugins: Option<Vec<String>>,
     /// Whether every listing carries a footer with its counts (directories,
     /// files, bytes), what is marked, and the free space of the volume the
     /// directory lives on. Absent = `true`.

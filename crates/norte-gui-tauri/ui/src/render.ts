@@ -17,8 +17,11 @@ import type {
   UiAction,
   ViewSnapshot,
   ProcessesSlotView,
+  WindowVerb,
 } from "./types";
+import { MARK_RULER_SPANS } from "./types";
 import {
+  markRulerImage,
   revelar,
   nota,
   OVERSCAN,
@@ -173,6 +176,8 @@ export class Screen {
      */
     readonly fetchImage: () => Promise<ArrayBuffer> = () =>
       Promise.resolve(new ArrayBuffer(0)),
+    /** La barra de título propia (ADR 0136): lo que pide a la ventana. */
+    readonly windowControl: (verb: WindowVerb) => void = () => undefined,
   ) {}
 
   /**
@@ -1124,6 +1129,15 @@ export class Screen {
 
     const total = slot.total_rows ?? slot.rows.length;
     dom.canvas.style.setProperty("height", `${total * cell.h}px`);
+    // La regla de marcas (ADR 0135): dónde están las que no se ven.
+    const regla = markRulerImage(slot.mark_ruler ?? [], MARK_RULER_SPANS);
+    if (regla === "") {
+      dom.scroller.style.removeProperty("--mark-ruler");
+      delete dom.scroller.dataset["ruler"];
+    } else {
+      dom.scroller.style.setProperty("--mark-ruler", regla);
+      dom.scroller.dataset["ruler"] = "true";
+    }
     dom.scroller.setAttribute("role", "grid");
     dom.scroller.setAttribute("tabindex", "-1");
     dom.scroller.setAttribute("aria-rowcount", String(total));

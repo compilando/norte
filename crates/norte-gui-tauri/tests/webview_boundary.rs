@@ -245,6 +245,53 @@ fn la_webview_no_navega_a_ninguna_parte() {
     );
 }
 
+/// `window_control` (ADR 0136) es la ÚNICA puerta de la webview a su
+/// ventana, y su forma es la decisión: cuatro verbos, rechazo con la barra
+/// nativa antes de tocar nada, y cerrar con `close()` —que pasa por
+/// `CloseRequested` y por tanto por `[ui] confirm_quit`— y nunca con
+/// `destroy()`, que se saltaría la pregunta y el guardado de la sesión.
+#[test]
+fn la_puerta_de_la_ventana_es_estrecha() {
+    use norte_gui_tauri::commands::WindowVerb;
+    for (texto, verbo) in [
+        ("\"minimize\"", WindowVerb::Minimize),
+        ("\"toggle_maximize\"", WindowVerb::ToggleMaximize),
+        ("\"close\"", WindowVerb::Close),
+        ("\"drag\"", WindowVerb::Drag),
+    ] {
+        assert_eq!(serde_json::from_str::<WindowVerb>(texto).ok(), Some(verbo));
+    }
+    for ajeno in [
+        "\"destroy\"",
+        "\"set_position\"",
+        "\"set_size\"",
+        "\"hide\"",
+    ] {
+        assert!(
+            serde_json::from_str::<WindowVerb>(ajeno).is_err(),
+            "{ajeno} no es un verbo de la barra de título"
+        );
+    }
+    let src = std::fs::read_to_string(raiz().join("src/main.rs")).expect("main.rs");
+    let (_, cuerpo) = src
+        .split_once("fn window_control(")
+        .expect("el binario declara `window_control`");
+    let (cuerpo, _) = cuerpo.split_once("\n}\n").expect("la función cierra");
+    let rechazo = cuerpo
+        .find("custom_titlebar")
+        .expect("mira si la barra es la propia");
+    let primer_verbo = cuerpo.find("match verb").expect("despacha por verbo");
+    assert!(
+        rechazo < primer_verbo,
+        "rechaza con la barra nativa ANTES de tocar la ventana"
+    );
+    assert!(cuerpo.contains("window.close()"), "cierra con `close()`");
+    assert!(
+        !cuerpo.contains("destroy"),
+        "`destroy()` se salta `confirm_quit` y el guardado de la sesión"
+    );
+}
+
 /// La instrumentación de la 3.6 no viaja en el binario por defecto.
 ///
 /// El test que clava la lista de comandos lee el `main.rs`, así que pasaría

@@ -224,12 +224,16 @@ pub fn panel_slots(app: &App, area: Rect) -> Vec<crate::mouse::PanelSlot> {
     resolved_frame(app, area)
         .placements
         .into_iter()
-        .map(|(slot, r)| crate::mouse::PanelSlot {
-            slot,
-            x: r.x,
-            y: r.y,
-            width: r.width,
-            height: r.height,
+        .map(|(slot, r)| {
+            // Sin la tira de un grupo de paneles: esa fila es de sus zonas.
+            let r = contenido_de_hueco(&app.layout, slot, crate::panel::to_ratatui(r));
+            crate::mouse::PanelSlot {
+                slot,
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+            }
         })
         .collect()
 }
@@ -434,7 +438,119 @@ pub(crate) fn placed_of_kind(
     res.placements
         .iter()
         .find(|(id, _)| tree.kind_of(*id).is_some_and(|k| k.as_str() == kind))
-        .map(|(id, r)| (*id, crate::panel::to_ratatui(*r)))
+        .map(|(id, r)| {
+            (
+                *id,
+                contenido_de_hueco(tree, *id, crate::panel::to_ratatui(*r)),
+            )
+        })
+}
+
+/// Dónde cae el CONTENIDO de un hueco colocado en `rect`.
+///
+/// En un grupo de paneles (ADR 0134) la primera fila es la TIRA de
+/// pestañas, y el contenido empieza una más abajo. UNA cuenta para quien
+/// pinta y para el ratón: con dos, un clic en el mapa de disco elegía el
+/// hijo de al lado.
+pub(crate) fn contenido_de_hueco(
+    tree: &norte_frontend::layout::Node,
+    id: norte_frontend::layout::SlotId,
+    mut rect: Rect,
+) -> Rect {
+    if grupo_de_paneles(tree, id).is_some() && rect.height > 1 {
+        rect.y = rect.y.saturating_add(1);
+        rect.height -= 1;
+    }
+    rect
+}
+
+/// El grupo de PANELES de `id` (ADR 0134): sus huecos y cuál está delante,
+/// si `id` vive en una pestaña junto a otro panel. Un grupo con un listado
+/// dentro es el de las pestañas de un listado, y ese tiene su propia tira.
+#[must_use]
+pub(crate) fn grupo_de_paneles(
+    tree: &norte_frontend::layout::Node,
+    id: norte_frontend::layout::SlotId,
+) -> Option<(Vec<norte_frontend::layout::SlotId>, usize)> {
+    let (huecos, activo) = tree.tabs_of(id)?;
+    (huecos.len() >= 2
+        && huecos
+            .iter()
+            .all(|s| tree.kind_of(*s).is_some_and(|k| k.as_str() != "browser")))
+    .then_some((huecos, activo))
+}
+
+/// Una pestaña de la tira de un grupo de paneles: dónde cae, qué hueco
+/// lleva y si es la de delante.
+pub(crate) struct PestanaDePanel {
+    /// El rótulo, con un espacio a cada lado.
+    pub texto: String,
+    /// Primera columna.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+    /// El hueco de dentro.
+    pub slot: norte_frontend::layout::SlotId,
+    /// Es la que se ve.
+    pub activa: bool,
+}
+
+/// Las tiras de pestañas de los grupos de paneles del frame (ADR 0134): la
+/// fila y sus pestañas. UNA medida para el pintado y para el ratón.
+#[must_use]
+pub(crate) fn tiras_de_paneles(app: &App, area: Rect) -> Vec<(Rect, Vec<PestanaDePanel>)> {
+    let res = resolved_frame(app, area);
+    let lang = norte_i18n::active();
+    let mut out = Vec::new();
+    for (id, r) in &res.placements {
+        let Some((huecos, activo)) = grupo_de_paneles(&app.layout, *id) else {
+            continue;
+        };
+        let rect = crate::panel::to_ratatui(*r);
+        // Un hueco sin altura no tiene fila propia: pintarla sería pisar la
+        // del vecino.
+        if rect.height == 0 {
+            continue;
+        }
+        let fila = Rect { height: 1, ..rect };
+        let tope = rect.x.saturating_add(rect.width);
+        let rotulos: Vec<(String, u16)> = huecos
+            .iter()
+            .map(|s| {
+                let kind = app
+                    .layout
+                    .kind_of(*s)
+                    .map_or("", norte_frontend::layout::KindId::as_str);
+                let nombre =
+                    norte_frontend::panelbar::label_in(lang, kind, &format!("layout.{kind}"));
+                let texto = format!(" {} ", norte_frontend::display_name(nombre.as_bytes()).0);
+                let w = u16::try_from(super::text::cells(&texto)).unwrap_or(u16::MAX);
+                (texto, w)
+            })
+            .collect();
+        // La de delante se reserva antes que nada: una tira estrecha que se
+        // come justo esa no dice qué panel se está viendo.
+        let w_activa = rotulos.get(activo).map_or(0, |(_, w)| *w);
+        let mut x = rect.x;
+        let mut pestanas = Vec::new();
+        for (i, ((texto, w), s)) in rotulos.into_iter().zip(&huecos).enumerate() {
+            let reserva = if i < activo { w_activa } else { 0 };
+            // Una pestaña que no cabe entera no se pinta ni se pulsa.
+            if x.saturating_add(w).saturating_add(reserva) > tope {
+                continue;
+            }
+            pestanas.push(PestanaDePanel {
+                texto,
+                x0: x,
+                x1: x.saturating_add(w).saturating_sub(1),
+                slot: *s,
+                activa: i == activo,
+            });
+            x = x.saturating_add(w);
+        }
+        out.push((fila, pestanas));
+    }
+    out
 }
 
 /// El CUERPO: la caja envolvente de los `browser` colocados.

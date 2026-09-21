@@ -146,6 +146,7 @@ export class Session {
         slot.path_segments = c.path_segments ?? [];
         slot.used_ratio = c.used_ratio ?? null;
         slot.marks = c.marks;
+        slot.mark_ruler = c.mark_ruler ?? [];
         return true;
       }
       case "slot_state": {

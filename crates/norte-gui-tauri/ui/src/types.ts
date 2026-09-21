@@ -9,7 +9,15 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 87;
+export const BRIDGE_VERSION = 89;
+
+/** Lo que la barra de título propia le pide a su ventana (ADR 0136); el
+ *  mismo vocabulario cerrado que `commands::WindowVerb` en Rust. */
+export type WindowVerb = "minimize" | "toggle_maximize" | "close" | "drag";
+
+/** En cuántos tramos parte la regla de marcas un listado; el mismo número
+ *  que `norte_ui_host::dto::MARK_RULER_SPANS`. */
+export const MARK_RULER_SPANS = 256;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -58,6 +66,9 @@ export interface TabGroupView {
   tabs: TabView[];
   /** Cuál está delante, como índice en `tabs`. */
   active: number;
+  /** Grupo de PANELES de un mismo borde (ADR 0134, puente 88): sin `+` ni
+   *  `×`, que abren y cierran listados. Opcional: host anterior = listados. */
+  panels?: boolean;
 }
 
 export interface TabView {
@@ -210,6 +221,12 @@ export interface BrowserSlotView {
   icon_column: boolean;
   cursor: RowKey | null;
   marks: number;
+  /**
+   * La regla de marcas (puente 89, ADR 0135): qué tramos del listado —de
+   * `MARK_RULER_SPANS` iguales— llevan alguna marca. Vacío o ausente = sin
+   * marcas.
+   */
+  mark_ruler?: number[];
   /**
    * Lo que el provider se SALTÓ, ya dicho en el idioma del lector. Vacío =
    * ninguna, o el provider no lleva la cuenta.
@@ -1497,6 +1514,7 @@ export type ViewChange =
       path_segments?: string[];
       used_ratio?: number | null;
       marks: number;
+      mark_ruler?: number[];
     }
   | { change: "slot_state"; slot_id: number; state: SlotState }
   | ({ change: "status" } & StatusView)
@@ -1737,4 +1755,8 @@ export interface Appearance {
    *  letra la dejaría desbordando su fila. */
   font_size: number | null;
   reduce_motion: boolean | null;
+  /** `[ui] titlebar = "custom"` (ADR 0136): la ventana no lleva la barra
+   *  del escritorio y la de menús hace de barra de título. Ausente = la
+   *  nativa. */
+  custom_titlebar?: boolean;
 }

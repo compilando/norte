@@ -235,6 +235,35 @@ impl PaneState {
         self.marks.len()
     }
 
+    /// Qué tramos del listado llevan alguna marca, para la regla junto a la
+    /// barra de desplazamiento de la ventana (ADR 0135).
+    ///
+    /// El listado se parte en `tramos` trozos iguales por POSICIÓN en
+    /// `entries` —el mismo espacio que `total_rows`— y se devuelven, en
+    /// orden y sin repetir, los índices de los que tienen al menos una
+    /// marca. Acotado por `tramos` y no por el número de marcas: diez mil
+    /// marcadas no cruzan el puente como diez mil números. Vacío si no hay
+    /// marcas o `tramos` es cero.
+    #[must_use]
+    pub fn mark_ruler(&self, tramos: u16) -> Vec<u16> {
+        let total = self.entries.len();
+        if self.marks.is_empty() || total == 0 || tramos == 0 {
+            return Vec::new();
+        }
+        let mut fuera: Vec<u16> = Vec::new();
+        for (i, e) in self.entries.iter().enumerate() {
+            if !self.marks.contains(&e.path) {
+                continue;
+            }
+            // `i < total`, así que el cociente es `< tramos` y cabe en u16.
+            let tramo = u16::try_from(i * usize::from(tramos) / total).unwrap_or(tramos - 1);
+            if fuera.last() != Some(&tramo) {
+                fuera.push(tramo);
+            }
+        }
+        fuera
+    }
+
     /// Las entradas MARCADAS, sin caer al cursor cuando no hay ninguna.
     ///
     /// Es lo que necesita quien tiene que distinguir «no hay marcas» de «hay

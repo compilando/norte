@@ -10,7 +10,13 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { FILA_POR_TAMANO, applyAppearance, applyTheme, themeFor } from "../src/main";
+import {
+  FILA_POR_TAMANO,
+  applyAppearance,
+  applyTheme,
+  showFatal,
+  themeFor,
+} from "../src/main";
 import type { HostCatalog } from "../src/types";
 
 const CSS = readFileSync(resolve(__dirname, "../src/style.css"), "utf8");
@@ -43,6 +49,34 @@ describe("la tipografía empaquetada y la configuración", () => {
     expect(raiz.style.getPropertyValue("--cell-h")).toBe(
       `${String(Math.round(16 * FILA_POR_TAMANO))}px`,
     );
+  });
+
+  it("[ui] titlebar = custom marca el raíz, y la nativa lo quita (ADR 0136)", () => {
+    const raiz = document.documentElement;
+    const base = { font: null, mono_font: null, font_size: null, reduce_motion: null };
+    applyAppearance(document, { ...base, custom_titlebar: true });
+    expect(raiz.dataset["titlebar"]).toBe("custom");
+    applyAppearance(document, base);
+    expect(raiz.dataset["titlebar"]).toBeUndefined();
+  });
+
+  it("el error fatal lleva su barra de título si la ventana no tiene la del escritorio", () => {
+    const raiz = document.documentElement;
+    const fatal = document.createElement("div");
+    const pedidos: string[] = [];
+    const ventana = { t: (k: string) => k, pedir: (v: string) => pedidos.push(v) };
+    raiz.dataset["titlebar"] = "custom";
+    showFatal(fatal, "el daemon se fue", ventana);
+    const cerrar = fatal.querySelector('[data-verb="close"]') as HTMLButtonElement;
+    expect(cerrar).not.toBeNull();
+    cerrar.click();
+    expect(pedidos).toEqual(["close"]);
+    expect(fatal.textContent).toContain("el daemon se fue");
+    // Con la nativa, el escritorio ya cierra: nada que añadir.
+    delete raiz.dataset["titlebar"];
+    showFatal(fatal, "otra vez", ventana);
+    expect(fatal.querySelector(".window-controls")).toBeNull();
+    expect(fatal.textContent).toBe("otra vez");
   });
 
   it("un campo null no toca lo que había", () => {

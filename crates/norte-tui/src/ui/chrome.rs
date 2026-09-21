@@ -540,6 +540,66 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
 pub fn panel_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     let mut out = panel_bar_zones(app, area);
     out.extend(layout_zones(app, area));
+    out.extend(zonas_de_tiras(app, area));
+    out
+}
+
+/// Pinta las tiras de pestañas de los grupos de paneles (ADR 0134): la de
+/// delante con el estilo de título y subrayada, las otras atenuadas.
+pub(crate) fn draw_tiras_de_paneles(frame: &mut Frame<'_>, app: &App) {
+    for (fila, pestanas) in crate::ui::geometry::tiras_de_paneles(app, frame.area()) {
+        clear_themed(frame, fila, &app.theme);
+        let spans: Vec<ratatui::text::Span<'static>> = pestanas
+            .into_iter()
+            .map(|p| {
+                let estilo = if p.activa {
+                    app.theme
+                        .role(Role::Title)
+                        .add_modifier(ratatui::style::Modifier::UNDERLINED)
+                } else {
+                    app.theme
+                        .role(Role::Regular)
+                        .add_modifier(ratatui::style::Modifier::DIM)
+                };
+                ratatui::text::Span::styled(p.texto, estilo)
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), fila);
+    }
+}
+
+/// Las pestañas ESCONDIDAS de los grupos de paneles como zonas pulsables:
+/// pulsar una corre la orden de su panel, que con el panel escondido lo
+/// ENSEÑA (#329). La de delante no es zona — pulsarla lo cerraría.
+fn zonas_de_tiras(app: &App, area: Rect) -> Vec<PanelZone> {
+    if crate::mouse::overlay_open(app) || app.menu.is_some() {
+        return Vec::new();
+    }
+    let botones = panel_buttons(app, area);
+    let mut out = Vec::new();
+    for (fila, pestanas) in crate::ui::geometry::tiras_de_paneles(app, area) {
+        for p in pestanas.into_iter().filter(|p| !p.activa) {
+            let Some(kind) = app.layout.kind_of(p.slot) else {
+                continue;
+            };
+            // Sin botón no hay comando que la traiga delante: `layout.<kind>`
+            // no existe para el panel de un plugin, y una zona que despacha
+            // un comando desconocido es un clic muerto con aviso.
+            let Some(command) = botones
+                .iter()
+                .find(|b| b.kind == kind.as_str())
+                .map(|b| b.command.clone())
+            else {
+                continue;
+            };
+            out.push(PanelZone {
+                row: fila.y,
+                x0: p.x0,
+                x1: p.x1,
+                command,
+            });
+        }
+    }
     out
 }
 

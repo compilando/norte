@@ -238,6 +238,7 @@ async fn main() -> Result<()> {
     app.menu_bar = cfg.common.ui_menu_bar.unwrap_or(true);
     app.panel_bar = cfg.common.ui_panel_bar.unwrap_or(true);
     app.chrome = cfg.common.ui_chrome;
+    app.status_plugins.clone_from(&cfg.common.ui_status_plugins);
     app.history.set_capacity(app.chrome.history_size());
     app.set_parent_row(cfg.common.ui_parent_entry.unwrap_or(true));
     // `[ui] layout`: una disposición guardada. Un layout que no carga NO deja

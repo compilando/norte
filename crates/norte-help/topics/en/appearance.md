@@ -37,6 +37,11 @@ one with news: how many tasks are running, how many warnings the log holds.
 column), or `auto`, which is top in the terminal and left in the window.
 `panel_bar = false` removes it.
 
+In the window, `titlebar = "custom"` removes the desktop's title bar and the
+menu bar does its job, as in VS Code: drag it to move the window,
+double-click to maximize, and minimize, maximize and close sit at its right
+end. The default is `native`. It applies the next time the window opens.
+
 The pane footer
 ---------------
 
@@ -60,6 +65,12 @@ and `notices` (unread notices; opens the log). `status_items` says which and
 in what order, for example `status_items = ["tasks", "position"]`; an empty
 list leaves the right half blank. The ones that do not fit give way by
 importance, and always before a warning on the left.
+
+A columns plugin can speak there too: `status_plugins =
+["plugin:git/branch"]` shows that column's value for the entry under the
+cursor — the branch, in the example — to the left of the others. Up to
+four, only from approved plugins that declare the column; they are the
+first to give way and are not clickable.
 
 Striped rows
 ------------

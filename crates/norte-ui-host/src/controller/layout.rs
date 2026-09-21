@@ -622,10 +622,14 @@ impl Estado {
                 continue;
             }
             let SlotId(id) = *slot;
+            let panels = huecos
+                .iter()
+                .all(|t| kind_de(&self.arbol, *t).is_some_and(|k| k.as_str() != "browser"));
             fuera.push(crate::dto::TabGroupView {
                 slot_id: id,
                 tabs: huecos.iter().map(|t| self.pestana(*t)).collect(),
                 active: activo as u64,
+                panels,
             });
         }
         fuera
@@ -649,11 +653,16 @@ impl Estado {
                 None => (dir.scheme().to_owned(), false),
             }
         } else {
-            // Lo que no es un listado se nombra por su KIND, que sale de un
-            // fichero de disposición y entra por la misma puerta.
+            // Lo que no es un listado se nombra como su botón de la barra de
+            // paneles («Visor», «Detalles»): desde que los paneles de un
+            // borde se agrupan en pestañas (fase F) este rótulo se LEE, y el
+            // id del kind no es un nombre. El kind sale de un fichero de
+            // disposición, así que el resultado pasa por la misma puerta.
             let kind = kind_de(&self.arbol, slot)
                 .map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
-            norte_frontend::display_name(kind.as_bytes())
+            let nombre =
+                norte_frontend::panelbar::label_in(self.lang, &kind, &format!("layout.{kind}"));
+            norte_frontend::display_name(nombre.as_bytes())
         };
         crate::dto::TabView {
             slot_id: id,

@@ -122,6 +122,12 @@ pub struct Appearance {
     /// quien ya la hizo en su escritorio.
     #[serde(default)]
     pub reduce_motion: Option<bool>,
+    /// `[ui] titlebar = "custom"` (ADR 0136): la ventana arrancó sin la barra
+    /// del escritorio, y la de menús hace de barra de título — se arrastra y
+    /// lleva minimizar, maximizar y cerrar. De ARRANQUE: la decoración se
+    /// quita al crear la ventana, así que cambiarla pide reiniciar.
+    #[serde(default)]
+    pub custom_titlebar: bool,
 }
 
 impl Appearance {
@@ -133,6 +139,7 @@ impl Appearance {
             mono_font: cfg.ui_mono_font.clone(),
             font_size: cfg.ui_font_size,
             reduce_motion: cfg.ui_reduce_motion,
+            custom_titlebar: cfg.ui_chrome.titlebar() == norte_config::Titlebar::Custom,
         }
     }
 }

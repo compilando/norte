@@ -577,6 +577,8 @@ status-item-sort-tip = Orden del listado. Pulsa para cambiarlo
 status-item-encoding-tip = Cómo se leen los nombres. Pulsa para reinterpretarlos
 status-item-tasks-tip = { $n } tareas en marcha. Pulsa para ver los procesos
 status-item-notices-tip = { $n } avisos sin leer. Pulsa para abrir el registro
+# Un elemento aportado por un plugin (ADR 0137): de quién es y qué columna.
+status-item-plugin-tip = Del plugin { $plugin }, columna { $column }, para la entrada bajo el cursor
 status-marks-pruned = { $n } marcas caídas, sus entradas ya no están
 status-watch-degraded = vigilancia de directorios degradada a sondeo (¿límite de inotify?) — crear/borrar/renombrar se ve en segundos; editar un fichero existente no se detecta
 msg-names-encoding = nombres mostrados como { $enc } (solo display; los bytes no cambian)
@@ -797,6 +799,11 @@ menu-bar-label = Barra de menús
 panelbar-label = Barra de paneles
 # Los botones de disposición de la derecha de la barra de menús (ADR 0133).
 layout-buttons-label = Disposición
+# Los botones de la ventana con la barra de título propia (ADR 0136).
+window-controls-label = Ventana
+window-minimize = Minimizar
+window-maximize = Maximizar o restaurar
+window-close = Cerrar
 # La marca de novedad de un botón de la barra, para un lector de pantalla.
 panelbar-attention = Novedades
 # H3c, y clave SEPARADA a propósito: `palette-hint` lo pintan los DOS
@@ -2062,6 +2069,8 @@ setting-ui-panel-bar-style-name = Etiquetas de la barra de paneles
 setting-ui-panel-bar-style-desc = Cómo nombra sus botones la barra de paneles: el nombre del panel con la letra de acceso subrayada (names) o solo la letra (letters). Con menos de sesenta celdas los nombres pasan solos a letras.
 setting-ui-panel-bar-position-name = Posición de la barra de paneles
 setting-ui-panel-bar-position-desc = Dónde va la barra de paneles: una fila bajo el menú (top) o una columna en el borde izquierdo (left). Con auto, cada interfaz elige la suya: arriba en el terminal, donde falta ancho, y a la izquierda en la ventana, donde falta alto.
+setting-ui-titlebar-name = Barra de título
+setting-ui-titlebar-desc = Quién pinta la barra de título de la ventana: el escritorio (native) o norte (custom), que usa la barra de menús como barra de título, con minimizar, maximizar y cerrar, como VS Code. Se aplica al volver a abrir la ventana. El terminal no tiene barra de título.
 setting-ui-status-items-name = Elementos de la barra de estado
 setting-ui-status-items-desc = Qué enseña la mitad derecha de la barra de estado, en orden: position (posición del cursor), marks (lo marcado), sort (el orden), encoding (cómo se leen los nombres), tasks (tareas en marcha) y notices (avisos sin leer). Los que no caben ceden por importancia; los mensajes y los avisos de la izquierda no se configuran.
 setting-ui-pane-footer-name = Pie del panel

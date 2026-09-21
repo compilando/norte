@@ -359,6 +359,69 @@ body {
   height: 16px;
 }
 
+/* La barra de título propia (ADR 0136): el hueco libre arrastra, así que
+   no selecciona texto. */
+.menubar[data-titlebar="true"] {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.window-controls {
+  display: flex;
+  height: 100%;
+}
+
+.window-controls[data-alone="true"] {
+  margin-left: auto;
+}
+
+.window-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* El ancho de los del escritorio y de VS Code: un blanco fácil en la
+     esquina, que es donde el ratón va sin mirar. */
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  opacity: 0.8;
+  cursor: default;
+  transition:
+    background-color 80ms ease-out,
+    color 80ms ease-out;
+}
+
+.window-control:hover {
+  opacity: 1;
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+/* Cerrar se enciende en rojo, como en todos los escritorios: es el único
+   de los tres que no se deshace. Rojo fijo y no del tema, porque es la
+   señal del sistema y no un color de norte. */
+.window-control[data-verb="close"]:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+.window-control .panelbar-icon {
+  width: 16px;
+  height: 16px;
+}
+
+:root[data-reduce-motion="true"] .window-control {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .window-control {
+    transition: none;
+  }
+}
+
 .menubar-title[aria-expanded="true"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
@@ -847,6 +910,18 @@ body {
   overflow-x: hidden;
   position: relative;
   outline: none;
+}
+
+/* La regla de marcas (ADR 0135), como la de VS Code junto a la barra: tres
+   píxeles a la derecha, bajo el deslizador, con una banda donde hay marcas
+   en el listado ENTERO. Es un fondo: el de un elemento con scroll no se
+   mueve con el contenido. La imagen, con su color, la compone el renderer
+   (`markRulerImage`). */
+.scroller[data-ruler="true"] {
+  background-image: var(--mark-ruler);
+  background-repeat: no-repeat;
+  background-size: 3px 100%;
+  background-position: right 2px top 0;
 }
 
 .canvas {
@@ -3211,6 +3286,56 @@ button.status-item:hover {
 .tab[data-active="true"] {
   opacity: 1;
   border-bottom: 2px solid var(--border-focus);
+}
+
+/* Un grupo de PANELES (ADR 0134): sus pestañas se leen como las del panel de
+   VS Code —la fuente del cromo, pequeñas, la de delante subrayada— y hacen
+   de título: el título del panel de delante sobra y se esconde. */
+.slot-tabs[data-panels="true"] {
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--separator, var(--border)) 70%, transparent);
+}
+
+.slot-tabs[data-panels="true"] .tabs {
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.slot-tabs[data-panels="true"] .tab {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 10px;
+  color: var(--muted, var(--title-fg));
+  opacity: 1;
+  border-bottom: 2px solid transparent;
+  transition:
+    color 0.12s,
+    border-color 0.12s;
+}
+
+.slot-tabs[data-panels="true"] .tab:hover {
+  color: var(--fg);
+}
+
+.slot-tabs[data-panels="true"] .tab[data-active="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--border-focus);
+}
+
+.slot-tabs[data-open="true"][data-panels="true"] + .slot-title {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slot-tabs[data-panels="true"] .tab {
+    transition: none;
+  }
+}
+
+:root[data-reduce-motion="true"] .slot-tabs[data-panels="true"] .tab {
+  transition: none;
 }
 
 /* La barra de pestañas y su `+` en una fila (ADR 0133). */

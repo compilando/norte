@@ -376,7 +376,8 @@ pub fn spawn_decorate_fetch(
         let merged = norte_frontend::merge_decorations(&paths, &plugins);
         // Review MINOR-1 (regla 3 en espíritu): un fetch SUPERADO (el run
         // loop pisó el slot → rx dropeado) corta antes de cada RPC restante
-        // en vez de gastar hasta 8 llamadas cuyo send fallará igual.
+        // en vez de gastar hasta 12 llamadas (8 columnas pintadas y 4 de la
+        // barra de estado, ADR 0137) cuyo send fallará igual.
         let (cols, headers) =
             fetch_plugin_columns(&b, &plugin_cols, &paths, || tx.is_closed()).await;
         let _ = tx.send((merged, cols, headers));

@@ -188,7 +188,32 @@ pub const COMANDOS: &[&str] = &[
     "request_snapshot",
     "catalog",
     "image_bytes",
+    "window_control",
 ];
+
+/// Lo que la barra de título propia puede pedirle a SU ventana (ADR 0136).
+///
+/// Un vocabulario cerrado en vez de los permisos `core:window:*` de Tauri:
+/// esos se conceden a la webview entera y para cualquier ventana, y la
+/// capacidad de esta no concede ninguno (D11). Así la puerta es un comando
+/// del binario que solo actúa sobre la ventana que lo llama, y solo con la
+/// barra propia puesta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowVerb {
+    /// Minimizar.
+    Minimize,
+    /// Maximizar, o restaurar si ya lo está.
+    ToggleMaximize,
+    /// Cerrar, por el mismo camino que la X del escritorio: `[ui]
+    /// confirm_quit` sigue preguntando. Tiene que seguir siendo
+    /// `Window::close()`, que emite `CloseRequested`; `destroy()` se
+    /// saltaría la pregunta y el guardado de la sesión
+    /// (`la_puerta_de_la_ventana_es_estrecha` lo vigila).
+    Close,
+    /// Empezar a arrastrar la ventana con el botón que está pulsado.
+    Drag,
+}
 
 #[cfg(test)]
 pub(crate) mod tests_soporte {

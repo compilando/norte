@@ -21,7 +21,8 @@ const FIXTURE: &str = r##"{
     "font": "Inter",
     "mono_font": "Iosevka",
     "font_size": 15.0,
-    "reduce_motion": true
+    "reduce_motion": true,
+    "custom_titlebar": true
   },
   "first_run": false,
   "no_splash": false
@@ -51,6 +52,9 @@ fn el_catalogo_va_y_vuelve_con_los_mismos_campos() {
     assert_eq!(leido.appearance.mono_font.as_deref(), Some("Iosevka"));
     assert_eq!(leido.appearance.font_size, Some(15.0));
     assert_eq!(leido.appearance.reduce_motion, Some(true));
+    // La barra de título propia (ADR 0136): de arranque, y el renderer la
+    // necesita para convertir la barra de menús en la de título.
+    assert!(leido.appearance.custom_titlebar);
 
     let vuelta: serde_json::Value = serde_json::to_value(&leido).expect("serializa");
     let esperado: serde_json::Value = serde_json::from_str(FIXTURE).expect("json");
@@ -72,4 +76,21 @@ fn el_catalogo_lleva_la_version_del_host() {
     let instancia = norte_ui_host::InstanceId::new("host-1".to_owned());
     let cat = norte_gui_tauri::catalog::catalogo(&instancia, norte_i18n::Lang::Es, &tema);
     assert_eq!(cat.bridge_version, norte_ui_host::BRIDGE_VERSION);
+}
+
+/// Los tramos de la regla de marcas (ADR 0135): el renderer los divide con
+/// el mismo número que el host usó para partir el listado. Con otro, las
+/// marcas se pintan desplazadas y nada se pone rojo.
+#[test]
+fn la_regla_de_marcas_cuenta_los_mismos_tramos_en_los_dos_lados() {
+    let raiz = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tipos = std::fs::read_to_string(raiz.join("ui/src/types.ts")).expect("types.ts");
+    let esperado = format!(
+        "export const MARK_RULER_SPANS = {};",
+        norte_ui_host::dto::MARK_RULER_SPANS
+    );
+    assert!(
+        tipos.contains(&esperado),
+        "`ui/src/types.ts` no declara `{esperado}`"
+    );
 }
