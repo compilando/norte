@@ -3854,6 +3854,109 @@ async fn los_botones_de_disposicion_y_de_pestana_se_pulsan() {
     }
 }
 
+/// Regresión (captura del 2026-09-21): con dos listados y los detalles a la
+/// derecha, arrastrar el borde entre el SEGUNDO listado y los detalles los
+/// estrecha. Se medía solo ese listado, no el cuerpo entero, y el borde no
+/// seguía al puntero.
+#[tokio::test]
+async fn el_borde_de_los_detalles_se_arrastra_desde_el_segundo_listado() {
+    let (h, _) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let _ = h
+        .dispatch(UiAction::LayoutButtonActivate {
+            id: "split-h".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    ejecutar_por_paleta(&h, &mut sub, "layout.metadata").await;
+    let detalles = |s: &norte_ui_host::ViewSnapshot| {
+        s.slots.iter().find_map(|v| match v {
+            SlotView::Metadata(m) => Some(m.slot_id),
+            _ => None,
+        })
+    };
+    let snap = foto_hasta(&h, &mut sub, "dos listados y los detalles", |s| {
+        let n = s
+            .slots
+            .iter()
+            .filter(|v| matches!(v, SlotView::Browser(_)))
+            .count();
+        (n == 2 && detalles(s).is_some()).then(|| s.clone())
+    })
+    .await;
+    let meta_id = detalles(&snap).expect("detalles");
+    let sitio = |s: &norte_ui_host::ViewSnapshot, id: u32| {
+        *s.layout
+            .placements
+            .iter()
+            .find(|p| p.slot_id == id)
+            .expect("colocado")
+    };
+    let meta = sitio(&snap, meta_id);
+    // El listado que toca a los detalles por la izquierda.
+    let listado = snap
+        .layout
+        .placements
+        .iter()
+        .find(|p| p.x + p.width == meta.x)
+        .expect("vecino")
+        .slot_id;
+    // El estado de la captura: los detalles MOVIDOS a la derecha del
+    // listado entran con su peso, y quedan tres ponderados en un reparto.
+    let _ = h
+        .dispatch(UiAction::MoveSlot {
+            slot_id: meta_id,
+            target: listado,
+            zone: norte_frontend::layout::DropZone::Right,
+        })
+        .await
+        .expect("host vivo");
+    let snap = foto_hasta(&h, &mut sub, "detalles con peso", |s| {
+        let m = sitio(s, meta_id);
+        (m.width != meta.width).then(|| s.clone())
+    })
+    .await;
+    let meta = sitio(&snap, meta_id);
+    let otro_ancho = snap
+        .layout
+        .placements
+        .iter()
+        .find(|p| p.slot_id != listado && p.slot_id != meta_id && p.y == meta.y)
+        .map(|p| p.width)
+        .expect("el otro listado");
+    let ack = h
+        .dispatch(UiAction::ResizeSlot {
+            slot_id: listado,
+            cells: meta.x + 10,
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "fue {ack:?}");
+    let ancho = meta.width;
+    let despues = foto_hasta(
+        &h,
+        &mut sub,
+        "detalles unas diez celdas más estrechos",
+        |s| {
+            let p = s.layout.placements.iter().find(|p| p.slot_id == meta_id)?;
+            (p.width + 9 <= ancho && p.width + 11 >= ancho).then(|| s.clone())
+        },
+    )
+    .await;
+    // Y el otro listado, que nadie agarró, no se entera.
+    let otro = despues
+        .layout
+        .placements
+        .iter()
+        .find(|p| p.slot_id != listado && p.slot_id != meta_id && p.y == meta.y)
+        .map(|p| p.width)
+        .expect("el otro listado");
+    assert!(
+        otro.abs_diff(otro_ancho) <= 1,
+        "el tercero se movió: {otro_ancho} → {otro}"
+    );
+}
+
 /// ADR 0138: soltar un listado debajo del otro los apila; `layout.flip` los
 /// vuelve a poner lado a lado.
 #[tokio::test]

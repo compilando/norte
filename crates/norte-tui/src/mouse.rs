@@ -55,6 +55,10 @@ const WHEEL_ROWS: usize = 3;
 pub struct ResizeBorder {
     /// El hueco de la izquierda o de arriba.
     pub slot: norte_frontend::layout::SlotId,
+    /// El de la derecha o de abajo: con los dos se encuentra el reparto
+    /// donde son vecinos (`Node::border_pair`), que puede no ser el de
+    /// `slot`.
+    pub vecino: norte_frontend::layout::SlotId,
     /// En qué dirección reparte el `Split` que los contiene.
     pub dir: norte_frontend::layout::Dir,
     /// La columna (o fila) del borde.
@@ -880,7 +884,9 @@ fn resize_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
             }
             let dentro = f32::from(eje.saturating_sub(borde.inicio));
             let frac = dentro / f32::from(borde.largo);
-            app.layout = app.layout.drag_border(borde.slot, frac, borde.largo);
+            app.layout =
+                app.layout
+                    .drag_border_between(borde.slot, borde.vecino, frac, borde.largo);
             Some(After::Nothing)
         }
         MouseEventKind::Up(MouseButton::Left) => {

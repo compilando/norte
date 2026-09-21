@@ -172,6 +172,14 @@ pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> 
             .and_then(|k| app.kinds.get(k))
             .is_some_and(|d| d.focusable)
     };
+    // La pareja se mide ENTERA, en el reparto donde los dos son vecinos:
+    // entre el segundo listado y los detalles, el borde separa el cuerpo
+    // de los detalles, y medir solo el listado daba la fracción de otra
+    // pareja.
+    let pareja = |a, b, dir| {
+        let (izq, der) = app.layout.border_pair(a, b)?;
+        norte_frontend::layout::border_span(&res, &izq, &der, dir)
+    };
     let mut out = Vec::new();
     for (a, ra) in &res.placements {
         if !panel(*a) {
@@ -184,26 +192,34 @@ pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> 
             // Vertical: `b` empieza justo donde acaba `a`, y se solapan en
             // filas. El `+ 1` es la columna del borde, que en el TUI es el
             // marco que los dos pintan.
-            if rb.x == ra.x + ra.width && solapan(ra.y, ra.height, rb.y, rb.height) {
+            if rb.x == ra.x + ra.width
+                && solapan(ra.y, ra.height, rb.y, rb.height)
+                && let Some((inicio, largo)) = pareja(*a, *b, Dir::Horizontal)
+            {
                 out.push(crate::mouse::ResizeBorder {
                     slot: *a,
+                    vecino: *b,
                     dir: Dir::Horizontal,
                     linea: ra.x + ra.width,
                     desde: ra.y.max(rb.y),
                     hasta: (ra.y + ra.height).min(rb.y + rb.height),
-                    inicio: ra.x,
-                    largo: ra.width + rb.width,
+                    inicio,
+                    largo,
                 });
             }
-            if rb.y == ra.y + ra.height && solapan(ra.x, ra.width, rb.x, rb.width) {
+            if rb.y == ra.y + ra.height
+                && solapan(ra.x, ra.width, rb.x, rb.width)
+                && let Some((inicio, largo)) = pareja(*a, *b, Dir::Vertical)
+            {
                 out.push(crate::mouse::ResizeBorder {
                     slot: *a,
+                    vecino: *b,
                     dir: Dir::Vertical,
                     linea: ra.y + ra.height,
                     desde: ra.x.max(rb.x),
                     hasta: (ra.x + ra.width).min(rb.x + rb.width),
-                    inicio: ra.y,
-                    largo: ra.height + rb.height,
+                    inicio,
+                    largo,
                 });
             }
         }

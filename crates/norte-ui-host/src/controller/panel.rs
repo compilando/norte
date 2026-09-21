@@ -187,16 +187,29 @@ impl Estado {
         let abajo = self.reparto.placements.iter().find(|(_, r)| {
             r.y == ra.y + ra.height && r.x < ra.x + ra.width && ra.x < r.x + r.width
         });
-        let (inicio, largo) = match (derecha, abajo) {
-            (Some((_, rb)), _) => (ra.x, ra.width + rb.width),
-            (None, Some((_, rb))) => (ra.y, ra.height + rb.height),
+        let (vecino, dir) = match (derecha, abajo) {
+            (Some((b, _)), _) => (*b, norte_frontend::layout::Dir::Horizontal),
+            (None, Some((b, _))) => (*b, norte_frontend::layout::Dir::Vertical),
             (None, None) => return (Self::obsoleta(StaleAction::Generation), Vec::new()),
+        };
+        // La pareja de verdad es la del reparto donde los dos son vecinos, y
+        // se mide ENTERA: el borde entre el segundo listado y los detalles
+        // separa el cuerpo de los detalles, no ese listado de ellos.
+        let Some((izq, der)) = self.arbol.border_pair(SlotId(slot), vecino) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        let Some((inicio, largo)) =
+            norte_frontend::layout::border_span(&self.reparto, &izq, &der, dir)
+        else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
         if largo == 0 {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         }
         let frac = f32::from(cells.saturating_sub(inicio)) / f32::from(largo);
-        let arbol = self.arbol.drag_border(SlotId(slot), frac, largo);
+        let arbol = self
+            .arbol
+            .drag_border_between(SlotId(slot), vecino, frac, largo);
         if arbol == self.arbol {
             // El borde no se movió: ni foto ni parche. Un arrastre emite un
             // evento por píxel, y repintar la pantalla entera por cada uno

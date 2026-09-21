@@ -36,7 +36,7 @@ mod tree;
 pub use by_slot::BySlot;
 pub use focus::{focus_next, focus_prev};
 pub use kinds::{KindDecl, KindRegistry, panel_kind_id};
-pub use resolve::{Resolved, has_room_to_split, keeps_on_screen, resolve};
+pub use resolve::{Resolved, border_span, has_room_to_split, keeps_on_screen, resolve};
 pub use roles::{Roles, resolve_follow, target_worth_marking};
 pub use store::SlotStore;
 pub use tree::{

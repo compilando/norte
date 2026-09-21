@@ -117,6 +117,31 @@ fn minimo_visible(decls: &KindRegistry, kind: &super::KindId) -> (u16, u16) {
     (mw.min(CONTENIDO.0), mh.min(CONTENIDO.1))
 }
 
+/// Dónde empieza y cuánto mide, en el eje de `dir`, la pareja de un borde:
+/// desde el principio de lo colocado de `izq` hasta el final de lo colocado
+/// de `der` (los dos lados de [`Node::border_pair`]). `None` si alguno de
+/// los dos lados no tiene nada colocado.
+///
+/// Una sola cuenta para la TUI y la ventana: medir solo los dos huecos que
+/// se tocan —y no los hijos enteros del reparto— daba la fracción de otra
+/// pareja, y el borde entre un listado y los detalles no seguía al puntero.
+#[must_use]
+pub fn border_span(res: &Resolved, izq: &[SlotId], der: &[SlotId], dir: Dir) -> Option<(u16, u16)> {
+    let tramo = |ids: &[SlotId]| {
+        res.placements
+            .iter()
+            .filter(|(id, _)| ids.contains(id))
+            .map(|(_, r)| match dir {
+                Dir::Horizontal => (r.x, r.x + r.width),
+                Dir::Vertical => (r.y, r.y + r.height),
+            })
+            .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
+    };
+    let (inicio, _) = tramo(izq)?;
+    let (_, fin) = tramo(der)?;
+    Some((inicio, fin.saturating_sub(inicio)))
+}
+
 /// ¿Sigue a la vista, en el reparto `despues`, todo lo que `antes` enseñaba?
 /// (ADR 0138)
 ///
