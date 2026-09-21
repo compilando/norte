@@ -9,7 +9,11 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 88;
+export const BRIDGE_VERSION = 89;
+
+/** En cuántos tramos parte la regla de marcas un listado; el mismo número
+ *  que `norte_ui_host::dto::MARK_RULER_SPANS`. */
+export const MARK_RULER_SPANS = 256;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -213,6 +217,12 @@ export interface BrowserSlotView {
   icon_column: boolean;
   cursor: RowKey | null;
   marks: number;
+  /**
+   * La regla de marcas (puente 89, ADR 0135): qué tramos del listado —de
+   * `MARK_RULER_SPANS` iguales— llevan alguna marca. Vacío o ausente = sin
+   * marcas.
+   */
+  mark_ruler?: number[];
   /**
    * Lo que el provider se SALTÓ, ya dicho en el idioma del lector. Vacío =
    * ninguna, o el provider no lleva la cuenta.
@@ -1500,6 +1510,7 @@ export type ViewChange =
       path_segments?: string[];
       used_ratio?: number | null;
       marks: number;
+      mark_ruler?: number[];
     }
   | { change: "slot_state"; slot_id: number; state: SlotState }
   | ({ change: "status" } & StatusView)

@@ -3291,3 +3291,21 @@ fn plugin_columns_clava_por_bytes_no_por_display() {
         Some("dos")
     );
 }
+
+#[test]
+fn la_regla_de_marcas_dice_que_tramos_llevan_alguna() {
+    let nombres: Vec<String> = (0..100).map(|i| format!("f{i:03}")).collect();
+    let refs: Vec<&str> = nombres.iter().map(String::as_str).collect();
+    let mut p = pane(&refs);
+    assert!(p.mark_ruler(10).is_empty(), "sin marcas no hay regla");
+    // Filas 5, 7 (mismo tramo) y 99 (el último).
+    for i in [5, 7, 99] {
+        p.set_cursor(i);
+        p.toggle_mark();
+    }
+    assert_eq!(p.mark_ruler(10), vec![0, 9]);
+    assert_eq!(p.mark_ruler(100), vec![5, 7, 99]);
+    assert!(p.mark_ruler(0).is_empty(), "cero tramos, nada");
+    // Más tramos que filas: cada fila cae en el suyo, sin pasarse.
+    assert!(p.mark_ruler(u16::MAX).iter().all(|t| *t < u16::MAX));
+}

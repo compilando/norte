@@ -1075,6 +1075,10 @@
         "hidden_note": "3 ocultas",
         "icon_column": true,
         "kind": "browser",
+        "mark_ruler": [
+          0,
+          170
+        ],
         "marked_note": "2 marcadas, 4,0 kB",
         "marks": 2,
         "names_note": "nombres: cp866",

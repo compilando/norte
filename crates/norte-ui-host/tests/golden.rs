@@ -1135,6 +1135,8 @@ fn slots_de_referencia() -> Vec<SlotView> {
             // vistas de un mismo hecho, y una referencia que las contradice
             // enseña justo lo contrario de lo que el DTO promete.
             marks: 2,
+            // Las dos marcas caen en tramos distintos de la regla.
+            mark_ruler: vec![0, 170],
             // El provider se saltó dos: se DICE. Un listado al que le faltan
             // entradas y no lo avisa miente por omisión.
             skipped_note: "⚠ 2 entradas omitidas (nombres hostiles/límites)".to_owned(),
@@ -2603,6 +2605,7 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
                 ],
                 used_ratio: None,
                 marks: 4,
+                mark_ruler: vec![3, 90, 255],
             },
         ),
     ]
@@ -2859,7 +2862,8 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // Puente 87: la unidad de la barra de sitios gana `free`, `mount` y
     // `kind` (captura del 2026-09-21).
     // Puente 88: `TabGroupView.panels`, el grupo de paneles (ADR 0134).
-    const FORMA: u64 = 6_330_243_143_821_114_742;
+    // Puente 89: `mark_ruler` en el listado y su cabecera (ADR 0135).
+    const FORMA: u64 = 8_274_109_617_083_728_450;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

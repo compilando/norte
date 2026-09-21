@@ -2287,6 +2287,13 @@ pub struct LogLineView {
     pub source: String,
 }
 
+/// En cuántos tramos iguales parte la regla de marcas un listado (ADR 0135).
+///
+/// Más que las filas de pantalla de cualquier ventana razonable, así que
+/// cada tramo cae en uno o dos píxeles de la regla; y fijo, para que diez
+/// mil marcas no crucen el puente como diez mil números.
+pub const MARK_RULER_SPANS: u16 = 256;
+
 /// El listado de un hueco.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BrowserSlotView {
@@ -2317,6 +2324,13 @@ pub struct BrowserSlotView {
     pub cursor: Option<RowKey>,
     /// Cuántas filas están marcadas en el hueco (no solo en la ventana).
     pub marks: u64,
+    /// Qué tramos del listado llevan alguna marca (puente 89, ADR 0135): la
+    /// regla junto a la barra de desplazamiento, para ver dónde están las
+    /// marcas que la ventana no enseña. El listado se parte en
+    /// [`MARK_RULER_SPANS`] tramos iguales por posición; acotado por eso y
+    /// no por el número de marcas. Vacío sin marcas.
+    #[serde(default)]
+    pub mark_ruler: Vec<u16>,
     /// Cuántas entradas se saltó el provider, ya DICHO en el idioma del
     /// lector. Vacío = ninguna, o el provider no lleva la cuenta.
     ///
@@ -3450,6 +3464,11 @@ pub enum ViewChange {
         /// habilitar algo), y derivar un número de una frase traducida es lo
         /// que este DTO existe para no obligar a nadie a hacer.
         marks: u64,
+        /// La regla de marcas (puente 89, ADR 0135): qué tramos del listado
+        /// —de [`MARK_RULER_SPANS`] iguales— llevan alguna marca, en orden.
+        /// Vacío sin marcas.
+        #[serde(default)]
+        mark_ruler: Vec<u16>,
     },
     /// El estado de un hueco cambió (cargando, error, listo).
     SlotState {

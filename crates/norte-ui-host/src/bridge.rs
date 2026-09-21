@@ -510,7 +510,10 @@ use serde::{Deserialize, Serialize};
 ///   0134). `TabGroupView.panels`: el grupo es de paneles, no de listados,
 ///   y no lleva `+`. El rótulo de una pestaña de panel es su nombre de la
 ///   barra de paneles, no el id del kind.
-pub const BRIDGE_VERSION: u32 = 88;
+/// - **89**: la regla de marcas (ADR 0135). `BrowserSlotView.mark_ruler` y
+///   `ViewChange::BrowserHeader.mark_ruler`: qué tramos del listado, de
+///   `MARK_RULER_SPANS`, llevan alguna marca.
+pub const BRIDGE_VERSION: u32 = 89;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

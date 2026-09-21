@@ -39,6 +39,10 @@ independently through `PROTOCOL_VERSION`.
   edge, in the window and in the terminal. A panel's key on a tab in the
   background brings it forward; on the one in front it closes it, and a
   group of one goes back to a plain panel.
+- **A marks ruler beside the scrollbar** (ADR 0135, bridge 89). In the
+  window, a thin band next to a listing's scrollbar shows where in the
+  whole directory the marked entries are, as VS Code's overview ruler
+  does — including the ones out of view.
 - **Window polish.** The root of a path's breadcrumbs (the provider's
   scheme) is dimmed, since it is in every path of the pane, and the handle
   between two panes lights up when the pointer is on it or dragging it —

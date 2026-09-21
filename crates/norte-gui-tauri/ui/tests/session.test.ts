@@ -116,6 +116,7 @@ describe("Session", () => {
             skipped_note: "2 entradas se saltaron",
             hidden_note: "3 ocultas",
             marks: 4,
+            mark_ruler: [0, 1, 9],
           },
         ],
       }),
@@ -125,6 +126,9 @@ describe("Session", () => {
     expect(slot?.kind === "browser" ? slot.path_display : null).toBe("⟨mem⟩/casa/café");
     expect(slot?.kind === "browser" ? slot.hidden_note : null).toBe("3 ocultas");
     expect(slot?.kind === "browser" ? slot.marks : null).toBe(4);
+    // La regla viaja con la cabecera: marcar sin moverse la tiene que
+    // repintar, o se queda enseñando las marcas de antes.
+    expect(slot?.kind === "browser" ? slot.mark_ruler : null).toEqual([0, 1, 9]);
   });
 
   it("aplica un parche sobre su base", () => {

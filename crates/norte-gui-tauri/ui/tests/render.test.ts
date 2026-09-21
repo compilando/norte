@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
-import { OVERSCAN } from "../src/render/dom";
+import { MARK_RULER_COLOR, OVERSCAN, markRulerImage } from "../src/render/dom";
 import { objetivoRevelado } from "../src/render/settings";
 import { catalogoReal } from "./fixtures";
 import { BRIDGE_VERSION } from "../src/types";
@@ -742,6 +742,34 @@ describe("Screen", () => {
     const name = root.querySelector(".cell-name") as HTMLElement;
     expect(name.style.color).toBe("");
     expect(name.style.fontWeight).toBe("");
+  });
+
+  it("la regla de marcas se pinta con marcas y se quita sin ellas (ADR 0135)", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({ marks: 3, mark_ruler: [0, 1, 128] }));
+    const grid = root.querySelector(".scroller") as HTMLElement;
+    expect(grid.dataset["ruler"]).toBe("true");
+    const regla = grid.style.getPropertyValue("--mark-ruler");
+    // Los tramos 0 y 1 son UNA banda; el 128, otra, a mitad del listado.
+    const c = MARK_RULER_COLOR;
+    expect(regla).toContain(`${c} 0%`);
+    expect(regla).toContain(`${c} 0.7813%`);
+    expect(regla).toContain(`${c} 50%`);
+    screen.paint(vista({ marks: 0, mark_ruler: [] }));
+    expect(grid.dataset["ruler"]).toBeUndefined();
+    expect(grid.style.getPropertyValue("--mark-ruler")).toBe("");
+  });
+
+  it("markRulerImage: rachas en una banda, nada sin tramos", () => {
+    expect(markRulerImage([], 256)).toBe("");
+    expect(markRulerImage([3], 0)).toBe("");
+    const img = markRulerImage([2, 3, 4, 10], 20);
+    expect(img.startsWith("linear-gradient(to bottom, transparent 0%")).toBe(true);
+    // [2..=4] va de 10% a 25%; [10] de 50% a 55%.
+    const c = MARK_RULER_COLOR;
+    expect(img).toContain(`${c} 10%, ${c} 25%`);
+    expect(img).toContain(`${c} 50%, ${c} 55%`);
+    expect(img.match(/transparent/g)).toHaveLength(5);
   });
 
   it("un listado vacío lo dice", () => {

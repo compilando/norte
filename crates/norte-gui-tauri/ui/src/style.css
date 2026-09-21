@@ -849,6 +849,18 @@ body {
   outline: none;
 }
 
+/* La regla de marcas (ADR 0135), como la de VS Code junto a la barra: tres
+   píxeles a la derecha, bajo el deslizador, con una banda donde hay marcas
+   en el listado ENTERO. Es un fondo: el de un elemento con scroll no se
+   mueve con el contenido. La imagen, con su color, la compone el renderer
+   (`markRulerImage`). */
+.scroller[data-ruler="true"] {
+  background-image: var(--mark-ruler);
+  background-repeat: no-repeat;
+  background-size: 3px 100%;
+  background-position: right 2px top 0;
+}
+
 .canvas {
   position: relative;
   width: 100%;

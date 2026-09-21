@@ -73,3 +73,20 @@ fn el_catalogo_lleva_la_version_del_host() {
     let cat = norte_gui_tauri::catalog::catalogo(&instancia, norte_i18n::Lang::Es, &tema);
     assert_eq!(cat.bridge_version, norte_ui_host::BRIDGE_VERSION);
 }
+
+/// Los tramos de la regla de marcas (ADR 0135): el renderer los divide con
+/// el mismo número que el host usó para partir el listado. Con otro, las
+/// marcas se pintan desplazadas y nada se pone rojo.
+#[test]
+fn la_regla_de_marcas_cuenta_los_mismos_tramos_en_los_dos_lados() {
+    let raiz = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tipos = std::fs::read_to_string(raiz.join("ui/src/types.ts")).expect("types.ts");
+    let esperado = format!(
+        "export const MARK_RULER_SPANS = {};",
+        norte_ui_host::dto::MARK_RULER_SPANS
+    );
+    assert!(
+        tipos.contains(&esperado),
+        "`ui/src/types.ts` no declara `{esperado}`"
+    );
+}
