@@ -562,15 +562,41 @@ fn en_columna_cada_boton_es_una_fila_del_borde_izquierdo() {
     };
     assert_eq!(pulsa(&mut app, 1).as_deref(), Some("layout.places"));
     assert_eq!(pulsa(&mut app, 6).as_deref(), Some("layout.log"));
-    // Lo pintado dice lo mismo: una letra por fila, en la columna 1 (el
-    // carácter 2: `TestBackend` pone la línea entre comillas).
-    let letra = |f: usize| lineas[f].chars().nth(2).expect("hay columna 1");
-    assert!(letra(1).is_alphabetic(), "{:?}", lineas[1]);
-    assert!(letra(6).is_alphabetic(), "{:?}", lineas[6]);
+    // Lo pintado dice lo mismo: un ICONO por fila (ADR 0140), en la columna
+    // 1 (el carácter 2: `TestBackend` pone la línea entre comillas).
+    let celda =
+        |lineas: &[String], f: usize| lineas[f].chars().nth(2).expect("hay columna 1").to_string();
+    let icono = |k| {
+        norte_frontend::panelbar::icon(k, norte_frontend::panelbar::IconSet::Unicode)
+            .expect("icono")
+            .to_owned()
+    };
+    assert_eq!(celda(&lineas, 1), icono("places"), "{:?}", lineas[1]);
+    assert_eq!(celda(&lineas, 6), icono("log"), "{:?}", lineas[6]);
     // Y el listado se movió con ella: su primera fila es ahora la 3, a
     // partir de la columna 3; la columna del raíl no es de ningún pane.
     assert!(mouse::hit_test(&app, 5, FILA0 - 1).is_some());
     assert!(mouse::hit_test(&app, 1, FILA0 - 1).is_none());
+
+    // Con `letters`, las letras de siempre.
+    app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
+    let lineas = pintar(&mut app);
+    assert!(
+        celda(&lineas, 1).chars().all(char::is_alphabetic),
+        "{:?}",
+        lineas[1]
+    );
+
+    // Con sitio de sobra, AIRE entre iconos, como en VS Code: el primero
+    // una fila más abajo y una en blanco entre dos. El ratón mide lo mismo.
+    app.chrome.panel_bar_style = None;
+    let lineas = pintar_en(&mut app, 80, 40);
+    assert_eq!(celda(&lineas, 2), icono("places"), "{:?}", lineas[2]);
+    assert_eq!(celda(&lineas, 3), " ", "fila de aire: {:?}", lineas[3]);
+    assert_eq!(celda(&lineas, 4), icono("viewer"), "{:?}", lineas[4]);
+    assert_eq!(pulsa(&mut app, 2).as_deref(), Some("layout.places"));
+    assert_eq!(pulsa(&mut app, 3), None, "el aire no es un botón");
+    assert_eq!(pulsa(&mut app, 4).as_deref(), Some("layout.preview"));
 }
 
 /// Los botones de disposición (ADR 0133) van en el borde derecho de la barra

@@ -387,7 +387,10 @@ pub struct UiSection {
     /// How the panel bar names its buttons: `"names"` (default) paints the
     /// localized panel name with its access letter underlined; `"letters"`
     /// paints only the letter, the row's original form. Below 60 usable
-    /// cells `names` falls back to letters on its own.
+    /// cells `names` falls back to letters on its own. `"icons"` and
+    /// `"nerd"` draw the terminal's COLUMN (`panel_bar_position = "left"`)
+    /// with Unicode symbols or Nerd Font glyphs; in a row they are `names`.
+    /// In the column, `names` draws the Unicode icons too.
     ///
     /// [`crate::load::load`] rejects other values (same pattern as
     /// `quick_search`) so its diagnostic can include the source path.

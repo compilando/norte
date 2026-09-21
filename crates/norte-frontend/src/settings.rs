@@ -635,7 +635,7 @@ const CATALOG: &[SettingDef] = &[
     },
     SettingDef {
         id: "ui.panel-bar-style",
-        kind: SettingKind::Enum(&["names", "letters"]),
+        kind: SettingKind::Enum(&["names", "letters", "icons", "nerd"]),
         applies_live: true,
     },
     SettingDef {

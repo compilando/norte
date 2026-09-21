@@ -36,7 +36,10 @@ cuántos avisos guarda el registro.
 
 `panel_bar_position` elige dónde va: `top` (una fila), `left` (una columna),
 o `auto`, que es arriba en el terminal y a la izquierda en la ventana.
-`panel_bar = false` la quita.
+`panel_bar = false` la quita. En la columna del terminal cada panel es un
+icono —★ ⋔ ◉ ∿ ⓘ ≡ ◔ ◷—, con una raya en el que tiene el teclado y una cifra
+en el que tiene novedades; `panel_bar_style = "nerd"` usa los de Nerd Fonts y
+`"letters"` vuelve a las letras.
 
 En la ventana, `titlebar = "custom"` quita la barra de título del escritorio
 y la de menús hace su papel, como en VS Code: se arrastra para mover la

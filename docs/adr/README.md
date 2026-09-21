@@ -140,3 +140,4 @@ edits.
 | [0137](0137-plugins-contribute-status-items-through-their-columns.md) | Plugins contribute status items through their columns | accepted |
 | [0138](0138-panels-move-by-dragging-and-splits-flip.md) | Panels move by dragging, and splits flip | accepted |
 | [0139](0139-each-frontend-remembers-its-own-layout.md) | Each frontend remembers its own layout | accepted |
+| [0140](0140-the-terminal-panel-column-draws-icons.md) | The terminal's panel column draws icons | accepted |
