@@ -20,6 +20,24 @@
 
 use norte_proto::methods::JournalRow;
 
+/// Cómo se PINTA la ruta de una fila: sin `file://` delante (lo local no se
+/// anuncia, la regla de [`crate::path_display`]) y enmascarada por la misma
+/// puerta que un listado. Una ruta que no parsea se deja como vino: ya es
+/// texto enmascarado por quien construyó la fila.
+///
+/// En una columna estrecha, `file:///ho…` no decía nada; `/home/oscar/Down…`
+/// sí (captura del 2026-09-21).
+///
+/// ```
+/// use norte_frontend::timeline::path_label;
+/// assert_eq!(path_label("file:///home/ana/fotos"), "/home/ana/fotos");
+/// assert_eq!(path_label("no es una ruta"), "no es una ruta");
+/// ```
+#[must_use]
+pub fn path_label(path: &str) -> String {
+    norte_proto::VPath::parse(path).map_or_else(|_| path.to_owned(), |v| crate::path_display(&v).0)
+}
+
 /// La clase de actor del humano, tal y como la escribe el journal.
 ///
 /// Es el valor de `actor_kind` que [`crate::timeline::Timeline`] compara

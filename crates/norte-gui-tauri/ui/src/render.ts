@@ -785,6 +785,11 @@ export class Screen {
     view: ViewSnapshot,
     cell: { w: number; h: number },
   ): void {
+    // El KIND en el hueco, para la hoja de estilos: la barra de estado y la
+    // franja de tareas son una FILA, sin título ni marco — con el título
+    // encima, la fila entera se la comía el título y la barra no se veía
+    // (captura del 2026-09-21).
+    dom.root.dataset["kind"] = slot.kind === "unsupported" ? slot.kind_name : slot.kind;
     if (slot.kind === "places") {
       this.paintPlaces(dom, slot);
       return;

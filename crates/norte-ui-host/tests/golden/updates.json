@@ -1205,8 +1205,11 @@
           },
           {
             "detail": "ext4 · 12 GiB libres de 100 GiB",
+            "free": "12G",
             "hostile": false,
+            "kind": "fixed",
             "label": "⟨file⟩/",
+            "mount": "/",
             "row": "drive"
           },
           {

@@ -1491,6 +1491,19 @@ pub enum PlaceRowView {
         /// El espacio y si es de solo lectura, ya formateado. Un tamaño que
         /// el sistema no contestó se DICE; jamás se pinta un `0`.
         detail: String,
+        /// El espacio libre CORTO (`159G`, o `?` sin respuesta), para la
+        /// columna de la derecha de la fila (puente 87). Ausente en un host
+        /// anterior.
+        #[serde(default)]
+        free: String,
+        /// El punto de montaje entero, saneado, para el título de la fila:
+        /// `label` es desde el puente 87 el nombre CORTO.
+        #[serde(default)]
+        mount: String,
+        /// La clase de unidad (`fixed`, `removable`, `network`, `unknown`):
+        /// elige el icono (puente 87).
+        #[serde(default)]
+        kind: String,
     },
     /// Un favorito de la hotlist.
     Favorite {

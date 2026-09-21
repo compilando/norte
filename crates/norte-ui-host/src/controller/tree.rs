@@ -28,10 +28,12 @@ impl Estado {
 
     /// Ancla el árbol donde esté MIRANDO el listado enfocado.
     pub(super) fn sembrar_ramas(&mut self) {
-        let raiz = self.hueco().pane.dir().clone();
+        // Cerca y no EN el directorio: colgado de él, un directorio sin
+        // subcarpetas era un árbol de una fila (captura del 2026-09-21).
+        let dir = self.hueco().pane.dir().clone();
         self.ramas
             .get_or_insert_with(norte_frontend::tree::Tree::default)
-            .anchor(raiz);
+            .anchor_near(&dir, &norte_frontend::shell::home_vpath());
         self.gen_ramas += 1;
     }
 
@@ -109,11 +111,10 @@ impl Estado {
             // y pedir tamaños o permisos por rama sería pagarlos por cada
             // carpeta que alguien despliega.
             let hijos = match backend.list(dir.clone(), Vec::new()).await {
-                Ok((stream, _)) => Self::ramas_del_listado(stream).await,
-                // Una rama que no se deja leer se marca como leída y VACÍA:
-                // sin esto se volvería a pedir en cada vuelta, que es un bucle
-                // de peticiones contra un directorio prohibido.
-                Err(_) => Vec::new(),
+                Ok((stream, _)) => Some(Self::ramas_del_listado(stream).await),
+                // Una rama que no se deja leer: la decide el modelo
+                // compartido (`Tree::branch_unreadable`).
+                Err(_) => None,
             };
             let _ = buzon
                 .send(Mensaje::Fondo(Box::new(Fondo::RamasDeArbol(dir, hijos))))
@@ -153,7 +154,7 @@ impl Estado {
     pub(super) fn aplicar_ramas(
         &mut self,
         dir: VPath,
-        hijos: Vec<VPath>,
+        hijos: Option<Vec<VPath>>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
@@ -161,7 +162,10 @@ impl Estado {
         // de un panel ya cerrado no resucita su estado ni manda una foto.
         self.hueco_de_ramas()?;
         let arbol = self.ramas.as_mut()?;
-        arbol.insert_children(dir, hijos);
+        match hijos {
+            Some(h) => arbol.insert_children(dir, h),
+            None => arbol.branch_unreadable(dir),
+        }
         // Las filas nuevas se insertan EN MEDIO: todo índice pintado hasta
         // ahora nombra otra rama.
         self.gen_ramas += 1;

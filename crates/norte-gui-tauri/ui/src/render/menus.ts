@@ -16,7 +16,7 @@ import type {
 } from "../types";
 import { badge, colVar, revelar, sinCambios } from "./dom";
 import type { SlotDom } from "./dom";
-import { cifraDeInsignia, iconoDePanel } from "./iconos";
+import { cifraDeInsignia, icono as iconoDePanel } from "./iconos";
 
 /**
  * La barra de paneles (#324): un botón por panel que se abre y se cierra,

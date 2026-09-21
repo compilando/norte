@@ -4,6 +4,7 @@
 import type { Screen } from "../render";
 import type { PlacesSlotView, TreeSlotView } from "../types";
 import { revelar, badge } from "./dom";
+import { icono } from "./iconos";
 import type { SlotDom } from "./dom";
 
 /**
@@ -43,7 +44,10 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
       // `null` —todavía no se ha mirado— se pinta como plegada y no como
       // hoja: pintar «no tiene nada dentro» a algo que nadie ha leído es
       // una respuesta inventada.
-      marca.textContent = r.expanded ? "▾" : "▸";
+      // Un chevrón que GIRA al desplegar, como en VS Code: la misma
+      // marca en dos posiciones se lee como un interruptor.
+      marca.textContent = "›";
+      marca.dataset["expanded"] = String(r.expanded);
       fila.setAttribute("aria-expanded", String(r.expanded));
       marca.addEventListener("click", (ev) => {
         // Que no llegue al nombre: plegar no navega.
@@ -55,6 +59,9 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
         });
       });
     }
+    // La carpeta, abierta o cerrada según la rama: es lo que hace que la
+    // columna se lea como un árbol de un vistazo, como en VS Code.
+    const carpeta = icono(document, r.expanded ? "fs:folder-open" : "fs:folder");
     const nombre = document.createElement("span");
     nombre.className = "tree-name";
     nombre.dataset["hostile"] = String(r.hostile);
@@ -72,7 +79,10 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
         generation: slot.generation,
       });
     });
-    fila.append(marca, nombre);
+    if (carpeta !== null) {
+      carpeta.classList.add("tree-icon");
+    }
+    fila.append(marca, carpeta ?? document.createElement("span"), nombre);
     lista.append(fila);
   }
   lista.setAttribute("aria-activedescendant", `tree-row-${String(slot.cursor)}`);
@@ -122,6 +132,26 @@ export function paintPlaces(this: Screen, dom: SlotDom, slot: PlacesSlotView): v
       texto.textContent = r.label;
       fila.append(marca, texto);
     } else if (r.row === "drive") {
+      // UNA línea (captura del 2026-09-21): icono por clase de unidad, el
+      // nombre CORTO y el libre corto a la derecha, como en la TUI. El
+      // montaje entero y la frase del espacio van en el título.
+      fila.dataset["kind"] = r.kind ?? "unknown";
+      if (r.free !== undefined) {
+        fila.dataset["line"] = "one";
+      }
+      fila.title = [r.mount ?? "", r.detail].filter((s) => s !== "").join("\n");
+      const dibujo = icono(
+        document,
+        r.kind === "removable"
+          ? "fs:removable"
+          : r.kind === "network"
+            ? "fs:network"
+            : "fs:drive",
+      );
+      if (dibujo !== null) {
+        dibujo.classList.add("places-icon");
+        fila.append(dibujo);
+      }
       const nombre = document.createElement("span");
       nombre.className = "places-name";
       nombre.dataset["hostile"] = String(r.hostile);
@@ -131,22 +161,29 @@ export function paintPlaces(this: Screen, dom: SlotDom, slot: PlacesSlotView): v
       }
       const detalle = document.createElement("span");
       detalle.className = "places-detail";
-      detalle.textContent = r.detail;
+      detalle.textContent = r.free ?? r.detail;
       fila.append(nombre, detalle);
     } else {
+      // Un favorito, en UNA línea: estrella y nombre; el destino va en el
+      // título. Uno roto sigue diciendo por qué, debajo y en rojo.
+      const estrella = icono(document, "fs:favorite");
+      if (estrella !== null) {
+        estrella.classList.add("places-icon");
+        fila.append(estrella);
+      }
       const nombre = document.createElement("span");
       nombre.className = "places-name";
       nombre.textContent = r.name;
       fila.append(nombre);
       if (r.broken === "") {
-        const destino = document.createElement("span");
-        destino.className = "places-detail";
-        destino.dataset["hostile"] = String(r.hostile);
-        destino.textContent = r.target;
+        fila.dataset["line"] = "one";
+        fila.title = r.target;
         if (r.hostile) {
-          destino.append(badge(this.t("hostile-name")));
+          // El destino no se ve en la fila, así que la marca va al nombre:
+          // un favorito que apunta a un nombre enmascarado lo DICE.
+          nombre.dataset["hostile"] = "true";
+          nombre.append(badge(this.t("hostile-name")));
         }
-        fila.append(destino);
       } else {
         // Un favorito roto se PINTA con su motivo: uno que desaparece en
         // silencio es un fallo de configuración que nadie puede ver.

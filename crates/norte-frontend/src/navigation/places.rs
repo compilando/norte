@@ -18,7 +18,35 @@
 //! sección sin la fuente sería una caja vacía prometiendo algo.
 
 use norte_proto::VPath;
-use norte_proto::methods::Volume;
+use norte_proto::methods::{Volume, VolumeKind};
+
+/// El nombre CORTO de una unidad: su etiqueta si la tiene y, si no, el último
+/// tramo de su punto de montaje (la raíz se dice entera). Con la bandera de
+/// enmascarado, como toda puerta de pintado.
+///
+/// El punto de montaje entero cortado —«/home/oscar/…» cinco veces en la
+/// barra de sitios de la captura del 2026-09-21— no distinguía una unidad de
+/// otra; su último tramo sí. La ruta entera sigue a mano donde cabe (el
+/// título de la fila en la ventana).
+///
+/// ```
+/// use norte_frontend::places::drive_name;
+/// use norte_proto::VPath;
+/// let vp = |w: &str| VPath::parse(w).unwrap();
+/// assert_eq!(drive_name(b"", &vp("file:///home/ana/nube")).0, "nube");
+/// assert_eq!(drive_name(b"USB", &vp("file:///media/x")).0, "USB");
+/// assert!(drive_name(b"", &vp("file:///")).0.ends_with('/'));
+/// ```
+#[must_use]
+pub fn drive_name(label: &[u8], mount: &VPath) -> (String, bool) {
+    if !label.is_empty() {
+        return crate::display_name(label);
+    }
+    match mount.file_name() {
+        Some(tramo) => crate::display_name(tramo.as_bytes()),
+        None => crate::path_display(mount),
+    }
+}
 
 /// Las secciones del sidebar, en el orden en que se pintan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +100,9 @@ pub enum PlaceRow {
         total: Option<u64>,
         /// ¿Está montado de solo lectura?
         read_only: bool,
+        /// Qué clase de unidad es (fija, extraíble, en red): lo que decide
+        /// su icono en la ventana.
+        kind: VolumeKind,
     },
     /// Un favorito de la hotlist.
     Favorite {
@@ -227,6 +258,7 @@ impl PlacesState {
                 free: v.free_bytes,
                 total: v.total_bytes,
                 read_only: v.read_only,
+                kind: v.kind,
             })
             .collect();
         self.rebuild();

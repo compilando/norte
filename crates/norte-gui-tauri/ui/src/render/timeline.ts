@@ -63,6 +63,8 @@ export function paintTimeline(this: Screen, dom: SlotDom, slot: TimelineSlotView
     const ruta = document.createElement("span");
     ruta.className = "timeline-path";
     ruta.textContent = r.path;
+    // La columna recorta por el final: la ruta entera, al pasar.
+    fila.title = `${r.op} ${r.path}`;
     fila.append(verbo, ruta);
     if (r.tail !== "") {
       const cola = document.createElement("span");

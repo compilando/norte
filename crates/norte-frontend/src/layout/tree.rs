@@ -261,6 +261,33 @@ pub enum Node {
     },
 }
 
+/// El tamaño con que entra un hijo nuevo en un reparto que ya tiene
+/// `hermanos`.
+///
+/// Un [`Size::Weight`] es una PROPORCIÓN, así que solo significa algo al
+/// lado de los otros pesos: `Weight(1)` quiere decir «como uno de ellos» en
+/// un reparto de unos, pero arrastrar un borde deja a los listados en 49/51 y
+/// entonces el mismo `Weight(1)` es un píxel. Se escala por la MEDIA de los
+/// pesos hermanos. Un [`Size::Fixed`] o un reparto sin pesos no cambian.
+fn peso_entre_hermanos(size: Size, hermanos: &[Size]) -> Size {
+    let Size::Weight(w) = size else {
+        return size;
+    };
+    let pesos: Vec<u32> = hermanos
+        .iter()
+        .filter_map(|s| match s {
+            Size::Weight(p) => Some(u32::from(*p)),
+            _ => None,
+        })
+        .collect();
+    if pesos.is_empty() {
+        return size;
+    }
+    let n = u32::try_from(pesos.len()).unwrap_or(u32::MAX);
+    let media = (pesos.iter().sum::<u32>() + n / 2) / n;
+    Size::Weight(u16::try_from(media.saturating_mul(u32::from(w)).max(1)).unwrap_or(u16::MAX))
+}
+
 impl Node {
     /// Un hueco sin params ni vínculos.
     #[must_use]
@@ -526,9 +553,24 @@ impl Node {
         }
         let mut nc = children.clone();
         let mut ns = sizes.clone();
-        let at = if edge.is_front() { 0 } else { nc.len() };
+        // Por detrás, pero por DELANTE de las filas de cromo del final (la
+        // franja de tareas y la barra de estado): un panel acoplado abajo
+        // va encima de la barra de estado, como en VS Code, y en el
+        // terminal la barra tiene que seguir siendo la última fila.
+        let at = if edge.is_front() {
+            0
+        } else {
+            nc.len()
+                - nc.iter()
+                    .rev()
+                    .take_while(|c| {
+                        matches!(c, Self::Slot { kind, .. }
+                            if kind.as_str() == "status" || kind.as_str() == "tasks")
+                    })
+                    .count()
+        };
         nc.insert(at, nuevo.clone());
-        ns.insert(at.min(ns.len()), size);
+        ns.insert(at.min(ns.len()), peso_entre_hermanos(size, sizes));
         Some(Self::Split {
             dir: *dir,
             children: nc,
@@ -2009,6 +2051,79 @@ mod tests {
         };
         assert_eq!(children.len(), 3);
         assert_eq!(children[2].first_slot_id(), Some(SlotId(9)));
+    }
+
+    /// REGRESIÓN (captura del 2026-09-21): un PESO se mide contra los pesos
+    /// hermanos, no en absoluto. Arrastrar el borde entre dos listados los
+    /// deja en 49/51; un visor que entra con `Weight(1)` se quedaba con
+    /// 1/101 del sitio libre — una barrita de un píxel que no se ve. Entra
+    /// con la MEDIA de los pesos de sus hermanos, que es lo que `Weight(1)`
+    /// significa en un reparto de unos.
+    #[test]
+    fn un_peso_que_entra_se_mide_contra_sus_hermanos() {
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![
+                Node::slot(SlotId(5), KindId::new("places")),
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+            sizes: vec![Size::Fixed(16), Size::Weight(49), Size::Weight(51)],
+        };
+        let con = arbol.dock(
+            SlotId(1),
+            Edge::Right,
+            Size::Weight(1),
+            &Node::slot(SlotId(9), KindId::new("viewer")),
+        );
+        let Node::Split { sizes, .. } = &con else {
+            panic!("split")
+        };
+        assert_eq!(sizes.last(), Some(&Size::Weight(50)), "{sizes:?}");
+        // Un fijo no se toca: su número es de celdas, no de proporción.
+        let con = arbol.dock(
+            SlotId(1),
+            Edge::Right,
+            Size::Fixed(30),
+            &Node::slot(SlotId(9), KindId::new("metadata")),
+        );
+        let Node::Split { sizes, .. } = &con else {
+            panic!("split")
+        };
+        assert_eq!(sizes.last(), Some(&Size::Fixed(30)));
+    }
+
+    /// Un panel acoplado ABAJO entra por ENCIMA de la franja de tareas y de
+    /// la barra de estado, no debajo (captura del 2026-09-21): el registro y
+    /// procesos salían por debajo de la barra de estado. En VS Code el panel
+    /// de abajo está siempre encima de la barra; y en el terminal, la barra
+    /// de estado tiene que ser la última fila.
+    #[test]
+    fn abajo_entra_por_encima_de_la_barra_de_estado() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            children: vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(3), KindId::new("tasks")),
+                Node::slot(SlotId(4), KindId::new("status")),
+            ],
+            sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
+        };
+        let con = arbol.dock(
+            SlotId(1),
+            Edge::Bottom,
+            Size::Fixed(12),
+            &Node::slot(SlotId(9), KindId::new("log")),
+        );
+        let Node::Split {
+            children, sizes, ..
+        } = &con
+        else {
+            panic!("split")
+        };
+        let ids: Vec<_> = children.iter().filter_map(Node::first_slot_id).collect();
+        assert_eq!(ids, [SlotId(1), SlotId(9), SlotId(3), SlotId(4)]);
+        assert_eq!(sizes[1], Size::Fixed(12), "el tamaño va con su hijo");
     }
 
     /// Sin ancestro en el eje pedido, se ENVUELVE. Un solo pane es el caso

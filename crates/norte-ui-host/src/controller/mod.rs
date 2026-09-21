@@ -1121,9 +1121,9 @@ enum Fondo {
     VolumenesDePie(Result<Vec<norte_proto::methods::Volume>, Error>),
     /// Los subdirectorios de una rama del ÁRBOL, ya filtrados y ordenados.
     ///
-    /// Sin `Result`: una rama que no se deja leer llega VACÍA y se marca como
-    /// leída, porque la alternativa es volver a pedirla en cada vuelta.
-    RamasDeArbol(VPath, Vec<VPath>),
+    /// `None` = la rama no se dejó leer; lo decide
+    /// `Tree::branch_unreadable` (vacía, o re-anclar si era la raíz).
+    RamasDeArbol(VPath, Option<Vec<VPath>>),
     /// La sesión de un panel se cerró (#140): el hueco, cómo fue, y a dónde va
     /// ese panel ahora.
     ///

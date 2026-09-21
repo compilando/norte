@@ -84,6 +84,78 @@ impl Tree {
         self.seguido = None;
     }
 
+    /// Ancla el árbol CERCA de `dir` y lo revela: en `home` si `dir` cuelga
+    /// de él, y si no en la raíz de su provider.
+    ///
+    /// Anclar en `dir` mismo —lo que se hacía— enseñaba una sola fila cuando
+    /// el directorio no tiene subcarpetas, con la ruta entera por nombre: un
+    /// árbol que no enseña nada de alrededor no sirve para moverse (captura
+    /// del 2026-09-21). Colgarlo de más arriba y revelar la rama es lo que
+    /// hace el explorador de VS Code.
+    ///
+    /// ```
+    /// use norte_frontend::tree::Tree;
+    /// use norte_proto::VPath;
+    /// let vp = |w: &str| VPath::parse(w).unwrap();
+    /// let casa = vp("file:///home/ana");
+    /// let mut t = Tree::default();
+    /// t.anchor_near(&vp("file:///home/ana/fotos/2026"), &casa);
+    /// assert_eq!(t.root(), Some(&casa));
+    /// assert_eq!(t.revealing(), Some(&vp("file:///home/ana/fotos/2026")));
+    /// // Fuera de casa, la raíz del provider.
+    /// let mut t = Tree::default();
+    /// t.anchor_near(&vp("file:///etc/ssh"), &casa);
+    /// assert_eq!(t.root(), Some(&vp("file:///")));
+    /// // Y en otro provider, también su raíz.
+    /// let mut t = Tree::default();
+    /// t.anchor_near(&vp("mem:///r/a"), &casa);
+    /// assert_eq!(t.root(), Some(&vp("mem:///")));
+    /// ```
+    pub fn anchor_near(&mut self, dir: &VPath, home: &VPath) {
+        let cadena = Self::hasta_la_raiz(dir);
+        let base = if cadena.contains(home) {
+            home.clone()
+        } else {
+            cadena.last().cloned().unwrap_or_else(|| dir.clone())
+        };
+        self.anchor(base);
+        self.follow(dir);
+    }
+
+    /// Una rama no se dejó leer.
+    ///
+    /// Se marca como leída y VACÍA —si no, se volvería a pedir en cada
+    /// vuelta, un bucle de peticiones contra un directorio prohibido— salvo
+    /// que sea la RAÍZ y el árbol esté siguiendo otro directorio: entonces
+    /// el árbol se re-ancla en ese directorio. Pasa con [`Self::anchor_near`]
+    /// en un servidor que no deja listar `/`, o en un sistema aislado: un
+    /// árbol colgado de una raíz ilegible no enseñaría nada.
+    ///
+    /// ```
+    /// use norte_frontend::tree::Tree;
+    /// use norte_proto::VPath;
+    /// let vp = |w: &str| VPath::parse(w).unwrap();
+    /// let mut t = Tree::default();
+    /// t.anchor_near(&vp("mem:///casa"), &vp("file:///home/ana"));
+    /// assert_eq!(t.root(), Some(&vp("mem:///")));
+    /// t.branch_unreadable(vp("mem:///"));
+    /// assert_eq!(t.root(), Some(&vp("mem:///casa")), "vuelve al listado");
+    /// // Otra rama ilegible solo se marca vacía.
+    /// t.branch_unreadable(vp("mem:///casa/cerrada"));
+    /// assert_eq!(t.root(), Some(&vp("mem:///casa")));
+    /// ```
+    pub fn branch_unreadable(&mut self, dir: VPath) {
+        if self.root.as_ref() == Some(&dir)
+            && let Some(sigue) = self.seguido.clone()
+            && sigue != dir
+        {
+            self.anchor(sigue.clone());
+            self.follow(&sigue);
+            return;
+        }
+        self.insert_children(dir, Vec::new());
+    }
+
     /// Sigue al listado de al lado: deja `dir` bajo el cursor SIN tirar lo que
     /// esté abierto. Dice si movió algo.
     ///

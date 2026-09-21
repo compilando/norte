@@ -64,15 +64,37 @@ const FIGURAS: Record<string, Figura> = {
       [18, 6, 2.5],
     ],
   },
+  // Lo que hay en el árbol y en los sitios (prefijo `fs:`).
+  // Carpeta cerrada: la pestaña arriba a la izquierda.
+  "fs:folder": { paths: ["M3.5 6.5h6l2 2h9v10h-17z"] },
+  // Carpeta abierta: la tapa inclinada hacia delante.
+  "fs:folder-open": { paths: ["M3.5 18.5v-12h6l2 2h8v2", "M3.5 18.5l3-8h15l-3 8z"] },
+  // Un disco: la caja con su piloto.
+  "fs:drive": { paths: ["M3.5 7.5h17v9h-17z", "M3.5 13h17"], circles: [[17, 15, 0.6]] },
+  // Un disco extraíble: el conector.
+  "fs:removable": { paths: ["M8 3.5h8v5H8z", "M6 8.5h12v12H6z"] },
+  // Algo en red: el globo.
+  "fs:network": {
+    paths: ["M3 12h18", "M12 3c3 3 3 15 0 18", "M12 3c-3 3-3 15 0 18"],
+    circles: [[12, 12, 9]],
+  },
+  // La casa.
+  "fs:home": { paths: ["M4 11l8-7 8 7", "M6 9.5v10h12v-10"] },
+  // Un favorito: la estrella de «sitios».
+  "fs:favorite": {
+    paths: ["M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"],
+  },
 };
 
 /**
- * El icono de un kind, o `null` si no tiene uno propio.
+ * El icono de `id` —un kind de panel, un botón `layout:*` o una cosa del
+ * sistema de ficheros `fs:*`—, o `null` si no tiene uno propio.
  *
- * Decorativo para la accesibilidad (`aria-hidden`): el nombre del panel va en
- * el botón, y un lector que leyera también el dibujo diría dos veces lo mismo.
+ * Decorativo para la accesibilidad (`aria-hidden`): el nombre va al lado o
+ * en la etiqueta, y un lector que leyera también el dibujo diría dos veces lo
+ * mismo.
  */
-export function iconoDePanel(doc: Document, kind: string): SVGSVGElement | null {
+export function icono(doc: Document, kind: string): SVGSVGElement | null {
   const figura = FIGURAS[kind];
   if (figura === undefined) {
     return null;

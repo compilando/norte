@@ -53,7 +53,7 @@ impl App {
                 // panel ya está en pantalla.
                 Some(crate::tree::KIND) if self.panes.tree(id).is_none() => {
                     let mut tree = crate::tree::Tree::default();
-                    tree.anchor(dir.clone());
+                    tree.anchor_near(&dir, &norte_frontend::shell::home_vpath());
                     self.panes.insert_tree(id, tree);
                 }
                 // Fase 7, y por el mismo motivo que el árbol de arriba: una
@@ -555,7 +555,7 @@ impl App {
                 // sitio desde la última vez.
                 let dir = self.focused().dir().clone();
                 if let Some(t) = self.panes.tree_mut(id) {
-                    t.anchor(dir);
+                    t.anchor_near(&dir, &norte_frontend::shell::home_vpath());
                 }
                 self.revelar(id);
                 self.key_owner = KeyOwner::Tree;
@@ -563,7 +563,8 @@ impl App {
             None => {
                 let id = self.mint_slot();
                 let mut tree = crate::tree::Tree::default();
-                tree.anchor(self.focused().dir().clone());
+                // Cerca del listado y no EN él (captura del 2026-09-21).
+                tree.anchor_near(self.focused().dir(), &norte_frontend::shell::home_vpath());
                 self.panes.insert_tree(id, tree);
                 self.layout = self.layout.dock(
                     self.focused_slot(),
@@ -1877,6 +1878,10 @@ mod tests {
         let mut app = app_en("mem:///r", "mem:///otro");
         app.toggle_tree();
         let t = app.tree_mut().expect("árbol");
+        // Lo que se mira aquí es SEGUIR, no anclar: se parte de un árbol
+        // colgado del listado para que la cuenta de filas sea la de siempre
+        // (abrirlo lo cuelga más arriba desde el 2026-09-21).
+        t.anchor(vp("mem:///r"));
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a"), vp("mem:///r/b")]);
         // `b` abierta a mano: es lo que un re-anclado habría cerrado.
         t.set_cursor(2);
@@ -1906,9 +1911,15 @@ mod tests {
         let mut app = app_en("mem:///r", "mem:///otro");
         app.toggle_tree();
         app.return_keys_to_panes();
+        // Abrirlo lo cuelga CERCA del listado (2026-09-21): `mem:///r` no
+        // cuelga de casa, así que de la raíz de su provider, revelando `r`.
         assert_eq!(
             app.tree().and_then(|t| t.root().cloned()),
-            Some(vp("mem:///r"))
+            Some(vp("mem:///"))
+        );
+        assert_eq!(
+            app.tree().and_then(norte_frontend::tree::Tree::revealing),
+            Some(&vp("mem:///r"))
         );
 
         app.switch_focus();
