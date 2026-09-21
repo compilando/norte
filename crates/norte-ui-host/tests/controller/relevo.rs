@@ -130,6 +130,15 @@ async fn el_relevo_escribe_suelta_y_entonces_abre_la_terminal() {
     // Y la pantalla que se escribió lleva la marca, por RUTA.
     let puestas = backend.puestas.lock().expect("puestas").clone();
     let ultima = puestas.last().expect("se escribió algo");
+    // ADR 0139: entregar la pantalla es que la terminal abra con ESTA, así
+    // que el relevo escribe también la clave compartida, no solo la suya.
+    let layouts = ultima.get("layouts").expect("disposiciones");
+    assert_eq!(
+        layouts.get("default"),
+        layouts.get("default@window"),
+        "la terminal recibe la disposición de la ventana"
+    );
+    assert!(layouts.get("default").is_some());
     let marcas = ultima
         .get("slots")
         .and_then(|s| s.get("1"))

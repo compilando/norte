@@ -64,6 +64,27 @@ pub const ORPHAN_HISTORY_CAP: usize = 8;
 /// existiendo y su próximo arranque sale de `[profile.start]`.
 pub const PROFILE_STATE_CAP: usize = 4;
 
+/// Sufijo de la clave de `layouts` bajo la que la VENTANA guarda su
+/// disposición (ADR 0139): `default@window`, `<perfil>@window`.
+///
+/// La terminal y la ventana recuerdan cada una la suya —tamaños y
+/// posiciones de los paneles—, porque compartirla hacía que la última en
+/// escribir pisara lo que la otra había ajustado. La clave de la terminal
+/// sigue siendo el nombre del perfil a secas.
+pub const WINDOW_LAYOUT_SUFFIX: &str = "@window";
+
+/// La clave de la ventana para el perfil de clave `perfil`.
+#[must_use]
+pub fn window_layout_key(perfil: &str) -> String {
+    format!("{perfil}{WINDOW_LAYOUT_SUFFIX}")
+}
+
+/// El perfil al que pertenece una clave de `layouts`: la de la ventana
+/// cuenta como la de su perfil para podar, y se poda con él.
+fn perfil_de(clave: &str) -> &str {
+    clave.strip_suffix(WINDOW_LAYOUT_SUFFIX).unwrap_or(clave)
+}
+
 /// Edad a la que un huérfano se barre: treinta días en milisegundos.
 pub const MAX_AGE_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -380,16 +401,17 @@ impl SessionBody {
         // Del que hace más que nadie activa hacia delante, y el ACTIVO no está
         // en esta lista: es el único que no se puede tirar.
         for nombre in self.profiles_by_last_touch() {
-            let Some(arbol) = self.layouts.remove(&nombre) else {
+            let arboles = self.quitar_perfil(&nombre);
+            if arboles.is_empty() {
                 continue;
-            };
+            }
             let vivos: BTreeSet<u32> = self
                 .layouts
                 .values()
                 .flat_map(Node::slot_ids)
                 .map(|SlotId(id)| id)
                 .collect();
-            for SlotId(id) in arbol.slot_ids() {
+            for SlotId(id) in arboles.iter().flat_map(Node::slot_ids) {
                 if !vivos.contains(&id) {
                     self.slots.remove(&id);
                 }
@@ -460,14 +482,45 @@ impl SessionBody {
                 .max()
                 .unwrap_or(0)
         };
-        let mut orden: Vec<(u64, String)> = self
-            .layouts
-            .iter()
-            .filter(|(nombre, _)| **nombre != self.active)
-            .map(|(nombre, arbol)| (ultimo_toque(arbol), nombre.clone()))
-            .collect();
+        // Por PERFIL, no por clave: la disposición de la ventana
+        // (`<perfil>@window`) es del mismo perfil que la de la terminal, y
+        // su toque cuenta para los dos.
+        let mut toques: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+        for (clave, arbol) in &self.layouts {
+            let perfil = perfil_de(clave);
+            if perfil == self.active {
+                continue;
+            }
+            let t = toques.entry(perfil.to_owned()).or_insert(0);
+            *t = (*t).max(ultimo_toque(arbol));
+        }
+        let mut orden: Vec<(u64, String)> = toques.into_iter().map(|(p, t)| (t, p)).collect();
         orden.sort_unstable();
         orden.into_iter().map(|(_, nombre)| nombre).collect()
+    }
+
+    /// Quita las disposiciones del perfil `perfil` —la de la terminal y la
+    /// de la ventana— y las devuelve.
+    fn quitar_perfil(&mut self, perfil: &str) -> Vec<Node> {
+        let claves: Vec<String> = self
+            .layouts
+            .keys()
+            .filter(|c| perfil_de(c) == perfil)
+            .cloned()
+            .collect();
+        claves
+            .iter()
+            .filter_map(|c| self.layouts.remove(c))
+            .collect()
+    }
+
+    /// Cuántos PERFILES tienen estado (la ventana no cuenta aparte).
+    fn perfiles_con_estado(&self) -> usize {
+        self.layouts
+            .keys()
+            .map(|c| perfil_de(c))
+            .collect::<BTreeSet<_>>()
+            .len()
     }
 
     /// Deja como mucho [`PROFILE_STATE_CAP`] perfiles con estado, tirando
@@ -479,14 +532,15 @@ impl SessionBody {
     /// huérfanos de `SlotStore`, donde un reloj haría los tests dependientes
     /// del tiempo.
     fn prune_profiles(&mut self) {
-        if self.layouts.len() <= PROFILE_STATE_CAP {
+        let perfiles = self.perfiles_con_estado();
+        if perfiles <= PROFILE_STATE_CAP {
             return;
         }
         let orden = self.profiles_by_last_touch();
-        let sobran = self.layouts.len() - PROFILE_STATE_CAP;
+        let sobran = perfiles - PROFILE_STATE_CAP;
         let mut candidatos: BTreeSet<u32> = BTreeSet::new();
         for nombre in orden.into_iter().take(sobran) {
-            if let Some(arbol) = self.layouts.remove(&nombre) {
+            for arbol in self.quitar_perfil(&nombre) {
                 candidatos.extend(arbol.slot_ids().into_iter().map(|SlotId(id)| id));
             }
         }
@@ -897,6 +951,35 @@ mod tests {
         b.prune(100);
         assert!(!b.layouts.contains_key("a"), "el más viejo se va");
         assert_eq!(b.layouts.len(), PROFILE_STATE_CAP);
+    }
+
+    /// ADR 0139: la disposición de la ventana (`<perfil>@window`) es del
+    /// mismo perfil que la de la terminal: no cuenta como un perfil más, y
+    /// se va y se queda con él.
+    #[test]
+    fn la_disposicion_de_la_ventana_va_con_su_perfil() {
+        let mut b = cuerpo_con_perfiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40)]);
+        for p in ["a", "d"] {
+            let arbol = b.layouts[p].clone();
+            b.layouts.insert(window_layout_key(p), arbol);
+        }
+        b.active = "d".to_owned();
+        b.prune(100);
+        assert_eq!(
+            b.layouts.len(),
+            6,
+            "cuatro perfiles, no seis: nada que podar"
+        );
+        let mut b = cuerpo_con_perfiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
+        for p in ["a", "e"] {
+            let arbol = b.layouts[p].clone();
+            b.layouts.insert(window_layout_key(p), arbol);
+        }
+        b.active = "e".to_owned();
+        b.prune(100);
+        assert!(!b.layouts.contains_key("a"));
+        assert!(!b.layouts.contains_key("a@window"), "se va con su perfil");
+        assert!(b.layouts.contains_key("e@window"), "la del activo se queda");
     }
 
     /// El ACTIVO no lo barre nada, en ningún paso, ni siendo el más viejo.

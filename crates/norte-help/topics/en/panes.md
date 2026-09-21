@@ -152,7 +152,9 @@ Panels can be resized and closed. {{cmd:layout.grow}} and
 {{cmd:layout.flip}} flips the focused one's split: side by side becomes
 stacked, and back. With the mouse a panel moves by dragging it by its title
 and dropping it on another: on one of its sides, or in the middle to join
-it as a tab; while dragging, where it would land is marked.
+it as a tab; while dragging, where it would land is marked. Sizes and
+places are remembered on closing — the window and the terminal each keep
+their own — until another layout is chosen with {{cmd:layout.pick}}.
 {{cmd:layout.close-slot}} closes the focused one and **refuses to close the
 last**: a screen with no listing at all is not a layout, it is a hang with
 borders.

@@ -73,6 +73,15 @@ impl App {
         // el sitio donde los otros perfiles dejaron sus paneles.
         let mut layouts = self.session.other_layouts.clone();
         layouts.insert(self.session_key(), self.layout.clone());
+        // En un RELEVO a la ventana, también bajo la clave de la ventana
+        // (ADR 0139): cada frontend recuerda la suya, pero entregar la
+        // pantalla es que la ventana abra con ESTA.
+        if marcas {
+            layouts.insert(
+                norte_frontend::session::window_layout_key(&self.session_key()),
+                self.layout.clone(),
+            );
+        }
         let mut body = SessionBody {
             active: self.session_key_active(),
             layouts,

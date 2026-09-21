@@ -139,3 +139,4 @@ edits.
 | [0136](0136-an-optional-custom-title-bar.md) | An optional custom title bar | accepted |
 | [0137](0137-plugins-contribute-status-items-through-their-columns.md) | Plugins contribute status items through their columns | accepted |
 | [0138](0138-panels-move-by-dragging-and-splits-flip.md) | Panels move by dragging, and splits flip | accepted |
+| [0139](0139-each-frontend-remembers-its-own-layout.md) | Each frontend remembers its own layout | accepted |

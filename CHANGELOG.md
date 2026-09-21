@@ -62,6 +62,11 @@ independently through `PROTOCOL_VERSION`.
   new `layout.flip` turns the focused panel's split from side by side to
   one above the other and back; it is a fifth layout button, in the
   Panels menu and in the palette, with no key.
+- **The window and the terminal each remember their own layout** (ADR
+  0139). Panel sizes and positions come back when a frontend reopens,
+  until a template is chosen from the layout picker; the window no longer
+  loses them because the terminal wrote its own in between. A handoff
+  still hands the current screen over.
 - **Window polish.** The root of a path's breadcrumbs (the provider's
   scheme) is dimmed, since it is in every path of the pane, and the handle
   between two panes lights up when the pointer is on it or dragging it —

@@ -58,7 +58,16 @@ impl Estado {
             tracing::warn!("la sesión guardada no se entiende: se arranca de la configuración");
             return;
         };
-        if let Some(arbol) = body.layouts.get(&self.clave_de_sesion()).cloned() {
+        // La disposición de ESTA ventana (ADR 0139), y si todavía no tiene
+        // —primera vez tras el cambio, o un perfil que solo usó la
+        // terminal— la compartida, para no arrancar de fábrica.
+        let propia = norte_frontend::session::window_layout_key(&self.clave_de_sesion());
+        if let Some(arbol) = body
+            .layouts
+            .get(&propia)
+            .or_else(|| body.layouts.get(&self.clave_de_sesion()))
+            .cloned()
+        {
             // Sin despertar nada: los listados se piden después, una vez la
             // sesión haya dicho dónde estaba cada uno. Despertarlos aquí
             // pediría el directorio del arranque para tirarlo un instante
@@ -530,9 +539,21 @@ impl Estado {
         // por miedo a que curiosear en el selector cambiara el arranque del
         // terminal, pero eso ES compartir la pantalla, y lo que la D5 protege
         // es otra cosa: que el TAMAÑO de una ventana no reescriba el árbol.
+        //
+        // Desde el ADR 0139 va bajo la clave PROPIA de la ventana
+        // (`<perfil>@window`): la terminal y la ventana recuerdan cada una
+        // sus tamaños y posiciones, y la última en escribir ya no pisa lo
+        // que la otra ajustó. En un RELEVO se escribe además la compartida:
+        // entregar la pantalla es justo que la terminal abra con esta.
         let mut body = self.sesion.leida.clone();
-        body.layouts
-            .insert(self.clave_de_sesion(), self.arbol.clone());
+        body.layouts.insert(
+            norte_frontend::session::window_layout_key(&self.clave_de_sesion()),
+            self.arbol.clone(),
+        );
+        if marcas {
+            body.layouts
+                .insert(self.clave_de_sesion(), self.arbol.clone());
+        }
         body.palette_recent.clone_from(&self.paleta_recientes);
         body.popular = self.popular.entries().to_vec();
         for (id, hueco) in &self.huecos {

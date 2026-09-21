@@ -154,6 +154,9 @@ Los paneles se pueden redimensionar y cerrar. {{cmd:layout.grow}} y
 encima del otro, y al revés. Con el ratón, un panel se mueve arrastrándolo
 por su título y soltándolo sobre otro: a uno de sus lados, o en el centro
 para unirse a él como pestaña; mientras se arrastra, se marca dónde caería.
+Los tamaños y los sitios se recuerdan al cerrar —la ventana y la terminal,
+cada una los suyos— hasta que se elige otra disposición con
+{{cmd:layout.pick}}.
 {{cmd:layout.close-slot}} cierra el enfocado, y **se niega a cerrar el
 último**: una pantalla sin ningún listado no es un layout, es un cuelgue con
 bordes.
