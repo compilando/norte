@@ -2201,6 +2201,63 @@ async fn elegir_una_rama_navega_el_listado_y_el_arbol_no_se_mueve() {
     );
 }
 
+/// Regresión (2026-09-21): con el foco en el listado de la IZQUIERDA, pulsar
+/// en el árbol y elegir una rama navega ESE listado, no el de la derecha.
+///
+/// Pulsar el árbol le da el papel de activo al hueco del árbol; `activo()`
+/// tiene que contestar un listado, y caía al de id más bajo — que en esta
+/// disposición, la de una sesión real, es el de la derecha.
+#[tokio::test]
+async fn la_rama_del_arbol_va_al_ultimo_listado_enfocado() {
+    let disposicion = r#"{"split": {"children": [{"split": {"children": [
+        {"slot": {"id": 2, "kind": "browser"}}, {"slot": {"id": 1, "kind": "browser"}}],
+        "dir": "horizontal", "sizes": [{"weight": 1}, {"weight": 1}]}},
+        {"slot": {"id": 4, "kind": "status"}}], "dir": "vertical",
+        "sizes": [{"weight": 1}, {"fixed": 1}]}}"#;
+    let tree: norte_frontend::layout::Node = serde_json::from_str(disposicion).expect("árbol");
+    let (h, _) = super::base::host_con_arbol(arbol(), tree, (160, 50)).await;
+    let mut sub = h.subscribe();
+    // El de la izquierda, el 2, con el foco.
+    let _ = h
+        .dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
+    let foto = arbol_con_ramas(&mut sub, 2).await;
+    let t = arbol_de(&foto);
+    // Y el clic en el árbol, que lo enfoca, antes de elegir la rama.
+    let _ = h
+        .dispatch(UiAction::FocusSlot { slot_id: t.slot_id })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::TreeActivateRow {
+        row: 1,
+        generation: t.generation,
+    })
+    .await
+    .expect("host vivo");
+    let ruta = |s: &norte_ui_host::ViewSnapshot, id: u32| {
+        s.slots.iter().find_map(|v| match v {
+            SlotView::Browser(b) if b.slot_id == id => Some(b.path_display.clone()),
+            _ => None,
+        })
+    };
+    let foto = foto_hasta(&h, &mut sub, "algún listado en docs", |s| {
+        (ruta(s, 1)?.ends_with("/casa/docs") || ruta(s, 2)?.ends_with("/casa/docs"))
+            .then(|| s.clone())
+    })
+    .await;
+    assert!(
+        ruta(&foto, 2).is_some_and(|r| r.ends_with("/casa/docs")),
+        "navega el de la izquierda, que tenía el foco: {:?}",
+        ruta(&foto, 2)
+    );
+    assert!(
+        ruta(&foto, 1).is_some_and(|r| !r.ends_with("/casa/docs")),
+        "y el de la derecha no se toca"
+    );
+}
+
 /// Un click con la generación de OTRA pintada se rechaza, no navega.
 ///
 /// Las hijas de una rama aterrizan EN MEDIO de la lista, así que entre que el
