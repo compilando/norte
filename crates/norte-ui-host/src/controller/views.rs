@@ -147,7 +147,6 @@ impl Estado {
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
             panel_bar: self.vista_barra_de_paneles(),
-            key_bar: self.vista_barra_de_teclas(),
             // El pijama (spec 2026-09-20). Va en la vista ENTERA y no en un
             // parche: es configuración, y la recarga en caliente reconstruye
             // la vista.
@@ -351,39 +350,6 @@ impl Estado {
         }
     }
 
-    /// La barra de teclas (spec 2026-09-10): las diez celdas del keymap de
-    /// la pantalla que tiene el teclado AHORA — el visor a pantalla completa
-    /// si está, los listados si no. Con un diálogo delante la fila va EN
-    /// BLANCO: ningún preset ata una tecla de función en `[dialog]`, y una
-    /// celda que anunciara un verbo que el modal activo rehúsa sería la
-    /// mentira que `hints` existe para no contar. El mismo orden que la TUI
-    /// (`App::key_bar_cells`), y por eso las dos barras dicen lo mismo.
-    pub(super) fn vista_barra_de_teclas(&self) -> crate::dto::KeyBarView {
-        let bar = self.config.common.ui_chrome.key_bar();
-        if !self.dialogos.is_empty() {
-            return crate::dto::KeyBarView {
-                bar,
-                cells: Vec::new(),
-            };
-        }
-        let eff = if self.visor.is_some() {
-            &self.efectivo_visor
-        } else {
-            self.resolver.effective()
-        };
-        crate::dto::KeyBarView {
-            bar,
-            cells: norte_frontend::keybar::cells_in(eff, self.lang)
-                .into_iter()
-                .map(|c| crate::dto::KeyCellView {
-                    key: u32::from(c.key),
-                    label: clamp_display(c.label),
-                    command: c.command.map(clamp_display),
-                })
-                .collect(),
-        }
-    }
-
     /// La proyección de la barra de paneles (#324).
     ///
     /// Lo que la TUI hace en `panel_buttons`, con lo que este host sabe: qué
@@ -398,6 +364,13 @@ impl Estado {
             bar: self.config.common.ui_panel_bar.unwrap_or(true),
             names: self.config.common.ui_chrome.panel_bar_style()
                 == norte_config::PanelBarStyle::Names,
+            // `auto` = columna: la ventana va corta de alto, no de ancho.
+            vertical: self
+                .config
+                .common
+                .ui_chrome
+                .panel_bar_position()
+                .vertical(true),
             buttons: botones
                 .iter()
                 .map(|b| {
@@ -423,7 +396,8 @@ impl Estado {
                                 crate::dto::PanelButtonState::Focused
                             }
                         },
-                        attention: b.attention,
+                        attention: b.attention > 0,
+                        count: b.attention,
                     }
                 })
                 .collect(),
@@ -453,17 +427,22 @@ impl Estado {
         // el tablero. Con el panel A LA VISTA ya lo estás viendo: la marca
         // sobra. Mismo criterio que la TUI, y por eso se pregunta a los
         // colocados y no al árbol.
-        let mut novedad: Vec<&str> = Vec::new();
-        if !abiertos.contains(&"processes") && self.filas_de_tablero() > 0 {
-            novedad.push("processes");
+        let mut novedad: Vec<(&str, u32)> = Vec::new();
+        if !abiertos.contains(&"processes") {
+            novedad.push((
+                "processes",
+                norte_frontend::panelbar::cifra(self.filas_de_tablero()),
+            ));
         }
         if !abiertos.contains(&super::logpanel::KIND)
-            && self
-                .log_ring
-                .as_ref()
-                .is_some_and(|r| r.has_at_or_above(norte_config::logline::LogLevel::Warn))
+            && let Some(r) = self.log_ring.as_ref()
         {
-            novedad.push(super::logpanel::KIND);
+            novedad.push((
+                super::logpanel::KIND,
+                norte_frontend::panelbar::cifra(
+                    r.count_at_or_above(norte_config::logline::LogLevel::Warn),
+                ),
+            ));
         }
         norte_frontend::panelbar::buttons_in(
             &self.kinds,

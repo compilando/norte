@@ -543,6 +543,36 @@ fn cada_boton_de_la_barra_cae_en_su_sitio() {
     assert_eq!(pulsa(&mut app, 24), None, "pasado el último no hay botón");
 }
 
+/// Con `[ui] panel_bar_position = "left"` la barra es una COLUMNA de tres
+/// celdas en el borde izquierdo (spec 2026-09-21): un botón por fila, y el
+/// listado sube una fila y se aparta tres columnas.
+///
+/// Pintado, pulsado y reparto salen de la misma geometría; si el ratón
+/// siguiera creyendo que la barra es una fila, el clic de la fila 1 abriría
+/// sitios con el listado debajo.
+#[test]
+fn en_columna_cada_boton_es_una_fila_del_borde_izquierdo() {
+    let mut app = app_pintada(5);
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
+    let lineas = pintar(&mut app);
+    let pulsa = |app: &mut norte_tui::app::App, fila: u16| {
+        app.pending_panel_command = None;
+        let _ = mouse::handle(app, ev(ABAJO, 1, fila));
+        app.pending_panel_command.clone()
+    };
+    assert_eq!(pulsa(&mut app, 1).as_deref(), Some("layout.places"));
+    assert_eq!(pulsa(&mut app, 6).as_deref(), Some("layout.log"));
+    // Lo pintado dice lo mismo: una letra por fila, en la columna 1 (el
+    // carácter 2: `TestBackend` pone la línea entre comillas).
+    let letra = |f: usize| lineas[f].chars().nth(2).expect("hay columna 1");
+    assert!(letra(1).is_alphabetic(), "{:?}", lineas[1]);
+    assert!(letra(6).is_alphabetic(), "{:?}", lineas[6]);
+    // Y el listado se movió con ella: su primera fila es ahora la 3, a
+    // partir de la columna 3; la columna del raíl no es de ningún pane.
+    assert!(mouse::hit_test(&app, 5, FILA0 - 1).is_some());
+    assert!(mouse::hit_test(&app, 1, FILA0 - 1).is_none());
+}
+
 /// REGRESIÓN de un BLOCKER: con un overlay delante, la barra ni se pinta ni se
 /// puede pulsar.
 ///

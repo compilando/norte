@@ -786,8 +786,6 @@ menu-bar-label = Barra de menús
 # Lo mismo para la barra de paneles (#324), que en la ventana es una fila de
 # botones con landmark propio.
 panelbar-label = Barra de paneles
-# Y la de teclas (spec 2026-09-10), la fila de teclas de función.
-keybar-label = Barra de teclas
 # La marca de novedad de un botón de la barra, para un lector de pantalla.
 panelbar-attention = Novedades
 # H3c, y clave SEPARADA a propósito: `palette-hint` lo pintan los DOS
@@ -2047,9 +2045,11 @@ setting-ui-diff-detached-desc = Si ese comparador abre una ventana propia (Meld,
 setting-ui-confirm-quit-name = Confirmar antes de salir
 setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
 setting-ui-key-bar-name = Barra de teclas
-setting-ui-key-bar-desc = Si la fila de teclas de función (F1–F10 y qué hace cada una en la pantalla actual) se queda fijada abajo. Se lee del keymap, así que reatar una tecla cambia su etiqueta, y pulsar una celda con el ratón ejecuta el comando.
+setting-ui-key-bar-desc = Solo en el terminal. Si la fila de teclas de función (F1–F10 y qué hace cada una en la pantalla actual) se queda fijada abajo. Se lee del keymap, así que reatar una tecla cambia su etiqueta, y pulsar una celda con el ratón ejecuta el comando. La ventana no la tiene: sus comandos están en el menú y en la paleta.
 setting-ui-panel-bar-style-name = Etiquetas de la barra de paneles
 setting-ui-panel-bar-style-desc = Cómo nombra sus botones la barra de paneles: el nombre del panel con la letra de acceso subrayada (names) o solo la letra (letters). Con menos de sesenta celdas los nombres pasan solos a letras.
+setting-ui-panel-bar-position-name = Posición de la barra de paneles
+setting-ui-panel-bar-position-desc = Dónde va la barra de paneles: una fila bajo el menú (top) o una columna en el borde izquierdo (left). Con auto, cada interfaz elige la suya: arriba en el terminal, donde falta ancho, y a la izquierda en la ventana, donde falta alto.
 setting-ui-pane-footer-name = Pie del panel
 setting-ui-pane-footer-desc = Si cada listado lleva un pie con sus cuentas (directorios, ficheros, bytes), lo marcado, y el espacio libre del volumen donde vive el directorio.
 setting-ui-row-stripes-name = Filas a rayas

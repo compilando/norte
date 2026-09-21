@@ -5,6 +5,7 @@
 //! `tab_zones`) y otra PINTA, porque quien enruta un clic necesita la geometría
 //! sin haber pintado nada.
 
+use norte_frontend::panelbar::cifra;
 use norte_theme::Role;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -412,7 +413,7 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
     let foco = kind_con_teclado(app);
     // Novedad: el registro con errores sin ver, y procesos con tareas vivas.
     // Es lo que hace mirar la barra en vez de recordarla.
-    let mut novedad: Vec<&str> = Vec::new();
+    let mut novedad: Vec<(&str, u32)> = Vec::new();
     // Con el panel A LA VISTA ya las estás viendo: la marca sobra, y además le
     // robaba el estilo al estado mientras durase la tarea. Mismo criterio que
     // el registro, aquí abajo.
@@ -423,22 +424,22 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
     // kinds visibles: recorrer el árbol otra vez costaría dos pasadas más por
     // frame y dejaría la misma pregunta contestada en dos sitios, libres de
     // separarse.
-    if !abiertos.contains(&crate::processes::KIND) && !app.board.rows().is_empty() {
-        novedad.push(crate::processes::KIND);
+    if !abiertos.contains(&crate::processes::KIND) {
+        novedad.push((crate::processes::KIND, cifra(app.board.rows().len())));
     }
     // Errores o avisos en el registro que el lector no ha tenido delante: si
     // el panel está abierto ya los está viendo, así que la marca sobra.
     //
-    // `has_at_or_above` y no `snapshot`: esto corre en cada frame, y clonar el
-    // anillo entero para preguntar «¿hay algún aviso?» eran dos mil líneas con
-    // sus dos `String` cada una, diez veces por segundo.
+    // `count_at_or_above` y no `snapshot`: esto corre en cada frame, y clonar
+    // el anillo entero para contar avisos eran dos mil líneas con sus dos
+    // `String` cada una, diez veces por segundo.
     if !abiertos.contains(&crate::logview::KIND)
-        && app
-            .log_ring
-            .as_ref()
-            .is_some_and(|r| r.has_at_or_above(norte_config::logline::LogLevel::Warn))
+        && let Some(r) = app.log_ring.as_ref()
     {
-        novedad.push(crate::logview::KIND);
+        novedad.push((
+            crate::logview::KIND,
+            cifra(r.count_at_or_above(norte_config::logline::LogLevel::Warn)),
+        ));
     }
     norte_frontend::panelbar::buttons(
         &app.kinds,
@@ -459,6 +460,19 @@ pub fn panel_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     let mut x = bar.x;
     let mut out = Vec::new();
     let botones = panel_buttons(app, area);
+    // En columna, un botón por fila y el raíl entero de ancho: las mismas
+    // filas que pinta `draw_panel_bar`.
+    if crate::ui::geometry::barra_en_columna(app) {
+        for (y, b) in (bar.y..bar.y.saturating_add(bar.height)).zip(botones) {
+            out.push(PanelZone {
+                row: y,
+                x0: bar.x,
+                x1: bar.x.saturating_add(bar.width).saturating_sub(1),
+                command: b.command,
+            });
+        }
+        return out;
+    }
     let nombres = con_nombres(app, &botones, bar);
     for b in botones {
         let ancho = u16::try_from(norte_frontend::panelbar::button_cell(&b, nombres).width)
@@ -491,12 +505,22 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
     let mut ancho = 0_u16;
     let botones = panel_buttons(app, frame.area());
     let nombres = con_nombres(app, &botones, bar);
-    for b in botones {
+    // En COLUMNA (spec 2026-09-21) cada botón es una línea con su celda de
+    // letras —` S·`, tres de ancho— y los nombres no caben.
+    let columna = crate::ui::geometry::barra_en_columna(app);
+    let nombres = nombres && !columna;
+    let mut lineas: Vec<ratatui::text::Line<'static>> = Vec::new();
+    for (i, b) in botones.into_iter().enumerate() {
         let celda = norte_frontend::panelbar::button_cell(&b, nombres);
         let ancho_boton = u16::try_from(celda.width).unwrap_or(u16::MAX);
-        if ancho.saturating_add(ancho_boton) > bar.width {
+        if columna {
+            if u16::try_from(i).unwrap_or(u16::MAX) >= bar.height {
+                break;
+            }
+        } else if ancho.saturating_add(ancho_boton) > bar.width {
             break;
         }
+        let desde = spans.len();
         // Tres estilos para tres estados. Que un panel tenga el TECLADO no es
         // lo mismo que esté abierto, y es la mitad de lo que se pregunta al
         // mirar la barra: dónde van a ir mis teclas.
@@ -541,14 +565,20 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
         spans.push(ratatui::text::Span::styled(format!(" {antes}"), estilo));
         spans.push(ratatui::text::Span::styled(letra, subrayado));
         spans.push(ratatui::text::Span::styled(despues, estilo));
-        spans.push(if b.attention {
+        spans.push(if b.attention > 0 {
             ratatui::text::Span::styled("·", app.theme.role(Role::Warning))
         } else {
             ratatui::text::Span::styled(" ", estilo)
         });
+        if columna {
+            lineas.push(ratatui::text::Line::from(spans.split_off(desde)));
+        }
         ancho = ancho.saturating_add(ancho_boton);
     }
-    frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
+    if !columna {
+        lineas.push(ratatui::text::Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(lineas), bar);
 }
 
 /// Pinta la barra de menús y su desplegable.

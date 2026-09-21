@@ -9,6 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window has an activity bar** (ADR 0131, bridge 84). The panel bar
+  moves to a column on the left, as in VS Code: one icon per panel, the
+  name in the tooltip, a border on the one with the keyboard, and a badge
+  with a count on the one with news — how many tasks are running, how many
+  warnings the log holds. `[ui] panel_bar_position` chooses `top`, `left`,
+  or `auto` (the default: left in the window, top in the terminal, since
+  each is short on the other dimension). The terminal can have the column
+  too, three cells wide, with `left`.
 - **The window edits settings with real controls** (ADR 0130, bridge 83). A
   boolean is a switch, a fixed list is a dropdown — with the installed
   themes and keymap presets already in it — and a number is a number field
@@ -70,6 +78,13 @@ independently through `PROTOCOL_VERSION`.
   pane narrows, because a column nobody asked for must not be the one that
   leaves the name unreadable. Write it into `[ui.columns]` yourself and it
   stops giving way, like any column you chose.
+
+### Removed
+
+- **The window no longer shows the F1–F10 key bar** (ADR 0131, bridge 84).
+  Its commands are in the menu and the palette, and the row was the
+  heaviest thing on screen. The keys still work, and the terminal keeps its
+  key bar under `[ui] key_bar`.
 
 ### Fixed
 

@@ -447,11 +447,14 @@ function sendViewport(send: (a: UiAction) => void, screen: Screen, doc: Document
   const view = doc.defaultView ?? window;
   // Del elemento que de verdad lleva el reparto, no de la ventana: la barra
   // de menús le come una fila, y medir la ventana le declararía al host un
-  // alto que no tiene dónde pintarse.
-  const alto = doc.getElementById("screen")?.clientHeight ?? view.innerHeight;
+  // alto que no tiene dónde pintarse. Lo mismo con el ANCHO desde que la
+  // barra de actividad come una columna a la izquierda (puente 84).
+  const pantalla = doc.getElementById("screen");
+  const alto = pantalla?.clientHeight ?? view.innerHeight;
+  const ancho = pantalla?.clientWidth ?? view.innerWidth;
   send({
     action: "set_viewport",
-    width: Math.max(1, Math.floor(view.innerWidth / cell.w)),
+    width: Math.max(1, Math.floor(ancho / cell.w)),
     height: Math.max(1, Math.floor(alto / cell.h)),
   });
 }

@@ -2260,7 +2260,61 @@ describe("la barra de menús", () => {
     v.panel_bar.bar = false;
     screen.paint(v);
     expect(document.documentElement.style.getPropertyValue("--panelbar-h")).toBe("0px");
+    expect(document.documentElement.style.getPropertyValue("--activity-w")).toBe("0px");
     expect(document.querySelector(".panelbar")).toBeNull();
+  });
+
+  it("en columna es la barra de actividad: reserva ANCHO, icono y cifra", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.panel_bar.vertical = true;
+    const log = v.panel_bar.buttons[1];
+    if (log !== undefined) {
+      log.count = 7;
+    }
+    v.panel_bar.buttons.push({
+      kind: "plugin:git:status",
+      label: "Git",
+      letter: "G",
+      chord: "—",
+      state: "focused",
+      attention: true,
+      count: 150,
+    });
+    screen.paint(v);
+    const raiz = document.documentElement.style;
+    // Columna: la fila de arriba no reserva nada y el borde izquierdo sí.
+    expect(raiz.getPropertyValue("--panelbar-h")).toBe("0px");
+    expect(raiz.getPropertyValue("--activity-w")).toBe("var(--activity-size)");
+    expect(screen.takeViewportDirty()).toBe(true);
+    const barra = document.querySelector(".panelbar") as HTMLElement;
+    expect(barra.dataset["vertical"]).toBe("true");
+    expect(barra.getAttribute("aria-orientation")).toBe("vertical");
+    const botones = [
+      ...document.querySelectorAll(".panelbar-button"),
+    ] as HTMLButtonElement[];
+    // Un kind de serie lleva su icono; uno que norte no conoce —el de un
+    // plugin— lleva su letra, que es lo que ya se sabe de él.
+    expect(botones[0]?.querySelector("svg.panelbar-icon")).not.toBeNull();
+    expect(botones[2]?.querySelector("svg")).toBeNull();
+    expect(botones[2]?.querySelector(".panelbar-letter")?.textContent).toBe("G");
+    // Sin texto visible, el NOMBRE es lo que oye un lector de pantalla.
+    expect(botones[0]?.getAttribute("aria-label")).toBe("Sitios");
+    expect(botones[0]?.title).toBe("Sitios (alt+p)");
+    // La cifra, acotada: una insignia de cuatro dígitos no cabe en 48 px.
+    expect(botones[0]?.querySelector(".panelbar-attention")).toBeNull();
+    expect(botones[1]?.querySelector(".panelbar-attention")?.textContent).toBe("7");
+    expect(botones[2]?.querySelector(".panelbar-attention")?.textContent).toBe("99+");
+    expect(botones[2]?.dataset["state"]).toBe("focused");
+
+    botones[2]?.click();
+    expect(enviadas).toEqual([{ action: "panel_bar_activate", button: 2 }]);
+
+    // Y volver a fila devuelve el ancho: la reserva sigue a la barra.
+    v.panel_bar.vertical = false;
+    screen.paint(v);
+    expect(raiz.getPropertyValue("--activity-w")).toBe("0px");
+    expect(raiz.getPropertyValue("--panelbar-h")).toBe("var(--cell-h)");
   });
 
   it("el desplegado marca su título, su cursor y lo que no se puede hacer", () => {

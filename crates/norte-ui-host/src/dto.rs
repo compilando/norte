@@ -53,8 +53,6 @@ pub struct ViewSnapshot {
     /// La barra de paneles (#324): qué paneles hay, cómo están, y si alguno
     /// tiene algo que contar. Puente 51.
     pub panel_bar: PanelBarView,
-    /// La barra de teclas de función (spec 2026-09-10). Puente 63.
-    pub key_bar: KeyBarView,
     /// `[ui] row_stripes` (spec 2026-09-20): si las filas impares de un
     /// listado van sobre una banda. Puente 80.
     ///
@@ -251,6 +249,12 @@ pub struct PanelBarView {
     /// letra. Ausente en un host anterior al puente 63 = nombres.
     #[serde(default = "default_true")]
     pub names: bool,
+    /// `[ui] panel_bar_position` ya resuelta (puente 84): `true` = una
+    /// columna en el borde izquierdo, la barra de actividad; `false` = la
+    /// fila bajo el menú. `auto` lo resuelve el HOST, a columna: en la
+    /// ventana falta alto, no ancho. Ausente en un host anterior = fila.
+    #[serde(default)]
+    pub vertical: bool,
     /// Los botones, en el orden en que se pintan. Un click vuelve como el
     /// ÍNDICE en esta lista (`UiAction::PanelBarActivate`), nunca como un
     /// comando: el renderer no despacha (ADR 0069).
@@ -261,36 +265,6 @@ pub struct PanelBarView {
 /// lo de siempre.
 fn default_true() -> bool {
     true
-}
-
-/// La barra de teclas de función (spec 2026-09-10, puente 63): diez celdas
-/// con lo que cada `F` hace en la pantalla que tiene el teclado.
-///
-/// DERIVADA del keymap efectivo de esa pantalla —el diálogo si hay uno
-/// abierto, el visor si está a pantalla completa, los listados si no—, que
-/// es el mismo orden con el que el host elige resolver; por eso dice la
-/// verdad. Viaja entera con cada cambio, como la de paneles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeyBarView {
-    /// `[ui] key_bar`: si la barra se pinta.
-    pub bar: bool,
-    /// Las diez celdas, `F1`..`F10` en orden. Un click vuelve como la TECLA
-    /// (`UiAction::KeyBarActivate`), nunca como un comando: el renderer no
-    /// despacha (ADR 0069), y una tecla sintetizada va por el mismo camino
-    /// que una de verdad.
-    pub cells: Vec<KeyCellView>,
-}
-
-/// Una celda de la barra de teclas.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeyCellView {
-    /// `1`..=`10`.
-    pub key: u32,
-    /// La etiqueta corta, en el idioma de la sesión. Vacía = la tecla no
-    /// ata nada en esta pantalla, y la celda no se pulsa.
-    pub label: String,
-    /// El comando que corre, para el título del botón. `None` = nada.
-    pub command: Option<String>,
 }
 
 /// Un botón de la barra de paneles.
@@ -311,6 +285,11 @@ pub struct PanelButtonView {
     /// Tiene algo que contar sin estar a la vista: el registro con avisos
     /// sin leer, procesos con tareas en el tablero.
     pub attention: bool,
+    /// CUÁNTAS cosas tiene que contar (puente 84): la cifra de la insignia.
+    /// `0` con `attention` apagado; ausente en un host anterior = `0`, y el
+    /// renderer pinta entonces la marca sin cifra.
+    #[serde(default)]
+    pub count: u32,
 }
 
 /// Cómo está el panel de un botón.
@@ -3496,13 +3475,6 @@ pub enum ViewChange {
     PanelBar {
         /// La barra entera.
         panel_bar: PanelBarView,
-    },
-    /// La barra de teclas cambió: otra pantalla tiene el teclado, o un
-    /// perfil trajo otro keymap. Mismo mecanismo que la de paneles: el host
-    /// la compara con la última que mandó al armar cada parche.
-    KeyBar {
-        /// La barra entera.
-        key_bar: KeyBarView,
     },
     /// La paleta se abrió, se filtró, se movió o se cerró.
     Palette {

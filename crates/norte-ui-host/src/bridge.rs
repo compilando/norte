@@ -482,7 +482,13 @@ use serde::{Deserialize, Serialize};
 ///   enseña como marcador. «Vacío» no es un hueco, es ese valor, y decir
 ///   cuál informa — una frase que diga que lo hay ocupa el sitio del dato
 ///   sin darlo.
-pub const BRIDGE_VERSION: u32 = 83;
+/// - **84**: la ventana deja la barra de teclas (spec 2026-09-21). Se van
+///   `ViewSnapshot.key_bar`, el cambio `key_bar` y la acción
+///   `key_bar_activate`, con `KeyBarView` y `KeyCellView`. La barra de
+///   F1–F10 es de la herencia del terminal; la ventana tiene menú, paleta y
+///   barra de actividad, y la fila de celdas era lo que más pesaba en la
+///   pantalla y lo que menos decía. `[ui] key_bar` sigue gobernando la TUI.
+pub const BRIDGE_VERSION: u32 = 84;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

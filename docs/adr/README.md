@@ -129,3 +129,6 @@ edits.
 | [0126](0126-the-catalogue-declares-what-a-command-does.md) | The catalogue declares what a command does | accepted |
 | [0127](0127-logs-are-structured-and-a-task-is-logged-inside-its-request.md) | Logs are structured, and a task is logged inside the request that asked for it | accepted |
 | [0128](0128-the-listing-reads-in-bands-and-says-what-it-may-do.md) | The listing reads in bands, and says what it may do | accepted |
+| [0129](0129-settings-have-sections-and-resetting-tells-the-truth.md) | Settings have sections, and resetting tells the truth | accepted |
+| [0130](0130-the-window-edits-settings-with-its-own-controls.md) | The window edits settings with its own controls | accepted |
+| [0131](0131-the-window-has-an-activity-bar-and-no-key-bar.md) | The window has an activity bar and no key bar | accepted |

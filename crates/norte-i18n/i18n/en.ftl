@@ -779,8 +779,6 @@ menu-bar-label = Menu bar
 # The same for the panel bar (#324), which in the window is a row of buttons
 # with a landmark of its own.
 panelbar-label = Panel bar
-# And for the key bar (spec 2026-09-10), the row of function keys.
-keybar-label = Key bar
 # A bar button's attention mark, for a screen reader.
 panelbar-attention = Something new
 # H3c, and a SEPARATE key on purpose: `palette-hint` is painted by both
@@ -2086,9 +2084,11 @@ setting-ui-diff-detached-desc = Whether that comparison tool opens a window of i
 setting-ui-confirm-quit-name = Confirm before quitting
 setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
 setting-ui-key-bar-name = Key bar
-setting-ui-key-bar-desc = Whether the row of function keys (F1–F10 and what each does on the current screen) stays pinned at the bottom. It is read from the keymap, so rebinding a key changes its label, and clicking a cell runs the command.
+setting-ui-key-bar-desc = Terminal only. Whether the row of function keys (F1–F10 and what each does on the current screen) stays pinned at the bottom. It is read from the keymap, so rebinding a key changes its label, and clicking a cell runs the command. The window has none: its commands live in the menu and the palette.
 setting-ui-panel-bar-style-name = Panel bar labels
 setting-ui-panel-bar-style-desc = How the panel bar names its buttons: the panel's name with its access letter underlined (names), or the letter alone (letters). Names fall back to letters on their own when the row is narrower than sixty cells.
+setting-ui-panel-bar-position-name = Panel bar position
+setting-ui-panel-bar-position-desc = Where the panel bar sits: a row under the menu (top) or a column on the left edge (left). With auto, each interface picks its own: top in the terminal, which is short on width, and left in the window, which is short on height.
 setting-ui-pane-footer-name = Pane footer
 setting-ui-pane-footer-desc = Whether every listing carries a footer with its counts (directories, files, bytes), what is marked, and the free space of the volume the directory lives on.
 setting-ui-row-stripes-name = Striped rows

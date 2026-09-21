@@ -4,10 +4,10 @@ expression: render_80x24(&app)
 ---
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "                                                                                "
-"┌/c┌ Ajustes · 34 de 34 ────────────────────────────────────────────────────┐──┐"
+"┌/c┌ Ajustes · 35 de 35 ────────────────────────────────────────────────────┐──┐"
 "│No│Apariencia                                                              │ha│"
 "│  │Apariencia 9                                                            │  │"
-"│  │Paneles …istado 11  > Tema                         default              │  │"
+"│  │Paneles …istado 12  > Tema                         default              │  │"
 "│  │Abrir con 4           Tipografía de la interfaz                         │  │"
 "│  │Teclado y ratón 4     Tipografía monoespaciada                          │  │"
 "│ !│Comportamiento 5      Tamaño de letra                                   │  │"

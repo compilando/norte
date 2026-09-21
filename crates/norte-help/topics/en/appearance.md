@@ -18,17 +18,24 @@ on the screen that has the keyboard: the listing, or the viewer. It is read
 from your keymap, so rebinding F5 relabels it, and a key that does nothing
 here shows only its number. With a dialog in front the row goes blank: no
 preset puts a function key on a dialog. Clicking a cell presses the key.
-`key_bar = false` removes the row.
+`key_bar = false` removes the row. It is the terminal's alone: the window
+has none, and its commands live in the menu and the palette.
 
 The panel bar
 -------------
 
-Under the menu sits a row with one button per side panel — Places, Viewer,
-Jobs, Details, Tree, Log — each showing its name with the access letter
-underlined, whether it is open, whether it has the keyboard, and whether it
-has something to say. `panel_bar_style = "letters"` shrinks it to the
-letters alone, and names fall back to letters on their own when they do not
-all fit. `panel_bar = false` removes the row.
+There is one button per side panel — Places, Viewer, Jobs, Details, Tree,
+Log — each saying whether it is open, whether it has the keyboard, and
+whether it has something to say. In the terminal it is a row under the
+menu, with the name and the access letter underlined;
+`panel_bar_style = "letters"` shrinks it to the letters alone, and names
+fall back to letters on their own when they do not all fit. In the window
+it is a column on the left edge, with one icon per panel and a count on the
+one with news: how many tasks are running, how many warnings the log holds.
+
+`panel_bar_position` chooses where it goes: `top` (a row), `left` (a
+column), or `auto`, which is top in the terminal and left in the window.
+`panel_bar = false` removes it.
 
 The pane footer
 ---------------

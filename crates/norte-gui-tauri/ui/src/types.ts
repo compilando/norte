@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 83;
+export const BRIDGE_VERSION = 84;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -844,32 +844,21 @@ export interface PanelButtonView {
   state: PanelButtonState;
   /** Tiene algo que contar sin estar a la vista. */
   attention: boolean;
+  /** Cuántas cosas (puente 84): la cifra de la insignia. Opcional: un host
+   *  anterior no la manda, y entonces la marca va sin cifra. */
+  count?: number;
 }
 
 /** La barra de paneles (#324, puente 51): qué paneles hay y cómo están. */
-/** La barra de teclas de función (puente 63): diez celdas con lo que cada
- *  `F` hace en la pantalla que tiene el teclado. Un click vuelve como la
- *  TECLA, y el host la sintetiza. */
-export interface KeyBarView {
-  /** `[ui] key_bar`: si la barra se pinta. */
-  bar: boolean;
-  /** `F1`..`F10`, en orden. */
-  cells: KeyCellView[];
-}
-
-export interface KeyCellView {
-  key: number;
-  /** Vacía = la tecla no ata nada aquí, y la celda no se pulsa. */
-  label: string;
-  command: string | null;
-}
-
 export interface PanelBarView {
   /** `[ui] panel_bar`: si la barra se pinta. */
   bar: boolean;
   /** `[ui] panel_bar_style = "names"`: nombre con la letra marcada, o solo
    *  la letra. Opcional: un host anterior al puente 63 no lo manda. */
   names?: boolean;
+  /** `[ui] panel_bar_position` ya resuelta por el host (puente 84): `true`
+   *  = barra de actividad en el borde izquierdo; ausente = fila arriba. */
+  vertical?: boolean;
   /** Un click vuelve como el ÍNDICE aquí, nunca como un comando. */
   buttons: PanelButtonView[];
 }
@@ -1405,8 +1394,6 @@ export interface ViewSnapshot {
   tasks: TaskView[];
   menu: MenuView;
   panel_bar: PanelBarView;
-  /** Opcional: un host anterior al puente 63 no la manda. */
-  key_bar?: KeyBarView;
   /** `[ui] row_stripes` (puente 80): el «pijama» del listado. Opcional: un
    *  host anterior no lo manda, y entonces no hay banda. */
   row_stripes?: boolean;
@@ -1489,7 +1476,6 @@ export type ViewChange =
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "menu"; menu: MenuView }
   | { change: "panel_bar"; panel_bar: PanelBarView }
-  | { change: "key_bar"; key_bar: KeyBarView }
   | { change: "profiles"; profiles: ProfilePickerView | null }
   | { change: "palette"; palette: PaletteView | null }
   | { change: "goto"; goto: GotoView | null }
@@ -1653,7 +1639,6 @@ export type UiAction =
   | { action: "splash_close" }
   | { action: "splash_activate_row"; number: number }
   | { action: "panel_bar_activate"; button: number }
-  | { action: "key_bar_activate"; key: number }
   | { action: "resize_slot"; slot_id: number; cells: number }
   | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };

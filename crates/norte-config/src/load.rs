@@ -1337,6 +1337,54 @@ impl PanelBarStyle {
     }
 }
 
+/// `[ui] panel_bar_position`: where the panel bar sits.
+///
+/// `Auto` is not a third place: it is "what this frontend does best", and
+/// the two answer differently on purpose. A terminal is short on width, so
+/// its bar is a row on top; the window is short on height, so its bar is an
+/// activity rail on the left, as in VS Code (spec 2026-09-21).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PanelBarPosition {
+    /// Top in the terminal, left in the window. Default.
+    #[default]
+    Auto,
+    /// A row under the menu bar.
+    Top,
+    /// A column on the left edge.
+    Left,
+}
+
+impl PanelBarPosition {
+    /// The wire string this variant round-trips from/to.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Top => "top",
+            Self::Left => "left",
+        }
+    }
+
+    /// Whether the bar is a column, given the frontend's own answer for
+    /// `Auto`.
+    ///
+    /// ```
+    /// use norte_config::PanelBarPosition;
+    /// assert!(!PanelBarPosition::Auto.vertical(false));
+    /// assert!(PanelBarPosition::Auto.vertical(true));
+    /// assert!(PanelBarPosition::Left.vertical(false));
+    /// assert!(!PanelBarPosition::Top.vertical(true));
+    /// ```
+    #[must_use]
+    pub fn vertical(self, auto_is_vertical: bool) -> bool {
+        match self {
+            Self::Auto => auto_is_vertical,
+            Self::Top => false,
+            Self::Left => true,
+        }
+    }
+}
+
 /// `[ui] date_format`: the default format of the `mtime` column.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DateFormat {
@@ -1475,6 +1523,8 @@ pub struct UiChrome {
     pub key_bar: Option<bool>,
     /// `[ui] panel_bar_style` (None = names), validated.
     pub panel_bar_style: Option<PanelBarStyle>,
+    /// `[ui] panel_bar_position` (None = auto), validated.
+    pub panel_bar_position: Option<PanelBarPosition>,
     /// `[ui] pane_footer` (None = shown).
     pub pane_footer: Option<bool>,
     /// `[ui] row_stripes` (None = off): the listing's «pyjama».
@@ -1579,6 +1629,11 @@ impl UiChrome {
     #[must_use]
     pub fn panel_bar_style(self) -> PanelBarStyle {
         self.panel_bar_style.unwrap_or_default()
+    }
+    /// Effective `panel_bar_position` (absent = auto).
+    #[must_use]
+    pub fn panel_bar_position(self) -> PanelBarPosition {
+        self.panel_bar_position.unwrap_or_default()
     }
     /// Effective `pane_footer` (absent = shown).
     #[must_use]
@@ -2019,15 +2074,42 @@ fn merge_ui_flags(
     *ui_layout = ui.layout.clone().or(ui_layout.take());
 }
 
+/// The panel bar's two enums, `panel_bar_style` and `panel_bar_position`.
+/// Split out of [`merge_ui_chrome`] only for length; the error is the
+/// message, and the caller attaches the file.
+fn merge_panel_bar(acc: &mut UiChrome, ui: &crate::schema::UiSection) -> Result<(), &'static str> {
+    if let Some(raw) = &ui.panel_bar_style {
+        acc.panel_bar_style = Some(match raw.as_str() {
+            "names" => PanelBarStyle::Names,
+            "letters" => PanelBarStyle::Letters,
+            _ => return Err("[ui] panel_bar_style inválido: solo se admite «names» o «letters»"),
+        });
+    }
+    if let Some(raw) = &ui.panel_bar_position {
+        acc.panel_bar_position = Some(match raw.as_str() {
+            "auto" => PanelBarPosition::Auto,
+            "top" => PanelBarPosition::Top,
+            "left" => PanelBarPosition::Left,
+            _ => {
+                return Err(
+                    "[ui] panel_bar_position inválido: solo se admite «auto», «top» o «left»",
+                );
+            }
+        });
+    }
+    Ok(())
+}
+
 /// Merges one layer's `[ui]` CHROME keys into the accumulator
-/// (last-present-wins per key), validating the two enums and the bound of
+/// (last-present-wins per key), validating the enums and the bound of
 /// `notice_seconds` so the diagnostic can name the source file. Same
 /// #73 caution as `parse_confirm_quit`: the message names the valid values,
 /// never the raw one.
 ///
 /// # Errors
-/// [`ConfigError::Toml`] on an unknown `panel_bar_style`/`date_format` or a
-/// `notice_seconds` above [`UiChrome::MAX_NOTICE_SECONDS`].
+/// [`ConfigError::Toml`] on an unknown `panel_bar_style`,
+/// `panel_bar_position` or `date_format`, or a `notice_seconds` above
+/// [`UiChrome::MAX_NOTICE_SECONDS`].
 fn merge_ui_chrome(
     acc: &mut UiChrome,
     ui: &crate::schema::UiSection,
@@ -2041,17 +2123,7 @@ fn merge_ui_chrome(
     acc.pane_footer = ui.pane_footer.or(acc.pane_footer);
     acc.row_stripes = ui.row_stripes.or(acc.row_stripes);
     acc.dialog_buttons = ui.dialog_buttons.or(acc.dialog_buttons);
-    if let Some(raw) = &ui.panel_bar_style {
-        acc.panel_bar_style = Some(match raw.as_str() {
-            "names" => PanelBarStyle::Names,
-            "letters" => PanelBarStyle::Letters,
-            _ => {
-                return Err(bad(
-                    "[ui] panel_bar_style inválido: solo se admite «names» o «letters»",
-                ));
-            }
-        });
-    }
+    merge_panel_bar(acc, ui).map_err(bad)?;
     if let Some(raw) = &ui.date_format {
         acc.date_format = Some(match raw.as_str() {
             "smart" => DateFormat::Smart,
@@ -3551,6 +3623,7 @@ format = "exact"
         std::fs::write(
             user.path().join("norte.toml"),
             "[ui]\nkey_bar = false\npanel_bar_style = \"letters\"\ndate_format = \"iso\"\n\
+             panel_bar_position = \"left\"\n\
              notice_seconds = 30\nhistory_size = 12\nsplash = \"home\"\n\
              processes_panel = \"manual\"\nimages = \"blocks\"\ndir_indicator = \"slash\"\n",
         )
@@ -3570,6 +3643,7 @@ format = "exact"
         let c = load(&layers).expect("carga").ui_chrome;
         assert_eq!(c.key_bar, Some(false));
         assert_eq!(c.panel_bar_style(), PanelBarStyle::Letters);
+        assert_eq!(c.panel_bar_position(), PanelBarPosition::Left);
         assert_eq!(c.date_format(), DateFormat::Relative, "la última capa gana");
         assert_eq!(c.notice_seconds(), 30);
         assert_eq!(c.history_size(), 12);
@@ -3584,6 +3658,7 @@ format = "exact"
         assert_eq!(empty, UiChrome::default());
         assert!(empty.key_bar() && empty.pane_footer() && empty.dialog_buttons());
         assert_eq!(empty.panel_bar_style(), PanelBarStyle::Names);
+        assert_eq!(empty.panel_bar_position(), PanelBarPosition::Auto);
         assert_eq!(empty.date_format(), DateFormat::Smart);
         assert_eq!(empty.notice_seconds(), 8);
         assert_eq!(empty.history_size(), 30);
@@ -3594,6 +3669,7 @@ format = "exact"
 
         for bad in [
             "panel_bar_style = \"icons\"",
+            "panel_bar_position = \"right\"",
             "date_format = \"unix\"",
             "notice_seconds = 601",
             "history_size = 4",

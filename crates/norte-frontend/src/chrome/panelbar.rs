@@ -65,8 +65,10 @@ pub struct PanelButton {
     pub name: String,
     /// Cómo está.
     pub state: PanelState,
-    /// Tiene algo que contar (errores nuevos, tareas vivas).
-    pub attention: bool,
+    /// Cuántas cosas tiene que contar (avisos en el registro, tareas vivas);
+    /// `0` = nada. La TUI pinta una marca; la ventana, la cifra, como la
+    /// insignia de la barra de actividad de VS Code (spec 2026-09-21).
+    pub attention: u32,
 }
 
 /// Lo que un botón ocupa y enseña en una fila de celdas (spec 2026-09-10).
@@ -130,6 +132,19 @@ pub fn names_fit(buttons: &[PanelButton], width: usize) -> bool {
         <= width
 }
 
+/// Una cuenta para la insignia de un botón: satura en vez de truncar, porque
+/// una cifra que da la vuelta diría «nada» con el registro lleno.
+///
+/// ```
+/// use norte_frontend::panelbar::cifra;
+/// assert_eq!(cifra(3), 3);
+/// assert_eq!(cifra(usize::MAX), u32::MAX);
+/// ```
+#[must_use]
+pub fn cifra(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
 /// Lo que la barra necesita saber del momento.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PanelBarInput<'a> {
@@ -142,8 +157,9 @@ pub struct PanelBarInput<'a> {
     pub open: &'a [&'a str],
     /// El kind que tiene el teclado, si es un panel.
     pub focused: Option<&'a str>,
-    /// Kinds con novedad.
-    pub attention: &'a [&'a str],
+    /// Kinds con novedad, con cuántas. Una cifra `0` es lo mismo que no
+    /// estar.
+    pub attention: &'a [(&'a str, u32)],
 }
 
 /// Los botones de la barra: los ABIERTOS en el orden en que están en
@@ -211,7 +227,11 @@ fn buttons_con(
             letter,
             name,
             state,
-            attention: input.attention.contains(&id),
+            attention: input
+                .attention
+                .iter()
+                .find(|(k, _)| *k == id)
+                .map_or(0, |(_, n)| *n),
         });
     }
     // El orden es el del REGISTRO, siempre, abiertos o no (decisión de Oscar
@@ -508,7 +528,7 @@ mod tests {
             letter,
             name: name.into(),
             state: PanelState::Closed,
-            attention: false,
+            attention: 0,
         };
         let sitios = button_cell(&b("Sitios", 'S'), true);
         assert_eq!(
@@ -585,7 +605,7 @@ mod tests {
             PanelBarInput {
                 open: &abiertos,
                 focused: Some("log"),
-                attention: &["processes"],
+                attention: &[("processes", 3), ("tree", 0)],
             },
         );
         let de = |k: &str| b.iter().find(|x| x.kind == k).expect("está").clone();
@@ -594,8 +614,10 @@ mod tests {
         assert_eq!(de("tree").state, PanelState::Closed);
         // Y la novedad es independiente de estar abierto: un panel cerrado con
         // algo que contar es justo el caso que hace mirar la barra.
-        assert!(de("processes").attention);
+        // La CIFRA viaja tal cual, y un cero es no tener nada que contar.
+        assert_eq!(de("processes").attention, 3);
         assert_eq!(de("processes").state, PanelState::Closed);
-        assert!(!de("log").attention);
+        assert_eq!(de("log").attention, 0);
+        assert_eq!(de("tree").attention, 0);
     }
 }

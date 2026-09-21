@@ -393,6 +393,13 @@ pub struct UiSection {
     /// `quick_search`) so its diagnostic can include the source path.
     #[serde(default)]
     pub panel_bar_style: Option<String>,
+    /// Where the panel bar sits: `"top"`, a row under the menu bar;
+    /// `"left"`, an activity rail on the left edge; `"auto"` (default), each
+    /// frontend's own answer — top in the terminal, left in the window.
+    ///
+    /// [`crate::load::load`] rejects other values.
+    #[serde(default)]
+    pub panel_bar_position: Option<String>,
     /// Whether every listing carries a footer with its counts (directories,
     /// files, bytes), what is marked, and the free space of the volume the
     /// directory lives on. Absent = `true`.

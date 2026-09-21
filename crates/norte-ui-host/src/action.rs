@@ -742,15 +742,6 @@ pub enum UiAction {
         /// Qué botón, en el orden en que viajaron.
         button: u32,
     },
-    /// Pulsa una celda de la barra de teclas (spec 2026-09-10, puente 63).
-    ///
-    /// Lleva la TECLA (`1`..=`10`) y no el comando: el host la sintetiza
-    /// como `F<n>` y la despacha por el mismo camino que una tecla de
-    /// verdad, contra la pantalla que tenga el teclado en ese momento.
-    KeyBarActivate {
-        /// Qué tecla de función.
-        key: u32,
-    },
     /// Arrastra el borde que hay entre `slot_id` y el hueco de al lado.
     ///
     /// `cells` es DÓNDE está el puntero en el eje del reparto, en celdas de

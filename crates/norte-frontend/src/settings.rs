@@ -475,9 +475,18 @@ pub fn section_of(id: &str) -> Option<Section> {
         | "ui.font-size" | "ui.reduce-motion" | "ui.row-stripes" | "ui.images" => {
             Section::Appearance
         }
-        "ui.show-hidden" | "ui.parent-entry" | "ui.dir-indicator" | "ui.pane-footer"
-        | "ui.date-format" | "ui.panel-bar" | "ui.panel-bar-style" | "ui.menu-bar"
-        | "ui.key-bar" | "ui.splash" | "ui.processes-panel" => Section::Panes,
+        "ui.show-hidden"
+        | "ui.parent-entry"
+        | "ui.dir-indicator"
+        | "ui.pane-footer"
+        | "ui.date-format"
+        | "ui.panel-bar"
+        | "ui.panel-bar-style"
+        | "ui.panel-bar-position"
+        | "ui.menu-bar"
+        | "ui.key-bar"
+        | "ui.splash"
+        | "ui.processes-panel" => Section::Panes,
         "ui.editor" | "ui.editor-detached" | "ui.diff" | "ui.diff-detached" => Section::OpenWith,
         "keymap.preset" | "ui.mouse" | "ui.alt-menu" | "ui.quick-search" => Section::Input,
         "ui.confirm-quit" | "ui.dialog-buttons" | "ui.notice-seconds" | "ui.history-size"
@@ -626,6 +635,13 @@ const CATALOG: &[SettingDef] = &[
     SettingDef {
         id: "ui.panel-bar-style",
         kind: SettingKind::Enum(&["names", "letters"]),
+        applies_live: true,
+    },
+    SettingDef {
+        // Arriba en el terminal y a la izquierda en la ventana (`auto`), o
+        // la misma en los dos (spec 2026-09-21).
+        id: "ui.panel-bar-position",
+        kind: SettingKind::Enum(&["auto", "top", "left"]),
         applies_live: true,
     },
     SettingDef {
@@ -810,6 +826,12 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         // Ausente = lo que el frontend hace de verdad, como `ui.menu-bar`.
         "ui.key-bar" => cfg.common.ui_chrome.key_bar().to_string(),
         "ui.panel-bar-style" => cfg.common.ui_chrome.panel_bar_style().as_str().to_owned(),
+        "ui.panel-bar-position" => cfg
+            .common
+            .ui_chrome
+            .panel_bar_position()
+            .as_str()
+            .to_owned(),
         "ui.pane-footer" => cfg.common.ui_chrome.pane_footer().to_string(),
         "ui.row-stripes" => cfg.common.ui_chrome.row_stripes().to_string(),
         "ui.date-format" => cfg.common.ui_chrome.date_format().as_str().to_owned(),
