@@ -475,32 +475,54 @@ export class Screen {
         }
         const slot = a.slot_id;
         el.addEventListener("pointerdown", (e: PointerEvent) => {
-          // La captura es lo que hace que el arrastre siga al puntero cuando
-          // se sale del tirador — que es lo que pasa siempre, porque el
-          // tirador mide seis píxeles.
-          el.setPointerCapture(e.pointerId);
           e.preventDefault();
-        });
-        el.addEventListener("pointermove", (e: PointerEvent) => {
-          if (!el.hasPointerCapture(e.pointerId)) {
-            return;
-          }
-          // Contra el ORIGEN del tablero, no contra la ventana. `#screen`
-          // baja lo que midan la barra de menú y la de paneles
-          // (`margin-top`), así que un `clientY` crudo le daba al host una
-          // fila de más por cada fila de cromo: el borde saltaba al empezar a
-          // arrastrarlo. En el eje X coincidían por casualidad —el tablero
-          // empieza en la columna 0— y por eso solo se notaba en los bordes
-          // horizontales.
-          const origen = this.root.getBoundingClientRect();
-          const cells = vertical
-            ? Math.round((e.clientX - origen.left) / cell.w)
-            : Math.round((e.clientY - origen.top) / cell.h);
-          this.send({ action: "resize_slot", slot_id: slot, cells });
+          this.arrastrarBorde(slot, vertical, cell);
         });
         this.root.append(el);
       }
     }
+  }
+
+  /**
+   * El arrastre de un borde, desde que se agarra hasta que se suelta.
+   *
+   * Por `window` y NO por captura del puntero en el tirador: cada paso del
+   * arrastre cambia el reparto, cada cambio de reparto rehace los huecos y
+   * los tiradores (`rebuild`), y el tirador agarrado desaparecía con su
+   * captura después del PRIMER paso — el borde se movía una celda, o
+   * ninguna, y se quedaba ahí. El hueco se nombra por id, que sobrevive a
+   * cualquier rehacer.
+   */
+  arrastrarBorde(slot: number, vertical: boolean, cell: { w: number; h: number }): void {
+    const raiz = document.documentElement;
+    raiz.dataset["dragging"] = vertical ? "border-col" : "border-row";
+    let ultimo = Number.NaN;
+    const mover = (e: PointerEvent): void => {
+      // Contra el ORIGEN del tablero, no contra la ventana. `#screen` baja
+      // lo que midan la barra de menú y la de paneles (`margin-top`), así
+      // que un `clientY` crudo le daba al host una fila de más por cada
+      // fila de cromo: el borde saltaba al empezar a arrastrarlo.
+      const origen = this.root.getBoundingClientRect();
+      const cells = vertical
+        ? Math.round((e.clientX - origen.left) / cell.w)
+        : Math.round((e.clientY - origen.top) / cell.h);
+      // Una orden por CELDA, no por píxel: el host no ve la diferencia y
+      // el puente no se llena de lo mismo.
+      if (cells === ultimo) {
+        return;
+      }
+      ultimo = cells;
+      this.send({ action: "resize_slot", slot_id: slot, cells });
+    };
+    const soltar = (): void => {
+      window.removeEventListener("pointermove", mover);
+      window.removeEventListener("pointerup", soltar);
+      window.removeEventListener("pointercancel", soltar);
+      delete raiz.dataset["dragging"];
+    };
+    window.addEventListener("pointermove", mover);
+    window.addEventListener("pointerup", soltar);
+    window.addEventListener("pointercancel", soltar);
   }
 
   rebuild(view: ViewSnapshot, cell: { w: number; h: number }): void {

@@ -3957,6 +3957,65 @@ async fn el_borde_de_los_detalles_se_arrastra_desde_el_segundo_listado() {
     );
 }
 
+/// Regresión (segunda captura): el borde HORIZONTAL entre los detalles y el
+/// registro de abajo sube y baja el registro, agarrado desde los detalles.
+#[tokio::test]
+async fn el_borde_del_registro_se_arrastra_desde_los_detalles() {
+    // El árbol de la sesión de la captura, tal cual lo guardó la ventana.
+    let sesion = r#"{"split": {"children": [{"split": {"children": [
+        {"slot": {"id": 2, "kind": "browser"}}, {"slot": {"id": 1, "kind": "browser"}},
+        {"slot": {"bindings": {"follows": {"role": "active"}}, "id": 5, "kind": "metadata"}}],
+        "dir": "horizontal", "sizes": [{"weight": 1}, {"weight": 1}, {"weight": 1}]}},
+        {"slot": {"id": 6, "kind": "log"}}, {"slot": {"id": 3, "kind": "tasks"}},
+        {"slot": {"id": 4, "kind": "status"}}], "dir": "vertical",
+        "sizes": [{"weight": 1}, {"fixed": 11}, "auto", {"fixed": 1}]}}"#;
+    let tree: norte_frontend::layout::Node = serde_json::from_str(sesion).expect("árbol");
+    let (h, _) = super::base::host_con_arbol(arbol(), tree, (160, 50)).await;
+    let mut sub = h.subscribe();
+    let _ = h.dispatch(UiAction::Resync).await;
+    let kind_de = |s: &norte_ui_host::ViewSnapshot, quiere: &str| {
+        s.slots.iter().find_map(|v| match (v, quiere) {
+            (SlotView::Metadata(m), "metadata") => Some(m.slot_id),
+            (SlotView::Log(l), "log") => Some(l.slot_id),
+            _ => None,
+        })
+    };
+    let snap = foto_hasta(&h, &mut sub, "detalles y registro", |s| {
+        (kind_de(s, "metadata").is_some() && kind_de(s, "log").is_some()).then(|| s.clone())
+    })
+    .await;
+    let sitio = |s: &norte_ui_host::ViewSnapshot, id: u32| {
+        *s.layout
+            .placements
+            .iter()
+            .find(|p| p.slot_id == id)
+            .expect("colocado")
+    };
+    let meta_id = kind_de(&snap, "metadata").expect("detalles");
+    let log_id = kind_de(&snap, "log").expect("registro");
+    let meta = sitio(&snap, meta_id);
+    let log = sitio(&snap, log_id);
+    assert_eq!(
+        meta.y + meta.height,
+        log.y,
+        "los detalles tocan el registro"
+    );
+    // Subir el borde cinco filas: el registro crece cinco.
+    let ack = h
+        .dispatch(UiAction::ResizeSlot {
+            slot_id: meta_id,
+            cells: log.y - 5,
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "fue {ack:?}");
+    let alto = log.height;
+    let () = foto_hasta(&h, &mut sub, "registro cinco filas más alto", |s| {
+        (sitio(s, log_id).height == alto + 5).then_some(())
+    })
+    .await;
+}
+
 /// ADR 0138: soltar un listado debajo del otro los apila; `layout.flip` los
 /// vuelve a poner lado a lado.
 #[tokio::test]

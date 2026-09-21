@@ -3654,6 +3654,21 @@ button.status-item:hover {
   cursor: row-resize;
 }
 
+/* Mientras se arrastra un borde, el cursor es el del borde en TODA la
+   pantalla: el puntero sale del tirador de seis píxeles en el primer
+   movimiento, y sin esto parpadeaba entre flechas. */
+:root[data-dragging="border-col"],
+:root[data-dragging="border-col"] * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+:root[data-dragging="border-row"],
+:root[data-dragging="border-row"] * {
+  cursor: row-resize !important;
+  user-select: none;
+}
+
 #profiles[data-open="true"] {
   position: fixed;
   inset: 0;
