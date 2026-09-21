@@ -203,6 +203,9 @@ impl Estado {
                 .into_iter()
                 .collect(),
             Fondo::Imagen(token, leido) => self.aplicar_imagen(token, leido).into_iter().collect(),
+            Fondo::Estilo(token, preview) => {
+                self.aplicar_estilo(token, preview).into_iter().collect()
+            }
             Fondo::Miniatura(token, thumb) => {
                 self.aplicar_miniatura(token, thumb).into_iter().collect()
             }

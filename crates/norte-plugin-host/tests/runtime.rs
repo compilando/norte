@@ -69,6 +69,56 @@ fn previewer_demo_renderiza_y_loguea() {
     );
 }
 
+/// ADR 0141: el mismo plugin se compila UNA vez por runtime, y cada
+/// instancia sigue siendo nueva — lo que se reutiliza es el código, no el
+/// estado.
+#[test]
+fn el_mismo_plugin_se_compila_una_vez_y_cada_instancia_es_nueva() {
+    let Some(wasm) = support::build_guest("previewer-demo") else {
+        return;
+    };
+    let rt = norte_plugin_host::PluginRuntime::new().expect("engine");
+    let mut primera = rt
+        .instantiate(&wasm, norte_plugin_host::Capabilities::default())
+        .expect("instancia");
+    let _ = primera
+        .render_preview("text/plain", b"uno")
+        .expect("render");
+    let mut segunda = rt
+        .instantiate(&wasm, norte_plugin_host::Capabilities::default())
+        .expect("instancia");
+    assert_eq!(rt.compiled_components(), 1, "compilado una sola vez");
+    assert!(
+        segunda.logs().is_empty(),
+        "la segunda no hereda los registros de la primera: {:?}",
+        segunda.logs()
+    );
+    let out = segunda
+        .render_preview("text/plain", b"dos")
+        .expect("render");
+    assert!(out.contains("dos"));
+    // Otros bytes, otra entrada: la clave es el CONTENIDO.
+    let copia = tempfile::tempdir().expect("tmp");
+    let otro = copia.path().join("otro.wasm");
+    let mut bytes = std::fs::read(&wasm).expect("wasm");
+    // Una sección personalizada al final sigue siendo un componente válido y
+    // cambia el resumen: id 0, nombre de un byte, sin contenido.
+    bytes.extend_from_slice(&[0, 2, 1, b'x']);
+    std::fs::write(&otro, &bytes).expect("escribe");
+    let _ = rt
+        .instantiate(&otro, norte_plugin_host::Capabilities::default())
+        .expect("instancia");
+    assert_eq!(rt.compiled_components(), 2);
+    // Y el MISMO fichero reescrito sustituye a su versión anterior en vez
+    // de sumarse: la vieja ya no la va a pedir nadie.
+    bytes.extend_from_slice(&[0, 2, 1, b'y']);
+    std::fs::write(&otro, &bytes).expect("reescribe");
+    let _ = rt
+        .instantiate(&otro, norte_plugin_host::Capabilities::default())
+        .expect("instancia");
+    assert_eq!(rt.compiled_components(), 2, "una versión por ruta");
+}
+
 #[test]
 fn command_demo_ejecuta_y_reporta_error_de_comando() {
     let Some(wasm) = support::build_guest("command-demo") else {

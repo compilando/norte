@@ -141,3 +141,4 @@ edits.
 | [0138](0138-panels-move-by-dragging-and-splits-flip.md) | Panels move by dragging, and splits flip | accepted |
 | [0139](0139-each-frontend-remembers-its-own-layout.md) | Each frontend remembers its own layout | accepted |
 | [0140](0140-the-terminal-panel-column-draws-icons.md) | The terminal's panel column draws icons | accepted |
+| [0141](0141-plugins-compile-once-and-the-viewer-opens-first.md) | Plugins compile once, and the viewer opens first | accepted |

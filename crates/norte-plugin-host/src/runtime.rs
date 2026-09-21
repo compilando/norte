@@ -453,7 +453,35 @@ pub struct PluginRuntime {
     ticker_stop: Arc<AtomicBool>,
     /// Handle del hilo ticker; `take()`-ado en `Drop` para hacer join.
     ticker: Option<JoinHandle<()>>,
+    /// Los componentes ya COMPILADOS, por el sha256 de sus bytes (ADR 0141).
+    ///
+    /// Compilar un plugin con cranelift cuesta segundos (el de resaltado de
+    /// sintaxis, 2–3 s), y se hacía en CADA llamada: cada F3 los pagaba. Un
+    /// `Component` es inmutable y barato de clonar, y cada llamada sigue
+    /// teniendo su `Store` y su instancia NUEVOS — lo que se reutiliza es el
+    /// código máquina, no el estado.
+    ///
+    /// Por CONTENIDO y no por ruta ni fecha: se compila de los mismos bytes
+    /// que se han resumido, así que un fichero cambiado es otra entrada y
+    /// nunca se ejecuta código viejo por uno nuevo ni al revés.
+    compilados: std::sync::Mutex<Compilados>,
 }
+
+/// Lo que guarda la caché de compilados (ADR 0141).
+#[derive(Default)]
+struct Compilados {
+    /// El código, por el sha256 de los bytes de los que salió.
+    por_resumen: HashMap<[u8; 32], Component>,
+    /// Qué resumen tiene ahora cada RUTA: al recompilar un plugin cambiado
+    /// se suelta su versión anterior, que ya nadie va a pedir. Sin esto,
+    /// cada vuelta de desarrollo dejaba una entrada muerta hasta el vaciado.
+    por_ruta: HashMap<std::path::PathBuf, [u8; 32]>,
+}
+
+/// Cuántos componentes compilados guarda un runtime. Pocos: cada uno ocupa
+/// lo que su código máquina, y los plugins que se usan a la vez son unos
+/// cuantos. Al pasarse se vacía entera, que es lo más simple que no crece.
+const COMPILADOS_MAX: usize = 16;
 
 impl PluginRuntime {
     /// Construye el motor con el Component Model activado y el deadline de época
@@ -505,7 +533,64 @@ impl PluginRuntime {
             epoch_deadline,
             ticker_stop,
             ticker: Some(ticker),
+            compilados: std::sync::Mutex::new(Compilados::default()),
         })
+    }
+
+    /// Cuántos componentes compilados guarda este runtime. Para los tests
+    /// de la caché (ADR 0141); no es API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn compiled_components(&self) -> usize {
+        self.compilados
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .por_resumen
+            .len()
+    }
+
+    /// El componente de estos bytes, compilado una sola vez por runtime
+    /// ([`Self::compilados`]). `ruta` es de dónde salieron, si salieron de
+    /// disco: sirve para soltar la versión anterior del mismo plugin.
+    ///
+    /// Dos llamadas simultáneas con el mismo plugin sin compilar lo compilan
+    /// las dos; la segunda en terminar pisa a la primera con lo mismo. Es
+    /// CPU gastada una vez por proceso y plugin, no un fallo.
+    fn compilado(&self, bytes: &[u8], ruta: Option<&Path>) -> Result<Component, RuntimeError> {
+        use sha2::Digest;
+        let clave: [u8; 32] = sha2::Sha256::digest(bytes).into();
+        // Un mutex envenenado es un pánico de otra llamada mientras metía
+        // una entrada; los mapas siguen siendo coherentes (cada inserción es
+        // atómica desde fuera), así que se siguen usando.
+        if let Some(c) = self
+            .compilados
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .por_resumen
+            .get(&clave)
+        {
+            return Ok(c.clone());
+        }
+        // Compilar FUERA del candado: son segundos, y otra llamada con otro
+        // plugin no tiene por qué esperarlos.
+        let component = Component::from_binary(&self.engine, bytes)
+            .map_err(|e| RuntimeError::Component(e.to_string()))?;
+        let mut cache = self
+            .compilados
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(r) = ruta
+            && let Some(anterior) = cache.por_ruta.insert(r.to_path_buf(), clave)
+            && anterior != clave
+        {
+            cache.por_resumen.remove(&anterior);
+        }
+        if cache.por_resumen.len() >= COMPILADOS_MAX {
+            cache.por_resumen.clear();
+            cache.por_ruta.retain(|_, c| *c == clave);
+        }
+        cache.por_resumen.insert(clave, component.clone());
+        Ok(component)
     }
 
     /// Instancia un plugin desde un componente WASM en disco, con las
@@ -754,8 +839,7 @@ impl PluginRuntime {
         // El artefacto embebido es first-party, pero el cap cuesta nada y protege
         // a un futuro caller que pase bytes de terceros (rust review m3).
         check_artifact_size(bytes.len() as u64)?;
-        let component = Component::from_binary(&self.engine, bytes)
-            .map_err(|e| RuntimeError::Component(e.to_string()))?;
+        let component = self.compilado(bytes, None)?;
         let (mut store, linker) = self.prepare_common(caps)?;
         let bindings = NorteProvider::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
@@ -767,24 +851,40 @@ impl PluginRuntime {
     }
 
     /// Prepara el `Store` (sandbox WASI vacío + límites + deadline) y el
-    /// `Linker` (WASI + `host-log`) comunes a cualquier world, y carga el
-    /// componente DESDE DISCO. El world concreto lo instancia el caller.
+    /// `Linker` (WASI + `host-log`) comunes a cualquier world, y trae el
+    /// componente de los bytes del fichero, compilado o de la caché (ADR
+    /// 0141). El world concreto lo instancia el caller.
     fn prepare(
         &self,
         wasm_path: &Path,
         caps: Capabilities,
     ) -> Result<(Store<HostState>, Component, Linker<HostState>), RuntimeError> {
-        // Cap del artefacto ANTES de compilar (issue #68): un `.wasm` gigante no
-        // debe gastar CPU/memoria de cranelift. `metadata` es una llamada barata
-        // que no lee el contenido; el propio `Component::from_file` fallará luego
-        // si el fichero desaparece entre medias.
+        // Cap del artefacto ANTES de leer (issue #68): un `.wasm` gigante no
+        // debe gastar ni la lectura. `metadata` no lee el contenido; la
+        // lectura de abajo vuelve a comprobarlo sobre lo leído.
         let len = std::fs::metadata(wasm_path)
             .map_err(|e| RuntimeError::Component(e.to_string()))?
             .len();
         check_artifact_size(len)?;
 
-        let component = Component::from_file(&self.engine, wasm_path)
-            .map_err(|e| RuntimeError::Component(e.to_string()))?;
+        // Los BYTES y no `from_file`: se resumen para la caché y se compila
+        // de esos mismos (ADR 0141). Leer un `.wasm` de un par de megas
+        // cuesta milisegundos; compilarlo, segundos.
+        // Acotada al tope más uno: el fichero pudo crecer entre el
+        // `metadata` y la lectura, y leerlo entero sería la memoria que el
+        // tope existe para no gastar. Con uno de más, el tope lo ve.
+        let bytes = {
+            use std::io::Read;
+            let f = std::fs::File::open(wasm_path)
+                .map_err(|e| RuntimeError::Component(e.to_string()))?;
+            let mut v = Vec::new();
+            f.take(MAX_ARTIFACT_BYTES.saturating_add(1))
+                .read_to_end(&mut v)
+                .map_err(|e| RuntimeError::Component(e.to_string()))?;
+            v
+        };
+        check_artifact_size(bytes.len() as u64)?;
+        let component = self.compilado(&bytes, Some(wasm_path))?;
         let (store, linker) = self.prepare_common(caps)?;
         Ok((store, component, linker))
     }

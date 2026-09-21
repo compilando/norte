@@ -1095,6 +1095,13 @@ enum Fondo {
     Adornos(Box<Adornos>),
     /// Los bytes enteros de una imagen que el visor aceptó.
     Imagen(RequestToken, Result<Vec<u8>, Error>),
+    /// La vista CON ESTILO que un previewer dio del fichero del visor (ADR
+    /// 0141), o `None` si ninguno casó. Llega DESPUÉS de abrir: el visor se
+    /// abre con la vista cruda en cuanto se lee y esto la sustituye.
+    Estilo(
+        RequestToken,
+        Option<norte_proto::methods::PluginPreviewStyled>,
+    ),
     /// La MINIATURA que un plugin dio del fichero del visor (ADR 0107), o
     /// `None` si ninguno casó o el que casó no supo.
     Miniatura(RequestToken, Option<norte_proto::methods::PluginThumbnail>),
