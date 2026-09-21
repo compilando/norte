@@ -15,6 +15,7 @@ import type {
   HostCatalog,
   SlotView,
   UiAction,
+  ViewerView,
   ViewSnapshot,
   ProcessesSlotView,
   WindowVerb,
@@ -119,6 +120,16 @@ export class Screen {
   /// Qué imagen se pidió, para no pedir dos veces la misma ni pintar la
   /// anterior sobre el visor de ahora.
   imagenDe: string | null = null;
+  /// El visor que está en pantalla y el tamaño de ventana con que se pintó.
+  /// Cada parche repinta la pantalla entera, y el visor se reconstruía con
+  /// cada uno —una tarea que avanza, un aviso— y además forzaba un reflujo
+  /// para medir su cuerpo. La sesión sustituye `viewer` por otro objeto
+  /// cuando cambia, así que el MISMO objeto es el mismo visor.
+  visorPintado: { viewer: ViewerView; firma: string } | null = null;
+  /// Con qué objeto se pintó por última vez cada capa de encima, y con qué
+  /// tamaño de ventana y de celda (`paint`).
+  capasPintadas = new Map<string, unknown>();
+  capasFirma = "";
   /** Las líneas de visor que ya se declararon. */
   viewerRows = 0;
   /** Las columnas del cuerpo del visor que el host ya conoce. */
@@ -267,28 +278,47 @@ export class Screen {
     }
     this.paintMenu(view.menu, view.layout_buttons ?? []);
     this.paintPanelBar(view.panel_bar);
-    this.paintPalette(view.palette);
-    this.paintGoto(view.goto ?? null);
-    this.paintWizard(view.wizard ?? null);
-    this.paintWhichKey(view.whichkey);
-    this.paintHelp(view.help);
-    this.paintSettings(view.settings);
-    this.paintExtensions(view.extensions);
-    this.paintAgents(view.agents);
-    this.paintPluginOutput(view.plugin_output);
-    this.paintProgramOutput(view.program_output);
-    this.paintTheme(view.theme);
-    this.paintPicker(view.picker);
-    this.paintProfiles(view.profiles);
-    this.paintLayouts(view.layouts);
-    this.paintColumns(view.columns);
-    this.paintSearch(view.search);
-    this.paintCompare(view.compare);
-    this.paintSync(view.sync);
+    // Las capas de encima, cada una SOLO si su dato cambió. Cada parche
+    // repinta la pantalla entera y todas ellas reconstruían su DOM con cada
+    // uno: con la ayuda o los ajustes abiertos, una tarea que avanza
+    // rehacía el diálogo varias veces por segundo. La sesión sustituye el
+    // objeto de una capa cuando llega su cambio, así que el MISMO objeto es
+    // la misma capa; y un cambio de tamaño de la ventana o de la celda las
+    // repinta todas, porque varias miden lo que cabe.
+    const firma = `${String(window.innerWidth)}x${String(window.innerHeight)}|${String(cell.w)}x${String(cell.h)}`;
+    if (firma !== this.capasFirma) {
+      this.capasFirma = firma;
+      this.capasPintadas.clear();
+    }
+    const capa = <T>(clave: string, valor: T, pintor: (v: T) => void): void => {
+      if (this.capasPintadas.has(clave) && this.capasPintadas.get(clave) === valor) {
+        return;
+      }
+      this.capasPintadas.set(clave, valor);
+      pintor.call(this, valor);
+    };
+    capa("palette", view.palette, this.paintPalette);
+    capa("goto", view.goto ?? null, this.paintGoto);
+    capa("wizard", view.wizard ?? null, this.paintWizard);
+    capa("whichkey", view.whichkey, this.paintWhichKey);
+    capa("help", view.help, this.paintHelp);
+    capa("settings", view.settings, this.paintSettings);
+    capa("extensions", view.extensions, this.paintExtensions);
+    capa("agents", view.agents, this.paintAgents);
+    capa("plugin_output", view.plugin_output, this.paintPluginOutput);
+    capa("program_output", view.program_output, this.paintProgramOutput);
+    capa("theme", view.theme, this.paintTheme);
+    capa("picker", view.picker, this.paintPicker);
+    capa("profiles", view.profiles, this.paintProfiles);
+    capa("layouts", view.layouts, this.paintLayouts);
+    capa("columns", view.columns, this.paintColumns);
+    capa("search", view.search, this.paintSearch);
+    capa("compare", view.compare, this.paintCompare);
+    capa("sync", view.sync, this.paintSync);
     this.paintViewer(view.viewer);
-    this.paintAiRename(view.ai_rename);
-    this.paintOrganize(view.organize);
-    this.paintDialogs(view.dialogs);
+    capa("ai_rename", view.ai_rename, this.paintAiRename);
+    capa("organize", view.organize, this.paintOrganize);
+    capa("dialogs", view.dialogs, this.paintDialogs);
     // LA ÚLTIMA: la pantalla de arranque se pone delante de todo lo demás, y
     // en esta hoja el apilado es el orden del documento.
     this.paintSplash(view.splash ?? null);
