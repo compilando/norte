@@ -2879,6 +2879,12 @@ struct Estado {
     /// acción la puede mandar cualquiera, y sin un relevo en curso no hay
     /// nada que recuperar ni que decir.
     relevo_en_curso: bool,
+    /// El último LISTADO que tuvo el foco. Cuando el foco está en un panel
+    /// que no es un listado —el árbol, los sitios—, es sobre él sobre el que
+    /// actúan los comandos y a él navega el árbol ([`Self::activo`]). Sin
+    /// esto, `activo` caía al listado de id más bajo, que puede ser el de la
+    /// DERECHA: elegir una rama movía el panel que no tenía el foco.
+    ultimo_listado: Option<u32>,
     status: StatusView,
     conexion: ConnectionView,
     /// Las sesiones de provider que viajan sin cifrar (#44), acotadas por el
@@ -3275,6 +3281,7 @@ impl Estado {
             dir_pedido: initial_dir_pedido.then(|| initial_dir.clone()),
             attach,
             relevo_en_curso: false,
+            ultimo_listado: None,
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
             degradadas: norte_frontend::banners::DegradedSet::default(),
@@ -3297,6 +3304,10 @@ impl Estado {
         let preferido = self.roles.get(RoleId::Active).map(|SlotId(id)| id);
         preferido
             .filter(|id| self.huecos.contains_key(id))
+            .or_else(|| {
+                self.ultimo_listado
+                    .filter(|id| self.huecos.contains_key(id))
+            })
             .or_else(|| self.huecos.keys().copied().next())
             .unwrap_or(1)
     }
@@ -3374,6 +3385,13 @@ impl Estado {
         let foco = SlotId(self.enfocado());
         self.roles
             .reconcile(&self.arbol, &self.reparto, &self.kinds, foco);
+        // El foco en un LISTADO se recuerda: es a donde vuelven los comandos
+        // y el árbol mientras el foco está en otro panel.
+        if let Some(SlotId(id)) = self.roles.get(RoleId::Active)
+            && self.huecos.contains_key(&id)
+        {
+            self.ultimo_listado = Some(id);
+        }
     }
 
     /// ¿Está este hueco fuera del reparto de ESTE tamaño?
