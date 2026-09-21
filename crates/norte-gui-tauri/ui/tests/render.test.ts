@@ -812,6 +812,29 @@ describe("Screen", () => {
     expect(grid.getAttribute("aria-activedescendant")).toBe(seleccionada.id);
   });
 
+  it("el parche del cursor, que muta `selected` en su sitio, se repinta", () => {
+    // La fila se salta por IDENTIDAD si nada cambió; el cursor es lo único
+    // que la sesión cambia sin sustituir la fila, y no puede perderse.
+    const { screen, root } = montar();
+    const v = vista({ rows: [fila(0, "a.txt", { selected: true }), fila(1, "b.txt")] });
+    screen.paint(v);
+    const slot = v.slots[0];
+    if (slot?.kind !== "browser") {
+      throw new Error("se esperaba un listado");
+    }
+    const [a, b] = slot.rows;
+    if (a === undefined || b === undefined) {
+      throw new Error("se esperaban dos filas");
+    }
+    a.selected = false;
+    b.selected = true;
+    slot.cursor = 1;
+    screen.paint(v);
+    const filas = root.querySelectorAll(".row");
+    expect(filas[0]?.getAttribute("aria-selected")).toBe("false");
+    expect(filas[1]?.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("un click señala la fila; dos seguidos sobre la misma la abren", () => {
     const { screen, enviadas, root } = montar();
     screen.paint(vista({}));
@@ -1364,12 +1387,31 @@ describe("el visor", () => {
     v.status = { ...v.status, message: "copiando" };
     screen.paint(v);
     expect(document.querySelector(".viewer")).toBe(antes);
-    // Un visor NUEVO (lo que la sesión pone al llegar un parche del visor)
-    // sí se pinta.
+    // DESPLAZARSE (un visor nuevo del mismo fichero) cambia el cuerpo y las
+    // marcas en su sitio: la caja y la cabecera se quedan.
+    const cabecera = document.querySelector(".viewer-head");
     v.viewer = { ...v.viewer, first_line: 1, lines: ["b", "c"] };
     screen.paint(v);
-    expect(document.querySelector(".viewer")).not.toBe(antes);
+    expect(document.querySelector(".viewer")).toBe(antes);
+    expect(document.querySelector(".viewer-head")).toBe(cabecera);
     expect(document.querySelector(".viewer-body")?.textContent).toBe("b\nc");
+    expect(document.querySelector(".viewer-meta")?.textContent).toContain("2/3");
+    // A lo ancho aparece la barra horizontal, una sola, y se mueve.
+    v.viewer = { ...v.viewer, total_cols: 800, first_col: 0 };
+    screen.paint(v);
+    v.viewer = { ...v.viewer, first_col: 400 };
+    screen.paint(v);
+    expect(document.querySelectorAll(".viewer-bar-h")).toHaveLength(1);
+    expect(document.querySelector(".viewer-meta")?.textContent).toContain("401/800");
+    v.viewer = { ...v.viewer, total_cols: 0, first_col: 0 };
+    // Otro FICHERO rehace la caja entera.
+    v.viewer = { ...v.viewer, path_display: "⟨file⟩/casa/otro.txt" };
+    screen.paint(v);
+    expect(document.querySelector(".viewer")).not.toBe(antes);
+    expect(document.querySelector(".viewer")?.getAttribute("aria-label")).toContain(
+      "otro.txt",
+    );
+    expect(document.querySelector(".viewer-bar-h")).toBe(null);
     // Cerrarlo y reabrir el MISMO objeto lo vuelve a pintar.
     const mismo = v.viewer;
     v.viewer = null;
