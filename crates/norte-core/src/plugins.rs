@@ -173,6 +173,11 @@ pub(crate) fn decode_for_preview(bytes: Vec<u8>) -> (Vec<u8>, bool) {
     match norte_encoding::detect(&bytes) {
         norte_encoding::Detection::Text { encoding, .. } => {
             let decoded = norte_encoding::decode(&bytes, encoding, complete);
+            // SIN cortar por líneas, a propósito (revisión del ADR 0141): un
+            // corte callado daba una vista con estilo que parecía el fichero
+            // entero y escondía lo que hubiera pasada la línea del corte. Un
+            // resultado de más de diez mil líneas lo sigue rechazando el host
+            // y el visor se queda con la vista cruda, que está entera.
             (decoded.text.into_bytes(), decoded.had_errors)
         }
         norte_encoding::Detection::Binary => (bytes, false),
@@ -1846,6 +1851,19 @@ command = [{ id = "run", title = "Run" }]
             decode_for_preview(b"hola mundo".to_vec()),
             (b"hola mundo".to_vec(), false)
         );
+    }
+
+    /// Revisión del ADR 0141: el texto llega al previewer ENTERO (dentro
+    /// del tope de bytes), nunca cortado por líneas: un corte callado daba
+    /// una vista con estilo que parecía el fichero completo y escondía el
+    /// final.
+    #[test]
+    fn decode_for_preview_no_corta_por_lineas() {
+        let largo: Vec<u8> = (0..20_000)
+            .flat_map(|i| format!("línea {i}\n").into_bytes())
+            .collect();
+        let (texto, _) = decode_for_preview(largo.clone());
+        assert_eq!(texto, largo, "entero");
     }
 
     #[test]

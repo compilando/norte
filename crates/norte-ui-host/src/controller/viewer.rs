@@ -182,12 +182,6 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         let path = entrada.path.clone();
-        // El ancho del visor, en celdas, para el previewer (proto 0.66.0):
-        // un previewer de imagen encoge a esto. Lo que MIDIÓ el renderer la
-        // última vez que pintó el cuerpo del visor (`SetViewerCols`), o el
-        // viewport si todavía no lo ha pintado nunca — que se pasa por el
-        // cromo, y por eso no es la primera opción.
-        let columnas = Some(self.visor_columnas.unwrap_or(u32::from(self.viewport.0)));
         tokio::spawn(async move {
             // Un byte de más que el presupuesto: es lo que delata que el
             // fichero seguía. El resto NO se lee.
@@ -207,13 +201,39 @@ impl Estado {
                 // provider que no responde.
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            // Y se le pregunta a los plugins. Un previewer que falla, que
-            // tarda o que no aplica NO es un error: el visor cae a la vista
-            // cruda, que es lo que el TUI ya hace. Un plugin no puede dejar
-            // un fichero sin poder mirarse.
+            // Se abre YA con lo leído. A los plugins se les pregunta después
+            // (`pedir_estilo`, ADR 0141): el visor esperaba al previewer para
+            // abrirse, y un previewer tarda lo que tarde — con la compilación
+            // por medio, segundos por cada F3.
+            let _ = buzon
+                .send(Mensaje::Contenido(Box::new((token, path, leido, None))))
+                .await;
+        });
+        (self.aplicada(), Vec::new())
+    }
+
+    /// Pide la vista CON ESTILO del fichero del visor a los plugins, sin
+    /// hacer esperar a nadie (ADR 0141): el visor ya está abierto con la
+    /// cruda, y esto la sustituye si llega a tiempo y el visor sigue siendo
+    /// el mismo. Un previewer que falla, que tarda o que no aplica NO es un
+    /// error: se queda la cruda, que es lo que el TUI ya hace.
+    fn pedir_estilo(
+        &self,
+        path: &VPath,
+        token: RequestToken,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let path = path.clone();
+        // El ancho del visor, en celdas, para el previewer (proto 0.66.0):
+        // el que midió el renderer, o el viewport si aún no lo ha pintado.
+        let columnas = Some(self.visor_columnas.unwrap_or(u32::from(self.viewport.0)));
+        tokio::spawn(async move {
             let preview = match tokio::time::timeout(
                 PLAZO_PLUGINS,
-                backend.plugin_preview_styled(path.clone(), columnas),
+                backend.plugin_preview_styled(path, columnas),
             )
             .await
             {
@@ -221,10 +241,46 @@ impl Estado {
                 _ => None,
             };
             let _ = buzon
-                .send(Mensaje::Contenido(Box::new((token, path, leido, preview))))
+                .send(Mensaje::Fondo(Box::new(Fondo::Estilo(token, preview))))
                 .await;
         });
-        (self.aplicada(), Vec::new())
+    }
+
+    /// La vista con estilo, llegada: sustituye a la cruda si el visor sigue
+    /// siendo el que la pidió, en la misma línea en que estaba.
+    pub(super) fn aplicar_estilo(
+        &mut self,
+        token: RequestToken,
+        preview: Option<norte_proto::methods::PluginPreviewStyled>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        if self.visor_token != Some(token) {
+            return None;
+        }
+        let p = preview?;
+        let actual = self.visor.as_ref()?;
+        // Si el lector ya ELIGIÓ cómo verlo —hexadecimal, otra codificación—
+        // mientras llegaba el estilo, se respeta: sustituir el visor se lo
+        // desharía sin decir nada.
+        if actual.hex || actual.is_forced() {
+            return None;
+        }
+        let path = actual.path.clone();
+        let arriba = actual.scroll;
+        let mut nuevo = norte_frontend::viewer::Viewer::with_plugin_preview_styled(
+            path,
+            p.plugin_name,
+            &p.lines,
+            p.lossy,
+        );
+        // Donde el lector ya estaba: pudo bajar mientras llegaba el estilo.
+        // Es la misma FILA, no siempre la misma línea del fichero: un
+        // previewer que parte una línea larga en dos mueve lo de debajo.
+        nuevo.scroll = arriba.min(nuevo.total_rows().saturating_sub(1));
+        self.visor = Some(nuevo);
+        let cambio = ViewChange::Viewer {
+            viewer: self.vista_visor(),
+        };
+        Some(self.parche(vec![cambio]))
     }
 
     /// Abre el visor con lo que se leyó.
@@ -270,8 +326,19 @@ impl Estado {
                     ),
                     None => norte_frontend::viewer::Viewer::new(path, bytes, truncado),
                 });
+                // Una imagen que la ventana pinta SOLA no pasa por ningún
+                // plugin (ADR 0141): ni la vista con estilo —que la convertía
+                // en arte ANSI y la dejaba sin imagen propia— ni la miniatura.
+                // Eran dos plugins compilados por abrir una foto.
+                let propia = self
+                    .visor
+                    .as_ref()
+                    .is_some_and(|v| matches!(Self::imagen_de(v), Ok(Some(_))));
                 self.pedir_imagen(&ruta, token, backend, buzon);
-                self.pedir_miniatura(&ruta, token, backend, buzon);
+                if !propia {
+                    self.pedir_miniatura(&ruta, token, backend, buzon);
+                    self.pedir_estilo(&ruta, token, backend, buzon);
+                }
             }
             Err(e) => {
                 // No se pudo leer: se DICE y no se abre un visor vacío que

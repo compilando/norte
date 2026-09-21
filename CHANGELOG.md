@@ -147,6 +147,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **F3 took seconds** (ADR 0141). Every plugin call recompiled the plugin:
+  the syntax highlighter cost 2–3 s per file viewed. Plugins now compile
+  once per process, keyed by their content; the window opens the viewer as
+  soon as the file is read and colours it when the highlighter answers;
+  and images the window can draw skip the plugins.
 - **Dragging a border between two weighted panels could not shrink the
   one on the right, and squashed their neighbours.** A panel moved beside
   a listing (ADR 0138) arrives weighted; dragging its border rescaled the

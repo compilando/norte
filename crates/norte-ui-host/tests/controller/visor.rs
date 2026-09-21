@@ -121,6 +121,52 @@ pub(super) fn preview_de(
     }
 }
 
+/// ADR 0141: una imagen que la ventana pinta SOLA no pasa por ningún
+/// plugin. Antes, con un previewer de imágenes instalado, su vista con
+/// estilo (arte ANSI) ganaba, la ventana se quedaba sin imagen propia y
+/// además pedía la miniatura: dos plugins compilados por abrir una foto.
+#[tokio::test]
+async fn una_imagen_propia_no_pregunta_a_los_plugins() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"foto.png".to_vec(), false)]);
+    f.contenido
+        .insert("mem:///casa/foto.png".to_owned(), png_de(640, 480, 4096));
+    // Un previewer que casaría: no se le tiene que preguntar.
+    f.previews.insert(
+        "mem:///casa/foto.png".to_owned(),
+        preview_de("Imagen ANSI", &["▀▀▀"], false),
+    );
+    let f = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&f)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    let mut v = None;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(x) = siguiente_foto(&mut sub).await.viewer.clone() {
+            v = Some(x);
+            break;
+        }
+    }
+    let v = v.expect("el visor abre");
+    assert!(v.image.is_some(), "la ventana pinta la suya");
+    assert!(
+        v.preview_by.is_empty(),
+        "sin vista de plugin: {:?}",
+        v.preview_by
+    );
+    // Unas vueltas más para que un estilo tardío, si se hubiera pedido,
+    // tuviera tiempo de llegar.
+    for _ in 0..5 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let _ = siguiente_foto(&mut sub).await;
+    }
+    assert!(
+        f.anchos_de_preview.lock().expect("mutex").is_empty(),
+        "no se preguntó a ningún previewer"
+    );
+}
+
 /// Cuando un previewer aplica, el visor enseña LO SUYO y dice de quién es.
 ///
 /// Un plugin puede enseñar cualquier cosa —ese es su trabajo: un PDF como
@@ -142,15 +188,19 @@ async fn el_visor_ensena_la_preview_de_un_plugin_y_dice_de_quien_es() {
     let mut sub = h.subscribe();
 
     h.dispatch(tecla("F3")).await.expect("host vivo");
+    // La vista del plugin llega DESPUÉS de abrir (ADR 0141): el visor se
+    // abre con la cruda y esta la sustituye. Se espera a ella.
     let mut visor = None;
-    for _ in 0..20 {
+    for _ in 0..40 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
-        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() {
+        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone()
+            && !v.preview_by.is_empty()
+        {
             visor = Some(v);
             break;
         }
     }
-    let v = visor.expect("el visor abre");
+    let v = visor.expect("el visor abre con la vista del plugin");
 
     assert!(
         v.lines.iter().any(|l| l.contains("Informe anual")),
@@ -234,14 +284,16 @@ async fn el_visor_lleva_los_fragmentos_de_la_preview() {
 
     h.dispatch(tecla("F3")).await.expect("host vivo");
     let mut visor = None;
-    for _ in 0..20 {
+    for _ in 0..40 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
-        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() {
+        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone()
+            && !v.styled.is_empty()
+        {
             visor = Some(v);
             break;
         }
     }
-    let v = visor.expect("el visor abre");
+    let v = visor.expect("el visor abre con la vista del plugin");
 
     // El ancho del visor viaja con la petición (0.66.0): es el viewport
     // con el que arrancó el host, no un `None` que deja elegir al guest.

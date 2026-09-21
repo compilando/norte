@@ -203,9 +203,9 @@ impl Backend {
                 crate::blocking::spawn_blocking(move || -> Result<String, Error> {
                     let reg = crate::PluginRegistry::discover(&dir)
                         .map_err(|_| Error::Io { retryable: false })?;
-                    let runtime = norte_plugin_host::PluginRuntime::new()
-                        .map_err(|_| Error::Internal { panic: false })?;
-                    reg.run_command(&runtime, &id, &command, &arg)
+                    let runtime =
+                        runtime_compartido().map_err(|_| Error::Internal { panic: false })?;
+                    reg.run_command(runtime, &id, &command, &arg)
                         .map_err(|e| run_error_to_taxonomy(&e))
                 })
                 .await
@@ -283,8 +283,8 @@ impl Backend {
                 // 3) Instanciar + renderizar (síncrono, WASM) en spawn_blocking.
                 let mime_owned = mime.to_owned();
                 let output = crate::blocking::spawn_blocking(move || -> Result<String, Error> {
-                    let runtime = norte_plugin_host::PluginRuntime::new()
-                        .map_err(|_| Error::Internal { panic: false })?;
+                    let runtime =
+                        runtime_compartido().map_err(|_| Error::Internal { panic: false })?;
                     let mut inst = runtime
                         .instantiate(&wasm, caps)
                         .map_err(|_| Error::Internal { panic: false })?;
@@ -391,7 +391,7 @@ impl Backend {
                 // o tope excedido) degrada a `Ok(None)` — ver rustdoc.
                 let mime_owned = mime.to_owned();
                 let outcome = crate::blocking::spawn_blocking(move || {
-                    let runtime = norte_plugin_host::PluginRuntime::new()?;
+                    let runtime = runtime_compartido()?;
                     let mut inst = runtime.instantiate(&wasm, caps)?;
                     inst.set_settings(settings);
                     inst.render_styled_preview(
@@ -471,7 +471,7 @@ impl Backend {
                     usize::try_from(crate::plugins::THUMBNAIL_MAX_BYTES).unwrap_or(usize::MAX);
                 bytes.truncate(cap.min(bytes.len()));
                 let outcome = crate::blocking::spawn_blocking(move || {
-                    let runtime = norte_plugin_host::PluginRuntime::new()?;
+                    let runtime = runtime_compartido()?;
                     let mut inst = runtime.instantiate_thumbnail(&wasm, caps)?;
                     inst.set_settings(settings);
                     inst.render_thumbnail(mime, &bytes, max_edge)
@@ -542,7 +542,7 @@ impl Backend {
                     move || -> Result<Vec<norte_proto::methods::PluginDecorations>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
-                        let runtime = norte_plugin_host::PluginRuntime::new()
+                        let runtime = runtime_compartido()
                             .map_err(|_| Error::Internal { panic: false })?;
                         let mut out = Vec::new();
                         for ((id, _name, wasm, caps, settings), slot) in reg.resolve_decorators() {
@@ -1062,6 +1062,24 @@ fn run_error_to_taxonomy(e: &crate::plugins::PluginRunError) -> Error {
     }
 }
 
+/// El runtime de plugins de ESTE proceso, para todo lo que no son columnas:
+/// comandos, visores, miniaturas, decoradores (ADR 0141).
+///
+/// Uno por llamada —como era— tiraba con él los plugins ya compilados: cada
+/// F3 recompilaba el de resaltado de sintaxis, segundos. Es el mismo runtime
+/// que el de [`columnas_de_proceso`], que ya vivía todo el proceso.
+///
+/// # Errors
+/// Si el motor wasmtime no se pudo configurar en esta plataforma.
+fn runtime_compartido()
+-> Result<&'static norte_plugin_host::PluginRuntime, norte_plugin_host::RuntimeError> {
+    columnas_de_proceso()
+        .map(|(runtime, _)| runtime)
+        .map_err(|_| {
+            norte_plugin_host::RuntimeError::Instantiate("motor wasm no disponible".into())
+        })
+}
+
 /// El motor WASM y el pool de instancias de columnas del PROCESO, para el
 /// backend embebido (#224).
 ///
@@ -1079,6 +1097,7 @@ fn run_error_to_taxonomy(e: &crate::plugins::PluginRunError) -> Error {
 /// Si el motor wasmtime no se puede configurar en esta plataforma. El fallo se
 /// recuerda: reintentarlo por cada página sería pagar el fallo N veces para
 /// llegar al mismo sitio.
+///
 /// El motor de wasm y el pool de columnas de ESTE proceso.
 ///
 /// Lo usan las columnas y, desde la fase 3, los paneles de plugin, que se
