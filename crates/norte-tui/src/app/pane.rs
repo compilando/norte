@@ -111,6 +111,13 @@ impl Pane {
         self.state.name_encoding()
     }
 
+    /// El estado compartido, para lo que se decide en `norte-frontend` sobre
+    /// él entero (la barra de estado, ADR 0132) en vez de campo a campo.
+    #[must_use]
+    pub(crate) fn state(&self) -> &norte_frontend::PaneState {
+        &self.state
+    }
+
     // --- Delegados de solo-lectura sobre el estado compartido (#82) ---
 
     /// Directorio listado.

@@ -1795,7 +1795,7 @@ mod tests {
             .expect("procesos tiene botón");
         assert_eq!(
             boton.attention,
-            !app.board.rows().is_empty(),
+            norte_frontend::panelbar::cifra(app.board.rows().len()),
             "la marca depende de si hay tareas, no de que el hueco exista"
         );
     }
@@ -1837,8 +1837,8 @@ mod tests {
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
             .expect("el registro tiene botón");
-        assert!(
-            boton.attention,
+        assert_eq!(
+            boton.attention, 1,
             "hay un aviso y el lector no lo tiene delante"
         );
     }

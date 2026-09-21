@@ -25,4 +25,4 @@ expression: render_80x24(&app)
 "│                                                                              │"
 "│↑↓ mover · a aprobar · Esc cerrar                                             │"
 "└ 4 pasos · pulsa a para aprobar ──────────────────────────────────────────────┘"
-" /casa  2/5                                                                     "
+" /casa                                                     2/5  Nombre ↑  UTF-8 "

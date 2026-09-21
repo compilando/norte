@@ -25,4 +25,4 @@ expression: text.clone()
 "│  │                             │                                          │  │"
 "│  └ [Enter] confirmar [y] aprobar [Esc] cancelar [e] activar [d] quitar ───┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" /casa  2/5                                                                     "
+" /casa                                                     2/5  Nombre ↑  UTF-8 "

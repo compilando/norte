@@ -520,9 +520,6 @@ degraded-reason-unknown = unknown reason
 msg-plugin-notice = ⚑ { $plugin }: { $text }
 msg-plugin-hooks-disabled = ⚑ { $plugin }: its hooks were switched off after three failures in a row — disable and re-enable it in the extension manager to try again
 msg-plugin-effect-denied = ⚑ { $plugin }: your policy denied a file this plugin asked to write (rule for actor "plugin"); said once while norte runs
-# The badge of expired notices nobody read (spec 2026-09-10): its title,
-# for the pointer and for a screen reader. Clicking it opens the log.
-status-notices = Unread notices — open the log
 status-connection-failed = ✗ could not connect
 status-failed-subject = { $banner } — scheme { $scheme }, host { $host } ({ $reason })
 failed-reason-secret-missing = the secret is missing
@@ -567,6 +564,18 @@ pane-footer-counts = { $dirs } dirs · { $files } files · { $size }
 pane-footer-free = { $free } free
 status-marked = { $n } marked, { $size }
 status-marked-with-dirs = { $n } marked, { $size } + { $dirs } dirs
+# The items on the status bar's right half (ADR 0132): the sort column's
+# label and each item's tooltip.
+status-item-sort-name = Name
+status-item-sort-size = Size
+status-item-sort-mtime = Date
+status-item-sort-ext = Extension
+status-item-position-tip = Cursor position in the listing
+status-item-marks-tip = What is marked in this pane
+status-item-sort-tip = Order of the listing. Click to change it
+status-item-encoding-tip = How names are read. Click to reinterpret them
+status-item-tasks-tip = { $n } tasks running. Click to see the jobs
+status-item-notices-tip = { $n } unread notices. Click to open the log
 status-marks-pruned = { $n } marks dropped, their entries are gone
 status-watch-degraded = directory watching degraded to polling (inotify limit?) — creates/deletes/renames show up within seconds; edits to existing files are not detected
 msg-names-encoding = names shown as { $enc } (display only; bytes unchanged)
@@ -779,8 +788,8 @@ menu-bar-label = Menu bar
 # The same for the panel bar (#324), which in the window is a row of buttons
 # with a landmark of its own.
 panelbar-label = Panel bar
-# And for the key bar (spec 2026-09-10), the row of function keys.
-keybar-label = Key bar
+# The layout buttons on the right of the menu bar (ADR 0133).
+layout-buttons-label = Layout
 # A bar button's attention mark, for a screen reader.
 panelbar-attention = Something new
 # H3c, and a SEPARATE key on purpose: `palette-hint` is painted by both
@@ -1076,6 +1085,7 @@ msg-settings-save-failed = not saved: { $error }
 msg-settings-save-crashed = internal error while saving — the value was not written
 msg-settings-invalid-int = not a number
 msg-settings-invalid-range = value must be between { $min } and { $max }
+msg-settings-invalid-status-items = each item once, from: position marks sort encoding tasks notices
 msg-settings-no-config-dir = no user config directory (env not set)
 msg-hotlist-persist-failed = favorites not saved: { $error }
 help-cmd-app-menu = menu bar
@@ -2086,9 +2096,13 @@ setting-ui-diff-detached-desc = Whether that comparison tool opens a window of i
 setting-ui-confirm-quit-name = Confirm before quitting
 setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
 setting-ui-key-bar-name = Key bar
-setting-ui-key-bar-desc = Whether the row of function keys (F1–F10 and what each does on the current screen) stays pinned at the bottom. It is read from the keymap, so rebinding a key changes its label, and clicking a cell runs the command.
+setting-ui-key-bar-desc = Terminal only. Whether the row of function keys (F1–F10 and what each does on the current screen) stays pinned at the bottom. It is read from the keymap, so rebinding a key changes its label, and clicking a cell runs the command. The window has none: its commands live in the menu and the palette.
 setting-ui-panel-bar-style-name = Panel bar labels
 setting-ui-panel-bar-style-desc = How the panel bar names its buttons: the panel's name with its access letter underlined (names), or the letter alone (letters). Names fall back to letters on their own when the row is narrower than sixty cells.
+setting-ui-panel-bar-position-name = Panel bar position
+setting-ui-panel-bar-position-desc = Where the panel bar sits: a row under the menu (top) or a column on the left edge (left). With auto, each interface picks its own: top in the terminal, which is short on width, and left in the window, which is short on height.
+setting-ui-status-items-name = Status bar items
+setting-ui-status-items-desc = What the right half of the status bar shows, in order: position (cursor position), marks (what is marked), sort (the order), encoding (how names are read), tasks (running tasks) and notices (unread notices). Those that do not fit give way by importance; the messages and warnings on the left are not configurable.
 setting-ui-pane-footer-name = Pane footer
 setting-ui-pane-footer-desc = Whether every listing carries a footer with its counts (directories, files, bytes), what is marked, and the free space of the volume the directory lives on.
 setting-ui-row-stripes-name = Striped rows

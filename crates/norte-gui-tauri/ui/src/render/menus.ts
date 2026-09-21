@@ -4,9 +4,9 @@
 import type { Screen } from "../render";
 import type {
   BrowserSlotView,
+  ChromeButtonView,
   ColumnHeader,
   MenuView,
-  KeyBarView,
   PanelBarView,
   WizardView,
   GotoView,
@@ -16,6 +16,7 @@ import type {
 } from "../types";
 import { badge, colVar, revelar, sinCambios } from "./dom";
 import type { SlotDom } from "./dom";
+import { cifraDeInsignia, iconoDePanel } from "./iconos";
 
 /**
  * La barra de paneles (#324): un botón por panel que se abre y se cierra,
@@ -26,15 +27,25 @@ import type { SlotDom } from "./dom";
  * misma (ADR 0077). Aquí solo se pintan y se pulsan; un click vuelve como
  * el índice del botón, nunca como un comando (ADR 0069).
  *
- * Reserva su fila igual que la barra de menús: el host reparte sobre el
- * alto que este renderer declara, y una fila flotante taparía la primera
- * del listado.
+ * Reserva su sitio igual que la barra de menús: el host reparte sobre lo
+ * que este renderer declara, y una barra flotante taparía la primera fila
+ * —o la primera columna— del listado.
+ *
+ * Dos formas (puente 84, `[ui] panel_bar_position`): la FILA bajo el menú,
+ * con letra y nombre como en la TUI, o la COLUMNA del borde izquierdo, la
+ * barra de actividad de VS Code, con un icono por panel y la cifra de sus
+ * novedades. Cuál toca lo decide el host; aquí solo se reserva el alto o
+ * el ancho que corresponda.
  */
 export function paintPanelBar(this: Screen, bar: PanelBarView): void {
-  const alto = bar.bar ? "var(--cell-h)" : "0px";
-  if (this.panelBarHeight !== alto) {
+  const columna = bar.bar && bar.vertical === true;
+  const alto = bar.bar && !columna ? "var(--cell-h)" : "0px";
+  const ancho = columna ? "var(--activity-size)" : "0px";
+  if (this.panelBarHeight !== alto || this.activityWidth !== ancho) {
     document.documentElement.style.setProperty("--panelbar-h", alto);
+    document.documentElement.style.setProperty("--activity-w", ancho);
     this.panelBarHeight = alto;
+    this.activityWidth = ancho;
     this.viewportSucio = true;
   }
   if (sinCambios(this.panelBarRoot, JSON.stringify(bar))) {
@@ -48,6 +59,8 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
   fila.className = "panelbar";
   fila.setAttribute("role", "toolbar");
   fila.setAttribute("aria-label", this.t("panelbar-label"));
+  fila.setAttribute("aria-orientation", columna ? "vertical" : "horizontal");
+  fila.dataset["vertical"] = String(columna);
   // `[ui] panel_bar_style`: con nombres o solo con la letra. El nombre
   // sigue en el título del botón en los dos casos.
   fila.dataset["names"] = String(bar.names !== false);
@@ -61,21 +74,41 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
     // panel está abierto»; el foco del teclado va aparte, en el estado.
     boton.setAttribute("aria-pressed", String(b.state !== "closed"));
     boton.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
-    const letra = document.createElement("span");
-    letra.className = "panelbar-letter";
-    letra.textContent = b.letter;
-    const nombre = document.createElement("span");
-    nombre.className = "panelbar-name";
-    nombre.textContent = b.label;
-    boton.append(letra, nombre);
+    const icono = columna ? iconoDePanel(document, b.kind) : null;
+    if (icono !== null) {
+      // En columna no hay texto visible: el nombre va en la etiqueta, que
+      // es lo que oye un lector de pantalla, y en el título al pasar.
+      boton.setAttribute("aria-label", b.label);
+      boton.append(icono);
+    } else {
+      const letra = document.createElement("span");
+      letra.className = "panelbar-letter";
+      letra.textContent = b.letter;
+      boton.append(letra);
+      if (columna) {
+        boton.setAttribute("aria-label", b.label);
+      } else {
+        const nombre = document.createElement("span");
+        nombre.className = "panelbar-name";
+        nombre.textContent = b.label;
+        boton.append(nombre);
+      }
+    }
     if (b.attention) {
       // La marca es un span APARTE y el botón conserva el estilo de su
       // estado: pintarlo entero de aviso le quitaría al lector la
       // respuesta a «¿a dónde van mis teclas?» justo cuando más la busca.
+      // Con cifra si el host la manda; un host anterior solo dice «algo».
       const marca = document.createElement("span");
       marca.className = "panelbar-attention";
-      marca.textContent = "·";
-      marca.setAttribute("aria-label", this.t("panelbar-attention"));
+      const n = b.count ?? 0;
+      marca.textContent = n > 0 ? cifraDeInsignia(n) : "·";
+      marca.setAttribute(
+        "aria-label",
+        n > 0
+          ? `${this.t("panelbar-attention")}: ${String(n)}`
+          : this.t("panelbar-attention"),
+      );
       boton.append(marca);
     }
     boton.addEventListener("click", () => {
@@ -84,66 +117,6 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
     fila.append(boton);
   }
   this.panelBarRoot.replaceChildren(fila);
-}
-
-/**
- * La barra de teclas de función (puente 63): diez celdas con lo que cada
- * `F` hace en la pantalla que tiene el teclado. El host la deriva del
- * keymap; aquí solo se pinta, y un click devuelve la TECLA, que el host
- * sintetiza — no hay un segundo despacho que pueda divergir.
- *
- * Su raíz se busca por id y, si el documento no la trae (un test, una
- * página anterior), se crea al final del cuerpo: es una fila `fixed` abajo,
- * y el orden del documento no le importa.
- */
-export function paintKeyBar(this: Screen, bar: KeyBarView | null): void {
-  const doc = this.root.ownerDocument;
-  let raiz = doc.getElementById("keybar");
-  if (raiz === null) {
-    raiz = doc.createElement("div");
-    raiz.id = "keybar";
-    doc.body.append(raiz);
-  }
-  const visible = bar !== null && bar.bar;
-  const alto = visible ? "var(--cell-h)" : "0px";
-  if (this.keyBarHeight !== alto) {
-    doc.documentElement.style.setProperty("--keybar-h", alto);
-    this.keyBarHeight = alto;
-    this.viewportSucio = true;
-  }
-  if (sinCambios(raiz, JSON.stringify(bar))) {
-    return;
-  }
-  if (!visible) {
-    raiz.replaceChildren();
-    return;
-  }
-  const fila = doc.createElement("nav");
-  fila.className = "keybar";
-  fila.setAttribute("role", "toolbar");
-  fila.setAttribute("aria-label", this.t("keybar-label"));
-  for (const c of bar.cells) {
-    const boton = doc.createElement("button");
-    boton.type = "button";
-    boton.className = "keybar-cell";
-    boton.dataset["bound"] = String(c.command !== null);
-    boton.disabled = c.command === null;
-    if (c.command !== null) {
-      boton.title = `F${String(c.key)} · ${c.command}`;
-    }
-    const num = doc.createElement("span");
-    num.className = "keybar-num";
-    num.textContent = String(c.key);
-    const etiqueta = doc.createElement("span");
-    etiqueta.className = "keybar-label";
-    etiqueta.textContent = c.label;
-    boton.append(num, etiqueta);
-    boton.addEventListener("click", () => {
-      this.send({ action: "key_bar_activate", key: c.key });
-    });
-    fila.append(boton);
-  }
-  raiz.replaceChildren(fila);
 }
 
 /**
@@ -211,7 +184,11 @@ export function paintWizard(this: Screen, wizard: WizardView | null): void {
  * Una entrada apagada SIGUE saliendo, atenuada: esconder lo que esta
  * ventana no hace convertiría una limitación en un misterio.
  */
-export function paintMenu(this: Screen, menu: MenuView): void {
+export function paintMenu(
+  this: Screen,
+  menu: MenuView,
+  botones: ChromeButtonView[] = [],
+): void {
   // La fila que la barra ocupa sale del CSS y entra en el reparto: el host
   // reparte sobre el alto que este renderer le declare, así que si la barra
   // no reservara su fila taparía la primera del listado — el mismo bug que
@@ -222,7 +199,7 @@ export function paintMenu(this: Screen, menu: MenuView): void {
     this.menuBarHeight = alto;
     this.viewportSucio = true;
   }
-  if (sinCambios(this.menuRoot, JSON.stringify(menu))) {
+  if (sinCambios(this.menuRoot, JSON.stringify({ menu, botones }))) {
     return;
   }
   if (!menu.bar && menu.open === null) {
@@ -248,6 +225,34 @@ export function paintMenu(this: Screen, menu: MenuView): void {
       this.send({ action: "menu_open", menu: i });
     });
     barra.append(boton);
+  }
+  // Los botones de disposición (ADR 0133), en el borde derecho: un icono
+  // por orden, con su nombre y su atajo al pasar. Un clic vuelve como el
+  // id; la orden la corre el host (ADR 0069).
+  if (botones.length > 0) {
+    const acciones = document.createElement("div");
+    acciones.className = "menubar-actions";
+    acciones.setAttribute("role", "toolbar");
+    acciones.setAttribute("aria-label", this.t("layout-buttons-label"));
+    for (const b of botones) {
+      const boton = document.createElement("button");
+      boton.type = "button";
+      boton.className = "menubar-action";
+      boton.dataset["id"] = b.id;
+      boton.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
+      boton.setAttribute("aria-label", b.label);
+      const icono = iconoDePanel(document, `layout:${b.id}`);
+      if (icono !== null) {
+        boton.append(icono);
+      } else {
+        boton.textContent = b.label;
+      }
+      boton.addEventListener("click", () => {
+        this.send({ action: "layout_button_activate", id: b.id });
+      });
+      acciones.append(boton);
+    }
+    barra.append(acciones);
   }
   const caja = document.createElement("div");
   caja.className = "menu";
@@ -563,9 +568,38 @@ export function paintTabs(
       // ningún grupo en vez de acertar por casualidad.
       this.send({ action: "select_tab", slot_id: t.slot_id });
     });
+    // Cerrar ESTA pestaña (ADR 0133): la `×` de cada una, visible en la
+    // activa y al pasar por encima, como en VS Code. El host la elige y
+    // luego la cierra, por el despacho de `pane.tab-close`.
+    const cerrar = document.createElement("button");
+    cerrar.type = "button";
+    cerrar.className = "tab-close";
+    cerrar.textContent = "×";
+    cerrar.title = this.t("menu-item-pane-tab-close");
+    cerrar.setAttribute("aria-label", this.t("menu-item-pane-tab-close"));
+    cerrar.addEventListener("click", (e) => {
+      // Sin esto el clic también elegiría la pestaña, y serían dos órdenes.
+      e.stopPropagation();
+      this.send({ action: "tab_action", slot_id: t.slot_id, verb: "close" });
+    });
+    li.append(cerrar);
     lista.append(li);
   }
-  dom.tabs.replaceChildren(lista);
+  // Abrir una pestaña EN ESTE GRUPO: se elige la activa del grupo y se abre
+  // detrás, igual que el `[+]` de la barra de la TUI.
+  const nueva = document.createElement("button");
+  nueva.type = "button";
+  nueva.className = "tab-new";
+  nueva.textContent = "+";
+  nueva.title = this.t("menu-item-pane-tab-new");
+  nueva.setAttribute("aria-label", this.t("menu-item-pane-tab-new"));
+  const activa = grupo.tabs[grupo.active] ?? grupo.tabs[0];
+  if (activa !== undefined) {
+    nueva.addEventListener("click", () => {
+      this.send({ action: "tab_action", slot_id: activa.slot_id, verb: "new" });
+    });
+  }
+  dom.tabs.replaceChildren(lista, nueva);
 }
 
 /**

@@ -4,10 +4,10 @@ expression: render_80x24(&app)
 ---
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "                                                                                "
-"┌/c┌ Ajustes · 34 de 34 ────────────────────────────────────────────────────┐──┐"
+"┌/c┌ Ajustes · 36 de 36 ────────────────────────────────────────────────────┐──┐"
 "│No│Apariencia                                                              │ha│"
 "│  │Apariencia 9                                                            │  │"
-"│  │Paneles …istado 11  > Tema                         default              │  │"
+"│  │Paneles …istado 13  > Tema                         default              │  │"
 "│  │Abrir con 4           Tipografía de la interfaz                         │  │"
 "│  │Teclado y ratón 4     Tipografía monoespaciada                          │  │"
 "│ !│Comportamiento 5      Tamaño de letra                                   │  │"
@@ -25,4 +25,4 @@ expression: render_80x24(&app)
 "│  │ Preset de color de la int…e tema propio, ADR 0020).                    │  │"
 "│  └ /  [tab] lado · [[/]] sección · [enter] editar · [ctrl+r] restablecer ·┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" /casa  2/5                                                                     "
+" /casa                                                     2/5  Nombre ↑  UTF-8 "

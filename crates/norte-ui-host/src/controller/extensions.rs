@@ -593,6 +593,15 @@ impl Estado {
                     fuera,
                 )
             }
+            // Un campo de plugin no tiene vocabulario cerrado hoy (solo el
+            // editor de los ajustes de norte devuelve esto); se dice como
+            // cualquier valor rechazado.
+            Err(norte_frontend::settings::SettingsEditError::Invalid { .. }) => (
+                ActionAck::Unavailable {
+                    reason_key: "host-value-rejected".to_owned(),
+                },
+                self.decir("host-value-rejected"),
+            ),
         }
     }
 

@@ -19,16 +19,24 @@ de tu keymap, así que reatar F5 cambia su etiqueta, y una tecla que aquí no
 hace nada enseña solo su número. Con un diálogo delante la fila se queda en
 blanco: ningún preset pone una tecla de función en un diálogo. Pulsar una
 celda con el ratón es pulsar la tecla. `key_bar = false` quita la fila.
+Es solo del terminal: la ventana no la tiene, y sus comandos están en el
+menú y en la paleta.
 
 La barra de paneles
 -------------------
 
-Bajo el menú hay una fila con un botón por panel lateral — Sitios, Visor,
-Procesos, Detalles, Árbol, Registro —, cada uno con su nombre y la letra de
-acceso subrayada, si está abierto, si tiene el teclado y si tiene algo que
-contar. `panel_bar_style = "letters"` la deja en las letras solas, y los
-nombres pasan solos a letras cuando no caben todos. `panel_bar = false` quita
-la fila.
+Hay un botón por panel lateral — Sitios, Visor, Procesos, Detalles, Árbol,
+Registro —, y cada uno dice si está abierto, si tiene el teclado y si tiene
+algo que contar. En el terminal es una fila bajo el menú, con el nombre y la
+letra de acceso subrayada; `panel_bar_style = "letters"` la deja en las
+letras solas, y los nombres pasan solos a letras cuando no caben todos. En
+la ventana es una columna en el borde izquierdo, con un icono por panel y
+una cifra sobre el que tiene novedades: cuántas tareas hay en marcha,
+cuántos avisos guarda el registro.
+
+`panel_bar_position` elige dónde va: `top` (una fila), `left` (una columna),
+o `auto`, que es arriba en el terminal y a la izquierda en la ventana.
+`panel_bar = false` la quita.
 
 El pie del panel
 ----------------
@@ -38,6 +46,21 @@ bytes —, luego lo marcado, y luego el espacio libre del volumen donde vive el
 directorio. Cuando el borde se queda corto cae primero el espacio libre y
 después la cuenta: lo que acabas de marcar es lo último en ceder.
 `pane_footer = false` deja el borde limpio.
+
+La barra de estado
+------------------
+
+Tiene dos mitades. La izquierda dice los mensajes, las esperas y los avisos
+—un listado incompleto, nombres reinterpretados, marcas que se perdieron, una
+sesión suelta— y no se configura: un aviso que se pudiera quitar dejaría de
+serlo. La derecha enseña datos pequeños, y se pulsan los que hacen algo:
+`position` (dónde está el cursor), `marks` (lo marcado), `sort` (el orden;
+abre el menú de orden), `encoding` (cómo se leen los nombres; los
+reinterpreta), `tasks` (tareas en marcha; abre los procesos) y `notices`
+(avisos sin leer; abre el registro). `status_items` dice cuáles y en qué
+orden, por ejemplo `status_items = ["tasks", "position"]`; una lista vacía
+deja la mitad derecha en blanco. Los que no caben ceden por importancia, y
+siempre antes que un aviso de la izquierda.
 
 Filas a rayas
 -------------

@@ -106,13 +106,13 @@
     "meta": false,
     "shift": false
   },
-  "key_bar_activate": {
-    "action": "key_bar_activate",
-    "key": 5
-  },
   "layout_activate_row": {
     "action": "layout_activate_row",
     "row": 0
+  },
+  "layout_button_activate": {
+    "action": "layout_button_activate",
+    "id": "split-h"
   },
   "log_cycle_source": {
     "action": "log_cycle_source"
@@ -334,6 +334,15 @@
   },
   "splash_open": {
     "action": "splash_open"
+  },
+  "status_item_activate": {
+    "action": "status_item_activate",
+    "id": "sort"
+  },
+  "tab_action": {
+    "action": "tab_action",
+    "slot_id": 3,
+    "verb": "close"
   },
   "toggle_mark": {
     "action": "toggle_mark",

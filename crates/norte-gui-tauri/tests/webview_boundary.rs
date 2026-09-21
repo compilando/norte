@@ -184,6 +184,12 @@ fn el_bundle_no_llama_a_casa() {
             continue;
         }
         let texto = std::fs::read_to_string(&entrada).unwrap_or_default();
+        // La ÚNICA excepción, y exacta: el espacio de nombres de SVG que
+        // `createElementNS` necesita para los iconos de la barra de
+        // actividad (ADR 0131). Es un identificador XML, no una dirección:
+        // el navegador no la pide nunca. Se quita la cadena entera antes de
+        // mirar, así que `http://www.w3.org/otra-cosa` sigue siendo rojo.
+        let texto = texto.replace("http://www.w3.org/2000/svg", "");
         mirados += 1;
         for prohibido in [
             "http://",

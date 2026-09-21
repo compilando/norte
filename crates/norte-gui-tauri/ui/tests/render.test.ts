@@ -1148,6 +1148,12 @@ describe("las migas, el indicador de espacio y el toast", () => {
     const migas = root.querySelectorAll(".title-path .crumb");
     expect([...migas].map((m) => m.textContent)).toEqual(["⟨file⟩", "home", "oscar"]);
     expect((migas[2] as HTMLButtonElement).disabled).toBe(true);
+    // Solo la raíz lleva la marca que la atenúa (spec 2026-09-21, fase D).
+    expect([...migas].map((m) => (m as HTMLElement).dataset["root"])).toEqual([
+      "true",
+      "false",
+      "false",
+    ]);
     (migas[1] as HTMLButtonElement).click();
     expect(enviadas.at(-1)).toEqual({
       action: "breadcrumb_activate",
@@ -2254,13 +2260,134 @@ describe("la barra de menús", () => {
     expect(enviadas).toEqual([{ action: "panel_bar_activate", button: 1 }]);
   });
 
+  it("los botones de disposición van a la derecha del menú y vuelven por id", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.layout_buttons = [
+      { id: "split-h", label: "Partir lado a lado", chord: "ctrl+\\" },
+      { id: "pick", label: "Disposición...", chord: "—" },
+    ];
+    screen.paint(v);
+    const botones = [
+      ...document.querySelectorAll(".menubar .menubar-actions .menubar-action"),
+    ] as HTMLButtonElement[];
+    expect(botones.map((b) => b.dataset["id"])).toEqual(["split-h", "pick"]);
+    expect(botones[0]?.querySelector("svg.panelbar-icon")).not.toBeNull();
+    expect(botones[0]?.title).toBe("Partir lado a lado (ctrl+\\)");
+    expect(botones[1]?.title).toBe("Disposición...");
+    expect(botones[1]?.getAttribute("aria-label")).toBe("Disposición...");
+    botones[1]?.click();
+    expect(enviadas).toEqual([{ action: "layout_button_activate", id: "pick" }]);
+  });
+
+  it("las pestañas de un grupo llevan su × y el grupo su +, y la × no elige", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.layout.tabs = [
+      {
+        slot_id: 1,
+        active: 0,
+        tabs: [
+          { slot_id: 1, title: "casa", title_hostile: false },
+          { slot_id: 7, title: "tmp", title_hostile: false },
+        ],
+      },
+    ];
+    screen.paint(v);
+    const cerrar = [
+      ...document.querySelectorAll(".tab .tab-close"),
+    ] as HTMLButtonElement[];
+    expect(cerrar).toHaveLength(2);
+    cerrar[1]?.click();
+    // UNA orden: la × no deja que el clic llegue a la pestaña y la elija.
+    expect(enviadas).toEqual([{ action: "tab_action", slot_id: 7, verb: "close" }]);
+    enviadas.length = 0;
+    (document.querySelector(".tab-new") as HTMLButtonElement).click();
+    // El `+` abre detrás de la ACTIVA del grupo.
+    expect(enviadas).toEqual([{ action: "tab_action", slot_id: 1, verb: "new" }]);
+  });
+
+  it("la mitad derecha de la barra de estado pinta sus elementos y se pulsan", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.status_items = [
+      { id: "position", text: "3/120", tooltip: "Posición", clickable: false },
+      { id: "notices", text: "!2", tooltip: "Avisos", clickable: true },
+    ];
+    screen.paint(v);
+    const derecha = document.querySelector(".statusbar .status-items") as HTMLElement;
+    expect(derecha).not.toBeNull();
+    const els = [...derecha.querySelectorAll(".status-item")] as HTMLElement[];
+    expect(els.map((e) => e.textContent)).toEqual(["3/120", "!2"]);
+    // Lo que no se pulsa no es un botón: un lector no lo anuncia como tal.
+    expect(els[0]?.tagName).toBe("SPAN");
+    expect(els[1]?.tagName).toBe("BUTTON");
+    expect(els[1]?.title).toBe("Avisos");
+    els[1]?.click();
+    expect(enviadas).toEqual([{ action: "status_item_activate", id: "notices" }]);
+  });
+
   it("con la barra de paneles apagada no reserva nada", () => {
     const { screen } = montar();
     const v = vista({});
     v.panel_bar.bar = false;
     screen.paint(v);
     expect(document.documentElement.style.getPropertyValue("--panelbar-h")).toBe("0px");
+    expect(document.documentElement.style.getPropertyValue("--activity-w")).toBe("0px");
     expect(document.querySelector(".panelbar")).toBeNull();
+  });
+
+  it("en columna es la barra de actividad: reserva ANCHO, icono y cifra", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.panel_bar.vertical = true;
+    const log = v.panel_bar.buttons[1];
+    if (log !== undefined) {
+      log.count = 7;
+    }
+    v.panel_bar.buttons.push({
+      kind: "plugin:git:status",
+      label: "Git",
+      letter: "G",
+      chord: "—",
+      state: "focused",
+      attention: true,
+      count: 150,
+    });
+    screen.paint(v);
+    const raiz = document.documentElement.style;
+    // Columna: la fila de arriba no reserva nada y el borde izquierdo sí.
+    expect(raiz.getPropertyValue("--panelbar-h")).toBe("0px");
+    expect(raiz.getPropertyValue("--activity-w")).toBe("var(--activity-size)");
+    expect(screen.takeViewportDirty()).toBe(true);
+    const barra = document.querySelector(".panelbar") as HTMLElement;
+    expect(barra.dataset["vertical"]).toBe("true");
+    expect(barra.getAttribute("aria-orientation")).toBe("vertical");
+    const botones = [
+      ...document.querySelectorAll(".panelbar-button"),
+    ] as HTMLButtonElement[];
+    // Un kind de serie lleva su icono; uno que norte no conoce —el de un
+    // plugin— lleva su letra, que es lo que ya se sabe de él.
+    expect(botones[0]?.querySelector("svg.panelbar-icon")).not.toBeNull();
+    expect(botones[2]?.querySelector("svg")).toBeNull();
+    expect(botones[2]?.querySelector(".panelbar-letter")?.textContent).toBe("G");
+    // Sin texto visible, el NOMBRE es lo que oye un lector de pantalla.
+    expect(botones[0]?.getAttribute("aria-label")).toBe("Sitios");
+    expect(botones[0]?.title).toBe("Sitios (alt+p)");
+    // La cifra, acotada: una insignia de cuatro dígitos no cabe en 48 px.
+    expect(botones[0]?.querySelector(".panelbar-attention")).toBeNull();
+    expect(botones[1]?.querySelector(".panelbar-attention")?.textContent).toBe("7");
+    expect(botones[2]?.querySelector(".panelbar-attention")?.textContent).toBe("99+");
+    expect(botones[2]?.dataset["state"]).toBe("focused");
+
+    botones[2]?.click();
+    expect(enviadas).toEqual([{ action: "panel_bar_activate", button: 2 }]);
+
+    // Y volver a fila devuelve el ancho: la reserva sigue a la barra.
+    v.panel_bar.vertical = false;
+    screen.paint(v);
+    expect(raiz.getPropertyValue("--activity-w")).toBe("0px");
+    expect(raiz.getPropertyValue("--panelbar-h")).toBe("var(--cell-h)");
   });
 
   it("el desplegado marca su título, su cursor y lo que no se puede hacer", () => {

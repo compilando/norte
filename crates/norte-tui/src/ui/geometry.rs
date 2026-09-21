@@ -266,18 +266,44 @@ pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
     // Dos filas de cromo posibles arriba, cada una opcional por su cuenta: la
     // de menús y la de paneles (#324). Se restan las que estén, y saturando —
     // es preferible una pantalla degradada a un reparto sobre altura negativa.
-    let filas = u16::from(app.menu_bar) + u16::from(app.panel_bar);
+    let filas = u16::from(app.menu_bar) + fila_de_paneles(app);
     // Y la de teclas ABAJO (spec 2026-09-10): se resta del alto, no del
     // origen. Mismo criterio que las dos de arriba: una sola resta, aquí.
     let abajo = u16::from(key_bar_area(app, area).is_some());
-    if filas + abajo == 0 || area.height == 0 {
+    // Y la barra de paneles en COLUMNA (spec 2026-09-21) se resta del ancho,
+    // desde el origen. La pregunta es a `panel_bar_area`, que ya sabe si cabe:
+    // un raíl que no se pinta no puede comerse tres columnas.
+    let izquierda = if barra_en_columna(app) {
+        panel_bar_area(app, area).map_or(0, |r| r.width)
+    } else {
+        0
+    };
+    if filas + abajo + izquierda == 0 || area.height == 0 {
         return area;
     }
     Rect {
+        x: area.x.saturating_add(izquierda),
         y: area.y.saturating_add(filas),
+        width: area.width.saturating_sub(izquierda),
         height: area.height.saturating_sub(filas).saturating_sub(abajo),
-        ..area
     }
+}
+
+/// Ancho de la barra de paneles en columna: `" S·"`, la celda de un botón
+/// en letras (`panelbar::button_cell`), que es la misma en fila y en columna.
+pub(crate) const RAIL_W: u16 = 3;
+
+/// ¿La barra de paneles va en COLUMNA? `[ui] panel_bar_position`, con la
+/// respuesta del terminal para `auto`: arriba, porque aquí falta ancho.
+#[must_use]
+pub(crate) fn barra_en_columna(app: &App) -> bool {
+    app.panel_bar && app.chrome.panel_bar_position().vertical(false)
+}
+
+/// Cuántas filas de arriba se come la barra de paneles: una en fila, ninguna
+/// en columna.
+fn fila_de_paneles(app: &App) -> u16 {
+    u16::from(app.panel_bar && !barra_en_columna(app))
 }
 
 /// La fila donde va la barra de teclas (spec 2026-09-10), si está: la ÚLTIMA
@@ -289,7 +315,7 @@ pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
 pub(crate) fn key_bar_area(app: &App, area: Rect) -> Option<Rect> {
     // Con las tres barras en un terminal de tres filas no queda cuerpo; la
     // de teclas es la que cede: `<=` para que no caiga fuera del búfer.
-    let arriba = u16::from(app.menu_bar) + u16::from(app.panel_bar);
+    let arriba = u16::from(app.menu_bar) + fila_de_paneles(app);
     if !app.chrome.key_bar() || area.height <= arriba.saturating_add(1) {
         return None;
     }
@@ -300,11 +326,13 @@ pub(crate) fn key_bar_area(app: &App, area: Rect) -> Option<Rect> {
     })
 }
 
-/// La fila donde va la barra de paneles, si está.
+/// Donde va la barra de paneles, si está: una fila, o una columna.
 ///
 /// Debajo de la de menús cuando las dos están: el menú nombra lo que se puede
 /// hacer y la barra enseña dónde está, así que el orden de arriba abajo es de
-/// lo general a lo concreto.
+/// lo general a lo concreto. En columna (`[ui] panel_bar_position = "left"`)
+/// va en el borde izquierdo, desde debajo del menú hasta encima de la barra
+/// de teclas.
 #[must_use]
 pub(crate) fn panel_bar_area(app: &App, area: Rect) -> Option<Rect> {
     // `<=` y no `== 0`: con las dos barras encendidas en un terminal de una
@@ -313,6 +341,24 @@ pub(crate) fn panel_bar_area(app: &App, area: Rect) -> Option<Rect> {
     // existe.
     if !app.panel_bar || area.height <= u16::from(app.menu_bar) {
         return None;
+    }
+    if barra_en_columna(app) {
+        // Un terminal que no deja cuerpo al lado del raíl se queda sin raíl:
+        // mejor un listado sin botones que botones sin listado.
+        let abajo = u16::from(key_bar_area(app, area).is_some());
+        let alto = area
+            .height
+            .saturating_sub(u16::from(app.menu_bar))
+            .saturating_sub(abajo);
+        if area.width <= RAIL_W || alto == 0 {
+            return None;
+        }
+        return Some(Rect {
+            x: area.x,
+            y: area.y.saturating_add(u16::from(app.menu_bar)),
+            width: RAIL_W,
+            height: alto,
+        });
     }
     Some(Rect {
         y: area.y.saturating_add(u16::from(app.menu_bar)),
@@ -422,7 +468,12 @@ pub(crate) fn body_rect(
 ///
 /// No pasa con el preset `orthodox`; existe porque un layout sin `browser` no
 /// puede dejar sin sitio a un visor abierto.
+///
+/// Parte de [`body_area`] y no del frame: sin eso el cuerpo de reserva
+/// empezaba debajo del raíl de paneles (y de las filas de cromo) en vez de a
+/// su lado.
 pub(crate) fn chrome_body(app: &App, area: Rect) -> Rect {
+    let area = body_area(app, area);
     let alto = area
         .height
         .saturating_sub(tasks_rows(app))

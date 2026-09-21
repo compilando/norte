@@ -28,7 +28,7 @@ impl Estado {
         // renderer vio de ella, y lo que el siguiente parche compara.
         if let UiUpdate::Snapshot(s) = &u {
             self.ultima_barra = Some(s.panel_bar.clone());
-            self.ultima_teclas = Some(s.key_bar.clone());
+            self.ultimos_elementos = Some(s.status_items.clone());
             // La foto se armó con el ajuste de AHORA (`ajuste_de` es puro).
             let _ = self.ajustes_movidos();
         }
@@ -50,15 +50,15 @@ impl Estado {
             });
             self.ultima_barra = Some(barra);
         }
-        // Y la de teclas, por el mismo mecanismo (spec 2026-09-10): abrir un
-        // diálogo o el visor cambia qué pantalla tiene el teclado, y con
-        // ella lo que cada `F` hace.
-        let teclas = self.vista_barra_de_teclas();
-        if self.ultima_teclas.as_ref() != Some(&teclas) {
-            changes.push(ViewChange::KeyBar {
-                key_bar: teclas.clone(),
+        // Y los elementos de la barra de estado (ADR 0132), por el mismo
+        // mecanismo: los mueven el cursor, las marcas, el orden y el tablero,
+        // y ninguno de esos caminos sabe que hay una barra que los cuenta.
+        let elementos = self.vista_elementos_de_estado();
+        if self.ultimos_elementos.as_ref() != Some(&elementos) {
+            changes.push(ViewChange::StatusItems {
+                status_items: elementos.clone(),
             });
-            self.ultima_teclas = Some(teclas);
+            self.ultimos_elementos = Some(elementos);
         }
         // Y el ajuste de columnas de cada hueco: lo mueven el ancho del
         // hueco y los nombres del listado, y ninguno de los caminos que los

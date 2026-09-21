@@ -25,4 +25,4 @@ expression: render_80x24(&app)
 "│1+iguales 3 · 2+distintas 1 · 3+solo izq. 1 · 4+solo der. 1 · 5+problemas 2   │"
 "│tab lado · 1-5 filtro · ins marcar · s sinc · m espejo · enter ir · esc cerrar│"
 "└ comparación: 8 filas · actuando sobre: izquierdo ────────────────────────────┘"
-" /casa  2/5                                                                     "
+" /casa                                                     2/5  Nombre ↑  UTF-8 "

@@ -142,6 +142,77 @@ impl Estado {
         }
     }
 
+    /// Un clic en un elemento de la barra de estado (ADR 0132): su comando,
+    /// por el mismo despacho que su atajo y que la barra de paneles.
+    ///
+    /// Se busca por id en la lista de AHORA: un elemento que ya no está (las
+    /// tareas acabaron, la lista cambió) es una carrera normal, y el
+    /// renderer pide foto.
+    pub(super) fn pulsar_elemento_de_estado(
+        &mut self,
+        id: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(comando) = self
+            .elementos_de_estado()
+            .into_iter()
+            .find(|v| v.id == id)
+            .and_then(|v| v.command)
+        else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        match crate::commands::efecto_de(comando, 1) {
+            Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
+            None => self.no_implementado(comando),
+        }
+    }
+
+    /// Un clic en un botón de disposición (ADR 0133): su orden, por el
+    /// despacho de su atajo. Un id que no está en la tabla compartida es un
+    /// renderer de otra versión: que pida foto.
+    pub(super) fn pulsar_boton_de_disposicion(
+        &mut self,
+        id: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(boton) = norte_frontend::layoutbar::by_id(id) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        match crate::commands::efecto_de(boton.command, 1) {
+            Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
+            None => self.no_implementado(boton.command),
+        }
+    }
+
+    /// Un botón de la barra de pestañas (ADR 0133): primero elige la
+    /// pestaña —el grupo pulsado pasa a tener el foco— y después corre la
+    /// orden por el despacho de su atajo. Una pestaña que ya no está es una
+    /// carrera normal.
+    pub(super) fn boton_de_pestana(
+        &mut self,
+        slot_id: u32,
+        verbo: crate::action::TabVerb,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let (ack, mut salidas) = self.elegir_pestana(slot_id, backend, buzon);
+        if matches!(ack, ActionAck::Stale { .. }) {
+            return (ack, salidas);
+        }
+        let comando = match verbo {
+            crate::action::TabVerb::New => "pane.tab-new",
+            crate::action::TabVerb::Close => "pane.tab-close",
+        };
+        let (ack, mas) = match crate::commands::efecto_de(comando, 1) {
+            Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
+            None => self.no_implementado(comando),
+        };
+        salidas.extend(mas);
+        (ack, salidas)
+    }
+
     /// Un click FUERA del desplegable lo cierra sin ejecutar nada.
     pub(super) fn cerrar_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.menu.is_none() {

@@ -126,8 +126,8 @@ export class Screen {
   menuBarHeight: string | null = null;
   /** Lo mismo para la barra de paneles (#324). */
   panelBarHeight: string | null = null;
-  /** La reserva de la barra de teclas, por lo mismo. */
-  keyBarHeight: string | null = null;
+  /** Y el ancho que reserva cuando es la barra de actividad (puente 84). */
+  activityWidth: string | null = null;
   /** La última foto pintada: lo que se repinta cuando cambia algo local. */
   ultimaVista: ViewSnapshot | null = null;
   /** Aviso local de una orden rechazada en la frontera (`rejected`). */
@@ -259,9 +259,8 @@ export class Screen {
       );
       this.paintSlot(dom, slot, view, cell);
     }
-    this.paintMenu(view.menu);
+    this.paintMenu(view.menu, view.layout_buttons ?? []);
     this.paintPanelBar(view.panel_bar);
-    this.paintKeyBar(view.key_bar ?? null);
     this.paintPalette(view.palette);
     this.paintGoto(view.goto ?? null);
     this.paintWizard(view.wizard ?? null);
@@ -291,7 +290,6 @@ export class Screen {
 
   /** En `render/menus.ts`. */
   readonly paintPanelBar = menus.paintPanelBar;
-  readonly paintKeyBar = menus.paintKeyBar;
 
   /** En `render/menus.ts`. */
   readonly paintMenu = menus.paintMenu;
@@ -927,24 +925,19 @@ export class Screen {
       dom.scroller.className = "statusbar";
       dom.scroller.setAttribute("role", "status");
       dom.scroller.setAttribute("aria-live", "polite");
-      // La insignia de avisos abre el registro por SU botón de la barra
-      // de paneles: el índice se resuelve contra la barra que el host
-      // acaba de mandar, y el host abre el panel por el mismo despacho que
-      // la tecla. Sin botón de registro (un plugin lo retiró), no se pulsa.
-      const registro = view.panel_bar.buttons.findIndex((b) => b.kind === "log");
-      const abrirRegistro =
-        registro < 0
-          ? null
-          : () => {
-              this.send({ action: "panel_bar_activate", button: registro });
-            };
+      // Los elementos de la derecha (ADR 0132) vuelven por ID: el host
+      // resuelve el comando contra su lista de ahora y lo corre por el
+      // mismo despacho que la tecla.
       dom.scroller.replaceChildren(
         ...statusNodes(
           view.status,
           view.connection.state,
           (k) => this.t(k),
           this.rechazo,
-          abrirRegistro,
+          view.status_items ?? [],
+          (id) => {
+            this.send({ action: "status_item_activate", id });
+          },
         ),
       );
       return;
@@ -1029,6 +1022,9 @@ export class Screen {
         miga.textContent = tramo;
         const actual = i === migas.length - 1;
         miga.dataset["current"] = String(actual);
+        // La raíz (el esquema, `⟨file⟩`) se pinta atenuada (fase D): dice
+        // de qué provider es la ruta, y es lo que menos cambia de las migas.
+        miga.dataset["root"] = String(i === 0);
         miga.disabled = actual;
         if (!actual) {
           miga.addEventListener("click", () => {

@@ -3,8 +3,11 @@
 :root {
   --cell-w: 8px;
   --cell-h: 22px;
+  /* El ancho de la barra de actividad (puente 84), el de VS Code. Lo que
+     RESERVA es `--activity-w`, que el renderer pone a esto o a cero. */
+  --activity-size: 48px;
   /* Tipografía EMPAQUETADA (spec 2026-09-11, V1): JetBrains Mono para lo
-     que se alinea en celdas —listados, visor, barra de teclas— e Inter para
+     que se alinea en celdas —listados, visor— e Inter para
      el cromo —menús, diálogos, paleta—. Las dos van dentro del bundle
      (`@fontsource`, OFL), así que la ventana se ve igual en una máquina sin
      fuentes instaladas. `[ui] mono_font` y `[ui] font` siguen mandando: son
@@ -121,7 +124,10 @@ body {
 
 #screen {
   position: relative;
-  width: 100vw;
+  /* La barra de actividad reserva su columna igual que las barras de arriba
+     su fila: con un margen, y el ancho que se declara al host ya sin ella. */
+  width: calc(100vw - var(--activity-w, 0px));
+  margin-left: var(--activity-w, 0px);
   /* La barra de menús RESERVA su fila, no la tapa: el reparto que el host
      calcula cuenta con la altura que este elemento diga, así que una barra
      flotante encima escondería la primera fila del listado. Se aparta con un
@@ -129,82 +135,8 @@ body {
      documento para pintar por encima de los paneles— y por tanto no ocupa
      sitio en el flujo. Con `[ui] menu_bar` apagada la variable es cero y no
      se pierde nada. */
-  height: calc(
-    100vh - var(--menubar-h, 0px) - var(--panelbar-h, 0px) - var(--keybar-h, 0px)
-  );
+  height: calc(100vh - var(--menubar-h, 0px) - var(--panelbar-h, 0px));
   margin-top: calc(var(--menubar-h, 0px) + var(--panelbar-h, 0px));
-}
-
-/* La barra de teclas (spec 2026-09-10): la ÚLTIMA fila, fija abajo y
-   reservada como las dos de arriba (`--keybar-h`). Diez celdas a partes
-   iguales; una tecla que no ata nada se queda con el fondo base. */
-.keybar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  height: var(--cell-h);
-  background: var(--panel-bg);
-  border-top: 1px solid var(--separator, var(--border));
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.keybar-cell {
-  font: inherit;
-  color: inherit;
-  background: none;
-  border: 0;
-  padding: 0;
-  flex: 1 1 0;
-  min-width: 0;
-  height: 100%;
-  display: inline-flex;
-  align-items: center;
-  overflow: hidden;
-  cursor: pointer;
-  unicode-bidi: isolate;
-  /* Un `<button>` centra su contenido: el número quedaba pegado a la
-     izquierda y la etiqueta en medio, y se leía «Ayuda 2 Renombrar 3».
-     Todo a la izquierda, número y etiqueta juntos, como en mc. */
-  justify-content: flex-start;
-  text-align: left;
-}
-
-.keybar-cell:disabled {
-  cursor: default;
-}
-
-/* El número como TECLA (spec 2026-09-11, V2): una insignia con borde y
-   sombra de un píxel, que se lee como la tecla física que es. Los colores
-   son los del texto, así que vale para cualquier tema. */
-.keybar-num {
-  flex: 0 0 auto;
-  margin: 0 4px 0 3px;
-  padding: 0 4px;
-  font-size: 0.8em;
-  line-height: 1.35;
-  border: 1px solid currentcolor;
-  border-radius: 3px;
-  box-shadow: 0 1px 0 currentcolor;
-  color: var(--fg);
-}
-
-.keybar-label {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 0 4px;
-  /* `button`, no `status`: una celda es un botón, y la franja de estado
-     justo encima no puede leerse como la misma cosa. */
-  background: var(--button-bg);
-  color: var(--button-fg, inherit);
-}
-
-.keybar-cell[data-bound="false"] .keybar-label {
-  background: none;
 }
 
 /* La barra de paneles (#324): una fila fija bajo la de menús, reservada
@@ -274,6 +206,86 @@ body {
   font-weight: bold;
 }
 
+/* La barra de actividad (puente 84): la misma barra en COLUMNA, en el borde
+   izquierdo, como la de VS Code. Reserva su ancho igual que la fila su alto
+   (ver `#screen`); el host reparte sobre lo que queda. */
+.panelbar[data-vertical="true"] {
+  top: var(--menubar-h, 0px);
+  bottom: 0;
+  right: auto;
+  width: var(--activity-size);
+  height: auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 4px 0;
+  border-bottom: 0;
+  border-right: 1px solid var(--separator, var(--border));
+}
+
+.panelbar[data-vertical="true"] .panelbar-button {
+  position: relative;
+  justify-content: center;
+  width: 100%;
+  height: var(--activity-size);
+  padding: 0;
+  opacity: 0.55;
+  /* El indicador de estado es un borde a la izquierda, no un fondo: el
+     icono tiene que seguir leyéndose sobre el panel. */
+  border-left: 2px solid transparent;
+}
+
+.panelbar[data-vertical="true"] .panelbar-button:hover {
+  opacity: 1;
+}
+
+.panelbar[data-vertical="true"] .panelbar-button[data-state="open"] {
+  color: var(--fg);
+  opacity: 0.9;
+}
+
+.panelbar[data-vertical="true"] .panelbar-button[data-state="focused"] {
+  background: none;
+  color: var(--fg);
+  opacity: 1;
+  border-left-color: var(--focus-border, var(--border-focus));
+}
+
+.panelbar-icon {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Un panel sin icono propio (el de un plugin) enseña su letra, sin el
+   subrayado de la fila: aquí no hay nombre en el que marcarla. */
+.panelbar[data-vertical="true"] .panelbar-letter {
+  font-family: var(--font-ui);
+  font-size: 18px;
+  text-decoration: none;
+}
+
+/* La insignia: la cifra de novedades sobre la esquina del icono. */
+.panelbar[data-vertical="true"] .panelbar-attention {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  background: var(--button-bg);
+  color: var(--button-fg, var(--fg));
+}
+
 /* `#menu` no se posiciona: sus tres hijos son `fixed` y se colocan contra la
    ventana. Es un ancla en el documento, y lo único que aporta es su SITIO —
    después de la pantalla y antes de los overlays. */
@@ -308,6 +320,39 @@ body {
   height: 100%;
   cursor: pointer;
   unicode-bidi: isolate;
+}
+
+/* Los botones de disposición (ADR 0133): en el borde derecho de la barra,
+   un icono cada uno, como los de arriba a la derecha de VS Code. */
+.menubar-actions {
+  display: flex;
+  margin-left: auto;
+  height: 100%;
+  padding-right: 4px;
+}
+
+.menubar-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.menubar-action:hover {
+  opacity: 1;
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.menubar-action .panelbar-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .menubar-title[aria-expanded="true"] {
@@ -919,27 +964,50 @@ body {
 }
 
 .statusbar {
+  display: flex;
+  align-items: center;
   background: var(--status-bg);
   padding: 0 6px;
   white-space: nowrap;
   overflow: hidden;
 }
 
+/* La mitad derecha (ADR 0132): los elementos, pegados al borde. El host ya
+   los recortó por prioridad; aquí solo no se encogen, para que ceda la
+   mitad izquierda y no media palabra de un elemento. */
+.status-items {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  margin-left: auto;
+  padding-left: 12px;
+}
+
+.status-item {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0 6px;
+  height: var(--cell-h);
+  unicode-bidi: isolate;
+}
+
+button.status-item {
+  cursor: pointer;
+}
+
+button.status-item:hover {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.status-item[data-id="notices"] {
+  color: var(--warning-fg);
+}
+
 .pending {
   color: var(--border-focus);
   margin-left: 8px;
-}
-
-/* La insignia de avisos caducados sin leer (puente 63): a la derecha de
-   la barra de estado, con el color de aviso, y se pulsa. */
-.notices {
-  font: inherit;
-  margin-left: auto;
-  padding: 0 6px;
-  border: 0;
-  background: none;
-  color: var(--warning-fg);
-  cursor: pointer;
 }
 
 .tasks {
@@ -1626,7 +1694,7 @@ body {
 .status-message {
   position: fixed;
   right: 12px;
-  bottom: calc(var(--keybar-h, 0px) + 10px);
+  bottom: 10px;
   max-width: 50vw;
   padding: 4px 12px;
   border-radius: 6px;
@@ -1678,6 +1746,18 @@ body {
 .crumb-sep {
   opacity: 0.5;
   padding: 0 1px;
+}
+
+/* La raíz de las migas (spec 2026-09-21, fase D): el esquema del provider, atenuado y un
+   punto más pequeño — está en todas las rutas del panel, y a la misma voz
+   que los directorios competía con ellos. Sigue pulsable. */
+.crumb[data-root="true"]:not(:disabled) {
+  opacity: 0.6;
+  font-size: 0.9em;
+}
+
+.crumb[data-root="true"]:hover:not(:disabled) {
+  opacity: 1;
 }
 
 /* El indicador de espacio del pie (puente 65): dos píxeles al pie del
@@ -2978,6 +3058,46 @@ body {
   border-bottom: 2px solid var(--border-focus);
 }
 
+/* La barra de pestañas y su `+` en una fila (ADR 0133). */
+.slot-tabs[data-open="true"] {
+  display: flex;
+  align-items: center;
+}
+
+/* La `×` de cada pestaña: siempre en la activa, al pasar en las demás,
+   como en VS Code. Ocupa su sitio aunque no se vea, para que el rótulo no
+   baile al pasar el ratón. */
+.tab-close,
+.tab-new {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.tab-close {
+  visibility: hidden;
+  margin-left: 4px;
+}
+
+.tab[data-active="true"] .tab-close,
+.tab:hover .tab-close {
+  visibility: visible;
+}
+
+.tab-close:hover,
+.tab-new:hover {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.tab-new {
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+
 .agents-note,
 .agents-empty {
   opacity: 0.8;
@@ -3199,6 +3319,15 @@ body {
   position: absolute;
   background: transparent;
   touch-action: none;
+}
+
+/* Al pasar o arrastrar, el tirador se enciende con el color del foco (fase
+   D, spec 2026-09-21), como el sash de VS Code: dice «aquí se agarra» solo cuando el
+   puntero está encima, y un retardo corto evita que parpadee al cruzarlo. */
+.resize-handle:hover,
+.resize-handle:active {
+  background: color-mix(in srgb, var(--border-focus) 70%, transparent);
+  transition: background-color 0.1s 0.15s;
 }
 
 .resize-handle.col {
@@ -4186,9 +4315,14 @@ body {
     animation: none;
   }
 
-  .row {
+  .row,
+  .resize-handle {
     transition: none;
   }
+}
+
+:root[data-reduce-motion="true"] .resize-handle {
+  transition: none;
 }
 
 :root[data-reduce-motion="true"] .slot-busy {

@@ -376,16 +376,18 @@ impl LogRing {
         Tail { lines, next, lost }
     }
 
-    /// ¿Hay alguna línea de nivel `l` o peor?
+    /// ¿Cuántas líneas de nivel `l` o peor retiene el anillo?
     ///
     /// Sin clonar nada, que es el punto: la barra de paneles lo pregunta en
-    /// CADA frame para decidir si marca el botón del registro, y contestarlo
+    /// CADA frame para poner la cifra en el botón del registro, y contestarlo
     /// con [`Self::snapshot`] clonaba dos mil líneas —con sus dos `String`—
     /// diez veces por segundo, disputándole el candado al hilo que escribe.
+    /// Contar es la misma pasada que preguntar si hay alguna: el anillo está
+    /// acotado.
     #[must_use]
-    pub fn has_at_or_above(&self, l: LogLevel) -> bool {
+    pub fn count_at_or_above(&self, l: LogLevel) -> usize {
         let r = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
-        r.lines.iter().any(|linea| linea.level <= l)
+        r.lines.iter().filter(|linea| linea.level <= l).count()
     }
 
     /// Mete una línea, tirando la más vieja si no cabe.
@@ -588,6 +590,20 @@ mod tests {
             target: target.to_string(),
             message: msg.to_string(),
         }
+    }
+
+    /// La cifra del botón del registro: cuenta lo de ese nivel O PEOR, y
+    /// nada más. Un `WARN` cuenta para `Warn`, un `ERROR` también, un `INFO`
+    /// no.
+    #[test]
+    fn cuenta_las_lineas_de_un_nivel_o_peor() {
+        let ring = LogRing::new(8);
+        assert_eq!(ring.count_at_or_above(LogLevel::Warn), 0);
+        ring.push(linea(Level::INFO, "a", "hola"));
+        ring.push(linea(Level::WARN, "a", "ojo"));
+        ring.push(linea(Level::ERROR, "a", "mal"));
+        assert_eq!(ring.count_at_or_above(LogLevel::Warn), 2);
+        assert_eq!(ring.count_at_or_above(LogLevel::Error), 1);
     }
 
     /// LA prueba del módulo (regla 10, #43): `suppaftp` loguea `PASS

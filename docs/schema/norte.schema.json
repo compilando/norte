@@ -643,6 +643,14 @@
             "null"
           ]
         },
+        "panel_bar_position": {
+          "default": null,
+          "description": "Where the panel bar sits: `\"top\"`, a row under the menu bar;\n`\"left\"`, an activity rail on the left edge; `\"auto\"` (default), each\nfrontend's own answer — top in the terminal, left in the window.\n\n[`crate::load::load`] rejects other values.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "panel_bar_style": {
           "default": null,
           "description": "How the panel bar names its buttons: `\"names\"` (default) paints the\nlocalized panel name with its access letter underlined; `\"letters\"`\npaints only the letter, the row's original form. Below 60 usable\ncells `names` falls back to letters on its own.\n\n[`crate::load::load`] rejects other values (same pattern as\n`quick_search`) so its diagnostic can include the source path.",
@@ -714,6 +722,17 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "status_items": {
+          "default": null,
+          "description": "The items on the right half of the status bar, in screen order:\nany of `\"position\"`, `\"marks\"`, `\"sort\"`, `\"encoding\"`, `\"tasks\"`,\n`\"notices\"`, each at most once. Absent = all six in that order; an\nempty list leaves the right half empty. The left half — messages and\nwarnings — is not configurable.\n\n[`crate::load::load`] rejects unknown and repeated ids.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },

@@ -145,7 +145,6 @@ describe("el contrato con el host", () => {
       "extensions",
       "goto",
       "help",
-      "key_bar",
       "layout",
       "layouts",
       "menu",
@@ -161,6 +160,7 @@ describe("el contrato con el host", () => {
       "settings",
       "slot_state",
       "status",
+      "status_items",
       "sync",
       "tasks",
       // Dos casos de `tasks`, no dos variantes: esta lista son los NOMBRES de

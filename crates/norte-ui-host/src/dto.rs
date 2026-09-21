@@ -53,8 +53,15 @@ pub struct ViewSnapshot {
     /// La barra de paneles (#324): qué paneles hay, cómo están, y si alguno
     /// tiene algo que contar. Puente 51.
     pub panel_bar: PanelBarView,
-    /// La barra de teclas de función (spec 2026-09-10). Puente 63.
-    pub key_bar: KeyBarView,
+    /// La mitad DERECHA de la barra de estado (ADR 0132, puente 85): los
+    /// elementos de `[ui] status_items` que caben, ya redactados y en su
+    /// orden. Ausente en un host anterior = ninguno.
+    #[serde(default)]
+    pub status_items: Vec<StatusItemView>,
+    /// Los botones de disposición de la derecha de la barra de menús (ADR
+    /// 0133, puente 86), en su orden. Ausente en un host anterior = ninguno.
+    #[serde(default)]
+    pub layout_buttons: Vec<ChromeButtonView>,
     /// `[ui] row_stripes` (spec 2026-09-20): si las filas impares de un
     /// listado van sobre una banda. Puente 80.
     ///
@@ -251,46 +258,54 @@ pub struct PanelBarView {
     /// letra. Ausente en un host anterior al puente 63 = nombres.
     #[serde(default = "default_true")]
     pub names: bool,
+    /// `[ui] panel_bar_position` ya resuelta (puente 84): `true` = una
+    /// columna en el borde izquierdo, la barra de actividad; `false` = la
+    /// fila bajo el menú. `auto` lo resuelve el HOST, a columna: en la
+    /// ventana falta alto, no ancho. Ausente en un host anterior = fila.
+    #[serde(default)]
+    pub vertical: bool,
     /// Los botones, en el orden en que se pintan. Un click vuelve como el
     /// ÍNDICE en esta lista (`UiAction::PanelBarActivate`), nunca como un
     /// comando: el renderer no despacha (ADR 0069).
     pub buttons: Vec<PanelButtonView>,
 }
 
+/// Un elemento de la mitad derecha de la barra de estado (ADR 0132).
+///
+/// Qué dice, con qué prioridad cede y qué corre un clic lo decide
+/// `norte_frontend::statusbar`, el mismo código que la TUI. Un clic vuelve
+/// como el `id` (`UiAction::StatusItemActivate`), nunca como un comando: el
+/// renderer no despacha (ADR 0069).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusItemView {
+    /// El id estable (`position`, `tasks`…).
+    pub id: String,
+    /// El texto, en el idioma de la sesión.
+    pub text: String,
+    /// Qué es y qué hace pulsarlo, para el título.
+    pub tooltip: String,
+    /// Si pulsarlo hace algo.
+    pub clickable: bool,
+}
+
+/// Un botón del cromo que corre una orden (ADR 0133): los de disposición.
+///
+/// Qué botones hay y qué corren lo decide `norte_frontend::layoutbar`; un
+/// clic vuelve como el `id`, nunca como la orden (ADR 0069).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChromeButtonView {
+    /// Id estable (`split-h`, `pick`…): vuelve con el clic y elige el icono.
+    pub id: String,
+    /// Su nombre corto, el de su entrada del menú.
+    pub label: String,
+    /// El atajo que hace lo mismo, o `—`.
+    pub chord: String,
+}
+
 /// `true` para un campo que un host anterior no mandaba y que encendido es
 /// lo de siempre.
 fn default_true() -> bool {
     true
-}
-
-/// La barra de teclas de función (spec 2026-09-10, puente 63): diez celdas
-/// con lo que cada `F` hace en la pantalla que tiene el teclado.
-///
-/// DERIVADA del keymap efectivo de esa pantalla —el diálogo si hay uno
-/// abierto, el visor si está a pantalla completa, los listados si no—, que
-/// es el mismo orden con el que el host elige resolver; por eso dice la
-/// verdad. Viaja entera con cada cambio, como la de paneles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeyBarView {
-    /// `[ui] key_bar`: si la barra se pinta.
-    pub bar: bool,
-    /// Las diez celdas, `F1`..`F10` en orden. Un click vuelve como la TECLA
-    /// (`UiAction::KeyBarActivate`), nunca como un comando: el renderer no
-    /// despacha (ADR 0069), y una tecla sintetizada va por el mismo camino
-    /// que una de verdad.
-    pub cells: Vec<KeyCellView>,
-}
-
-/// Una celda de la barra de teclas.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeyCellView {
-    /// `1`..=`10`.
-    pub key: u32,
-    /// La etiqueta corta, en el idioma de la sesión. Vacía = la tecla no
-    /// ata nada en esta pantalla, y la celda no se pulsa.
-    pub label: String,
-    /// El comando que corre, para el título del botón. `None` = nada.
-    pub command: Option<String>,
 }
 
 /// Un botón de la barra de paneles.
@@ -311,6 +326,11 @@ pub struct PanelButtonView {
     /// Tiene algo que contar sin estar a la vista: el registro con avisos
     /// sin leer, procesos con tareas en el tablero.
     pub attention: bool,
+    /// CUÁNTAS cosas tiene que contar (puente 84): la cifra de la insignia.
+    /// `0` con `attention` apagado; ausente en un host anterior = `0`, y el
+    /// renderer pinta entonces la marca sin cifra.
+    #[serde(default)]
+    pub count: u32,
 }
 
 /// Cómo está el panel de un botón.
@@ -3421,6 +3441,14 @@ pub enum ViewChange {
     },
     /// La barra de estado cambió.
     Status(StatusView),
+    /// Los elementos de la mitad derecha de la barra de estado cambiaron
+    /// (ADR 0132). Como la barra de paneles: el host los compara con los
+    /// últimos que mandó al armar cada parche, porque los mueve casi todo
+    /// —el cursor, una marca, el orden, una tarea—.
+    StatusItems {
+        /// La lista entera.
+        status_items: Vec<StatusItemView>,
+    },
     /// El tablero de tasks cambió.
     ///
     /// Variante de STRUCT y no de tupla, y no por gusto: un enum etiquetado
@@ -3496,13 +3524,6 @@ pub enum ViewChange {
     PanelBar {
         /// La barra entera.
         panel_bar: PanelBarView,
-    },
-    /// La barra de teclas cambió: otra pantalla tiene el teclado, o un
-    /// perfil trajo otro keymap. Mismo mecanismo que la de paneles: el host
-    /// la compara con la última que mandó al armar cada parche.
-    KeyBar {
-        /// La barra entera.
-        key_bar: KeyBarView,
     },
     /// La paleta se abrió, se filtró, se movió o se cerró.
     Palette {

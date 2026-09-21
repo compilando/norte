@@ -228,7 +228,9 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::SplashActivateRow { .. } => "splash_activate_row",
         UiAction::WizardActivateRow { .. } => "wizard_activate_row",
         UiAction::PanelBarActivate { .. } => "panel_bar_activate",
-        UiAction::KeyBarActivate { .. } => "key_bar_activate",
+        UiAction::StatusItemActivate { .. } => "status_item_activate",
+        UiAction::LayoutButtonActivate { .. } => "layout_button_activate",
+        UiAction::TabAction { .. } => "tab_action",
         UiAction::ResizeSlot { .. } => "resize_slot",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
@@ -556,7 +558,25 @@ fn acciones_de_cromo() -> Vec<(&'static str, UiAction)> {
             "panel_bar_activate",
             UiAction::PanelBarActivate { button: 2 },
         ),
-        ("key_bar_activate", UiAction::KeyBarActivate { key: 5 }),
+        (
+            "status_item_activate",
+            UiAction::StatusItemActivate {
+                id: "sort".to_owned(),
+            },
+        ),
+        (
+            "layout_button_activate",
+            UiAction::LayoutButtonActivate {
+                id: "split-h".to_owned(),
+            },
+        ),
+        (
+            "tab_action",
+            UiAction::TabAction {
+                slot_id: 3,
+                verb: norte_ui_host::TabVerb::Close,
+            },
+        ),
         (
             "resize_slot",
             UiAction::ResizeSlot {
@@ -1445,23 +1465,23 @@ fn asistente_de_referencia() -> norte_ui_host::dto::WizardView {
     }
 }
 
-fn barra_de_teclas_de_referencia() -> norte_ui_host::dto::KeyBarView {
-    use norte_ui_host::dto::KeyCellView;
-    norte_ui_host::dto::KeyBarView {
-        bar: true,
-        cells: vec![
-            KeyCellView {
-                key: 1,
-                label: "Ayuda".to_owned(),
-                command: Some("app.help".to_owned()),
-            },
-            KeyCellView {
-                key: 2,
-                label: String::new(),
-                command: None,
-            },
-        ],
-    }
+/// Uno pulsable y uno que no: las dos formas que el renderer pinta.
+fn elementos_de_estado_de_referencia() -> Vec<norte_ui_host::dto::StatusItemView> {
+    use norte_ui_host::dto::StatusItemView;
+    vec![
+        StatusItemView {
+            id: "position".to_owned(),
+            text: "3/120".to_owned(),
+            tooltip: "Posición del cursor en el listado".to_owned(),
+            clickable: false,
+        },
+        StatusItemView {
+            id: "sort".to_owned(),
+            text: "Nombre ↑".to_owned(),
+            tooltip: "Orden del listado. Pulsa para cambiarlo".to_owned(),
+            clickable: true,
+        },
+    ]
 }
 
 fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
@@ -1469,6 +1489,9 @@ fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
     norte_ui_host::dto::PanelBarView {
         bar: true,
         names: true,
+        // Columna en la referencia (puente 84): un booleano que el golden
+        // fija a `false` no distingue «lo manda» de «no existe».
+        vertical: true,
         buttons: vec![
             PanelButtonView {
                 kind: "places".to_owned(),
@@ -1477,6 +1500,7 @@ fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
                 chord: "alt+p".to_owned(),
                 state: PanelButtonState::Open,
                 attention: false,
+                count: 0,
             },
             PanelButtonView {
                 kind: "log".to_owned(),
@@ -1485,6 +1509,7 @@ fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
                 chord: "—".to_owned(),
                 state: PanelButtonState::Closed,
                 attention: true,
+                count: 3,
             },
         ],
     }
@@ -1545,7 +1570,12 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         tasks: vec![task_de_referencia()],
         menu: menu_de_referencia(),
         panel_bar: barra_de_paneles_de_referencia(),
-        key_bar: barra_de_teclas_de_referencia(),
+        status_items: elementos_de_estado_de_referencia(),
+        layout_buttons: vec![norte_ui_host::dto::ChromeButtonView {
+            id: "split-h".to_owned(),
+            label: "Partir lado a lado".to_owned(),
+            chord: "—".to_owned(),
+        }],
         // El pijama ENCENDIDO en la referencia (puente 80): un booleano que
         // el golden fija a `false` no distingue «lo manda» de «no existe».
         row_stripes: true,
@@ -2606,12 +2636,6 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
-            "key_bar",
-            ViewChange::KeyBar {
-                key_bar: barra_de_teclas_de_referencia(),
-            },
-        ),
-        (
             "wizard",
             ViewChange::Wizard {
                 wizard: Some(asistente_de_referencia()),
@@ -2621,6 +2645,12 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             "panel_bar",
             ViewChange::PanelBar {
                 panel_bar: barra_de_paneles_de_referencia(),
+            },
+        ),
+        (
+            "status_items",
+            ViewChange::StatusItems {
+                status_items: elementos_de_estado_de_referencia(),
             },
         ),
         (
@@ -2815,7 +2845,14 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // concreto en vez de ciclar.
     //   Y `default`: el valor de fábrica, que la ventana enseña como
     //   marcador de un campo vacío — «vacío» no es un hueco, es ese valor.
-    const FORMA: u64 = 12_185_788_950_238_215_034;
+    // Puente 84: se va la barra de teclas (`View::key_bar`, el cambio
+    // `key_bar`); la de paneles gana `vertical` (columna o fila) y cada
+    // botón `count`, la cifra de su insignia.
+    // Puente 85: `View::status_items` y su cambio, la mitad derecha de la
+    // barra de estado (ADR 0132).
+    // Puente 86: `View::layout_buttons`, los botones de disposición (ADR
+    // 0133).
+    const FORMA: u64 = 5_446_401_236_544_408_442;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

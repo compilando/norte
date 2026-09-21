@@ -5,6 +5,7 @@
 //! `tab_zones`) y otra PINTA, porque quien enruta un clic necesita la geometría
 //! sin haber pintado nada.
 
+use norte_frontend::panelbar::cifra;
 use norte_theme::Role;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -257,6 +258,86 @@ pub fn menu_zones(app: &App, area: Rect) -> Vec<MenuZone> {
     out
 }
 
+/// Dónde caen los botones de disposición (ADR 0133): en el borde DERECHO de
+/// la barra de menús, si caben enteros sin pisar un título. UNA medida para
+/// el pintado y para el ratón.
+pub(crate) fn layout_button_cells(
+    app: &App,
+    area: Rect,
+) -> Vec<(u16, &'static norte_frontend::layoutbar::LayoutButton)> {
+    // Con un overlay delante o el menú desplegado, ni se pintan ni se
+    // pulsan: los overlays no tapan la fila 0, así que pintados quedarían a
+    // la vista y muertos (revisión de ADR 0133; la barra de paneles tuvo el
+    // mismo BLOCKER). La comprobación vive AQUÍ para que pintado y ratón no
+    // puedan separarse.
+    if !app.menu_bar || app.menu.is_some() || crate::mouse::overlay_open(app) {
+        return Vec::new();
+    }
+    let total = norte_frontend::layoutbar::width();
+    let usado: usize = menu_titles(area)
+        .iter()
+        .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
+        .map(|(l, _, _)| UnicodeWidthStr::width(l.as_str()))
+        .sum();
+    // Un título vale más que un botón: sin sitio para los cuatro enteros y
+    // un espacio de separación, no sale ninguno.
+    if usize::from(area.width) < usado + total + 1 {
+        return Vec::new();
+    }
+    let mut x = area
+        .x
+        .saturating_add(area.width)
+        .saturating_sub(u16::try_from(total).unwrap_or(u16::MAX));
+    let mut out = Vec::new();
+    for b in &norte_frontend::layoutbar::BUTTONS {
+        out.push((x, b));
+        x = x.saturating_add(u16::try_from(b.glyph.len() + 1).unwrap_or(u16::MAX));
+    }
+    out
+}
+
+/// Pinta los botones de disposición (ADR 0133) en el borde derecho de `bar`
+/// y devuelve cuántas celdas reservan, separación incluida — lo que la
+/// pista del atajo del menú tiene que dejarles.
+fn draw_layout_buttons(frame: &mut Frame<'_>, app: &App, area: Rect, bar: Rect) -> u16 {
+    let botones = layout_button_cells(app, area);
+    for (x, b) in &botones {
+        let w = u16::try_from(b.glyph.len()).unwrap_or(0);
+        frame.render_widget(
+            Paragraph::new(ratatui::text::Line::styled(
+                b.glyph,
+                app.theme.role(Role::Title),
+            )),
+            Rect {
+                x: *x,
+                width: w,
+                ..bar
+            },
+        );
+    }
+    if botones.is_empty() {
+        0
+    } else {
+        u16::try_from(norte_frontend::layoutbar::width() + 1).unwrap_or(u16::MAX)
+    }
+}
+
+/// Las zonas de los botones de disposición: las MISMAS celdas que se
+/// pintan (`layout_button_cells`), que ya callan con un overlay delante o
+/// el menú abierto.
+#[must_use]
+pub fn layout_zones(app: &App, area: Rect) -> Vec<PanelZone> {
+    layout_button_cells(app, area)
+        .into_iter()
+        .map(|(x0, b)| PanelZone {
+            row: area.y,
+            x0,
+            x1: x0.saturating_add(u16::try_from(b.glyph.len()).unwrap_or(u16::MAX) - 1),
+            command: b.command.to_owned(),
+        })
+        .collect()
+}
+
 /// Una casilla pulsable de la barra de paneles (#324).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanelZone {
@@ -412,7 +493,7 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
     let foco = kind_con_teclado(app);
     // Novedad: el registro con errores sin ver, y procesos con tareas vivas.
     // Es lo que hace mirar la barra en vez de recordarla.
-    let mut novedad: Vec<&str> = Vec::new();
+    let mut novedad: Vec<(&str, u32)> = Vec::new();
     // Con el panel A LA VISTA ya las estás viendo: la marca sobra, y además le
     // robaba el estilo al estado mientras durase la tarea. Mismo criterio que
     // el registro, aquí abajo.
@@ -423,22 +504,22 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
     // kinds visibles: recorrer el árbol otra vez costaría dos pasadas más por
     // frame y dejaría la misma pregunta contestada en dos sitios, libres de
     // separarse.
-    if !abiertos.contains(&crate::processes::KIND) && !app.board.rows().is_empty() {
-        novedad.push(crate::processes::KIND);
+    if !abiertos.contains(&crate::processes::KIND) {
+        novedad.push((crate::processes::KIND, cifra(app.board.rows().len())));
     }
     // Errores o avisos en el registro que el lector no ha tenido delante: si
     // el panel está abierto ya los está viendo, así que la marca sobra.
     //
-    // `has_at_or_above` y no `snapshot`: esto corre en cada frame, y clonar el
-    // anillo entero para preguntar «¿hay algún aviso?» eran dos mil líneas con
-    // sus dos `String` cada una, diez veces por segundo.
+    // `count_at_or_above` y no `snapshot`: esto corre en cada frame, y clonar
+    // el anillo entero para contar avisos eran dos mil líneas con sus dos
+    // `String` cada una, diez veces por segundo.
     if !abiertos.contains(&crate::logview::KIND)
-        && app
-            .log_ring
-            .as_ref()
-            .is_some_and(|r| r.has_at_or_above(norte_config::logline::LogLevel::Warn))
+        && let Some(r) = app.log_ring.as_ref()
     {
-        novedad.push(crate::logview::KIND);
+        novedad.push((
+            crate::logview::KIND,
+            cifra(r.count_at_or_above(norte_config::logline::LogLevel::Warn)),
+        ));
     }
     norte_frontend::panelbar::buttons(
         &app.kinds,
@@ -451,14 +532,38 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
 }
 
 /// Las casillas pulsables de la barra de paneles.
+///
+/// Y las de los botones de disposición de la barra de menús (ADR 0133): son
+/// la misma cosa —una casilla del cromo que corre una orden por el despacho
+/// de su atajo— y así el ratón las resuelve por el mismo camino.
 #[must_use]
 pub fn panel_zones(app: &App, area: Rect) -> Vec<PanelZone> {
+    let mut out = panel_bar_zones(app, area);
+    out.extend(layout_zones(app, area));
+    out
+}
+
+/// Las casillas de la barra de paneles, sola.
+fn panel_bar_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     let Some(bar) = crate::ui::geometry::panel_bar_visible(app, area) else {
         return Vec::new();
     };
     let mut x = bar.x;
     let mut out = Vec::new();
     let botones = panel_buttons(app, area);
+    // En columna, un botón por fila y el raíl entero de ancho: las mismas
+    // filas que pinta `draw_panel_bar`.
+    if crate::ui::geometry::barra_en_columna(app) {
+        for (y, b) in (bar.y..bar.y.saturating_add(bar.height)).zip(botones) {
+            out.push(PanelZone {
+                row: y,
+                x0: bar.x,
+                x1: bar.x.saturating_add(bar.width).saturating_sub(1),
+                command: b.command,
+            });
+        }
+        return out;
+    }
     let nombres = con_nombres(app, &botones, bar);
     for b in botones {
         let ancho = u16::try_from(norte_frontend::panelbar::button_cell(&b, nombres).width)
@@ -491,12 +596,22 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
     let mut ancho = 0_u16;
     let botones = panel_buttons(app, frame.area());
     let nombres = con_nombres(app, &botones, bar);
-    for b in botones {
+    // En COLUMNA (spec 2026-09-21) cada botón es una línea con su celda de
+    // letras —` S·`, tres de ancho— y los nombres no caben.
+    let columna = crate::ui::geometry::barra_en_columna(app);
+    let nombres = nombres && !columna;
+    let mut lineas: Vec<ratatui::text::Line<'static>> = Vec::new();
+    for (i, b) in botones.into_iter().enumerate() {
         let celda = norte_frontend::panelbar::button_cell(&b, nombres);
         let ancho_boton = u16::try_from(celda.width).unwrap_or(u16::MAX);
-        if ancho.saturating_add(ancho_boton) > bar.width {
+        if columna {
+            if u16::try_from(i).unwrap_or(u16::MAX) >= bar.height {
+                break;
+            }
+        } else if ancho.saturating_add(ancho_boton) > bar.width {
             break;
         }
+        let desde = spans.len();
         // Tres estilos para tres estados. Que un panel tenga el TECLADO no es
         // lo mismo que esté abierto, y es la mitad de lo que se pregunta al
         // mirar la barra: dónde van a ir mis teclas.
@@ -541,14 +656,20 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
         spans.push(ratatui::text::Span::styled(format!(" {antes}"), estilo));
         spans.push(ratatui::text::Span::styled(letra, subrayado));
         spans.push(ratatui::text::Span::styled(despues, estilo));
-        spans.push(if b.attention {
+        spans.push(if b.attention > 0 {
             ratatui::text::Span::styled("·", app.theme.role(Role::Warning))
         } else {
             ratatui::text::Span::styled(" ", estilo)
         });
+        if columna {
+            lineas.push(ratatui::text::Line::from(spans.split_off(desde)));
+        }
         ancho = ancho.saturating_add(ancho_boton);
     }
-    frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
+    if !columna {
+        lineas.push(ratatui::text::Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(lineas), bar);
 }
 
 /// Pinta la barra de menús y su desplegable.
@@ -580,6 +701,8 @@ pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
         .collect();
     frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
 
+    let reserva = draw_layout_buttons(frame, app, area, bar);
+
     // Y la tecla que lo abre, a la derecha, SACADA DEL KEYMAP VIVO.
     //
     // Una barra que enseña siete títulos y no dice cómo se entra en ellos deja
@@ -605,9 +728,14 @@ pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
             .sum::<u16>();
         // Solo si cabe SIN pisar los títulos: el nombre de un menú vale más
         // que su atajo, y medio atajo no vale nada.
-        if bar.width > usado.saturating_add(w) {
+        // A la izquierda de los botones, si los hay.
+        if bar.width > usado.saturating_add(w).saturating_add(reserva) {
             let hint = Rect {
-                x: bar.x.saturating_add(bar.width).saturating_sub(w),
+                x: bar
+                    .x
+                    .saturating_add(bar.width)
+                    .saturating_sub(w)
+                    .saturating_sub(reserva),
                 width: w,
                 ..bar
             };

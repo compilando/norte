@@ -587,21 +587,6 @@
       "title": "Copiar",
       "topic_id": "copying"
     },
-    "key_bar": {
-      "bar": true,
-      "cells": [
-        {
-          "command": "app.help",
-          "key": 1,
-          "label": "Ayuda"
-        },
-        {
-          "command": null,
-          "key": 2,
-          "label": ""
-        }
-      ]
-    },
     "layout": {
       "cells": [
         120,
@@ -728,6 +713,13 @@
         }
       ]
     },
+    "layout_buttons": [
+      {
+        "chord": "—",
+        "id": "split-h",
+        "label": "Partir lado a lado"
+      }
+    ],
     "layouts": {
       "cursor": 0,
       "preview": [
@@ -846,6 +838,7 @@
         {
           "attention": false,
           "chord": "alt+p",
+          "count": 0,
           "kind": "places",
           "label": "Sitios",
           "letter": "S",
@@ -854,13 +847,15 @@
         {
           "attention": true,
           "chord": "—",
+          "count": 3,
           "kind": "log",
           "label": "Registro",
           "letter": "R",
           "state": "closed"
         }
       ],
-      "names": true
+      "names": true,
+      "vertical": true
     },
     "picker": {
       "cursor": 0,
@@ -1438,6 +1433,20 @@
         "count": 12
       }
     },
+    "status_items": [
+      {
+        "clickable": false,
+        "id": "position",
+        "text": "3/120",
+        "tooltip": "Posición del cursor en el listado"
+      },
+      {
+        "clickable": true,
+        "id": "sort",
+        "text": "Nombre ↑",
+        "tooltip": "Orden del listado. Pulsa para cambiarlo"
+      }
+    ],
     "sync": null,
     "tasks": [
       {

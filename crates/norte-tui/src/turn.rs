@@ -591,7 +591,7 @@ pub async fn after_frame(
             extensions: ui::extension_zones(app, painted),
             help: ui::help_zones(app, painted),
             session: ui::session_zone(app, painted),
-            notices: ui::notices_zone(app, painted),
+            status_items: ui::status_item_zones(app, painted),
             borders: ui::resize_borders(app, painted),
             slots: ui::panel_slots(app, painted),
         },

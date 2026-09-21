@@ -482,7 +482,26 @@ use serde::{Deserialize, Serialize};
 ///   enseña como marcador. «Vacío» no es un hueco, es ese valor, y decir
 ///   cuál informa — una frase que diga que lo hay ocupa el sitio del dato
 ///   sin darlo.
-pub const BRIDGE_VERSION: u32 = 83;
+/// - **84**: la ventana deja la barra de teclas (spec 2026-09-21). Se van
+///   `ViewSnapshot.key_bar`, el cambio `key_bar` y la acción
+///   `key_bar_activate`, con `KeyBarView` y `KeyCellView`. La barra de
+///   F1–F10 es de la herencia del terminal; la ventana tiene menú, paleta y
+///   barra de actividad, y la fila de celdas era lo que más pesaba en la
+///   pantalla y lo que menos decía. `[ui] key_bar` sigue gobernando la TUI.
+///   Y la barra de paneles puede ser la barra de actividad (ADR 0131):
+///   `PanelBarView.vertical` (`[ui] panel_bar_position` ya resuelta) y
+///   `PanelButtonView.count`, la cifra de su insignia.
+/// - **85**: la barra de estado por elementos (ADR 0132).
+///   `ViewSnapshot.status_items` y el cambio `status_items`: la mitad
+///   derecha, ya redactada, recortada por prioridad y en el orden de
+///   `[ui] status_items`. La acción `status_item_activate { id }` pulsa uno,
+///   por ID porque la lista se mueve con el cursor.
+/// - **86**: botones de disposición y de pestañas (ADR 0133).
+///   `ViewSnapshot.layout_buttons` (`ChromeButtonView`: id, nombre, atajo)
+///   y la acción `layout_button_activate { id }`; la acción
+///   `tab_action { slot_id, verb: "new" | "close" }`, que elige la pestaña
+///   y corre la orden, como el `[+]`/`[x]` de la TUI.
+pub const BRIDGE_VERSION: u32 = 86;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

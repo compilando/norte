@@ -201,6 +201,9 @@ impl Estado {
                             &[("min", &min.to_string()), ("max", &max.to_string())],
                         ),
                     ),
+                    norte_frontend::settings::SettingsEditError::Invalid { key } => {
+                        (key, norte_i18n::t_in(self.lang, key))
+                    }
                 };
                 self.status.message = Some(clamp_display(texto));
                 let cambios = vec![
@@ -514,6 +517,9 @@ impl Estado {
                             &[("min", &min.to_string()), ("max", &max.to_string())],
                         ),
                     ),
+                    norte_frontend::settings::SettingsEditError::Invalid { key } => {
+                        (key, norte_i18n::t_in(self.lang, key))
+                    }
                 };
                 self.status.message = Some(clamp_display(texto));
                 let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);

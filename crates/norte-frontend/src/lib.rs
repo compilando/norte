@@ -42,7 +42,7 @@ mod ops;
 mod overlays;
 mod view;
 
-pub use chrome::{banners, footer, frame, keybar, menu, panelbar, splash};
+pub use chrome::{banners, footer, frame, keybar, layoutbar, menu, panelbar, splash, statusbar};
 pub use navigation::{goto, history, places, tree, watch};
 pub use ops::{checksums, chmod, compare, diffpair, organize, rename_pattern};
 pub use overlays::{

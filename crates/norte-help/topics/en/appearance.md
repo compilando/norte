@@ -18,17 +18,24 @@ on the screen that has the keyboard: the listing, or the viewer. It is read
 from your keymap, so rebinding F5 relabels it, and a key that does nothing
 here shows only its number. With a dialog in front the row goes blank: no
 preset puts a function key on a dialog. Clicking a cell presses the key.
-`key_bar = false` removes the row.
+`key_bar = false` removes the row. It is the terminal's alone: the window
+has none, and its commands live in the menu and the palette.
 
 The panel bar
 -------------
 
-Under the menu sits a row with one button per side panel — Places, Viewer,
-Jobs, Details, Tree, Log — each showing its name with the access letter
-underlined, whether it is open, whether it has the keyboard, and whether it
-has something to say. `panel_bar_style = "letters"` shrinks it to the
-letters alone, and names fall back to letters on their own when they do not
-all fit. `panel_bar = false` removes the row.
+There is one button per side panel — Places, Viewer, Jobs, Details, Tree,
+Log — each saying whether it is open, whether it has the keyboard, and
+whether it has something to say. In the terminal it is a row under the
+menu, with the name and the access letter underlined;
+`panel_bar_style = "letters"` shrinks it to the letters alone, and names
+fall back to letters on their own when they do not all fit. In the window
+it is a column on the left edge, with one icon per panel and a count on the
+one with news: how many tasks are running, how many warnings the log holds.
+
+`panel_bar_position` chooses where it goes: `top` (a row), `left` (a
+column), or `auto`, which is top in the terminal and left in the window.
+`panel_bar = false` removes it.
 
 The pane footer
 ---------------
@@ -38,6 +45,21 @@ files, bytes — then what is marked, then the free space of the volume the
 directory lives on. When the border is too short the free space goes first
 and the count second: what you just marked is the last thing to give way.
 `pane_footer = false` leaves the border bare.
+
+The status bar
+--------------
+
+It has two halves. The left one says the messages, the waits and the
+warnings — a listing that is incomplete, names reinterpreted, marks that
+were lost, a detached session — and is not configurable: a warning you could
+remove would stop being one. The right one shows small facts, and the ones
+that do something can be clicked: `position` (where the cursor is), `marks`
+(what is marked), `sort` (the order; opens the sort menu), `encoding` (how
+names are read; reinterprets them), `tasks` (running tasks; opens the jobs)
+and `notices` (unread notices; opens the log). `status_items` says which and
+in what order, for example `status_items = ["tasks", "position"]`; an empty
+list leaves the right half blank. The ones that do not fit give way by
+importance, and always before a warning on the left.
 
 Striped rows
 ------------

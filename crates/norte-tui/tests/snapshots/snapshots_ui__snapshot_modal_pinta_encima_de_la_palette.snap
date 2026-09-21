@@ -17,4 +17,4 @@ expression: render(&app)
 "│         │ ir a la pestaña 4            pane.t…-goto-4           —  │         │"
 "│         │ ir a la pestaña 5            pane.t…-goto-5           —  │         │"
 "└─────────│ ir a la pestaña 6            pane.t…-goto-6           —  │─────────┘"
-" /casa  2/└ /  [enter] ejecutar · [esc] cerrar · [f1] ayuda ─────────┘          "
+" /casa    └ /  [enter] ejecutar · [esc] cerrar · [f1] ayuda ─────────┘ ↑  UTF-8 "
