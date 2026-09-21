@@ -39,6 +39,7 @@ async fn plugin_provider_camino_de_escritura() {
         return;
     };
     let rt = PluginRuntime::new().expect("runtime");
+    let wasm = norte_plugin_host::WasmArtifact::trusting_current(&wasm).expect("guest");
     let p = PluginProvider::new(rt, &wasm, HostCaps::default(), "mem").expect("adapter");
     let root = root();
 

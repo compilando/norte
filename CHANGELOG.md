@@ -147,6 +147,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A plugin's binary is checked every time it is loaded** (ADR 0142).
+  Approval covers the plugin's `.wasm` by its digest, but only providers
+  compared it when loading; any other plugin whose binary was replaced after
+  approval ran the new code with the old approval. Now every kind is
+  refused if its binary is not the approved one.
 - **F3 took seconds** (ADR 0141). Every plugin call recompiled the plugin:
   the syntax highlighter cost 2–3 s per file viewed. Plugins now compile
   once per process, keyed by their content; the window opens the viewer as

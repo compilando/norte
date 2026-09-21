@@ -105,7 +105,7 @@ fn plugin_preview_e2e_wasm_real() {
     assert_eq!(id, "org.norte.prev", "id del previewer resuelto");
     assert_eq!(name, "Preview Demo", "name del previewer resuelto");
     assert!(
-        resolved_wasm.ends_with("plugin.wasm"),
+        resolved_wasm.path().ends_with("plugin.wasm"),
         "el binario resuelto es <dir>/plugin.wasm"
     );
 
@@ -138,6 +138,23 @@ fn plugin_preview_e2e_wasm_real() {
     assert!(
         !render.contains("linea cuatro"),
         "el previewer-demo solo toma 3 líneas: la 4.ª no aparece: {render:?}"
+    );
+
+    // 6) ADR 0142: el `plugin.wasm` reescrito DESPUÉS de aprobarse no se
+    //    ejecuta con esa aprobación, aunque el registro ya lo resolviera y
+    //    la versión aprobada esté compilada en la caché del runtime.
+    let mut bytes = std::fs::read(&resolved_wasm).expect("lee el binario");
+    // Una sección personalizada al final: sigue siendo un componente válido,
+    // así que lo único que lo delata es la huella.
+    bytes.extend_from_slice(&[0, 2, 1, b'z']);
+    std::fs::write(&resolved_wasm, &bytes).expect("reescribe el binario");
+    let Err(err) = rt.instantiate(&resolved_wasm, norte_plugin_host::Capabilities::default())
+    else {
+        panic!("un binario cambiado tras aprobarse no se instancia")
+    };
+    assert!(
+        matches!(err, norte_plugin_host::RuntimeError::DigestMismatch),
+        "fue {err:?}"
     );
 }
 
