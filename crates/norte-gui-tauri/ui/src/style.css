@@ -1748,6 +1748,18 @@ button.status-item:hover {
   padding: 0 1px;
 }
 
+/* La raíz de las migas (spec 2026-09-21, fase D): el esquema del provider, atenuado y un
+   punto más pequeño — está en todas las rutas del panel, y a la misma voz
+   que los directorios competía con ellos. Sigue pulsable. */
+.crumb[data-root="true"]:not(:disabled) {
+  opacity: 0.6;
+  font-size: 0.9em;
+}
+
+.crumb[data-root="true"]:hover:not(:disabled) {
+  opacity: 1;
+}
+
 /* El indicador de espacio del pie (puente 65): dos píxeles al pie del
    pie, llenos hasta lo ocupado. Del color del borde de foco; de aviso
    pasado el 75 %, y de error pasado el 90 %, que es cuando importa. */
@@ -3309,6 +3321,15 @@ button.status-item:hover {
   touch-action: none;
 }
 
+/* Al pasar o arrastrar, el tirador se enciende con el color del foco (fase
+   D, spec 2026-09-21), como el sash de VS Code: dice «aquí se agarra» solo cuando el
+   puntero está encima, y un retardo corto evita que parpadee al cruzarlo. */
+.resize-handle:hover,
+.resize-handle:active {
+  background: color-mix(in srgb, var(--border-focus) 70%, transparent);
+  transition: background-color 0.1s 0.15s;
+}
+
 .resize-handle.col {
   cursor: col-resize;
 }
@@ -4294,9 +4315,14 @@ button.status-item:hover {
     animation: none;
   }
 
-  .row {
+  .row,
+  .resize-handle {
     transition: none;
   }
+}
+
+:root[data-reduce-motion="true"] .resize-handle {
+  transition: none;
 }
 
 :root[data-reduce-motion="true"] .slot-busy {

@@ -33,6 +33,10 @@ independently through `PROTOCOL_VERSION`.
   in a terminal wide enough. In the window every tab has a `×` and each tab
   group ends with a `+`, as the terminal's tab strip already had. They run
   the same commands as their keys.
+- **Window polish.** The root of a path's breadcrumbs (the provider's
+  scheme) is dimmed, since it is in every path of the pane, and the handle
+  between two panes lights up when the pointer is on it or dragging it —
+  with no transition when motion is reduced.
 - **The window edits settings with real controls** (ADR 0130, bridge 83). A
   boolean is a switch, a fixed list is a dropdown — with the installed
   themes and keymap presets already in it — and a number is a number field

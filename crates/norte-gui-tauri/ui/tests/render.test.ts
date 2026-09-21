@@ -1148,6 +1148,12 @@ describe("las migas, el indicador de espacio y el toast", () => {
     const migas = root.querySelectorAll(".title-path .crumb");
     expect([...migas].map((m) => m.textContent)).toEqual(["⟨file⟩", "home", "oscar"]);
     expect((migas[2] as HTMLButtonElement).disabled).toBe(true);
+    // Solo la raíz lleva la marca que la atenúa (spec 2026-09-21, fase D).
+    expect([...migas].map((m) => (m as HTMLElement).dataset["root"])).toEqual([
+      "true",
+      "false",
+      "false",
+    ]);
     (migas[1] as HTMLButtonElement).click();
     expect(enviadas.at(-1)).toEqual({
       action: "breadcrumb_activate",

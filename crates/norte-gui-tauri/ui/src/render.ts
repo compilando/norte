@@ -1022,6 +1022,9 @@ export class Screen {
         miga.textContent = tramo;
         const actual = i === migas.length - 1;
         miga.dataset["current"] = String(actual);
+        // La raíz (el esquema, `⟨file⟩`) se pinta atenuada (fase D): dice
+        // de qué provider es la ruta, y es lo que menos cambia de las migas.
+        miga.dataset["root"] = String(i === 0);
         miga.disabled = actual;
         if (!actual) {
           miga.addEventListener("click", () => {
