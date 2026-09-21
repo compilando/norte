@@ -80,7 +80,7 @@ pub fn width_of(botones: &[&LayoutButton]) -> usize {
 const PRESCINDIBLE: &str = "flip";
 
 /// Los botones que caben en `disponible` celdas: todos, o todos menos
-/// [`PRESCINDIBLE`], o ninguno. Nunca un conjunto a medias al azar: un
+/// girar (el que cede primero), o ninguno. Nunca un conjunto a medias al azar: un
 /// botón que está unas veces sí y otras no, según el ancho, se aprende
 /// peor que uno que cede siempre el mismo.
 #[must_use]
