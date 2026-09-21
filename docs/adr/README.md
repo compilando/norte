@@ -142,3 +142,4 @@ edits.
 | [0139](0139-each-frontend-remembers-its-own-layout.md) | Each frontend remembers its own layout | accepted |
 | [0140](0140-the-terminal-panel-column-draws-icons.md) | The terminal's panel column draws icons | accepted |
 | [0141](0141-plugins-compile-once-and-the-viewer-opens-first.md) | Plugins compile once, and the viewer opens first | accepted |
+| [0142](0142-plugin-binaries-are-checked-when-loaded.md) | Plugin binaries are checked when they are loaded | accepted |

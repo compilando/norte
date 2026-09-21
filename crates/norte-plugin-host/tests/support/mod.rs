@@ -9,12 +9,21 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// Compila el guest `examples-wasm/<name>/` a `wasm32-wasip2` en modo release y
-/// devuelve la ruta del `.wasm` producido.
+/// devuelve el `.wasm` producido como artefacto, con la huella de lo que
+/// acaba de compilar (ADR 0142): el test es la autoridad de ese fichero.
 ///
 /// Devuelve `None` (con un aviso por `stderr`) si el target `wasm32-wasip2` no
 /// está instalado.
 #[must_use]
-pub fn build_guest(name: &str) -> Option<PathBuf> {
+pub fn build_guest(name: &str) -> Option<norte_plugin_host::WasmArtifact> {
+    build_guest_path(name)
+        .map(|p| norte_plugin_host::WasmArtifact::trusting_current(p).expect("se lee el guest"))
+}
+
+/// Como [`build_guest`], pero la RUTA: para quien tiene que copiarlo o
+/// reescribirlo antes de instanciarlo.
+#[must_use]
+pub fn build_guest_path(name: &str) -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
         eprintln!("SKIP: target wasm32-wasip2 no instalado");
         return None;

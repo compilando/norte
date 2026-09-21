@@ -3366,3 +3366,34 @@ fn la_regla_de_marcas_dice_que_tramos_llevan_alguna() {
     // Más tramos que filas: cada fila cae en el suyo, sin pasarse.
     assert!(p.mark_ruler(u16::MAX).iter().all(|t| *t < u16::MAX));
 }
+
+/// La pasada única de la cabecera dice exactamente lo mismo que las tres
+/// funciones a las que sustituye: si divergen, la ventana y la TUI cuentan
+/// marcas distintas del mismo listado.
+#[test]
+fn el_resumen_de_marcas_coincide_con_las_tres_pasadas() {
+    let mut entradas = Vec::new();
+    for i in 0..40u64 {
+        let kind = if i % 4 == 0 {
+            EntryKind::Dir
+        } else {
+            EntryKind::File
+        };
+        let mut x = e(&format!("mem:///n{i:02}"), kind);
+        x.size = Some(i * 100);
+        entradas.push(x);
+    }
+    let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entradas);
+    assert_eq!(p.marks_summary(10), crate::MarksSummary::default());
+    for i in [0, 3, 4, 5, 17, 39] {
+        p.set_cursor(i);
+        p.toggle_mark();
+    }
+    for tramos in [0, 1, 7, 10, 40, 100] {
+        let r = p.marks_summary(tramos);
+        assert_eq!(r.bytes, p.marked_bytes(), "bytes con {tramos} tramos");
+        assert_eq!(r.dirs, p.marked_dirs(), "dirs con {tramos} tramos");
+        assert_eq!(r.ruler, p.mark_ruler(tramos), "regla con {tramos} tramos");
+    }
+    assert!(p.marks_summary(10).dirs > 0 && p.marks_summary(10).bytes > 0);
+}

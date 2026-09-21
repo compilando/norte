@@ -647,7 +647,6 @@ impl ConnectionManager {
         let ResolvedProvider {
             id,
             wasm,
-            wasm_digest,
             capabilities: mut caps,
             settings,
             default_port,
@@ -692,17 +691,17 @@ impl ConnectionManager {
         tracing::info!(plugin = %id, scheme = %ep.scheme, "provider por plugin");
 
         // Leer, hashear e instanciar (compila cranelift): todo bloqueante
-        // (regla 2). El digest se compara ANTES de instanciar.
+        // (regla 2). El runtime lee con la cota del artefacto y compara el
+        // digest aprobado ANTES de compilar (ADR 0142).
         let scheme = ep.scheme.clone();
         let provider = crate::blocking::spawn_blocking(move || {
-            let bytes = std::fs::read(&wasm).map_err(|_| Error::Unsupported)?;
-            if norte_plugin_host::wasm_digest_of(&bytes) != wasm_digest {
-                tracing::warn!(plugin = %id, "el plugin.wasm no es el que se aprobó");
-                return Err(Error::PermissionDenied);
-            }
             let runtime = PluginRuntime::new().map_err(|e| map_runtime_error(&e))?;
-            PluginProvider::from_bytes(runtime, &bytes, caps, scheme)
-                .map_err(|e| map_runtime_error(&e))
+            PluginProvider::new(runtime, &wasm, caps, scheme).map_err(|e| {
+                if matches!(e, norte_plugin_host::RuntimeError::DigestMismatch) {
+                    tracing::warn!(plugin = %id, "el plugin.wasm no es el que se aprobó");
+                }
+                map_runtime_error(&e)
+            })
         })
         .await
         .map_err(|_| Error::Internal { panic: true })??;

@@ -17,6 +17,8 @@ mod marks;
 mod quick;
 mod viewport;
 
+pub use marks::MarksSummary;
+
 // `PaneState` sigue siendo UNO: lo que se reparte son sus métodos, en
 // bloques `impl` hermanos. Un módulo hijo ve lo privado de su padre, así que
 // esto no abre nada — solo pone junto lo que se lee junto.

@@ -57,8 +57,8 @@ pub use runtime::{
     MAX_HOOK_EFFECTS, MAX_RENAME_PROPOSALS, MAX_SIDECAR_BYTES, MAX_SIDECAR_EFFECTS,
     OrganizerInstance, PanelFrame, PanelInstance, PluginInstance, PluginRuntime, ProviderInstance,
     RenamerInstance, RuntimeError, THUMB_MAX_BYTES, THUMB_MAX_EDGE, Thumbnail, ThumbnailInstance,
-    columns_iface, decorator_iface, hook_iface, location_iface, organizer_iface, panel_iface,
-    previewer_iface, provider_iface, renamer_iface, thumbnail_iface,
+    WasmArtifact, columns_iface, decorator_iface, hook_iface, location_iface, organizer_iface,
+    panel_iface, previewer_iface, provider_iface, renamer_iface, thumbnail_iface,
 };
 /// Handle opaco de un `writer` resource del guest (#30 stage 2b-write): el
 /// adapter host lo lleva en su `ByteSink` y lo pasa a los métodos

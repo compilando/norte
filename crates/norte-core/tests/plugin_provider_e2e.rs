@@ -71,6 +71,7 @@ async fn plugin_provider_satisface_el_contrato_de_lectura() {
         return;
     };
     let rt = PluginRuntime::new().expect("runtime");
+    let wasm = norte_plugin_host::WasmArtifact::trusting_current(&wasm).expect("guest");
     let p = PluginProvider::new(rt, &wasm, HostCaps::default(), "mem").expect("adapter");
     let root = root();
 
@@ -292,6 +293,7 @@ async fn plugin_provider_set_settings_es_seguro_con_o_sin_llamarla() {
         return;
     };
     let rt = PluginRuntime::new().expect("runtime");
+    let wasm = norte_plugin_host::WasmArtifact::trusting_current(&wasm).expect("guest");
     let p = PluginProvider::new(rt, &wasm, HostCaps::default(), "mem").expect("adapter");
     let root = root();
 

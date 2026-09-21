@@ -1332,6 +1332,54 @@ describe("el visor", () => {
     expect(lado?.action === "viewer_scroll" && lado.cols > 0).toBe(true);
   });
 
+  it("un parche que no toca el visor no lo reconstruye", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.viewer = {
+      path_display: "⟨file⟩/casa/largo.txt",
+      path_hostile: false,
+      encoding: "UTF-8",
+      eol: "lf",
+      hex: false,
+      forced: false,
+      had_errors: false,
+      truncated: false,
+      total_rows: 3,
+      first_line: 0,
+      total_cols: 0,
+      first_col: 0,
+      lines: ["a", "b", "c"],
+      preview_by: "",
+      preview_lossy: false,
+      image: null,
+      image_refused: "",
+      image_zoom: 100,
+      styled: [],
+    };
+    screen.paint(v);
+    const antes = document.querySelector(".viewer");
+    expect(antes).not.toBe(null);
+    // Otra cosa cambia —el estado, como hace una tarea al avanzar— y el
+    // visor es el mismo objeto: su DOM se queda.
+    v.status = { ...v.status, message: "copiando" };
+    screen.paint(v);
+    expect(document.querySelector(".viewer")).toBe(antes);
+    // Un visor NUEVO (lo que la sesión pone al llegar un parche del visor)
+    // sí se pinta.
+    v.viewer = { ...v.viewer, first_line: 1, lines: ["b", "c"] };
+    screen.paint(v);
+    expect(document.querySelector(".viewer")).not.toBe(antes);
+    expect(document.querySelector(".viewer-body")?.textContent).toBe("b\nc");
+    // Cerrarlo y reabrir el MISMO objeto lo vuelve a pintar.
+    const mismo = v.viewer;
+    v.viewer = null;
+    screen.paint(v);
+    expect(document.querySelector(".viewer")).toBe(null);
+    v.viewer = mismo;
+    screen.paint(v);
+    expect(document.querySelector(".viewer-body")?.textContent).toBe("b\nc");
+  });
+
   it("un binario se pinta como hexadecimal y lo dice", () => {
     const { screen } = montar();
     const v = vista({});
@@ -3034,11 +3082,16 @@ describe("la ayuda", () => {
     const cuerpo = () => document.querySelector(".help-body") as HTMLElement;
     cuerpo().scrollTop = 50;
     if (v.help !== null) {
-      v.help.scroll = { to: "top", seq: 1 };
+      v.help = { ...v.help, scroll: { to: "top", seq: 1 } };
     }
     screen.paint(v);
     expect(cuerpo().scrollTop, "aplicada").toBe(0);
     cuerpo().scrollTop = 40;
+    // Otro parche de la ayuda (un objeto nuevo, como los pone la sesión)
+    // con la misma petición.
+    if (v.help !== null) {
+      v.help = { ...v.help };
+    }
     screen.paint(v);
     expect(cuerpo().scrollTop, "la misma petición no se repite").toBe(40);
     // Y una apertura NUEVA vuelve a numerar desde 1.
@@ -3238,7 +3291,7 @@ describe("los ajustes", () => {
     expect(marcada.dataset["key"]).toBe("appearance");
 
     if (v.settings !== null) {
-      v.settings.focus = "index";
+      v.settings = { ...v.settings, focus: "index" };
     }
     screen.paint(v);
     const lista2 = document.querySelector(".settings-rows") as HTMLElement;
@@ -3708,7 +3761,7 @@ describe("el gestor de extensiones", () => {
         },
       ];
       // Las rotas van detrás de las dos cargadas.
-      v.extensions.cursor = 2;
+      v.extensions = { ...v.extensions, cursor: 2 };
     }
     screen.paint(v);
     const rotas = [...document.querySelectorAll(".extensions-error")];
@@ -3728,7 +3781,7 @@ describe("el gestor de extensiones", () => {
 
     // Sin id no hay botón: se dice por qué, con la frase del host.
     if (v.extensions !== null) {
-      v.extensions.cursor = 3;
+      v.extensions = { ...v.extensions, cursor: 3 };
     }
     screen.paint(v);
     expect(document.querySelector(".extensions-action-uninstall")).toBeNull();
@@ -3750,7 +3803,7 @@ describe("el gestor de extensiones", () => {
           id: "acme.roto",
         },
       ];
-      v.extensions.cursor = 2;
+      v.extensions = { ...v.extensions, cursor: 2 };
     }
     screen.paint(v);
     const errores = document.querySelector(".extensions-errors") as HTMLElement;
@@ -3764,7 +3817,7 @@ describe("el gestor de extensiones", () => {
     ).toBeNull();
 
     if (v.extensions !== null) {
-      v.extensions.cursor = 0;
+      v.extensions = { ...v.extensions, cursor: 0 };
     }
     screen.paint(v);
     expect(
@@ -3779,7 +3832,7 @@ describe("el gestor de extensiones", () => {
     const { screen, enviadas } = montar();
     const v = conExtensiones();
     if (v.extensions !== null) {
-      v.extensions.cursor = 1;
+      v.extensions = { ...v.extensions, cursor: 1 };
     }
     screen.paint(v);
     const acciones = document.querySelector(".extensions-actions") as HTMLElement;

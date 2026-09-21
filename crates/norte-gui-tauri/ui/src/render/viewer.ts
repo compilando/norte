@@ -12,11 +12,22 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
     this.viewerRoot.replaceChildren();
     this.viewerRoot.dataset["open"] = "false";
     this.viewerRows = 0;
+    this.visorPintado = null;
     // El visor se cerró: se SUELTA el búfer. Un object URL sin revocar
     // retiene sus bytes mientras viva el documento.
     this.soltarImagen();
     return;
   }
+  // El mismo visor en una ventana del mismo tamaño y con la misma celda ya
+  // está pintado: nada de lo que se construye abajo cambiaría. Leer el
+  // tamaño de la ventana y las variables de la raíz no fuerza un reflujo;
+  // medir el cuerpo, que es lo que hace el final de esta función, sí.
+  const celda = this.cell();
+  const firma = `${String(window.innerWidth)}x${String(window.innerHeight)}|${String(celda.w)}x${String(celda.h)}`;
+  if (this.visorPintado?.viewer === viewer && this.visorPintado.firma === firma) {
+    return;
+  }
+  this.visorPintado = { viewer, firma };
   this.viewerRoot.dataset["open"] = "true";
   const box = document.createElement("section");
   box.className = "viewer";
@@ -170,7 +181,6 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   // celdas de disposición menos un cromo adivinado, así que mandaba más
   // líneas de las que se ven —se recortaban sin decirlo— y avanzaba una
   // página por un número distinto: cada página saltaba lo recortado.
-  const celda = this.cell();
   const filas = Math.max(1, Math.floor(body.clientHeight / celda.h));
   if (filas !== this.viewerRows) {
     this.viewerRows = filas;

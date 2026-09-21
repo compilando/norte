@@ -251,7 +251,7 @@ impl Bucket {
 /// sigue sirviendo: el `.wasm` que se instanció y su huella en disco.
 struct Live {
     inst: HookInstance,
-    wasm: PathBuf,
+    wasm: norte_plugin_host::WasmArtifact,
     stamp: Option<(std::time::SystemTime, u64)>,
 }
 
@@ -762,14 +762,16 @@ fn ensure_live<'s>(
     state: &'s mut State,
     runtime: &PluginRuntime,
     id: &str,
-    wasm: &std::path::Path,
+    wasm: &norte_plugin_host::WasmArtifact,
     caps: norte_plugin_host::Capabilities,
 ) -> Result<&'s mut Live, String> {
-    let stamp = stamp_of(wasm);
+    let stamp = stamp_of(wasm.path());
+    // El artefacto ENTERO, huella incluida (ADR 0142): una instancia viva
+    // no sirve a un binario que se aprobó de nuevo con otros bytes.
     let reuse = state
         .live
         .get(id)
-        .is_some_and(|l| l.wasm == wasm && l.stamp == stamp && l.stamp.is_some());
+        .is_some_and(|l| l.wasm == *wasm && l.stamp == stamp && l.stamp.is_some());
     if !reuse {
         state.live.remove(id);
         let inst = runtime
@@ -779,7 +781,7 @@ fn ensure_live<'s>(
             id.to_owned(),
             Live {
                 inst,
-                wasm: wasm.to_path_buf(),
+                wasm: wasm.clone(),
                 stamp,
             },
         );

@@ -147,6 +147,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The window no longer rebuilds open dialogs on every update.** Each
+  change from the host repainted the whole screen, and the viewer, help,
+  settings, search and every other overlay rebuilt their contents each
+  time — with a task running, several times a second, and the viewer also
+  forced a layout pass to measure itself. They now repaint only when their
+  own data, the window size or the cell size change.
+- **Marking in a very large folder no longer walks it three times per key.**
+  The window's pane header counted the marked bytes, the marked folders and
+  the marks ruler in three separate passes over the whole listing, on every
+  keystroke; it is now one pass, and none when nothing is marked.
+- **A plugin's binary is checked every time it is loaded** (ADR 0142).
+  Approval covers the plugin's `.wasm` by its digest, but only providers
+  compared it when loading; any other plugin whose binary was replaced after
+  approval ran the new code with the old approval. Now every kind is
+  refused if its binary is not the approved one.
 - **F3 took seconds** (ADR 0141). Every plugin call recompiled the plugin:
   the syntax highlighter cost 2–3 s per file viewed. Plugins now compile
   once per process, keyed by their content; the window opens the viewer as

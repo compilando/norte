@@ -63,7 +63,7 @@ cover the formats the window cannot decode.
   the raw text.
 - Compiled code stays in memory while the process lives, up to sixteen
   plugins.
-- **Still open, found in this review and older than it:** the approved
+- **Closed by ADR 0142.** Found in this review and older than it: the approved
   `.wasm` digest is checked when a plugin is discovered, and for providers
   when they connect, but not when a previewer, thumbnailer, command,
   decorator, panel, renamer or organizer is loaded. Something able to write

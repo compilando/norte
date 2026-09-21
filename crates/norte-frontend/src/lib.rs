@@ -109,5 +109,5 @@ pub use modal::{
     undo_report_is_clean, undo_report_lines, validate_ai_plan, validate_ai_plan_in,
     validate_semantic_hits,
 };
-pub use pane::{DEFAULT_PAGE, PaneState, PatternError};
+pub use pane::{DEFAULT_PAGE, MarksSummary, PaneState, PatternError};
 pub use sort::{SortColumn, SortDir, SortSpec, sort_entries, sort_entries_with};

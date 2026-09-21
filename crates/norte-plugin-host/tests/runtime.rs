@@ -16,6 +16,7 @@ fn cargar_un_no_componente_falla_claro() {
     let dir = tempfile::tempdir().unwrap();
     let fake = dir.path().join("no.wasm");
     std::fs::write(&fake, b"esto no es un componente wasm").unwrap();
+    let fake = norte_plugin_host::WasmArtifact::trusting_current(fake).expect("lee");
     let err = rt
         .instantiate(&fake, Capabilities::default())
         .expect_err("bytes basura");
@@ -35,6 +36,8 @@ fn artefacto_demasiado_grande_se_rechaza_antes_de_compilar() {
     // 64 MiB + 1: justo por encima de MAX_ARTIFACT_BYTES.
     f.set_len(64 * 1024 * 1024 + 1).unwrap();
     drop(f);
+    // La huella da igual: el tope se mira antes de leer nada.
+    let fake = norte_plugin_host::WasmArtifact::approved(fake, "0".repeat(64));
     let err = rt
         .instantiate(&fake, Capabilities::default())
         .expect_err("artefacto sobredimensionado");
@@ -105,16 +108,28 @@ fn el_mismo_plugin_se_compila_una_vez_y_cada_instancia_es_nueva() {
     // cambia el resumen: id 0, nombre de un byte, sin contenido.
     bytes.extend_from_slice(&[0, 2, 1, b'x']);
     std::fs::write(&otro, &bytes).expect("escribe");
+    let aprobado = norte_plugin_host::WasmArtifact::trusting_current(&otro).expect("lee");
     let _ = rt
-        .instantiate(&otro, norte_plugin_host::Capabilities::default())
+        .instantiate(&aprobado, norte_plugin_host::Capabilities::default())
         .expect("instancia");
     assert_eq!(rt.compiled_components(), 2);
-    // Y el MISMO fichero reescrito sustituye a su versión anterior en vez
-    // de sumarse: la vieja ya no la va a pedir nadie.
+    // ADR 0142: el fichero reescrito DESPUÉS de aprobarse no se carga con la
+    // aprobación de antes, aunque la ruta sea la misma y su versión vieja
+    // esté compilada en la caché.
     bytes.extend_from_slice(&[0, 2, 1, b'y']);
     std::fs::write(&otro, &bytes).expect("reescribe");
+    let Err(err) = rt.instantiate(&aprobado, norte_plugin_host::Capabilities::default()) else {
+        panic!("un binario cambiado tras aprobarse no se instancia")
+    };
+    assert!(
+        matches!(err, norte_plugin_host::RuntimeError::DigestMismatch),
+        "fue {err:?}"
+    );
+    // Y aprobado de nuevo, la versión nueva SUSTITUYE a la vieja en la
+    // caché en vez de sumarse: la vieja ya no la va a pedir nadie.
+    let nuevo = norte_plugin_host::WasmArtifact::trusting_current(&otro).expect("lee");
     let _ = rt
-        .instantiate(&otro, norte_plugin_host::Capabilities::default())
+        .instantiate(&nuevo, norte_plugin_host::Capabilities::default())
         .expect("instancia");
     assert_eq!(rt.compiled_components(), 2, "una versión por ruta");
 }

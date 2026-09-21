@@ -140,6 +140,10 @@ pub enum RuntimeError {
     /// es falsa.
     #[error("el guest agotó su presupuesto de llamada")]
     Deadline,
+    /// El `plugin.wasm` no es el que se aprobó: su huella no es la del
+    /// catálogo (ADR 0142). No se compila ni se ejecuta.
+    #[error("el binario del plugin cambió desde que se aprobó")]
+    DigestMismatch,
     /// El guest devolvió un `Err` legible desde su lógica.
     #[error("error del plugin: {0}")]
     Guest(String),
@@ -467,6 +471,76 @@ pub struct PluginRuntime {
     compilados: std::sync::Mutex<Compilados>,
 }
 
+/// El sha256 de unos bytes: la clave de la caché y, en hex, la huella del
+/// catálogo ([`crate::wasm_digest_of`]).
+fn resumen(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).into()
+}
+
+/// Un `plugin.wasm` junto con la HUELLA que el humano aprobó (#241, ADR
+/// 0142): lo único con lo que el runtime acepta instanciar desde disco.
+///
+/// El runtime lee el fichero, lo resume y lo rechaza con
+/// [`RuntimeError::DigestMismatch`] si no es lo aprobado, sobre los MISMOS
+/// bytes que compila. Antes solo se comparaba al descubrir, y el `.wasm`
+/// podía cambiar después sin que nadie volviera a mirar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WasmArtifact {
+    path: std::path::PathBuf,
+    digest: String,
+}
+
+impl WasmArtifact {
+    /// La ruta y la huella aprobada (sha256 en hex minúscula, la de
+    /// [`crate::PluginEntry::wasm_digest`]).
+    ///
+    /// El tipo TRANSPORTA la huella; no la certifica. La huella tiene que
+    /// venir del catálogo, después de comprobar que la aprobación sigue
+    /// vigente — una calculada ahora sobre el fichero no protege nada.
+    #[must_use]
+    pub fn approved(path: std::path::PathBuf, digest: String) -> Self {
+        Self { path, digest }
+    }
+
+    /// La huella de lo que hay AHORA en `path`.
+    ///
+    /// Es fiarse del fichero: solo para quien es la autoridad de ese fichero
+    /// —los tests, que acaban de compilarlo—, nunca para un plugin de un
+    /// tercero, que va con [`Self::approved`] y la huella del catálogo.
+    ///
+    /// # Errors
+    /// Si no se puede leer.
+    pub fn trusting_current(path: impl Into<std::path::PathBuf>) -> std::io::Result<Self> {
+        let path = path.into();
+        let bytes = std::fs::read(&path)?;
+        Ok(Self {
+            digest: crate::wasm_digest_of(&bytes),
+            path,
+        })
+    }
+
+    /// La ruta.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// La huella aprobada.
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+}
+
+/// Para LEER o copiar el fichero (tests, diagnóstico): la ruta. Instanciar
+/// pide el artefacto entero, huella incluida.
+impl AsRef<Path> for WasmArtifact {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Lo que guarda la caché de compilados (ADR 0141).
 #[derive(Default)]
 struct Compilados {
@@ -557,8 +631,17 @@ impl PluginRuntime {
     /// las dos; la segunda en terminar pisa a la primera con lo mismo. Es
     /// CPU gastada una vez por proceso y plugin, no un fallo.
     fn compilado(&self, bytes: &[u8], ruta: Option<&Path>) -> Result<Component, RuntimeError> {
-        use sha2::Digest;
-        let clave: [u8; 32] = sha2::Sha256::digest(bytes).into();
+        self.compilado_con(resumen(bytes), bytes, ruta)
+    }
+
+    /// Como [`Self::compilado`], con el resumen ya hecho: quien acaba de
+    /// comprobar la huella no lo calcula dos veces.
+    fn compilado_con(
+        &self,
+        clave: [u8; 32],
+        bytes: &[u8],
+        ruta: Option<&Path>,
+    ) -> Result<Component, RuntimeError> {
         // Un mutex envenenado es un pánico de otra llamada mientras metía
         // una entrada; los mapas siguen siendo coherentes (cada inserción es
         // atómica desde fuera), así que se siguen usando.
@@ -603,10 +686,10 @@ impl PluginRuntime {
     /// - [`RuntimeError::Instantiate`] si el linker o la instanciación fallan.
     pub fn instantiate(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
     ) -> Result<PluginInstance, RuntimeError> {
-        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let (mut store, component, linker) = self.prepare(wasm, caps)?;
         let bindings = NortePlugin::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
         Ok(PluginInstance {
@@ -625,11 +708,11 @@ impl PluginRuntime {
     /// Igual que [`Self::instantiate`].
     pub fn instantiate_provider(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
     ) -> Result<ProviderInstance, RuntimeError> {
         use crate::bindings::provider_world::NorteProvider;
-        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let (mut store, component, linker) = self.prepare(wasm, caps)?;
         let bindings = NorteProvider::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
         Ok(ProviderInstance {
@@ -647,11 +730,11 @@ impl PluginRuntime {
     /// Igual que [`Self::instantiate`].
     pub fn instantiate_decorator(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
     ) -> Result<DecoratorInstance, RuntimeError> {
         use crate::bindings::decorator_world::NorteDecorator;
-        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let (mut store, component, linker) = self.prepare(wasm, caps)?;
         let bindings = NorteDecorator::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
         Ok(DecoratorInstance {
@@ -668,12 +751,12 @@ impl PluginRuntime {
     /// Igual que [`Self::instantiate`].
     pub fn instantiate_panel(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
         location: Option<Arc<dyn LocationHost>>,
     ) -> Result<PanelInstance, RuntimeError> {
         use crate::bindings::panel_world::NortePanel;
-        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let (mut store, component, linker) = self.prepare(wasm, caps)?;
         // La ubicación se enchufa ANTES de instanciar, como en columnas y
         // renamers. Sin esta línea el world importa `norte:location` y cada
         // llamada del guest contesta «no disponible»: una capacidad linkada y
@@ -696,11 +779,11 @@ impl PluginRuntime {
     /// Igual que [`Self::instantiate`].
     pub fn instantiate_thumbnail(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
     ) -> Result<ThumbnailInstance, RuntimeError> {
         use crate::bindings::thumbnail_world::NorteThumbnail;
-        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let (mut store, component, linker) = self.prepare(wasm, caps)?;
         let bindings = NorteThumbnail::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
         Ok(ThumbnailInstance {
@@ -718,10 +801,10 @@ impl PluginRuntime {
     /// Igual que [`Self::instantiate`].
     pub fn instantiate_columns(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
     ) -> Result<ColumnsInstance, RuntimeError> {
-        self.instantiate_columns_with_location(wasm_path, caps, None)
+        self.instantiate_columns_with_location(wasm, caps, None)
     }
 
     /// Como [`Self::instantiate_columns`], inyectando quién resuelve los tokens
@@ -732,12 +815,12 @@ impl PluginRuntime {
     /// Igual que [`Self::instantiate`].
     pub fn instantiate_columns_with_location(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
         location: Option<Arc<dyn LocationHost>>,
     ) -> Result<ColumnsInstance, RuntimeError> {
         use crate::bindings::columns_world::NorteColumns;
-        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let (mut store, component, linker) = self.prepare(wasm, caps)?;
         store.data_mut().location = location;
         let bindings = NorteColumns::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
@@ -756,12 +839,12 @@ impl PluginRuntime {
     /// Igual que [`Self::instantiate`].
     pub fn instantiate_renamer_with_location(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
         location: Option<Arc<dyn LocationHost>>,
     ) -> Result<RenamerInstance, RuntimeError> {
         use crate::bindings::renamer_world::NorteRenamer;
-        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let (mut store, component, linker) = self.prepare(wasm, caps)?;
         store.data_mut().location = location;
         let bindings = NorteRenamer::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
@@ -780,12 +863,12 @@ impl PluginRuntime {
     /// Igual que [`Self::instantiate`].
     pub fn instantiate_organizer_with_location(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
         location: Option<Arc<dyn LocationHost>>,
     ) -> Result<OrganizerInstance, RuntimeError> {
         use crate::bindings::organizer_world::NorteOrganizer;
-        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let (mut store, component, linker) = self.prepare(wasm, caps)?;
         store.data_mut().location = location;
         let bindings = NorteOrganizer::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
@@ -804,12 +887,12 @@ impl PluginRuntime {
     /// Igual que [`Self::instantiate`].
     pub fn instantiate_hook_with_location(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
         location: Option<Arc<dyn LocationHost>>,
     ) -> Result<HookInstance, RuntimeError> {
         use crate::bindings::hook_world::NorteHook;
-        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let (mut store, component, linker) = self.prepare(wasm, caps)?;
         store.data_mut().location = location;
         let bindings = NorteHook::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
@@ -856,13 +939,13 @@ impl PluginRuntime {
     /// 0141). El world concreto lo instancia el caller.
     fn prepare(
         &self,
-        wasm_path: &Path,
+        wasm: &WasmArtifact,
         caps: Capabilities,
     ) -> Result<(Store<HostState>, Component, Linker<HostState>), RuntimeError> {
         // Cap del artefacto ANTES de leer (issue #68): un `.wasm` gigante no
         // debe gastar ni la lectura. `metadata` no lee el contenido; la
         // lectura de abajo vuelve a comprobarlo sobre lo leído.
-        let len = std::fs::metadata(wasm_path)
+        let len = std::fs::metadata(wasm.path())
             .map_err(|e| RuntimeError::Component(e.to_string()))?
             .len();
         check_artifact_size(len)?;
@@ -875,7 +958,7 @@ impl PluginRuntime {
         // tope existe para no gastar. Con uno de más, el tope lo ve.
         let bytes = {
             use std::io::Read;
-            let f = std::fs::File::open(wasm_path)
+            let f = std::fs::File::open(wasm.path())
                 .map_err(|e| RuntimeError::Component(e.to_string()))?;
             let mut v = Vec::new();
             f.take(MAX_ARTIFACT_BYTES.saturating_add(1))
@@ -884,7 +967,16 @@ impl PluginRuntime {
             v
         };
         check_artifact_size(bytes.len() as u64)?;
-        let component = self.compilado(&bytes, Some(wasm_path))?;
+        // Los bytes que se van a compilar son los que el humano APROBÓ, o no
+        // se compila nada (ADR 0142). Se comprueba AQUÍ, sobre lo leído y
+        // antes de la caché, y no al descubrir: entre descubrir y cargar,
+        // quien pudiera escribir `plugin.wasm` ejecutaba su código con las
+        // capacidades concedidas a otro.
+        let clave = resumen(&bytes);
+        if crate::capability::hex_lower(&clave) != wasm.digest() {
+            return Err(RuntimeError::DigestMismatch);
+        }
+        let component = self.compilado_con(clave, &bytes, Some(wasm.path()))?;
         let (store, linker) = self.prepare_common(caps)?;
         Ok((store, component, linker))
     }

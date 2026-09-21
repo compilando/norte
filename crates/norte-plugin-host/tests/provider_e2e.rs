@@ -185,7 +185,7 @@ fn provider_wit_e2e_wasm_real() {
 
 /// Compila `examples-wasm/<name>/` a `wasm32-wasip2` (release). `None` (SKIP) si
 /// el target no está; si está pero no compila, es fallo real.
-fn build_guest(name: &str) -> Option<PathBuf> {
+fn build_guest(name: &str) -> Option<norte_plugin_host::WasmArtifact> {
     if !target_installed("wasm32-wasip2") {
         eprintln!("SKIP: target wasm32-wasip2 no instalado");
         return None;
@@ -212,7 +212,8 @@ fn build_guest(name: &str) -> Option<PathBuf> {
         .join("release")
         .join(format!("{}.wasm", name.replace('-', "_")));
     assert!(wasm.exists(), "no se encontró {}", wasm.display());
-    Some(wasm)
+    // Con la huella de lo que se acaba de compilar (ADR 0142).
+    Some(norte_plugin_host::WasmArtifact::trusting_current(wasm).expect("guest"))
 }
 
 fn target_installed(target: &str) -> bool {

@@ -28,7 +28,6 @@
 //! de wiring.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -75,7 +74,7 @@ impl PluginProvider {
     /// `capabilities` atrapa.
     pub fn new(
         runtime: PluginRuntime,
-        wasm: &Path,
+        wasm: &norte_plugin_host::WasmArtifact,
         host_caps: HostCaps,
         scheme: impl Into<String>,
     ) -> Result<Self, RuntimeError> {
@@ -294,6 +293,9 @@ fn map_vfs_error(e: provider_iface::VfsError) -> Error {
 pub(crate) fn map_runtime_error(e: &RuntimeError) -> Error {
     match e {
         RuntimeError::Deadline => Error::ProviderUnavailable { retryable: true },
+        // El binario no es el aprobado (ADR 0142): lo mismo que dice
+        // `connect` cuando lo detecta él — no hay permiso para ESE código.
+        RuntimeError::DigestMismatch => Error::PermissionDenied,
         otro => Error::Internal {
             panic: matches!(otro, RuntimeError::Trap(_)),
         },

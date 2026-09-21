@@ -92,7 +92,7 @@ fn ftp_plugin_stack_e2e() {
     );
 }
 
-fn build_guest(name: &str) -> Option<PathBuf> {
+fn build_guest(name: &str) -> Option<norte_plugin_host::WasmArtifact> {
     if !target_installed("wasm32-wasip2") {
         eprintln!("SKIP: target wasm32-wasip2 no instalado");
         return None;
@@ -119,7 +119,8 @@ fn build_guest(name: &str) -> Option<PathBuf> {
         .join("release")
         .join(format!("{}.wasm", name.replace('-', "_")));
     assert!(wasm.exists(), "no se encontró {}", wasm.display());
-    Some(wasm)
+    // Con la huella de lo que se acaba de compilar (ADR 0142).
+    Some(norte_plugin_host::WasmArtifact::trusting_current(wasm).expect("guest"))
 }
 
 fn target_installed(target: &str) -> bool {

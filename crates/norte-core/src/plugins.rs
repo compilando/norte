@@ -448,7 +448,9 @@ pub const THUMBNAIL_MAX_BYTES: u64 = 8 * 1024 * 1024;
 pub type ResolvedPreviewer = (
     String,
     String,
-    PathBuf,
+    // Ruta Y huella aprobada (ADR 0142): el runtime rechaza bytes que no
+    // sean los aprobados.
+    norte_plugin_host::WasmArtifact,
     norte_plugin_host::Capabilities,
     BTreeMap<String, String>,
 );
@@ -475,8 +477,9 @@ pub struct ResolvedProvider {
     pub id: String,
     /// Nombre legible (texto de tercero).
     pub name: String,
-    /// Ruta canónica de `plugin.wasm`, verificada dentro del directorio.
-    pub wasm: PathBuf,
+    /// Ruta canónica de `plugin.wasm`, verificada dentro del directorio, con
+    /// su huella aprobada (ADR 0142).
+    pub wasm: norte_plugin_host::WasmArtifact,
     /// Digest del `plugin.wasm` tal como lo ancló el catálogo al descubrir:
     /// lo que la aprobación cubre (#241). Quien instancie DEBE leer los
     /// bytes, hashearlos y comparar — una ruta no es una promesa.
@@ -1143,7 +1146,7 @@ impl PluginRegistry {
         id: &str,
     ) -> Result<
         (
-            PathBuf,
+            norte_plugin_host::WasmArtifact,
             norte_plugin_host::Capabilities,
             BTreeMap<String, String>,
         ),
@@ -1173,8 +1176,8 @@ impl PluginRegistry {
         if !st.enabled {
             return Err(PluginRunError::Disabled(id.to_string()));
         }
-        let wasm = Self::verified_wasm(&entry.dir)
-            .ok_or_else(|| PluginRunError::NoBinary(id.to_string()))?;
+        let wasm =
+            Self::verified_wasm(entry).ok_or_else(|| PluginRunError::NoBinary(id.to_string()))?;
         Ok((
             wasm,
             entry.manifest.capabilities.clone(),
@@ -1244,7 +1247,7 @@ impl PluginRegistry {
             {
                 return None;
             }
-            let wasm = Self::verified_wasm(&e.dir)?;
+            let wasm = Self::verified_wasm(e)?;
             Some((
                 e.manifest.id.clone(),
                 e.manifest.name.clone(),
@@ -1271,7 +1274,7 @@ impl PluginRegistry {
             if !handles {
                 return None;
             }
-            let wasm = Self::verified_wasm(&e.dir)?;
+            let wasm = Self::verified_wasm(e)?;
             Some((
                 e.manifest.id.clone(),
                 e.manifest.name.clone(),
@@ -1302,7 +1305,7 @@ impl PluginRegistry {
             if !handles {
                 return None;
             }
-            let wasm = Self::verified_wasm(&e.dir)?;
+            let wasm = Self::verified_wasm(e)?;
             Some((
                 e.manifest.id.clone(),
                 e.manifest.name.clone(),
@@ -1337,7 +1340,7 @@ impl PluginRegistry {
                 if !Self::approval_is_current(&st, e) || !st.enabled {
                     return None;
                 }
-                let wasm = Self::verified_wasm(&e.dir)?;
+                let wasm = Self::verified_wasm(e)?;
                 // El hueco lo dice la PRIMERA contribución: un decorador
                 // declara una, y si declarase dos con huecos distintos no
                 // habría forma de saber cuál de sus respuestas va a cuál.
@@ -1408,7 +1411,7 @@ impl PluginRegistry {
                 );
                 return None;
             }
-            let wasm = Self::verified_wasm(&e.dir)?;
+            let wasm = Self::verified_wasm(e)?;
             let wasm_digest = e.wasm_digest.clone()?;
             Some(ResolvedProvider {
                 id: e.manifest.id.clone(),
@@ -1461,7 +1464,7 @@ impl PluginRegistry {
             {
                 return None;
             }
-            let wasm = Self::verified_wasm(&e.dir)?;
+            let wasm = Self::verified_wasm(e)?;
             Some((
                 e.manifest.id.clone(),
                 e.manifest.name.clone(),
@@ -1503,7 +1506,7 @@ impl PluginRegistry {
             {
                 return None;
             }
-            let wasm = Self::verified_wasm(&e.dir)?;
+            let wasm = Self::verified_wasm(e)?;
             Some((
                 e.manifest.id.clone(),
                 e.manifest.name.clone(),
@@ -1531,7 +1534,7 @@ impl PluginRegistry {
                 if !Self::approval_is_current(&st, e) || !st.enabled {
                     return None;
                 }
-                let wasm = Self::verified_wasm(&e.dir)?;
+                let wasm = Self::verified_wasm(e)?;
                 let ons = e
                     .manifest
                     .contributions
@@ -1596,7 +1599,7 @@ impl PluginRegistry {
             if !declares {
                 return None;
             }
-            let wasm = Self::verified_wasm(&e.dir)?;
+            let wasm = Self::verified_wasm(e)?;
             Some((
                 e.manifest.id.clone(),
                 e.manifest.name.clone(),
@@ -1681,8 +1684,17 @@ impl PluginRegistry {
     /// [`norte_plugin_host::verified_child`], que documenta lo que NO cubre):
     /// el catálogo la necesita al descubrir y este crate al leer o ejecutar, y
     /// una segunda copia de un guard de seguridad es peor que la dependencia.
-    fn verified_wasm(dir: &Path) -> Option<PathBuf> {
-        norte_plugin_host::verified_child(dir, "plugin.wasm")
+    ///
+    /// Y con la HUELLA que ancló el catálogo (ADR 0142): el runtime compara
+    /// los bytes que compila contra ella. Sin huella —un binario que no se
+    /// pudo leer al descubrir— no hay artefacto, que es lo mismo que no
+    /// tener binario.
+    fn verified_wasm(
+        e: &norte_plugin_host::PluginEntry,
+    ) -> Option<norte_plugin_host::WasmArtifact> {
+        let path = norte_plugin_host::verified_child(&e.dir, "plugin.wasm")?;
+        let digest = e.wasm_digest.clone()?;
+        Some(norte_plugin_host::WasmArtifact::approved(path, digest))
     }
 
     /// Lee el estado persistido. Ausente = vacío; corrupto = `InvalidData`.
@@ -2009,7 +2021,7 @@ scheme = "memplug"
             .expect("consentido y activado");
         assert_eq!(r.id, "org.norte.memplug");
         assert_eq!(r.name, "Mem plug");
-        assert!(r.wasm.ends_with("plugin.wasm"));
+        assert!(r.wasm.path().ends_with("plugin.wasm"));
         assert_eq!(
             r.wasm_digest,
             norte_plugin_host::wasm_digest_of(b"\0asm"),
@@ -2523,7 +2535,7 @@ mimetypes = ["text/*"]
         let (id, name, wasm, _caps, settings) = got.unwrap();
         assert_eq!(id, "org.norte.prev");
         assert_eq!(name, "Prev");
-        assert!(wasm.ends_with("plugin.wasm"));
+        assert!(wasm.path().ends_with("plugin.wasm"));
         assert!(
             settings.is_empty(),
             "PREV_MANIFEST no declara [config]: mapa vacío"
@@ -2969,7 +2981,7 @@ header = "Size"
             .expect("la columna declarada resuelve");
         assert_eq!(id, "org.norte.cols");
         assert_eq!(name, "Cols");
-        assert!(wasm.ends_with("plugin.wasm"));
+        assert!(wasm.path().ends_with("plugin.wasm"));
 
         assert!(
             reg.resolve_columns("no-declarada").is_none(),
@@ -4662,7 +4674,9 @@ struct EnPool {
     /// `(id del plugin, wasm, ubicación en wire)`. La ubicación entra en la
     /// clave porque es lo que el guest cachea dentro: un `.git/index` parseado
     /// no vale para otro proyecto.
-    clave: (String, std::path::PathBuf, String),
+    // El artefacto lleva la huella aprobada (ADR 0142): una instancia del
+    // pool no sirve a un binario aprobado de nuevo.
+    clave: (String, norte_plugin_host::WasmArtifact, String),
     /// Los permisos con los que se instanció. Si el catálogo resuelve otros
     /// —un consentimiento retirado, un manifiesto reinstalado— la instancia se
     /// TIRA: reutilizarla sería correr con permisos que ya nadie concede.
