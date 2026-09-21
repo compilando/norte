@@ -395,7 +395,14 @@ fn min_of(node: &Node, decls: &KindRegistry) -> (u16, u16) {
 /// Un [`Size::Auto`] cuenta como cero. No debería llegar hasta aquí
 /// —[`Node::substitute_auto`] lo sustituye antes— pero un reparto no es sitio
 /// para reventar.
-fn distribute(area: Rect, dir: Dir, sizes: &[Size]) -> Vec<Rect> {
+///
+/// `suelos` es el mínimo de cada hijo en el eje del reparto. Si el sitio
+/// libre alcanza para el de TODOS los ponderados, ninguno baja del suyo: se
+/// le da su mínimo y el resto se vuelve a repartir entre los demás, en su
+/// proporción. Si no alcanza, el reparto es el proporcional de siempre y el
+/// colapso decide. Sin esto un peso pequeño al lado de pesos grandes —el que
+/// deja arrastrar un borde— salía de un píxel.
+fn distribute(area: Rect, dir: Dir, sizes: &[Size], suelos: &[u16]) -> Vec<Rect> {
     let extent = u64::from(match dir {
         Dir::Horizontal => area.width,
         Dir::Vertical => area.height,
@@ -417,19 +424,52 @@ fn distribute(area: Rect, dir: Dir, sizes: &[Size]) -> Vec<Rect> {
             Size::Fixed(_) | Size::Auto => 0,
         })
         .collect();
-    let total: u64 = pesos.iter().sum();
-    if let Some(ultimo) = pesos.iter().rposition(|p| *p > 0) {
+    let suelo = |i: usize| u64::from(suelos.get(i).copied().unwrap_or(0));
+    let caben_los_suelos = (0..sizes.len())
+        .filter(|i| pesos[*i] > 0)
+        .map(suelo)
+        .sum::<u64>()
+        <= resto;
+    // Los ponderados que ya cobran su suelo salen del reparto proporcional.
+    let mut al_suelo = vec![false; sizes.len()];
+    loop {
+        let fijo: u64 = (0..sizes.len()).filter(|i| al_suelo[*i]).map(suelo).sum();
+        let libre = resto.saturating_sub(fijo);
+        let activos: Vec<usize> = (0..sizes.len())
+            .filter(|i| pesos[*i] > 0 && !al_suelo[*i])
+            .collect();
+        let total: u64 = activos.iter().map(|i| pesos[*i]).sum();
         let mut dado: u64 = 0;
-        for (i, p) in pesos.iter().enumerate() {
-            if *p == 0 {
-                continue;
-            }
-            asignado[i] = if i == ultimo {
-                resto.saturating_sub(dado)
+        for (n, &i) in activos.iter().enumerate() {
+            asignado[i] = if n + 1 == activos.len() {
+                libre.saturating_sub(dado)
             } else {
-                resto.saturating_mul(*p).checked_div(total).unwrap_or(0)
+                libre
+                    .saturating_mul(pesos[i])
+                    .checked_div(total)
+                    .unwrap_or(0)
             };
             dado = dado.saturating_add(asignado[i]);
+        }
+        for i in 0..sizes.len() {
+            if al_suelo[i] {
+                asignado[i] = suelo(i);
+            }
+        }
+        if !caben_los_suelos {
+            break;
+        }
+        let bajos: Vec<usize> = activos
+            .iter()
+            .copied()
+            .filter(|i| asignado[*i] < suelo(*i))
+            .collect();
+        // Cada vuelta fija al menos uno más, así que termina.
+        if bajos.is_empty() {
+            break;
+        }
+        for i in bajos {
+            al_suelo[i] = true;
         }
     }
     let mut out = Vec::with_capacity(sizes.len());
@@ -483,7 +523,17 @@ fn place(node: &Node, area: Rect, decls: &KindRegistry, out: &mut Resolved) {
                     None => Size::Weight(1),
                 })
                 .collect();
-            let rects = distribute(area, *dir, &tam);
+            let suelos: Vec<u16> = children
+                .iter()
+                .map(|c| {
+                    let (mw, mh) = min_of(c, decls);
+                    match dir {
+                        Dir::Horizontal => mw,
+                        Dir::Vertical => mh,
+                    }
+                })
+                .collect();
+            let rects = distribute(area, *dir, &tam, &suelos);
             // Un `Split` colapsa SOLO si todos sus hijos son ponderados.
             //
             // Colapsar es «estos hermanos se disputan el mismo eje y no caben,
@@ -560,6 +610,45 @@ mod tests {
         );
         assert!(out.hidden.is_empty());
         assert_eq!(out.focus_order, vec![SlotId(1), SlotId(2)]);
+    }
+
+    /// REGRESIÓN (captura del 2026-09-21): un PESO no baja del mínimo de su
+    /// kind mientras el sitio libre alcance para todos. El layout guardado
+    /// tenía listados a 49/51 y el visor a 1, al lado de fijos: el visor
+    /// salía de un píxel, y un `Split` con fijos no colapsa. Ahora toma su
+    /// mínimo (20) y los demás pesos ceden la diferencia en proporción.
+    #[test]
+    fn un_peso_no_baja_de_su_minimo_si_hay_sitio() {
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![
+                Node::slot(SlotId(5), KindId::new("places")),
+                browser(1),
+                browser(2),
+                Node::slot(SlotId(9), KindId::new("viewer")),
+            ],
+            sizes: vec![
+                Size::Fixed(16),
+                Size::Weight(49),
+                Size::Weight(51),
+                Size::Weight(1),
+            ],
+        };
+        let out = resolve(r(0, 0, 200, 30), &arbol, &reg());
+        let ancho = |id: u32| {
+            out.placements
+                .iter()
+                .find(|(s, _)| *s == SlotId(id))
+                .map(|(_, re)| re.width)
+                .expect("colocado")
+        };
+        assert_eq!(ancho(9), 20, "el visor, a su mínimo");
+        assert_eq!(ancho(5), 16, "el fijo no cede");
+        assert_eq!(ancho(1) + ancho(2) + 20 + 16, 200, "nada se pierde");
+        assert!(ancho(2) > ancho(1), "los demás conservan su proporción");
+        // Sin sitio para todos los mínimos, el reparto es el de siempre.
+        let out = resolve(r(0, 0, 60, 30), &arbol, &reg());
+        assert!(out.placements.len() + out.hidden.len() >= 4);
     }
 
     /// Un ancho impar no puede perder una columna: el resto va al último.
@@ -1078,11 +1167,16 @@ mod tests {
                 out.placements
             );
         }
-        // La hoja de atributos NO se pinta, y no es cosa de esta regla: en las
-        // nueve filas que quedan no caben un visor (mínimo 5) y una hoja
-        // (mínimo 4) apilados, así que su `Split` se degrada a pestañas — el
-        // colapso de siempre.
-        assert!(out.hidden.contains(&SlotId(8)));
+        // Y la hoja de atributos TAMBIÉN se pinta: en las nueve filas que
+        // quedan caben justas un visor (mínimo 5) y una hoja (mínimo 4). Antes
+        // el reparto proporcional daba 4/5, el visor quedaba bajo su mínimo y
+        // el `Split` se degradaba a pestañas escondiendo la hoja; con el suelo
+        // de los pesos cada uno cobra su mínimo.
+        assert!(
+            out.placements.iter().any(|(p, _)| *p == SlotId(8)),
+            "{:?}",
+            out.placements
+        );
         assert_eq!(
             out.diagnostics
                 .iter()
