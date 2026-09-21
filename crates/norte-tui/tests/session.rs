@@ -64,6 +64,30 @@ fn las_disposiciones_de_otros_perfiles_vuelven_intactas() {
     assert_eq!(vuelta.active, "work");
 }
 
+/// ADR 0139: la terminal no pisa la disposición de la VENTANA al escribir
+/// la suya —cada una recuerda sus tamaños—, y en un RELEVO a la ventana le
+/// entrega la suya también bajo la clave de la ventana.
+#[test]
+fn la_disposicion_de_la_ventana_se_respeta_y_el_relevo_la_entrega() {
+    let de_la_ventana = norte_frontend::layout::presets::tree("krusader").expect("preset");
+    let mut body = norte_frontend::session::SessionBody::default();
+    body.layouts
+        .insert("default@window".to_owned(), de_la_ventana.clone());
+    let mut app = app_basica();
+    app.apply_session(&body);
+    assert_eq!(
+        app.session_body().layouts.get("default@window"),
+        Some(&de_la_ventana),
+        "escribir la suya no toca la de la ventana"
+    );
+    let relevo = app.session_body_for_handoff();
+    assert_eq!(
+        relevo.layouts.get("default@window"),
+        relevo.layouts.get("default"),
+        "el relevo entrega ESTA pantalla a la ventana"
+    );
+}
+
 /// El perfil PEGAJOSO llega con la sesión y pide el cambio.
 ///
 /// No puede aplicarse antes: vive en la sesión, la sesión la tiene el daemon, y

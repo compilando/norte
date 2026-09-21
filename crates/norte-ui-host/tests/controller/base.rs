@@ -1517,9 +1517,9 @@ fn cuerpo_escrito(f: &Falso) -> Option<norte_frontend::session::SessionBody> {
 }
 
 /// Alternar un panel lateral escribe la disposición en la sesión AL MOMENTO,
-/// bajo la misma clave que el terminal (ADR 0058 D8): la pantalla es una para
-/// los dos frontends, y hasta aquí la ventana ni la escribía ni la leía — solo
-/// guardaba dónde estaba cada listado, y solo al cerrar.
+/// bajo la clave PROPIA de la ventana (ADR 0139, que sustituye aquí a la D8
+/// de la ADR 0058): la terminal y la ventana recuerdan cada una la suya, y
+/// la de la terminal no se toca.
 #[tokio::test]
 async fn alternar_un_panel_escribe_la_disposicion_al_momento() {
     let backend = Arc::new(falso_con_sesion(
@@ -1533,8 +1533,12 @@ async fn alternar_un_panel_escribe_la_disposicion_al_momento() {
     let cuerpo = hasta(&backend, "la disposición escrita", cuerpo_escrito).await;
     let arbol = cuerpo
         .layouts
-        .get("default")
-        .expect("bajo la clave del terminal sin perfil");
+        .get("default@window")
+        .expect("bajo la clave de la ventana sin perfil");
+    assert!(
+        !cuerpo.layouts.contains_key("default"),
+        "la de la terminal no se escribe"
+    );
     let texto = serde_json::to_string(arbol).expect("json");
     assert!(
         texto.contains("places"),
@@ -1555,7 +1559,8 @@ async fn alternar_un_panel_escribe_la_disposicion_al_momento() {
             .flatten()
     })
     .await;
-    let texto = serde_json::to_string(cuerpo.layouts.get("default").expect("sigue")).expect("json");
+    let texto =
+        serde_json::to_string(cuerpo.layouts.get("default@window").expect("sigue")).expect("json");
     assert!(!texto.contains("places"), "ya sin la barra: {texto}");
 }
 
@@ -1584,6 +1589,33 @@ async fn la_disposicion_guardada_se_aplica_al_arrancar() {
         listados, 2,
         "los dos listados de la disposición guardada, no el uno de `simple`"
     );
+}
+
+/// ADR 0139: con la suya guardada, la ventana arranca con LA SUYA, aunque la
+/// terminal haya dejado otra después.
+#[tokio::test]
+async fn la_ventana_arranca_con_su_disposicion_y_no_con_la_de_la_terminal() {
+    let mut guardada = sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut cuerpo: norte_frontend::session::SessionBody =
+        serde_json::from_value(guardada.body.clone()).expect("cuerpo");
+    // La terminal: un listado. La ventana: dos.
+    cuerpo.layouts.insert(
+        "default".to_owned(),
+        norte_frontend::layout::presets::tree("simple").expect("preset"),
+    );
+    cuerpo.layouts.insert(
+        "default@window".to_owned(),
+        norte_frontend::layout::presets::tree("orthodox").expect("preset"),
+    );
+    guardada.body = serde_json::to_value(&cuerpo).expect("json");
+    let backend = Arc::new(falso_con_sesion(guardada, true));
+    let (_h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let listados = snap
+        .slots
+        .iter()
+        .filter(|s| matches!(s, norte_ui_host::dto::SlotView::Browser(_)))
+        .count();
+    assert_eq!(listados, 2, "la de la ventana, no la de la terminal");
 }
 
 /// El tic de la sesión escribe lo que cambió y NO repite lo mismo.

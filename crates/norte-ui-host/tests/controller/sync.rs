@@ -3957,6 +3957,110 @@ async fn el_borde_de_los_detalles_se_arrastra_desde_el_segundo_listado() {
     );
 }
 
+/// Los tamaños arrastrados SE RECUERDAN: lo que una ventana deja en la
+/// sesión es con lo que la siguiente abre, hasta que se elige otra
+/// disposición.
+#[tokio::test]
+async fn los_tamanos_arrastrados_vuelven_al_abrir() {
+    let falso = super::arbol_como_falso();
+    // Dueña de una sesión vacía: la única que escribe.
+    *falso.sesion.lock().expect("sesión") = (
+        norte_proto::methods::Session {
+            version: 0,
+            revision: 0,
+            body: serde_json::Value::Null,
+        },
+        true,
+    );
+    let falso = Arc::new(falso);
+    let (h, _) = host_arbol(Arc::clone(&falso)).await;
+    let mut sub = h.subscribe();
+    let _ = h
+        .dispatch(UiAction::LayoutButtonActivate {
+            id: "split-h".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    let snap = foto_hasta(&h, &mut sub, "dos listados", |s| {
+        let n = s
+            .slots
+            .iter()
+            .filter(|v| matches!(v, SlotView::Browser(_)))
+            .count();
+        (n == 2).then(|| s.clone())
+    })
+    .await;
+    let izq = *snap
+        .layout
+        .placements
+        .iter()
+        .filter(|p| {
+            snap.slots
+                .iter()
+                .any(|v| matches!(v, SlotView::Browser(b) if b.slot_id == p.slot_id))
+        })
+        .min_by_key(|p| p.x)
+        .expect("listado");
+    // El borde a un tercio.
+    let _ = h
+        .dispatch(UiAction::ResizeSlot {
+            slot_id: izq.slot_id,
+            cells: (izq.x + izq.width * 2) / 3,
+        })
+        .await
+        .expect("host vivo");
+    let movido = foto_hasta(&h, &mut sub, "borde movido", |s| {
+        let p = s
+            .layout
+            .placements
+            .iter()
+            .find(|p| p.slot_id == izq.slot_id)?;
+        (p.width < izq.width).then(|| s.clone())
+    })
+    .await;
+    let anchos = |s: &norte_ui_host::ViewSnapshot| -> Vec<(u32, u16)> {
+        let mut v: Vec<(u32, u16)> = s
+            .layout
+            .placements
+            .iter()
+            .map(|p| (p.slot_id, p.width))
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    // Lo escrito, en cuanto se escriba.
+    let mut escrito = None;
+    for _ in 0..50 {
+        escrito = falso.escrito.lock().expect("escrito").clone();
+        let lleva = escrito
+            .as_ref()
+            .is_some_and(|b| b.to_string().contains(&format!("\"id\":{}", izq.slot_id)));
+        if lleva {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let escrito = escrito.expect("la ventana escribió su sesión");
+    drop(h);
+
+    // Otra ventana, sobre lo que dejó la primera.
+    let segundo = super::arbol_como_falso();
+    *segundo.sesion.lock().expect("sesión") = (
+        norte_proto::methods::Session {
+            version: norte_frontend::session::SCHEMA_VERSION,
+            revision: 9,
+            body: escrito,
+        },
+        true,
+    );
+    let (_h2, snap2) = host_arbol(Arc::new(segundo)).await;
+    assert_eq!(
+        anchos(&snap2),
+        anchos(&movido),
+        "abre con los mismos anchos"
+    );
+}
+
 /// Regresión (segunda captura): el borde HORIZONTAL entre los detalles y el
 /// registro de abajo sube y baja el registro, agarrado desde los detalles.
 #[tokio::test]
