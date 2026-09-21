@@ -2254,6 +2254,26 @@ describe("la barra de menús", () => {
     expect(enviadas).toEqual([{ action: "panel_bar_activate", button: 1 }]);
   });
 
+  it("la mitad derecha de la barra de estado pinta sus elementos y se pulsan", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.status_items = [
+      { id: "position", text: "3/120", tooltip: "Posición", clickable: false },
+      { id: "notices", text: "!2", tooltip: "Avisos", clickable: true },
+    ];
+    screen.paint(v);
+    const derecha = document.querySelector(".statusbar .status-items") as HTMLElement;
+    expect(derecha).not.toBeNull();
+    const els = [...derecha.querySelectorAll(".status-item")] as HTMLElement[];
+    expect(els.map((e) => e.textContent)).toEqual(["3/120", "!2"]);
+    // Lo que no se pulsa no es un botón: un lector no lo anuncia como tal.
+    expect(els[0]?.tagName).toBe("SPAN");
+    expect(els[1]?.tagName).toBe("BUTTON");
+    expect(els[1]?.title).toBe("Avisos");
+    els[1]?.click();
+    expect(enviadas).toEqual([{ action: "status_item_activate", id: "notices" }]);
+  });
+
   it("con la barra de paneles apagada no reserva nada", () => {
     const { screen } = montar();
     const v = vista({});

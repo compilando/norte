@@ -5,6 +5,7 @@ import type {
   CompareRowView,
   RowView,
   SlotPlacement,
+  StatusItemView,
   StatusView,
   TaskView,
   UiAction,
@@ -435,7 +436,8 @@ export function statusNodes(
   connection: string,
   tr: (k: string) => string,
   rechazo: string | null = null,
-  onNotices: (() => void) | null = null,
+  items: StatusItemView[] = [],
+  onItem: ((id: string) => void) | null = null,
 ): Node[] {
   const nodes: Node[] = [];
   if (rechazo !== null) {
@@ -503,23 +505,6 @@ export function statusNodes(
   msg.className = "status-message";
   msg.textContent = status.message ?? "";
   nodes.push(msg);
-  // Los avisos caducados sin leer (puente 63): una insignia `!n` que abre
-  // el registro, por el botón de la barra de paneles — el mismo despacho
-  // que su tecla. Sin sitio donde abrirlo (sin botón), la insignia solo
-  // cuenta.
-  const sinLeer = status.notices_unread ?? 0;
-  if (sinLeer > 0 && status.message === null) {
-    const insignia = document.createElement("button");
-    insignia.type = "button";
-    insignia.className = "notices";
-    insignia.textContent = `!${String(sinLeer)}`;
-    insignia.title = tr("status-notices");
-    insignia.setAttribute("aria-label", tr("status-notices"));
-    if (onNotices !== null) {
-      insignia.addEventListener("click", onNotices);
-    }
-    nodes.push(insignia);
-  }
   if (status.pending !== null) {
     const p = document.createElement("span");
     p.className = "pending";
@@ -529,6 +514,30 @@ export function statusNodes(
         ? status.pending.chords
         : `${String(count)} ${status.pending.chords}`;
     nodes.push(p);
+  }
+  // La mitad DERECHA (ADR 0132, puente 85): los elementos que el host ya
+  // eligió, redactó y recortó, en su orden. Los avisos sin leer son uno de
+  // ellos (`notices`). Un clic devuelve el ID; el host corre el comando.
+  if (items.length > 0) {
+    const derecha = document.createElement("span");
+    derecha.className = "status-items";
+    for (const it of items) {
+      const el = document.createElement(it.clickable ? "button" : "span");
+      el.className = "status-item";
+      el.dataset["id"] = it.id;
+      el.textContent = it.text;
+      el.title = it.tooltip;
+      if (el instanceof HTMLButtonElement) {
+        el.type = "button";
+        if (onItem !== null) {
+          el.addEventListener("click", () => {
+            onItem(it.id);
+          });
+        }
+      }
+      derecha.append(el);
+    }
+    nodes.push(derecha);
   }
   return nodes;
 }

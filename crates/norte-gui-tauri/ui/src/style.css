@@ -931,27 +931,50 @@ body {
 }
 
 .statusbar {
+  display: flex;
+  align-items: center;
   background: var(--status-bg);
   padding: 0 6px;
   white-space: nowrap;
   overflow: hidden;
 }
 
+/* La mitad derecha (ADR 0132): los elementos, pegados al borde. El host ya
+   los recortó por prioridad; aquí solo no se encogen, para que ceda la
+   mitad izquierda y no media palabra de un elemento. */
+.status-items {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  margin-left: auto;
+  padding-left: 12px;
+}
+
+.status-item {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0 6px;
+  height: var(--cell-h);
+  unicode-bidi: isolate;
+}
+
+button.status-item {
+  cursor: pointer;
+}
+
+button.status-item:hover {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.status-item[data-id="notices"] {
+  color: var(--warning-fg);
+}
+
 .pending {
   color: var(--border-focus);
   margin-left: 8px;
-}
-
-/* La insignia de avisos caducados sin leer (puente 63): a la derecha de
-   la barra de estado, con el color de aviso, y se pulsa. */
-.notices {
-  font: inherit;
-  margin-left: auto;
-  padding: 0 6px;
-  border: 0;
-  background: none;
-  color: var(--warning-fg);
-  cursor: pointer;
 }
 
 .tasks {

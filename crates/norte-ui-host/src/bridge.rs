@@ -488,7 +488,15 @@ use serde::{Deserialize, Serialize};
 ///   F1–F10 es de la herencia del terminal; la ventana tiene menú, paleta y
 ///   barra de actividad, y la fila de celdas era lo que más pesaba en la
 ///   pantalla y lo que menos decía. `[ui] key_bar` sigue gobernando la TUI.
-pub const BRIDGE_VERSION: u32 = 84;
+///   Y la barra de paneles puede ser la barra de actividad (ADR 0131):
+///   `PanelBarView.vertical` (`[ui] panel_bar_position` ya resuelta) y
+///   `PanelButtonView.count`, la cifra de su insignia.
+/// - **85**: la barra de estado por elementos (ADR 0132).
+///   `ViewSnapshot.status_items` y el cambio `status_items`: la mitad
+///   derecha, ya redactada, recortada por prioridad y en el orden de
+///   `[ui] status_items`. La acción `status_item_activate { id }` pulsa uno,
+///   por ID porque la lista se mueve con el cursor.
+pub const BRIDGE_VERSION: u32 = 85;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

@@ -4,7 +4,7 @@ expression: render_80x24(&app)
 ---
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "                                                                                "
-"┌/c┌ Ajustes · 1 de 35 ─────────────────────────────────────────────────────┐──┐"
+"┌/c┌ Ajustes · 1 de 36 ─────────────────────────────────────────────────────┐──┐"
 "│No│Apariencia                                                              │ha│"
 "│  │Apariencia 1                                                            │  │"
 "│  │Paneles …listado 0  > Tipografía de la interfaz                         │  │"
@@ -25,4 +25,4 @@ expression: render_80x24(&app)
 "│  │ Familia tipográfica del c…stado). El TUI la ignora.                    │  │"
 "│  └ Fira Code_  [enter] guardar · [esc] cancelar ──────────────────────────┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" /casa  2/5                                                                     "
+" /casa                                                     2/5  Nombre ↑  UTF-8 "

@@ -1426,6 +1426,20 @@
         "count": 12
       }
     },
+    "status_items": [
+      {
+        "clickable": false,
+        "id": "position",
+        "text": "3/120",
+        "tooltip": "Posición del cursor en el listado"
+      },
+      {
+        "clickable": true,
+        "id": "sort",
+        "text": "Nombre ↑",
+        "tooltip": "Orden del listado. Pulsa para cambiarlo"
+      }
+    ],
     "sync": null,
     "tasks": [
       {

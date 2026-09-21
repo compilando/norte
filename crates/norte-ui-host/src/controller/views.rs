@@ -147,6 +147,7 @@ impl Estado {
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
             panel_bar: self.vista_barra_de_paneles(),
+            status_items: self.vista_elementos_de_estado(),
             // El pijama (spec 2026-09-20). Va en la vista ENTERA y no en un
             // parche: es configuración, y la recarga en caliente reconstruye
             // la vista.
@@ -402,6 +403,41 @@ impl Estado {
                 })
                 .collect(),
         }
+    }
+
+    /// Los elementos de la barra de estado, SIN recortar por ancho: lo que
+    /// un clic resuelve. Del mismo código que la TUI (ADR 0132).
+    pub(super) fn elementos_de_estado(&self) -> Vec<norte_frontend::statusbar::StatusItemView> {
+        let input = norte_frontend::statusbar::StatusInput::from_pane(
+            &self.hueco().pane,
+            self.filas_de_tablero(),
+            self.status.notices_unread,
+        );
+        norte_frontend::statusbar::items(
+            &input,
+            self.config.common.ui_chrome.status_items(),
+            self.lang,
+        )
+    }
+
+    /// La proyección de la mitad derecha de la barra de estado (ADR 0132):
+    /// lo que cabe en la mitad del ancho declarado, descartado por
+    /// prioridad con el mismo `fit` que la TUI.
+    pub(super) fn vista_elementos_de_estado(&self) -> Vec<crate::dto::StatusItemView> {
+        let lista = self.elementos_de_estado();
+        let ancho = usize::from(self.viewport.0);
+        norte_frontend::statusbar::fit(&lista, ancho / 2, 2)
+            .into_iter()
+            .map(|i| {
+                let v = &lista[i];
+                crate::dto::StatusItemView {
+                    id: v.id.to_owned(),
+                    text: clamp_display(v.text.clone()),
+                    tooltip: clamp_display(v.tooltip.clone()),
+                    clickable: v.command.is_some(),
+                }
+            })
+            .collect()
     }
 
     /// Los botones de la barra, con su comando: lo que un click resuelve.

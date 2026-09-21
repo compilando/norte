@@ -483,6 +483,7 @@ pub fn section_of(id: &str) -> Option<Section> {
         | "ui.panel-bar"
         | "ui.panel-bar-style"
         | "ui.panel-bar-position"
+        | "ui.status-items"
         | "ui.menu-bar"
         | "ui.key-bar"
         | "ui.splash"
@@ -642,6 +643,13 @@ const CATALOG: &[SettingDef] = &[
         // la misma en los dos (spec 2026-09-21).
         id: "ui.panel-bar-position",
         kind: SettingKind::Enum(&["auto", "top", "left"]),
+        applies_live: true,
+    },
+    SettingDef {
+        // La mitad derecha de la barra de estado (ADR 0132): ids separados
+        // por espacios, en el orden en que se pintan.
+        id: "ui.status-items",
+        kind: SettingKind::Args,
         applies_live: true,
     },
     SettingDef {
@@ -832,6 +840,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
             .panel_bar_position()
             .as_str()
             .to_owned(),
+        "ui.status-items" => cfg.common.ui_chrome.status_items().to_ids().join(" "),
         "ui.pane-footer" => cfg.common.ui_chrome.pane_footer().to_string(),
         "ui.row-stripes" => cfg.common.ui_chrome.row_stripes().to_string(),
         "ui.date-format" => cfg.common.ui_chrome.date_format().as_str().to_owned(),
@@ -1131,6 +1140,14 @@ pub enum SettingsEditError {
         min: i64,
         /// Inclusive upper bound.
         max: i64,
+    },
+    /// The value does not fit what the setting admits; `key` is the Fluent
+    /// id of the message that says what does (ADR 0132: an unknown or
+    /// repeated `ui.status-items` id is refused HERE, before it reaches
+    /// `norte.toml` and breaks the next load).
+    Invalid {
+        /// The Fluent id of the message.
+        key: &'static str,
     },
 }
 
@@ -1809,6 +1826,16 @@ impl SettingsState {
             //
             // Vacío = un array vacío, que la configuración lee como «ninguno»
             // y devuelve el mando a `$VISUAL`/`$EDITOR`.
+            // Una lista con vocabulario cerrado se valida AQUÍ: escrita mal,
+            // la siguiente carga rechazaría el fichero entero.
+            if def.id == "ui.status-items" {
+                let ids: Vec<&str> = buf.split_ascii_whitespace().collect();
+                if norte_config::StatusItems::parse(&ids).is_err() {
+                    return Err(SettingsEditError::Invalid {
+                        key: "msg-settings-invalid-status-items",
+                    });
+                }
+            }
             let mut arr = toml_edit::Array::new();
             for tok in buf.split_ascii_whitespace() {
                 arr.push(tok);
@@ -1895,6 +1922,7 @@ pub fn edit_error_message(e: &SettingsEditError) -> String {
             "msg-settings-invalid-range",
             &[("min", &min.to_string()), ("max", &max.to_string())],
         ),
+        SettingsEditError::Invalid { key } => t(key),
     }
 }
 
@@ -2751,6 +2779,23 @@ mod tests {
         let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
         assert!(s.set_value("ui.confirm-quit", "quizas", &[], &[]).is_err());
         assert!(s.set_value("ui.mouse", "SI", &[], &[]).is_err());
+        // Los elementos de la barra de estado (ADR 0132): un id que no
+        // existe, o uno repetido, rompería la siguiente carga del fichero.
+        assert_eq!(
+            s.set_value("ui.status-items", "tasks git", &[], &[])
+                .expect_err("id desconocido"),
+            SettingsEditError::Invalid {
+                key: "msg-settings-invalid-status-items"
+            }
+        );
+        assert!(
+            s.set_value("ui.status-items", "tasks tasks", &[], &[])
+                .is_err()
+        );
+        let w = s
+            .set_value("ui.status-items", "notices  position", &[], &[])
+            .expect("válida");
+        assert_eq!(w.display, "notices position");
         assert!(s.set_value("no.existe", "1", &[], &[]).is_err());
     }
 

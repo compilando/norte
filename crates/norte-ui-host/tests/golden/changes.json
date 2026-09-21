@@ -1034,6 +1034,23 @@
     "notices_unread": 0,
     "pending": null
   },
+  "status_items": {
+    "change": "status_items",
+    "status_items": [
+      {
+        "clickable": false,
+        "id": "position",
+        "text": "3/120",
+        "tooltip": "Posición del cursor en el listado"
+      },
+      {
+        "clickable": true,
+        "id": "sort",
+        "text": "Nombre ↑",
+        "tooltip": "Orden del listado. Pulsa para cambiarlo"
+      }
+    ]
+  },
   "sync": {
     "change": "sync",
     "sync": {

@@ -47,6 +47,21 @@ directorio. Cuando el borde se queda corto cae primero el espacio libre y
 después la cuenta: lo que acabas de marcar es lo último en ceder.
 `pane_footer = false` deja el borde limpio.
 
+La barra de estado
+------------------
+
+Tiene dos mitades. La izquierda dice los mensajes, las esperas y los avisos
+—un listado incompleto, nombres reinterpretados, marcas que se perdieron, una
+sesión suelta— y no se configura: un aviso que se pudiera quitar dejaría de
+serlo. La derecha enseña datos pequeños, y se pulsan los que hacen algo:
+`position` (dónde está el cursor), `marks` (lo marcado), `sort` (el orden;
+abre el menú de orden), `encoding` (cómo se leen los nombres; los
+reinterpreta), `tasks` (tareas en marcha; abre los procesos) y `notices`
+(avisos sin leer; abre el registro). `status_items` dice cuáles y en qué
+orden, por ejemplo `status_items = ["tasks", "position"]`; una lista vacía
+deja la mitad derecha en blanco. Los que no caben ceden por importancia, y
+siempre antes que un aviso de la izquierda.
+
 Filas a rayas
 -------------
 

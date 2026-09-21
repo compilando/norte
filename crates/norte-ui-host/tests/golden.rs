@@ -228,6 +228,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::SplashActivateRow { .. } => "splash_activate_row",
         UiAction::WizardActivateRow { .. } => "wizard_activate_row",
         UiAction::PanelBarActivate { .. } => "panel_bar_activate",
+        UiAction::StatusItemActivate { .. } => "status_item_activate",
         UiAction::ResizeSlot { .. } => "resize_slot",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
@@ -554,6 +555,12 @@ fn acciones_de_cromo() -> Vec<(&'static str, UiAction)> {
         (
             "panel_bar_activate",
             UiAction::PanelBarActivate { button: 2 },
+        ),
+        (
+            "status_item_activate",
+            UiAction::StatusItemActivate {
+                id: "sort".to_owned(),
+            },
         ),
         (
             "resize_slot",
@@ -1443,6 +1450,25 @@ fn asistente_de_referencia() -> norte_ui_host::dto::WizardView {
     }
 }
 
+/// Uno pulsable y uno que no: las dos formas que el renderer pinta.
+fn elementos_de_estado_de_referencia() -> Vec<norte_ui_host::dto::StatusItemView> {
+    use norte_ui_host::dto::StatusItemView;
+    vec![
+        StatusItemView {
+            id: "position".to_owned(),
+            text: "3/120".to_owned(),
+            tooltip: "Posición del cursor en el listado".to_owned(),
+            clickable: false,
+        },
+        StatusItemView {
+            id: "sort".to_owned(),
+            text: "Nombre ↑".to_owned(),
+            tooltip: "Orden del listado. Pulsa para cambiarlo".to_owned(),
+            clickable: true,
+        },
+    ]
+}
+
 fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
     use norte_ui_host::dto::{PanelButtonState, PanelButtonView};
     norte_ui_host::dto::PanelBarView {
@@ -1529,6 +1555,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         tasks: vec![task_de_referencia()],
         menu: menu_de_referencia(),
         panel_bar: barra_de_paneles_de_referencia(),
+        status_items: elementos_de_estado_de_referencia(),
         // El pijama ENCENDIDO en la referencia (puente 80): un booleano que
         // el golden fija a `false` no distingue «lo manda» de «no existe».
         row_stripes: true,
@@ -2601,6 +2628,12 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
+            "status_items",
+            ViewChange::StatusItems {
+                status_items: elementos_de_estado_de_referencia(),
+            },
+        ),
+        (
             "profiles",
             ViewChange::Profiles {
                 profiles: Some(perfiles_de_referencia()),
@@ -2795,7 +2828,9 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // Puente 84: se va la barra de teclas (`View::key_bar`, el cambio
     // `key_bar`); la de paneles gana `vertical` (columna o fila) y cada
     // botón `count`, la cifra de su insignia.
-    const FORMA: u64 = 13_337_661_625_639_488_570;
+    // Puente 85: `View::status_items` y su cambio, la mitad derecha de la
+    // barra de estado (ADR 0132).
+    const FORMA: u64 = 4_174_435_362_060_295_429;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

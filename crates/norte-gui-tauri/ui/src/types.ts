@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 84;
+export const BRIDGE_VERSION = 85;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -849,6 +849,16 @@ export interface PanelButtonView {
   count?: number;
 }
 
+/** Un elemento de la mitad derecha de la barra de estado (ADR 0132). */
+export interface StatusItemView {
+  /** El id estable: vuelve con el clic. */
+  id: string;
+  text: string;
+  tooltip: string;
+  /** Si pulsarlo hace algo. */
+  clickable: boolean;
+}
+
 /** La barra de paneles (#324, puente 51): qué paneles hay y cómo están. */
 export interface PanelBarView {
   /** `[ui] panel_bar`: si la barra se pinta. */
@@ -1394,6 +1404,9 @@ export interface ViewSnapshot {
   tasks: TaskView[];
   menu: MenuView;
   panel_bar: PanelBarView;
+  /** La mitad derecha de la barra de estado (ADR 0132, puente 85).
+   *  Opcional: un host anterior no la manda. */
+  status_items?: StatusItemView[];
   /** `[ui] row_stripes` (puente 80): el «pijama» del listado. Opcional: un
    *  host anterior no lo manda, y entonces no hay banda. */
   row_stripes?: boolean;
@@ -1476,6 +1489,7 @@ export type ViewChange =
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "menu"; menu: MenuView }
   | { change: "panel_bar"; panel_bar: PanelBarView }
+  | { change: "status_items"; status_items: StatusItemView[] }
   | { change: "profiles"; profiles: ProfilePickerView | null }
   | { change: "palette"; palette: PaletteView | null }
   | { change: "goto"; goto: GotoView | null }
@@ -1639,6 +1653,7 @@ export type UiAction =
   | { action: "splash_close" }
   | { action: "splash_activate_row"; number: number }
   | { action: "panel_bar_activate"; button: number }
+  | { action: "status_item_activate"; id: string }
   | { action: "resize_slot"; slot_id: number; cells: number }
   | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };

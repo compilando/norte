@@ -2792,6 +2792,9 @@ struct Estado {
     /// con la de ahora y manda la nueva si difiere: es lo que hace que la
     /// barra se actualice por cualquier camino sin que cada camino lo sepa.
     ultima_barra: Option<crate::dto::PanelBarView>,
+    /// Los últimos elementos de la barra de estado que cruzaron (ADR 0132),
+    /// por lo mismo que la barra de paneles.
+    ultimos_elementos: Option<Vec<crate::dto::StatusItemView>>,
     /// El último ajuste de columnas que cruzó, por hueco
     /// (`norte_frontend::columns::fitted_columns`). Depende del ancho del
     /// hueco y de los nombres de su listado, y los dos cambian por caminos
@@ -3234,6 +3237,7 @@ impl Estado {
             arbol,
             kinds,
             ultima_barra: None,
+            ultimos_elementos: None,
             ultimo_ajuste: std::collections::HashMap::new(),
             mensaje_ticks: 0,
             mensaje_contado: None,
@@ -3788,6 +3792,9 @@ impl Estado {
             }
             UiAction::PanelBarActivate { button } => {
                 self.pulsar_barra_de_paneles(*button, backend, buzon)
+            }
+            UiAction::StatusItemActivate { id } => {
+                self.pulsar_elemento_de_estado(id, backend, buzon)
             }
             UiAction::ResizeSlot { slot_id, cells } => {
                 self.arrastrar_borde(*slot_id, *cells, backend, buzon)

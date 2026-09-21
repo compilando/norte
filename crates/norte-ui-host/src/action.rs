@@ -742,6 +742,16 @@ pub enum UiAction {
         /// Qué botón, en el orden en que viajaron.
         button: u32,
     },
+    /// Pulsa un elemento de la barra de estado (ADR 0132, puente 85).
+    ///
+    /// Por ID y no por posición, como `settings_set`: la lista cambia con el
+    /// cursor y el ancho, y entre el pintado y el clic puede haberse movido.
+    /// El host resuelve el comando con el mismo código que la TUI y lo corre
+    /// por el mismo despacho que su atajo.
+    StatusItemActivate {
+        /// El id del elemento (`sort`, `tasks`…).
+        id: String,
+    },
     /// Arrastra el borde que hay entre `slot_id` y el hueco de al lado.
     ///
     /// `cells` es DÓNDE está el puntero en el eje del reparto, en celdas de

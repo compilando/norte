@@ -1337,6 +1337,117 @@ impl PanelBarStyle {
     }
 }
 
+/// One item of the status bar's right half (`[ui] status_items`).
+///
+/// Informative only: what the listing IS (position, marks, order, name
+/// encoding) and what is running. Warnings are not items — they live in the
+/// left half, where no configuration can hide them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusItem {
+    /// Cursor position over the listing, `3/120`.
+    Position,
+    /// What is marked, `2 marked · 4 MiB`.
+    Marks,
+    /// The order of the listing, `Name ↑`.
+    Sort,
+    /// How names are decoded, `UTF-8` / `CP437`.
+    Encoding,
+    /// How many tasks are running.
+    Tasks,
+    /// Notices that expired unread.
+    Notices,
+}
+
+impl StatusItem {
+    /// Every item, in the default order.
+    pub const ALL: [Self; 6] = [
+        Self::Position,
+        Self::Marks,
+        Self::Sort,
+        Self::Encoding,
+        Self::Tasks,
+        Self::Notices,
+    ];
+
+    /// The id written in `norte.toml`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Position => "position",
+            Self::Marks => "marks",
+            Self::Sort => "sort",
+            Self::Encoding => "encoding",
+            Self::Tasks => "tasks",
+            Self::Notices => "notices",
+        }
+    }
+
+    /// The item an id names, if any.
+    #[must_use]
+    pub fn parse(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|i| i.as_str() == id)
+    }
+}
+
+/// The status bar's right half, in screen order: at most one of each
+/// [`StatusItem`]. A fixed array so [`UiChrome`] stays `Copy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatusItems {
+    ids: [StatusItem; StatusItem::ALL.len()],
+    len: u8,
+}
+
+impl StatusItems {
+    /// All six, in [`StatusItem::ALL`] order.
+    pub const DEFAULT: Self = Self {
+        ids: StatusItem::ALL,
+        len: 6,
+    };
+
+    /// Parses a list of ids, rejecting unknown and repeated ones.
+    ///
+    /// ```
+    /// use norte_config::{StatusItem, StatusItems};
+    /// let s = StatusItems::parse(&["tasks", "position"]).unwrap();
+    /// assert_eq!(s.iter().collect::<Vec<_>>(), [StatusItem::Tasks, StatusItem::Position]);
+    /// assert!(StatusItems::parse(&["tasks", "tasks"]).is_err());
+    /// assert!(StatusItems::parse(&["git"]).is_err());
+    /// assert_eq!(StatusItems::parse(&[] as &[&str]).unwrap().iter().count(), 0);
+    /// ```
+    ///
+    /// # Errors
+    /// The message to show, naming the valid ids (never the raw value).
+    pub fn parse<S: AsRef<str>>(ids: &[S]) -> Result<Self, &'static str> {
+        const MSG: &str = "[ui] status_items inválido: cada id una vez, de «position», \
+                           «marks», «sort», «encoding», «tasks» y «notices»";
+        let mut out = Self {
+            ids: StatusItem::ALL,
+            len: 0,
+        };
+        for id in ids {
+            let item = StatusItem::parse(id.as_ref()).ok_or(MSG)?;
+            if out.iter().any(|i| i == item) {
+                return Err(MSG);
+            }
+            // Cabe: `ALL` tiene uno de cada, y los repetidos ya se rechazaron.
+            out.ids[usize::from(out.len)] = item;
+            out.len += 1;
+        }
+        Ok(out)
+    }
+
+    /// The items, in screen order.
+    pub fn iter(&self) -> impl Iterator<Item = StatusItem> + '_ {
+        self.ids[..usize::from(self.len)].iter().copied()
+    }
+
+    /// The list as `norte.toml` and the settings screen spell it.
+    #[must_use]
+    pub fn to_ids(&self) -> Vec<&'static str> {
+        self.iter().map(StatusItem::as_str).collect()
+    }
+}
+
 /// `[ui] panel_bar_position`: where the panel bar sits.
 ///
 /// `Auto` is not a third place: it is "what this frontend does best", and
@@ -1525,6 +1636,8 @@ pub struct UiChrome {
     pub panel_bar_style: Option<PanelBarStyle>,
     /// `[ui] panel_bar_position` (None = auto), validated.
     pub panel_bar_position: Option<PanelBarPosition>,
+    /// `[ui] status_items` (None = [`StatusItems::DEFAULT`]), validated.
+    pub status_items: Option<StatusItems>,
     /// `[ui] pane_footer` (None = shown).
     pub pane_footer: Option<bool>,
     /// `[ui] row_stripes` (None = off): the listing's «pyjama».
@@ -1634,6 +1747,11 @@ impl UiChrome {
     #[must_use]
     pub fn panel_bar_position(self) -> PanelBarPosition {
         self.panel_bar_position.unwrap_or_default()
+    }
+    /// Effective `status_items` (absent = all six).
+    #[must_use]
+    pub fn status_items(self) -> StatusItems {
+        self.status_items.unwrap_or(StatusItems::DEFAULT)
     }
     /// Effective `pane_footer` (absent = shown).
     #[must_use]
@@ -2124,6 +2242,9 @@ fn merge_ui_chrome(
     acc.row_stripes = ui.row_stripes.or(acc.row_stripes);
     acc.dialog_buttons = ui.dialog_buttons.or(acc.dialog_buttons);
     merge_panel_bar(acc, ui).map_err(bad)?;
+    if let Some(ids) = &ui.status_items {
+        acc.status_items = Some(StatusItems::parse(ids).map_err(bad)?);
+    }
     if let Some(raw) = &ui.date_format {
         acc.date_format = Some(match raw.as_str() {
             "smart" => DateFormat::Smart,
@@ -3623,7 +3744,7 @@ format = "exact"
         std::fs::write(
             user.path().join("norte.toml"),
             "[ui]\nkey_bar = false\npanel_bar_style = \"letters\"\ndate_format = \"iso\"\n\
-             panel_bar_position = \"left\"\n\
+             panel_bar_position = \"left\"\nstatus_items = [\"tasks\", \"position\"]\n\
              notice_seconds = 30\nhistory_size = 12\nsplash = \"home\"\n\
              processes_panel = \"manual\"\nimages = \"blocks\"\ndir_indicator = \"slash\"\n",
         )
@@ -3644,6 +3765,7 @@ format = "exact"
         assert_eq!(c.key_bar, Some(false));
         assert_eq!(c.panel_bar_style(), PanelBarStyle::Letters);
         assert_eq!(c.panel_bar_position(), PanelBarPosition::Left);
+        assert_eq!(c.status_items().to_ids(), ["tasks", "position"]);
         assert_eq!(c.date_format(), DateFormat::Relative, "la última capa gana");
         assert_eq!(c.notice_seconds(), 30);
         assert_eq!(c.history_size(), 12);
@@ -3659,6 +3781,7 @@ format = "exact"
         assert!(empty.key_bar() && empty.pane_footer() && empty.dialog_buttons());
         assert_eq!(empty.panel_bar_style(), PanelBarStyle::Names);
         assert_eq!(empty.panel_bar_position(), PanelBarPosition::Auto);
+        assert_eq!(empty.status_items(), StatusItems::DEFAULT);
         assert_eq!(empty.date_format(), DateFormat::Smart);
         assert_eq!(empty.notice_seconds(), 8);
         assert_eq!(empty.history_size(), 30);
@@ -3670,6 +3793,8 @@ format = "exact"
         for bad in [
             "panel_bar_style = \"icons\"",
             "panel_bar_position = \"right\"",
+            "status_items = [\"git\"]",
+            "status_items = [\"marks\", \"marks\"]",
             "date_format = \"unix\"",
             "notice_seconds = 601",
             "history_size = 4",

@@ -331,6 +331,10 @@
   "splash_open": {
     "action": "splash_open"
   },
+  "status_item_activate": {
+    "action": "status_item_activate",
+    "id": "sort"
+  },
   "toggle_mark": {
     "action": "toggle_mark",
     "generation": 4,

@@ -106,7 +106,7 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
             extensions: ui::extension_zones(app, frame.area),
             help: ui::help_zones(app, frame.area),
             session: ui::session_zone(app, frame.area),
-            notices: ui::notices_zone(app, frame.area),
+            status_items: ui::status_item_zones(app, frame.area),
             borders: ui::resize_borders(app, frame.area),
             slots: ui::panel_slots(app, frame.area),
         },

@@ -53,6 +53,11 @@ pub struct ViewSnapshot {
     /// La barra de paneles (#324): qué paneles hay, cómo están, y si alguno
     /// tiene algo que contar. Puente 51.
     pub panel_bar: PanelBarView,
+    /// La mitad DERECHA de la barra de estado (ADR 0132, puente 85): los
+    /// elementos de `[ui] status_items` que caben, ya redactados y en su
+    /// orden. Ausente en un host anterior = ninguno.
+    #[serde(default)]
+    pub status_items: Vec<StatusItemView>,
     /// `[ui] row_stripes` (spec 2026-09-20): si las filas impares de un
     /// listado van sobre una banda. Puente 80.
     ///
@@ -259,6 +264,24 @@ pub struct PanelBarView {
     /// ÍNDICE en esta lista (`UiAction::PanelBarActivate`), nunca como un
     /// comando: el renderer no despacha (ADR 0069).
     pub buttons: Vec<PanelButtonView>,
+}
+
+/// Un elemento de la mitad derecha de la barra de estado (ADR 0132).
+///
+/// Qué dice, con qué prioridad cede y qué corre un clic lo decide
+/// `norte_frontend::statusbar`, el mismo código que la TUI. Un clic vuelve
+/// como el `id` (`UiAction::StatusItemActivate`), nunca como un comando: el
+/// renderer no despacha (ADR 0069).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusItemView {
+    /// El id estable (`position`, `tasks`…).
+    pub id: String,
+    /// El texto, en el idioma de la sesión.
+    pub text: String,
+    /// Qué es y qué hace pulsarlo, para el título.
+    pub tooltip: String,
+    /// Si pulsarlo hace algo.
+    pub clickable: bool,
 }
 
 /// `true` para un campo que un host anterior no mandaba y que encendido es
@@ -3400,6 +3423,14 @@ pub enum ViewChange {
     },
     /// La barra de estado cambió.
     Status(StatusView),
+    /// Los elementos de la mitad derecha de la barra de estado cambiaron
+    /// (ADR 0132). Como la barra de paneles: el host los compara con los
+    /// últimos que mandó al armar cada parche, porque los mueve casi todo
+    /// —el cursor, una marca, el orden, una tarea—.
+    StatusItems {
+        /// La lista entera.
+        status_items: Vec<StatusItemView>,
+    },
     /// El tablero de tasks cambió.
     ///
     /// Variante de STRUCT y no de tupla, y no por gusto: un enum etiquetado

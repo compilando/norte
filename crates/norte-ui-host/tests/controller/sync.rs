@@ -3771,6 +3771,48 @@ async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
     );
 }
 
+/// ADR 0132: la foto trae la mitad derecha de la barra de estado, con los
+/// elementos por defecto que tienen algo que decir, y pulsar uno corre su
+/// comando; un id que ya no está es una carrera y pide foto.
+#[tokio::test]
+async fn la_barra_de_estado_trae_sus_elementos_y_se_pulsan() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let ids: Vec<&str> = snap.status_items.iter().map(|i| i.id.as_str()).collect();
+    // Sin marcas, sin tareas y sin avisos, esos tres callan.
+    assert_eq!(
+        ids,
+        ["position", "sort", "encoding"],
+        "{:?}",
+        snap.status_items
+    );
+    let orden = snap
+        .status_items
+        .iter()
+        .find(|i| i.id == "sort")
+        .expect("orden");
+    assert!(orden.clickable);
+    assert!(!snap.status_items[0].clickable, "la posición no se pulsa");
+
+    let ack = h
+        .dispatch(UiAction::StatusItemActivate {
+            id: "sort".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        !matches!(ack, ActionAck::Stale { .. }),
+        "el orden se pulsa: {ack:?}"
+    );
+    // `tasks` no está (no hay tareas): lo que el renderer pulsó ya no existe.
+    let ack = h
+        .dispatch(UiAction::StatusItemActivate {
+            id: "tasks".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Stale { .. }), "fue {ack:?}");
+}
+
 /// #291: el hueco de preview SIGUE al cursor y enseña el mismo visor que el
 /// grande — con la preview del plugin y sus fragmentos—; sobre un
 /// directorio dice que lo es, y cerrarlo lo quita. El último de los siete

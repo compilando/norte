@@ -46,6 +46,21 @@ directory lives on. When the border is too short the free space goes first
 and the count second: what you just marked is the last thing to give way.
 `pane_footer = false` leaves the border bare.
 
+The status bar
+--------------
+
+It has two halves. The left one says the messages, the waits and the
+warnings — a listing that is incomplete, names reinterpreted, marks that
+were lost, a detached session — and is not configurable: a warning you could
+remove would stop being one. The right one shows small facts, and the ones
+that do something can be clicked: `position` (where the cursor is), `marks`
+(what is marked), `sort` (the order; opens the sort menu), `encoding` (how
+names are read; reinterprets them), `tasks` (running tasks; opens the jobs)
+and `notices` (unread notices; opens the log). `status_items` says which and
+in what order, for example `status_items = ["tasks", "position"]`; an empty
+list leaves the right half blank. The ones that do not fit give way by
+importance, and always before a warning on the left.
+
 Striped rows
 ------------
 

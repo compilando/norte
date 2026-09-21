@@ -12,3 +12,4 @@ pub mod keybar;
 pub mod menu;
 pub mod panelbar;
 pub mod splash;
+pub mod statusbar;

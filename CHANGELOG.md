@@ -17,6 +17,16 @@ independently through `PROTOCOL_VERSION`.
   or `auto` (the default: left in the window, top in the terminal, since
   each is short on the other dimension). The terminal can have the column
   too, three cells wide, with `left`.
+- **The status bar is made of items** (ADR 0132, bridge 85). Its right half
+  shows small facts, as in VS Code — the cursor position, what is marked,
+  the order (`Name ↑`), how names are read (`UTF-8`), running tasks and
+  unread notices — each one clickable where it does something: the order
+  opens the sort menu, the encoding reinterprets names, tasks open the jobs
+  panel and notices the log. `[ui] status_items` chooses which and in what
+  order, also from the settings screen; the ones that do not fit give way
+  by importance. The left half — messages and warnings — is not
+  configurable, and a warning always wins the space. The window's status
+  bar, empty until now when nothing was happening, uses the same items.
 - **The window edits settings with real controls** (ADR 0130, bridge 83). A
   boolean is a switch, a fixed list is a dropdown — with the installed
   themes and keymap presets already in it — and a number is a number field

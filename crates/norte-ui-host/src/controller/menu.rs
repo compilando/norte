@@ -142,6 +142,32 @@ impl Estado {
         }
     }
 
+    /// Un clic en un elemento de la barra de estado (ADR 0132): su comando,
+    /// por el mismo despacho que su atajo y que la barra de paneles.
+    ///
+    /// Se busca por id en la lista de AHORA: un elemento que ya no está (las
+    /// tareas acabaron, la lista cambió) es una carrera normal, y el
+    /// renderer pide foto.
+    pub(super) fn pulsar_elemento_de_estado(
+        &mut self,
+        id: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(comando) = self
+            .elementos_de_estado()
+            .into_iter()
+            .find(|v| v.id == id)
+            .and_then(|v| v.command)
+        else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        match crate::commands::efecto_de(comando, 1) {
+            Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
+            None => self.no_implementado(comando),
+        }
+    }
+
     /// Un click FUERA del desplegable lo cierra sin ejecutar nada.
     pub(super) fn cerrar_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.menu.is_none() {

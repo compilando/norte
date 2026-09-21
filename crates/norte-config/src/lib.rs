@@ -39,10 +39,10 @@ pub use dirs::{
 pub use load::{
     AiSettings, AlignChoice, ColumnSpec, ColumnsConfig, CommonConfig, ConfigWrite, ConfirmQuit,
     DateFormat, HotlistItem, Images, KeymapList, KeymapWrite, PanelBarPosition, PanelBarStyle,
-    PersistSort, QuickSearch, SchemeColumns, SortChoice, SortColumnKey, UiChrome, WidthChoice,
-    load, persist_column_format, persist_column_width, persist_columns, persist_hotlist_add,
-    persist_hotlist_remove, persist_keymap_bind, persist_keymap_unbind, persist_set,
-    persist_ui_theme, persist_ui_theme_to, persist_unset,
+    PersistSort, QuickSearch, SchemeColumns, SortChoice, SortColumnKey, StatusItem, StatusItems,
+    UiChrome, WidthChoice, load, persist_column_format, persist_column_width, persist_columns,
+    persist_hotlist_add, persist_hotlist_remove, persist_keymap_bind, persist_keymap_unbind,
+    persist_set, persist_ui_theme, persist_ui_theme_to, persist_unset,
 };
 pub use profiles::{
     Loaded, PROFILE_LAYOUT_NAME, ProfileError, ProfileLoad, ProfileSnapshot, ProfileSource,

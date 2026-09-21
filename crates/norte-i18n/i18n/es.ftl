@@ -521,9 +521,6 @@ degraded-reason-unknown = motivo desconocido
 msg-plugin-notice = ⚑ { $plugin }: { $text }
 msg-plugin-hooks-disabled = ⚑ { $plugin }: sus hooks se apagaron tras tres fallos seguidos — desactívalo y vuelve a activarlo en el gestor de extensiones para reintentar
 msg-plugin-effect-denied = ⚑ { $plugin }: tu policy denegó un fichero que este plugin pidió escribir (regla para actor "plugin"); se dice una vez mientras norte corre
-# La insignia de avisos caducados sin leer (spec 2026-09-10): su título,
-# para el puntero y para un lector de pantalla. Pulsarla abre el registro.
-status-notices = Avisos sin leer — abrir el registro
 status-connection-failed = ✗ no se pudo conectar
 status-failed-subject = { $banner } — esquema { $scheme }, host { $host } ({ $reason })
 failed-reason-secret-missing = falta el secreto
@@ -568,6 +565,18 @@ pane-footer-counts = { $dirs } dirs · { $files } ficheros · { $size }
 pane-footer-free = { $free } libres
 status-marked = { $n } marcadas, { $size }
 status-marked-with-dirs = { $n } marcadas, { $size } + { $dirs } dirs
+# Los elementos de la mitad derecha de la barra de estado (ADR 0132): el
+# rótulo de la columna de orden y el tooltip de cada uno.
+status-item-sort-name = Nombre
+status-item-sort-size = Tamaño
+status-item-sort-mtime = Fecha
+status-item-sort-ext = Extensión
+status-item-position-tip = Posición del cursor en el listado
+status-item-marks-tip = Lo marcado en este panel
+status-item-sort-tip = Orden del listado. Pulsa para cambiarlo
+status-item-encoding-tip = Cómo se leen los nombres. Pulsa para reinterpretarlos
+status-item-tasks-tip = { $n } tareas en marcha. Pulsa para ver los procesos
+status-item-notices-tip = { $n } avisos sin leer. Pulsa para abrir el registro
 status-marks-pruned = { $n } marcas caídas, sus entradas ya no están
 status-watch-degraded = vigilancia de directorios degradada a sondeo (¿límite de inotify?) — crear/borrar/renombrar se ve en segundos; editar un fichero existente no se detecta
 msg-names-encoding = nombres mostrados como { $enc } (solo display; los bytes no cambian)
@@ -1021,6 +1030,7 @@ msg-settings-save-failed = no se pudo guardar: { $error }
 msg-settings-save-crashed = error interno al guardar — el valor no se escribió
 msg-settings-invalid-int = no es un número
 msg-settings-invalid-range = el valor debe estar entre { $min } y { $max }
+msg-settings-invalid-status-items = cada elemento una vez, de: position marks sort encoding tasks notices
 msg-settings-no-config-dir = sin directorio de config de usuario (entorno sin definir)
 msg-hotlist-persist-failed = favoritos no guardados: { $error }
 help-cmd-app-menu = barra de menús
@@ -2050,6 +2060,8 @@ setting-ui-panel-bar-style-name = Etiquetas de la barra de paneles
 setting-ui-panel-bar-style-desc = Cómo nombra sus botones la barra de paneles: el nombre del panel con la letra de acceso subrayada (names) o solo la letra (letters). Con menos de sesenta celdas los nombres pasan solos a letras.
 setting-ui-panel-bar-position-name = Posición de la barra de paneles
 setting-ui-panel-bar-position-desc = Dónde va la barra de paneles: una fila bajo el menú (top) o una columna en el borde izquierdo (left). Con auto, cada interfaz elige la suya: arriba en el terminal, donde falta ancho, y a la izquierda en la ventana, donde falta alto.
+setting-ui-status-items-name = Elementos de la barra de estado
+setting-ui-status-items-desc = Qué enseña la mitad derecha de la barra de estado, en orden: position (posición del cursor), marks (lo marcado), sort (el orden), encoding (cómo se leen los nombres), tasks (tareas en marcha) y notices (avisos sin leer). Los que no caben ceden por importancia; los mensajes y los avisos de la izquierda no se configuran.
 setting-ui-pane-footer-name = Pie del panel
 setting-ui-pane-footer-desc = Si cada listado lleva un pie con sus cuentas (directorios, ficheros, bytes), lo marcado, y el espacio libre del volumen donde vive el directorio.
 setting-ui-row-stripes-name = Filas a rayas

@@ -17,4 +17,4 @@ expression: render(&app)
 "│         │[F6] busco: cualquier cosa                                │         │"
 "│         │! /casa/evil�dir                                          │         │"
 "└─────────│[tab] campo · [enter] buscar · [esc] cancelar             │─────────┘"
-" !/casa/ev└──────────────────────────────────────────────────────────┘          "
+" !/casa/ev└──────────────────────────────────────────────────────────┘ ↑  UTF-8 "
