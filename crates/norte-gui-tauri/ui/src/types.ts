@@ -11,6 +11,10 @@
 /** La versión del contrato que este renderer sabe leer. */
 export const BRIDGE_VERSION = 89;
 
+/** Lo que la barra de título propia le pide a su ventana (ADR 0136); el
+ *  mismo vocabulario cerrado que `commands::WindowVerb` en Rust. */
+export type WindowVerb = "minimize" | "toggle_maximize" | "close" | "drag";
+
 /** En cuántos tramos parte la regla de marcas un listado; el mismo número
  *  que `norte_ui_host::dto::MARK_RULER_SPANS`. */
 export const MARK_RULER_SPANS = 256;
@@ -1751,4 +1755,8 @@ export interface Appearance {
    *  letra la dejaría desbordando su fila. */
   font_size: number | null;
   reduce_motion: boolean | null;
+  /** `[ui] titlebar = "custom"` (ADR 0136): la ventana no lleva la barra
+   *  del escritorio y la de menús hace de barra de título. Ausente = la
+   *  nativa. */
+  custom_titlebar?: boolean;
 }

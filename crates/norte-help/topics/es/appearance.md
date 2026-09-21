@@ -38,6 +38,11 @@ cuántos avisos guarda el registro.
 o `auto`, que es arriba en el terminal y a la izquierda en la ventana.
 `panel_bar = false` la quita.
 
+En la ventana, `titlebar = "custom"` quita la barra de título del escritorio
+y la de menús hace su papel, como en VS Code: se arrastra para mover la
+ventana, un doble clic la maximiza, y a la derecha van minimizar, maximizar
+y cerrar. De serie es `native`. Se aplica al volver a abrir la ventana.
+
 El pie del panel
 ----------------
 

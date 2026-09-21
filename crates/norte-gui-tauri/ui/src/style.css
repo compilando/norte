@@ -359,6 +359,69 @@ body {
   height: 16px;
 }
 
+/* La barra de título propia (ADR 0136): el hueco libre arrastra, así que
+   no selecciona texto. */
+.menubar[data-titlebar="true"] {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.window-controls {
+  display: flex;
+  height: 100%;
+}
+
+.window-controls[data-alone="true"] {
+  margin-left: auto;
+}
+
+.window-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* El ancho de los del escritorio y de VS Code: un blanco fácil en la
+     esquina, que es donde el ratón va sin mirar. */
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  opacity: 0.8;
+  cursor: default;
+  transition:
+    background-color 80ms ease-out,
+    color 80ms ease-out;
+}
+
+.window-control:hover {
+  opacity: 1;
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+/* Cerrar se enciende en rojo, como en todos los escritorios: es el único
+   de los tres que no se deshace. Rojo fijo y no del tema, porque es la
+   señal del sistema y no un color de norte. */
+.window-control[data-verb="close"]:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+.window-control .panelbar-icon {
+  width: 16px;
+  height: 16px;
+}
+
+:root[data-reduce-motion="true"] .window-control {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .window-control {
+    transition: none;
+  }
+}
+
 .menubar-title[aria-expanded="true"] {
   background: var(--selection-bg);
   color: var(--selection-fg);

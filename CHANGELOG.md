@@ -43,6 +43,12 @@ independently through `PROTOCOL_VERSION`.
   window, a thin band next to a listing's scrollbar shows where in the
   whole directory the marked entries are, as VS Code's overview ruler
   does — including the ones out of view.
+- **An optional custom title bar** (ADR 0136). `[ui] titlebar = "custom"`
+  (also on the settings screen, under Appearance) removes the desktop's
+  title bar and lets the menu bar do its job, as in VS Code: drag it to
+  move the window, double-click to maximize, and minimize, maximize and
+  close at its right end. The default stays `native`. Takes effect the
+  next time the window opens.
 - **Window polish.** The root of a path's breadcrumbs (the provider's
   scheme) is dimmed, since it is in every path of the pane, and the handle
   between two panes lights up when the pointer is on it or dragging it —

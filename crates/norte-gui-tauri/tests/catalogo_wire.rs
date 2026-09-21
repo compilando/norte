@@ -21,7 +21,8 @@ const FIXTURE: &str = r##"{
     "font": "Inter",
     "mono_font": "Iosevka",
     "font_size": 15.0,
-    "reduce_motion": true
+    "reduce_motion": true,
+    "custom_titlebar": true
   },
   "first_run": false,
   "no_splash": false
@@ -51,6 +52,9 @@ fn el_catalogo_va_y_vuelve_con_los_mismos_campos() {
     assert_eq!(leido.appearance.mono_font.as_deref(), Some("Iosevka"));
     assert_eq!(leido.appearance.font_size, Some(15.0));
     assert_eq!(leido.appearance.reduce_motion, Some(true));
+    // La barra de título propia (ADR 0136): de arranque, y el renderer la
+    // necesita para convertir la barra de menús en la de título.
+    assert!(leido.appearance.custom_titlebar);
 
     let vuelta: serde_json::Value = serde_json::to_value(&leido).expect("serializa");
     let esperado: serde_json::Value = serde_json::from_str(FIXTURE).expect("json");

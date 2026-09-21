@@ -37,6 +37,11 @@ one with news: how many tasks are running, how many warnings the log holds.
 column), or `auto`, which is top in the terminal and left in the window.
 `panel_bar = false` removes it.
 
+In the window, `titlebar = "custom"` removes the desktop's title bar and the
+menu bar does its job, as in VS Code: drag it to move the window,
+double-click to maximize, and minimize, maximize and close sit at its right
+end. The default is `native`. It applies the next time the window opens.
+
 The pane footer
 ---------------
 

@@ -1448,6 +1448,28 @@ impl StatusItems {
     }
 }
 
+/// `[ui] titlebar`: who draws the window's title bar (ADR 0136).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Titlebar {
+    /// The desktop's own. Default: it is the one every other window has,
+    /// and it works with whatever the window manager does.
+    #[default]
+    Native,
+    /// None from the desktop: the menu bar doubles as the title bar.
+    Custom,
+}
+
+impl Titlebar {
+    /// The wire string this variant round-trips from/to.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Custom => "custom",
+        }
+    }
+}
+
 /// `[ui] panel_bar_position`: where the panel bar sits.
 ///
 /// `Auto` is not a third place: it is "what this frontend does best", and
@@ -1636,6 +1658,8 @@ pub struct UiChrome {
     pub panel_bar_style: Option<PanelBarStyle>,
     /// `[ui] panel_bar_position` (None = auto), validated.
     pub panel_bar_position: Option<PanelBarPosition>,
+    /// `[ui] titlebar` (None = native), validated.
+    pub titlebar: Option<Titlebar>,
     /// `[ui] status_items` (None = [`StatusItems::DEFAULT`]), validated.
     pub status_items: Option<StatusItems>,
     /// `[ui] pane_footer` (None = shown).
@@ -1747,6 +1771,11 @@ impl UiChrome {
     #[must_use]
     pub fn panel_bar_position(self) -> PanelBarPosition {
         self.panel_bar_position.unwrap_or_default()
+    }
+    /// Effective `titlebar` (absent = native).
+    #[must_use]
+    pub fn titlebar(self) -> Titlebar {
+        self.titlebar.unwrap_or_default()
     }
     /// Effective `status_items` (absent = all six).
     #[must_use]
@@ -2213,6 +2242,13 @@ fn merge_panel_bar(acc: &mut UiChrome, ui: &crate::schema::UiSection) -> Result<
                     "[ui] panel_bar_position inválido: solo se admite «auto», «top» o «left»",
                 );
             }
+        });
+    }
+    if let Some(raw) = &ui.titlebar {
+        acc.titlebar = Some(match raw.as_str() {
+            "native" => Titlebar::Native,
+            "custom" => Titlebar::Custom,
+            _ => return Err("[ui] titlebar inválido: solo se admite «native» o «custom»"),
         });
     }
     Ok(())
@@ -3746,7 +3782,8 @@ format = "exact"
             "[ui]\nkey_bar = false\npanel_bar_style = \"letters\"\ndate_format = \"iso\"\n\
              panel_bar_position = \"left\"\nstatus_items = [\"tasks\", \"position\"]\n\
              notice_seconds = 30\nhistory_size = 12\nsplash = \"home\"\n\
-             processes_panel = \"manual\"\nimages = \"blocks\"\ndir_indicator = \"slash\"\n",
+             processes_panel = \"manual\"\nimages = \"blocks\"\ndir_indicator = \"slash\"\n\
+             titlebar = \"custom\"\n",
         )
         .unwrap();
         let project = tempfile::tempdir().unwrap();
@@ -3765,6 +3802,7 @@ format = "exact"
         assert_eq!(c.key_bar, Some(false));
         assert_eq!(c.panel_bar_style(), PanelBarStyle::Letters);
         assert_eq!(c.panel_bar_position(), PanelBarPosition::Left);
+        assert_eq!(c.titlebar(), Titlebar::Custom);
         assert_eq!(c.status_items().to_ids(), ["tasks", "position"]);
         assert_eq!(c.date_format(), DateFormat::Relative, "la última capa gana");
         assert_eq!(c.notice_seconds(), 30);
@@ -3781,6 +3819,11 @@ format = "exact"
         assert!(empty.key_bar() && empty.pane_footer() && empty.dialog_buttons());
         assert_eq!(empty.panel_bar_style(), PanelBarStyle::Names);
         assert_eq!(empty.panel_bar_position(), PanelBarPosition::Auto);
+        assert_eq!(
+            empty.titlebar(),
+            Titlebar::Native,
+            "la del escritorio, de serie"
+        );
         assert_eq!(empty.status_items(), StatusItems::DEFAULT);
         assert_eq!(empty.date_format(), DateFormat::Smart);
         assert_eq!(empty.notice_seconds(), 8);
@@ -3793,6 +3836,7 @@ format = "exact"
         for bad in [
             "panel_bar_style = \"icons\"",
             "panel_bar_position = \"right\"",
+            "titlebar = \"frameless\"",
             "status_items = [\"git\"]",
             "status_items = [\"marks\", \"marks\"]",
             "date_format = \"unix\"",

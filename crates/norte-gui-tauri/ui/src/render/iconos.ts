@@ -55,6 +55,14 @@ const FIGURAS: Record<string, Figura> = {
   "layout:pick": {
     paths: ["M4 4h7v7H4z", "M13 4h7v7h-7z", "M4 13h7v7H4z", "M13 13h7v7h-7z"],
   },
+  // Los botones de la ventana con barra de título propia (ADR 0136),
+  // prefijo `window:`. Finos y pequeños, como los del escritorio.
+  // Minimizar: una raya abajo.
+  "window:minimize": { paths: ["M7 12.5h10"] },
+  // Maximizar: un cuadrado.
+  "window:toggle_maximize": { paths: ["M7.5 7.5h9v9h-9z"] },
+  // Cerrar: el aspa.
+  "window:close": { paths: ["M7.5 7.5l9 9", "M16.5 7.5l-9 9"] },
   // Historia de git: una rama que se separa y vuelve.
   gitlog: {
     paths: ["M6 8v8", "M18 8.5c0 5-6 4-11 7"],

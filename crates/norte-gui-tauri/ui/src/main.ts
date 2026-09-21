@@ -17,9 +17,10 @@ import { invokeMetrics, tauriPort } from "./bridge";
 import type { HostPort } from "./bridge";
 import { AltSolo, esParaElCampo, keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
+import { montarBarraDeTitulo } from "./render/menus";
 import { Session } from "./session";
 import { BRIDGE_VERSION } from "./types";
-import type { Appearance, HostCatalog, UiAction } from "./types";
+import type { Appearance, HostCatalog, UiAction, WindowVerb } from "./types";
 
 /** Medidas del spike: latencia tecla→pintado. Las lee el arnés de la 3.6. */
 export interface Metrics {
@@ -92,6 +93,17 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   let catalogoActual = catalog;
   applyThemeFor(doc, catalog);
   applyAppearance(doc, catalog.appearance);
+  // La barra de título propia (ADR 0136), para la pantalla y para el error
+  // fatal. Sin respuesta que esperar: la ventana se mueve o no, y un rechazo
+  // (barra nativa) va a la consola y nada más.
+  const ventana: ControlesDeVentana = {
+    t: (k) => catalog.strings[k] ?? k,
+    pedir: (verb) => {
+      port.windowControl(verb).catch((e: unknown) => {
+        console.warn("window_control", verb, e);
+      });
+    },
+  };
   // (El seguimiento del esquema del escritorio se engancha más abajo, en
   // cuanto existe `send`: desde el puente 66 no basta con enchufar variables.)
   // El umbral de «te estoy haciendo esperar» viene del host, que lo saca del
@@ -167,6 +179,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     catalog,
     send,
     () => port.imageBytes(),
+    ventana.pedir,
   );
 
   const repaint = (): void => {
@@ -217,12 +230,13 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
           // La del RENDERER, que es contra la que se comparó. `catalog`
           // trae la del host, así que decía `bridge 17 ≠ 17`.
           `bridge ${String(out.version)} ≠ ${String(BRIDGE_VERSION)}`,
+          ventana,
         );
         return;
       case "notice":
         if (out.notice.notice === "fatal") {
           muerto = true;
-          showFatal(fatalEl, screen.t(out.notice.key));
+          showFatal(fatalEl, screen.t(out.notice.key), ventana);
         }
         repaint();
         return;
@@ -256,7 +270,11 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const inicial = session.receive(first);
   if (inicial.kind === "incompatible") {
     muerto = true;
-    showFatal(fatalEl, `bridge ${String(inicial.version)} ≠ ${String(BRIDGE_VERSION)}`);
+    showFatal(
+      fatalEl,
+      `bridge ${String(inicial.version)} ≠ ${String(BRIDGE_VERSION)}`,
+      ventana,
+    );
     return metrics;
   }
   repaint();
@@ -566,6 +584,13 @@ export function applyAppearance(doc: Document, ap: Appearance | undefined): void
   } else {
     delete raiz.dataset["reduceMotion"];
   }
+  // La barra de título propia (ADR 0136): la de menús se arrastra y lleva
+  // los tres botones de la ventana. Con la nativa, ni lo uno ni lo otro.
+  if (ap.custom_titlebar === true) {
+    raiz.dataset["titlebar"] = "custom";
+  } else {
+    delete raiz.dataset["titlebar"];
+  }
   medirCelda(doc);
 }
 
@@ -596,8 +621,33 @@ function medirCelda(doc: Document): void {
   }
 }
 
-function showFatal(el: HTMLElement, text: string): void {
-  el.textContent = text;
+/** Lo que la pantalla fatal necesita para poner la barra de título propia. */
+export interface ControlesDeVentana {
+  t: (clave: string) => string;
+  pedir: (verbo: WindowVerb) => void;
+}
+
+/**
+ * La pantalla de error que lo tapa todo.
+ *
+ * Con la barra de título PROPIA (ADR 0136) lleva la suya: tapa la de menús,
+ * la ventana no tiene la del escritorio, y un daemon muerto o un bundle
+ * viejo dejaban una ventana que no se podía mover ni cerrar con el ratón.
+ */
+export function showFatal(
+  el: HTMLElement,
+  text: string,
+  ventana: ControlesDeVentana | null = null,
+): void {
+  el.replaceChildren();
+  const doc = el.ownerDocument;
+  if (ventana !== null && doc.documentElement.dataset["titlebar"] === "custom") {
+    const barra = doc.createElement("nav");
+    barra.className = "menubar";
+    montarBarraDeTitulo(barra, ventana.t, ventana.pedir, false);
+    el.append(barra);
+  }
+  el.append(text);
   el.dataset["shown"] = "true";
 }
 

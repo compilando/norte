@@ -472,7 +472,7 @@ pub fn default_value(def: &SettingDef) -> String {
 pub fn section_of(id: &str) -> Option<Section> {
     let s = match id {
         "ui.theme" | "ui.theme-light" | "ui.theme-dark" | "ui.font" | "ui.mono-font"
-        | "ui.font-size" | "ui.reduce-motion" | "ui.row-stripes" | "ui.images" => {
+        | "ui.font-size" | "ui.reduce-motion" | "ui.row-stripes" | "ui.images" | "ui.titlebar" => {
             Section::Appearance
         }
         "ui.show-hidden"
@@ -644,6 +644,13 @@ const CATALOG: &[SettingDef] = &[
         id: "ui.panel-bar-position",
         kind: SettingKind::Enum(&["auto", "top", "left"]),
         applies_live: true,
+    },
+    SettingDef {
+        // La barra de título de la ventana (ADR 0136). De ARRANQUE: la
+        // decoración se quita al crear la ventana.
+        id: "ui.titlebar",
+        kind: SettingKind::Enum(&["native", "custom"]),
+        applies_live: false,
     },
     SettingDef {
         // La mitad derecha de la barra de estado (ADR 0132): ids separados
@@ -840,6 +847,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
             .panel_bar_position()
             .as_str()
             .to_owned(),
+        "ui.titlebar" => cfg.common.ui_chrome.titlebar().as_str().to_owned(),
         "ui.status-items" => cfg.common.ui_chrome.status_items().to_ids().join(" "),
         "ui.pane-footer" => cfg.common.ui_chrome.pane_footer().to_string(),
         "ui.row-stripes" => cfg.common.ui_chrome.row_stripes().to_string(),

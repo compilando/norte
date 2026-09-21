@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
 import { MARK_RULER_COLOR, OVERSCAN, markRulerImage } from "../src/render/dom";
@@ -21,6 +21,7 @@ import type {
   RowView,
   UiAction,
   ViewSnapshot,
+  WindowVerb,
 } from "../src/types";
 
 const CELL_H = 20;
@@ -404,7 +405,12 @@ describe("repintar sin cambios (el parpadeo al desplazarse)", () => {
   });
 });
 
-function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
+function montar(
+  opciones: {
+    imageBytes?: () => Promise<ArrayBuffer>;
+    windowControl?: (verb: WindowVerb) => void;
+  } = {},
+): {
   screen: Screen;
   enviadas: UiAction[];
   root: HTMLElement;
@@ -489,6 +495,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     catalogo(),
     (a: UiAction) => enviadas.push(a),
     opciones.imageBytes ?? (() => Promise.resolve(new ArrayBuffer(0))),
+    opciones.windowControl,
   );
   return { screen, enviadas, root };
 }
@@ -2247,6 +2254,77 @@ describe("la barra de menús", () => {
       "var(--cell-h)",
     );
     expect(document.querySelector(".menu-items")).toBeNull();
+  });
+
+  describe("con la barra de título propia (ADR 0136)", () => {
+    beforeEach(() => {
+      document.documentElement.dataset["titlebar"] = "custom";
+    });
+    afterEach(() => {
+      delete document.documentElement.dataset["titlebar"];
+    });
+
+    it("lleva los tres botones de la ventana y cada uno pide su verbo", () => {
+      const pedidos: WindowVerb[] = [];
+      const { screen, enviadas } = montar({ windowControl: (v) => pedidos.push(v) });
+      screen.paint(conMenu(null));
+      const botones = [
+        ...document.querySelectorAll(".menubar .window-controls .window-control"),
+      ] as HTMLButtonElement[];
+      expect(botones.map((b) => b.dataset["verb"])).toEqual([
+        "minimize",
+        "toggle_maximize",
+        "close",
+      ]);
+      expect(botones.every((b) => b.querySelector("svg.panelbar-icon") !== null)).toBe(
+        true,
+      );
+      expect(botones[2]?.getAttribute("aria-label")).toBe("Cerrar");
+      for (const b of botones) {
+        b.click();
+      }
+      expect(pedidos).toEqual(["minimize", "toggle_maximize", "close"]);
+      // Nada de esto es del host: no es estado de pantalla.
+      expect(enviadas).toEqual([]);
+    });
+
+    it("el hueco libre arrastra y un doble clic maximiza; un título no", () => {
+      const pedidos: WindowVerb[] = [];
+      const { screen } = montar({ windowControl: (v) => pedidos.push(v) });
+      screen.paint(conMenu(null));
+      const barra = document.querySelector(".menubar") as HTMLElement;
+      barra.dispatchEvent(
+        new MouseEvent("mousedown", { button: 0, detail: 1, bubbles: true }),
+      );
+      barra.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      const titulo = document.querySelector(".menubar-title") as HTMLElement;
+      titulo.dispatchEvent(
+        new MouseEvent("mousedown", { button: 0, detail: 1, bubbles: true }),
+      );
+      titulo.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(pedidos).toEqual(["drag", "toggle_maximize"]);
+    });
+
+    it("con el menú apagado la fila sigue: es lo único que mueve y cierra", () => {
+      const { screen } = montar();
+      const v = conMenu(null);
+      v.menu.bar = false;
+      screen.paint(v);
+      expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe(
+        "var(--cell-h)",
+      );
+      expect(document.querySelectorAll(".menubar-title")).toHaveLength(0);
+      expect(document.querySelectorAll(".window-control")).toHaveLength(3);
+    });
+  });
+
+  it("con la barra nativa no hay botones de ventana", () => {
+    const { screen } = montar();
+    screen.paint(conMenu(null));
+    expect(document.querySelector(".window-controls")).toBeNull();
+    expect(
+      (document.querySelector(".menubar") as HTMLElement).dataset["titlebar"],
+    ).toBeUndefined();
   });
 
   it("con la barra apagada no reserva nada", () => {

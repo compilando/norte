@@ -759,6 +759,14 @@
             "string",
             "null"
           ]
+        },
+        "titlebar": {
+          "default": null,
+          "description": "The window's title bar: `\"native\"` (default), the desktop's own;\n`\"custom\"`, none from the desktop, and the menu bar doubles as the\ntitle bar with its own minimize, maximize and close buttons, as in\nVS Code. Read at start-up. The terminal has no title bar and ignores\nit.\n\n[`crate::load::load`] rejects other values.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"

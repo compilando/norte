@@ -17,6 +17,7 @@ import type {
   UiAction,
   ViewSnapshot,
   ProcessesSlotView,
+  WindowVerb,
 } from "./types";
 import { MARK_RULER_SPANS } from "./types";
 import {
@@ -175,6 +176,8 @@ export class Screen {
      */
     readonly fetchImage: () => Promise<ArrayBuffer> = () =>
       Promise.resolve(new ArrayBuffer(0)),
+    /** La barra de título propia (ADR 0136): lo que pide a la ventana. */
+    readonly windowControl: (verb: WindowVerb) => void = () => undefined,
   ) {}
 
   /**

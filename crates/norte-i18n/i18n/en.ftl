@@ -790,6 +790,11 @@ menu-bar-label = Menu bar
 panelbar-label = Panel bar
 # The layout buttons on the right of the menu bar (ADR 0133).
 layout-buttons-label = Layout
+# The window buttons with the custom title bar (ADR 0136).
+window-controls-label = Window
+window-minimize = Minimize
+window-maximize = Maximize or restore
+window-close = Close
 # A bar button's attention mark, for a screen reader.
 panelbar-attention = Something new
 # H3c, and a SEPARATE key on purpose: `palette-hint` is painted by both
@@ -2101,6 +2106,8 @@ setting-ui-panel-bar-style-name = Panel bar labels
 setting-ui-panel-bar-style-desc = How the panel bar names its buttons: the panel's name with its access letter underlined (names), or the letter alone (letters). Names fall back to letters on their own when the row is narrower than sixty cells.
 setting-ui-panel-bar-position-name = Panel bar position
 setting-ui-panel-bar-position-desc = Where the panel bar sits: a row under the menu (top) or a column on the left edge (left). With auto, each interface picks its own: top in the terminal, which is short on width, and left in the window, which is short on height.
+setting-ui-titlebar-name = Title bar
+setting-ui-titlebar-desc = Who draws the window's title bar: the desktop (native) or norte (custom), which uses the menu bar as the title bar, with minimize, maximize and close, as VS Code does. Applies the next time the window opens. The terminal has no title bar.
 setting-ui-status-items-name = Status bar items
 setting-ui-status-items-desc = What the right half of the status bar shows, in order: position (cursor position), marks (what is marked), sort (the order), encoding (how names are read), tasks (running tasks) and notices (unread notices). Those that do not fit give way by importance; the messages and warnings on the left are not configurable.
 setting-ui-pane-footer-name = Pane footer

@@ -7,7 +7,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import type { ActionAck, BridgeEnvelope, HostCatalog, UiAction, UiUpdate } from "./types";
+import type {
+  ActionAck,
+  BridgeEnvelope,
+  HostCatalog,
+  UiAction,
+  UiUpdate,
+  WindowVerb,
+} from "./types";
 
 /** El evento por el que llegan las actualizaciones, en orden. */
 export const EVENT_UPDATE = "norte://update";
@@ -24,6 +31,9 @@ export interface HostPort {
   catalog(): Promise<HostCatalog>;
   /** Los bytes de la imagen abierta. Vacío = no hay ninguna. */
   imageBytes(): Promise<ArrayBuffer>;
+  /** La barra de título propia (ADR 0136): minimizar, maximizar, cerrar o
+   *  empezar a arrastrar ESTA ventana. Sin ella el binario lo rechaza. */
+  windowControl(verb: WindowVerb): Promise<void>;
   onUpdate(cb: (env: BridgeEnvelope<UiUpdate>) => void): Promise<() => void>;
   onLagged(cb: () => void): Promise<() => void>;
   /** El catálogo cambió: hay que volver a pedirlo y re-aplicar lo que salga
@@ -47,6 +57,9 @@ export const tauriPort: HostPort = {
   // ficheros, se le sirve la que el host decidió abrir. Vacío = no hay
   // ninguna, que la foto ya dijo.
   imageBytes: () => invoke<ArrayBuffer>("image_bytes"),
+  // Un verbo cerrado y la ventana que llama, nada más: ningún permiso de
+  // ventana en la capacidad (D11), la puerta es un comando del binario.
+  windowControl: (verb) => invoke<void>("window_control", { verb }),
   onUpdate: async (cb) => {
     const un = await listen<BridgeEnvelope<UiUpdate>>(EVENT_UPDATE, (e) => {
       cb(e.payload);

@@ -136,3 +136,4 @@ edits.
 | [0133](0133-layout-and-tab-buttons-run-existing-commands.md) | Layout and tab buttons run existing commands | accepted |
 | [0134](0134-panels-on-one-edge-share-it-as-tabs.md) | Panels on one edge share it as tabs | accepted |
 | [0135](0135-the-scrollbar-carries-a-marks-ruler.md) | The scrollbar carries a marks ruler | accepted |
+| [0136](0136-an-optional-custom-title-bar.md) | An optional custom title bar | accepted |

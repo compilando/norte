@@ -13,6 +13,7 @@ import type {
   PaletteView,
   TabGroupView,
   WhichKeyView,
+  WindowVerb,
 } from "../types";
 import { badge, colVar, revelar, sinCambios } from "./dom";
 import type { SlotDom } from "./dom";
@@ -174,6 +175,84 @@ export function paintWizard(this: Screen, wizard: WizardView | null): void {
   raiz.replaceChildren(caja);
 }
 
+/** Los tres botones de la ventana, en el orden del escritorio. */
+const VERBOS_DE_VENTANA = [
+  ["minimize", "window-minimize"],
+  ["toggle_maximize", "window-maximize"],
+  ["close", "window-close"],
+] as const;
+
+/**
+ * La barra de menús como barra de TÍTULO (ADR 0136): el hueco libre
+ * arrastra la ventana, un doble clic la maximiza, y al final van minimizar,
+ * maximizar y cerrar.
+ *
+ * Solo el hueco de la propia barra arrastra: empezar a arrastrar sobre un
+ * título de menú o un botón se comería su clic. Nada de esto pasa por el
+ * host — no es estado de pantalla — sino por `window_control`, un comando
+ * del binario con un verbo cerrado; la capacidad de la webview sigue sin
+ * permisos de ventana (D11).
+ */
+function barraDeTitulo(this: Screen, barra: HTMLElement, hayAcciones: boolean): void {
+  montarBarraDeTitulo(
+    barra,
+    (k) => this.t(k),
+    (v) => {
+      this.windowControl(v);
+    },
+    hayAcciones,
+  );
+}
+
+/**
+ * Lo mismo sin `Screen`: el arrastre del hueco libre y los tres botones,
+ * sobre `barra`. Aparte porque la pantalla de error FATAL también la
+ * necesita — tapa la barra de menús, y sin la del escritorio una ventana
+ * con el daemon muerto no se podría ni mover ni cerrar con el ratón.
+ */
+export function montarBarraDeTitulo(
+  barra: HTMLElement,
+  t: (clave: string) => string,
+  pedir: (verbo: WindowVerb) => void,
+  hayAcciones: boolean,
+): void {
+  const doc = barra.ownerDocument;
+  barra.dataset["titlebar"] = "true";
+  barra.addEventListener("mousedown", (e) => {
+    if (e.button === 0 && e.target === barra && e.detail === 1) {
+      pedir("drag");
+    }
+  });
+  barra.addEventListener("dblclick", (e) => {
+    if (e.target === barra) {
+      pedir("toggle_maximize");
+    }
+  });
+  const ventana = doc.createElement("div");
+  ventana.className = "window-controls";
+  // Sin botones de disposición nada empuja los de la ventana al borde.
+  ventana.dataset["alone"] = String(!hayAcciones);
+  ventana.setAttribute("role", "toolbar");
+  ventana.setAttribute("aria-label", t("window-controls-label"));
+  for (const [verbo, clave] of VERBOS_DE_VENTANA) {
+    const boton = doc.createElement("button");
+    boton.type = "button";
+    boton.className = "window-control";
+    boton.dataset["verb"] = verbo;
+    boton.title = t(clave);
+    boton.setAttribute("aria-label", t(clave));
+    const dibujo = iconoDePanel(doc, `window:${verbo}`);
+    if (dibujo !== null) {
+      boton.append(dibujo);
+    }
+    boton.addEventListener("click", () => {
+      pedir(verbo);
+    });
+    ventana.append(boton);
+  }
+  barra.append(ventana);
+}
+
 /**
  * La barra de menús, y el desplegable si hay uno abierto.
  *
@@ -193,16 +272,22 @@ export function paintMenu(
   // reparte sobre el alto que este renderer le declare, así que si la barra
   // no reservara su fila taparía la primera del listado — el mismo bug que
   // el TUI tuvo con el visor a pantalla completa.
-  const alto = menu.bar ? "var(--cell-h)" : "0px";
+  //
+  // Con la barra de título PROPIA (ADR 0136) la fila existe siempre, con o
+  // sin menús: es lo único que arrastra y cierra la ventana, y esconderla
+  // dejaría una ventana sin forma de moverla ni de cerrarla con el ratón.
+  const propia = document.documentElement.dataset["titlebar"] === "custom";
+  const hayBarra = menu.bar || propia;
+  const alto = hayBarra ? "var(--cell-h)" : "0px";
   if (this.menuBarHeight !== alto) {
     document.documentElement.style.setProperty("--menubar-h", alto);
     this.menuBarHeight = alto;
     this.viewportSucio = true;
   }
-  if (sinCambios(this.menuRoot, JSON.stringify({ menu, botones }))) {
+  if (sinCambios(this.menuRoot, JSON.stringify({ menu, botones, propia }))) {
     return;
   }
-  if (!menu.bar && menu.open === null) {
+  if (!hayBarra && menu.open === null) {
     this.menuRoot.replaceChildren();
     this.menuRoot.dataset["open"] = "false";
     return;
@@ -212,7 +297,7 @@ export function paintMenu(
   barra.className = "menubar";
   barra.setAttribute("role", "menubar");
   barra.setAttribute("aria-label", this.t("menu-bar-label"));
-  for (const [i, titulo] of menu.titles.entries()) {
+  for (const [i, titulo] of (menu.bar ? menu.titles : []).entries()) {
     const boton = document.createElement("button");
     boton.type = "button";
     boton.className = "menubar-title";
@@ -253,6 +338,9 @@ export function paintMenu(
       acciones.append(boton);
     }
     barra.append(acciones);
+  }
+  if (propia) {
+    barraDeTitulo.call(this, barra, botones.length > 0);
   }
   const caja = document.createElement("div");
   caja.className = "menu";
