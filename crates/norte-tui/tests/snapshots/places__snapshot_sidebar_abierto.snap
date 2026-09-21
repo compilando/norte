@@ -7,7 +7,7 @@ expression: terminal.backend().to_string()
 "┌ Sitios ──────┐┌/casa───────────────────────────────────┐┌/casa───────────────────────────────────┐"
 "│▾ Unidades    ││Nombre▲               Tamaño       Fecha││Nombre▲               Tamaño       Fecha│"
 "│ /       38G  ││   f00                   1 B            ││   f00                   1 B            │"
-"│ /boot  383M  ││   f01                   1 B            ││   f01                   1 B            │"
+"│ boot   383M  ││   f01                   1 B            ││   f01                   1 B            │"
 "│▾ Favoritos   ││   f02                   1 B            ││   f02                   1 B            │"
 "│ trabajo      ││                                        ││                                        │"
 "│ roto      !  ││                                        ││                                        │"

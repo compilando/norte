@@ -400,7 +400,8 @@ fn min_of(node: &Node, decls: &KindRegistry) -> (u16, u16) {
 /// libre alcanza para el de TODOS los ponderados, ninguno baja del suyo: se
 /// le da su mínimo y el resto se vuelve a repartir entre los demás, en su
 /// proporción. Si no alcanza, el reparto es el proporcional de siempre y el
-/// colapso decide. Sin esto un peso pequeño al lado de pesos grandes —el que
+/// colapso decide. La columna sobrante de la división entera va al último
+/// ponderado de los que NO se quedaron en su suelo. Sin esto un peso pequeño al lado de pesos grandes —el que
 /// deja arrastrar un borde— salía de un píxel.
 fn distribute(area: Rect, dir: Dir, sizes: &[Size], suelos: &[u16]) -> Vec<Rect> {
     let extent = u64::from(match dir {

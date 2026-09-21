@@ -237,19 +237,34 @@ impl Estado {
                     free,
                     total,
                     read_only,
+                    kind,
                 } => {
                     // La etiqueta son BYTES y el punto de montaje un `VPath`:
                     // los dos por la puerta compartida, nunca por
-                    // `to_string_lossy`.
-                    let (pintable, hostil) = if label.is_empty() {
-                        norte_frontend::display::path_display(mount)
-                    } else {
-                        norte_frontend::display_name(label)
-                    };
+                    // `to_string_lossy`. El nombre CORTO lo decide
+                    // `drive_name`, el mismo que la TUI.
+                    let (pintable, hostil) = norte_frontend::places::drive_name(label, mount);
+                    // El montaje entero va al título, ENMASCARADO; la bandera es
+                    // la del nombre que se PINTA, la misma que ve la TUI (una
+                    // bandera por lo que no está a la vista era una marca que
+                    // solo salía en una de las dos).
+                    let (montaje, _) = norte_frontend::display::path_display(mount);
                     crate::dto::PlaceRowView::Drive {
                         label: clamp_display(pintable),
                         hostile: hostil,
                         detail: clamp_display(self.espacio_de(*free, *total, *read_only)),
+                        // Un `?` cuando no contestó, jamás un cero: se
+                        // leería como «lleno».
+                        free: free
+                            .map_or_else(|| "?".to_owned(), norte_frontend::human_bytes_short),
+                        mount: clamp_display(montaje),
+                        kind: match kind {
+                            norte_proto::methods::VolumeKind::Fixed => "fixed",
+                            norte_proto::methods::VolumeKind::Removable => "removable",
+                            norte_proto::methods::VolumeKind::Network => "network",
+                            _ => "unknown",
+                        }
+                        .to_owned(),
                     }
                 }
                 PlaceRow::Favorite { name, target } => {

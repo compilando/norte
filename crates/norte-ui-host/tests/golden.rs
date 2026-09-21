@@ -1208,6 +1208,9 @@ fn slots_de_referencia() -> Vec<SlotView> {
                     label: "\u{27e8}file\u{27e9}/".to_owned(),
                     hostile: false,
                     detail: "ext4 · 12 GiB libres de 100 GiB".to_owned(),
+                    free: "12G".to_owned(),
+                    mount: "/".to_owned(),
+                    kind: "fixed".to_owned(),
                 },
                 norte_ui_host::dto::PlaceRowView::Header {
                     label: "Favoritos".to_owned(),
@@ -2852,7 +2855,9 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // barra de estado (ADR 0132).
     // Puente 86: `View::layout_buttons`, los botones de disposición (ADR
     // 0133).
-    const FORMA: u64 = 5_446_401_236_544_408_442;
+    // Puente 87: la unidad de la barra de sitios gana `free`, `mount` y
+    // `kind` (captura del 2026-09-21).
+    const FORMA: u64 = 17_608_722_998_706_144_277;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

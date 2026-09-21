@@ -4387,6 +4387,9 @@ describe("la barra lateral de sitios", () => {
             label: "raíz",
             hostile: false,
             detail: "12 GiB libres de 100 GiB",
+            free: "12G",
+            mount: "/",
+            kind: "network",
           },
           { row: "header", label: "Favoritos", folded: true },
           {
@@ -4429,6 +4432,23 @@ describe("la barra lateral de sitios", () => {
     expect(filas[3]?.querySelector(".places-broken")).toBeNull();
     const lista = document.querySelector(".places-rows") as HTMLElement;
     expect(lista.getAttribute("aria-activedescendant")).toBe("place-row-1");
+  });
+
+  it("una unidad va en UNA línea: icono, nombre corto y libre corto", () => {
+    const { screen } = montar();
+    screen.paint(conSitios(0));
+    const unidad = document.querySelectorAll(".places-row")[1] as HTMLElement;
+    expect(unidad.dataset["line"]).toBe("one");
+    expect(unidad.dataset["kind"]).toBe("network");
+    expect(unidad.querySelector("svg.places-icon")).not.toBeNull();
+    expect(unidad.querySelector(".places-name")?.textContent).toBe("raíz");
+    expect(unidad.querySelector(".places-detail")?.textContent).toBe("12G");
+    // Lo que no cabe en la fila, en su título.
+    expect(unidad.title).toBe("/\n12 GiB libres de 100 GiB");
+    // Un favorito sano, también: el destino al título.
+    const favorito = document.querySelectorAll(".places-row")[3] as HTMLElement;
+    expect(favorito.dataset["line"]).toBe("one");
+    expect(favorito.title).toBe("⟨file⟩/home");
   });
 
   it("un click ELIGE y ACTIVA: una barra lateral existe para ir a sitios", () => {

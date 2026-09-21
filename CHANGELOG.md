@@ -108,6 +108,37 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The window's status bar was invisible.** Its one-row slot was taken
+  entirely by the slot's title, so none of it showed. It is now a real row
+  at the bottom, in the chrome font, and panels docked at the bottom (log,
+  jobs) go ABOVE it — in the terminal too, where the status bar is again
+  the last row.
+- **The docked viewer no longer comes up as a one-pixel strip.** Dragging
+  the border between two listings leaves their weights at 49/51; a panel
+  that joined with weight 1 got 1/101 of the free space. A weighted panel
+  now joins at the average of its siblings, and no weighted panel is laid
+  out below its minimum while there is room — which also repairs layouts
+  already saved, and keeps a stack that fits exactly (viewer 5 + details 4
+  rows in 9) from collapsing into tabs.
+- **The tree shows where you are.** It hung from the listing's own
+  directory, so a folder without subfolders was a one-row tree with a full
+  path. It now hangs from your home (or the volume's root outside it) and
+  reveals the branch down to you; if that root cannot be read, it hangs
+  from the listing. In the window it has folder icons, a rotating chevron,
+  indentation guides and hover.
+- **The drives in the sidebar read at a glance.** One line each: an icon
+  for its kind (disk, removable, network), a short name (its label, or the
+  last part of the mount point) and the short free space; the full mount
+  and the space sentence are in the tooltip. The desktop's own FUSE mounts
+  under `/run/user` (the document portal, gvfs) are no longer listed as
+  "0B free". The terminal uses the same short names.
+- **Window polish.** The palette's query follows its prompt instead of
+  sitting in the middle; the palette, menus and dialogs have rounded
+  corners, depth and a short entrance (none with reduced motion); the log's
+  level buttons and filter use the theme instead of the system's grey
+  widgets; side panels lost the empty row under their title; the viewer
+  says why it is empty in the middle, not in the corner; the timeline shows
+  paths without `file://`; the transient toast sits above the status bar.
 - **A settings section keeps its heading when you scroll back up.** Both
   frontends anchored the view to the selected ROW, and the first row of a
   section sits one line below its heading — so once you had scrolled to the

@@ -415,11 +415,32 @@ mod tests {
     /// diff and not a new branch somewhere.
     #[test]
     fn the_filter_hides_pseudo_filesystems_and_keeps_real_ones() {
-        for t in ["proc", "sysfs", "cgroup2", "tmpfs", "squashfs", "overlay"] {
+        // Los dos FUSE que monta el ESCRITORIO en `/run/user/<uid>` (captura
+        // del 2026-09-21): salían como «0B libres» en la barra de sitios.
+        for t in [
+            "proc",
+            "sysfs",
+            "cgroup2",
+            "tmpfs",
+            "squashfs",
+            "overlay",
+            "fuse.portal",
+            "fuse.gvfsd-fuse",
+        ] {
             assert!(is_pseudo(t), "{t} should be hidden");
         }
+        // Un FUSE que monta una PERSONA —sshfs, rclone— sigue siendo real.
         for t in [
-            "ext4", "btrfs", "xfs", "vfat", "ntfs3", "apfs", "nfs4", "cifs",
+            "ext4",
+            "btrfs",
+            "xfs",
+            "vfat",
+            "ntfs3",
+            "apfs",
+            "nfs4",
+            "cifs",
+            "fuse.sshfs",
+            "fuse.rclone",
         ] {
             assert!(!is_pseudo(t), "{t} is a filesystem a person mounts");
         }

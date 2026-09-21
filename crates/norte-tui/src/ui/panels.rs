@@ -533,11 +533,10 @@ pub(crate) fn draw_places(
             PlaceRow::Drive {
                 label, mount, free, ..
             } => {
-                let (nombre, hostile) = if label.is_empty() {
-                    mount_name(mount)
-                } else {
-                    display_name(label)
-                };
+                // El nombre CORTO, el mismo que la ventana (captura del
+                // 2026-09-21): el montaje entero recortado eran cinco filas
+                // «/home/oscar/…» que no se distinguían.
+                let (nombre, hostile) = norte_frontend::places::drive_name(label, mount);
                 // Corto y sin decimales: catorce celdas tienen que llevar el
                 // nombre del montaje Y su espacio. Un `?` cuando el
                 // filesystem no contestó — jamás un cero, que se leería como
@@ -710,19 +709,6 @@ pub fn tree_zones(app: &App, area: Rect) -> Vec<TreeZone> {
             })
         })
         .collect()
-}
-
-/// Cómo se llama un punto de montaje en catorce celdas.
-///
-/// Esto llevaba su propia copia de «lo local no se anuncia», porque
-/// `path_display` sí lo anunciaba y en un panel de catorce celdas el prefijo
-/// se comía la ruta entera. Ahora esa es la regla de `path_display` para todo
-/// el mundo, así que la copia sobra — y era una copia que ya había DERIVADO:
-/// usaba `display_name` donde `path_display_with` usa `display_name_with`, o
-/// sea que bajo una reinterpretación las dos pintaban distinto el mismo
-/// montaje.
-pub(crate) fn mount_name(mount: &norte_proto::VPath) -> (String, bool) {
-    norte_frontend::path_display(mount)
 }
 
 /// El porcentaje de una tarea, o `0` si todavía no se sabe.
@@ -1348,7 +1334,8 @@ fn linea_de_timeline<'a>(
         .max(1);
     spans.push(Span::raw(verbo));
     spans.push(Span::raw(norte_frontend::display::middle_ellipsis(
-        &fila.path, sitio,
+        &norte_frontend::timeline::path_label(&fila.path),
+        sitio,
     )));
     if !cola.is_empty() {
         spans.push(Span::styled(cola, theme.role(Role::BorderUnfocused)));

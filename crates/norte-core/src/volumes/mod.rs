@@ -184,6 +184,12 @@ pub const PSEUDO_FS: &[&str] = &[
     "binfmt_misc",
     "efivarfs",
     "nsfs",
+    // Los FUSE que monta el ESCRITORIO en `/run/user/<uid>`, no una persona:
+    // el portal de documentos de Flatpak y el puente de gvfs. Contestan 0
+    // bytes y salían en la barra de sitios como «0B libres». Un FUSE que sí
+    // se monta a propósito (`fuse.sshfs`, `fuse.rclone`) no está aquí.
+    "fuse.portal",
+    "fuse.gvfsd-fuse",
 ];
 
 /// `true` if `fs_type` is in [`PSEUDO_FS`].

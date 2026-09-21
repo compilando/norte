@@ -38,6 +38,9 @@ fn app_con_arbol() -> App {
     );
     app.toggle_tree();
     let t = app.tree_mut().expect("árbol abierto");
+    // Colgado del listado a mano: estos tests son de CLICS, no de dónde se
+    // ancla (que desde el 2026-09-21 es más arriba, en casa o en la raíz).
+    t.anchor(dir.clone());
     t.insert_children(
         dir.clone(),
         vec![vp("file:///casa/a"), vp("file:///casa/b")],

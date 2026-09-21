@@ -175,6 +175,10 @@ body {
   align-items: center;
   gap: 4px;
   unicode-bidi: isolate;
+  transition:
+    opacity 0.12s,
+    border-color 0.12s,
+    background-color 0.12s;
 }
 
 .panelbar-letter {
@@ -382,24 +386,36 @@ body {
      acota para que no se salga por la derecha. */
   left: min(var(--menu-left, calc(var(--menu-open, 0) * 12ch)), calc(100vw - 34ch));
   margin: 0;
-  padding: 2px 0;
+  padding: 4px 0;
   list-style: none;
   min-width: 32ch;
   max-height: 70vh;
   overflow: auto;
   background: var(--widget-bg, var(--panel-bg));
-  border: 1px solid var(--border-focus);
-  box-shadow: 0 4px 16px var(--widget-shadow, rgb(0 0 0 / 35%));
+  border: 1px solid var(--separator, var(--border));
+  border-radius: 0 0 6px 6px;
+  box-shadow:
+    0 10px 28px var(--widget-shadow, rgb(0 0 0 / 45%)),
+    0 0 0 1px rgb(0 0 0 / 20%);
+  animation: norte-emerge 90ms ease-out;
 }
 
 .menu-item {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 0 8px;
+  min-height: 24px;
+  padding: 0 12px;
+  margin: 0 4px;
+  border-radius: 4px;
   white-space: nowrap;
   cursor: pointer;
   unicode-bidi: isolate;
+}
+
+.menu-item:hover:not([data-current="true"]):not([data-enabled="false"]) {
+  background: var(--hover, var(--panel-focus-bg));
 }
 
 .menu-item[data-current="true"] {
@@ -441,7 +457,9 @@ body {
 
 .menu-section[data-titled="true"] {
   border-top: none;
-  padding: 4px 8px 0;
+  /* A la misma sangría que el texto de las entradas (4 de margen + 12 de
+     relleno): un rótulo que empieza antes que lo que rotula se lee suelto. */
+  padding: 4px 16px 0;
   font-size: 0.85em;
   color: var(--muted, var(--title-fg));
   white-space: nowrap;
@@ -459,6 +477,32 @@ body {
 .slot[data-role="active"] {
   border-color: var(--border-focus);
   background: var(--panel-focus-bg);
+}
+
+/* La barra de estado y la franja de tareas son FILAS del cromo, no paneles:
+   sin título —en un hueco de una fila el título se comía la fila entera y la
+   barra no se veía— y sin marco, a lo ancho, como la de VS Code. */
+.slot[data-kind="status"],
+.slot[data-kind="tasks"] {
+  border: 0;
+}
+
+.slot[data-kind="status"] > .slot-title,
+.slot[data-kind="tasks"] > .slot-title,
+.slot[data-kind="status"] > .slot-columns,
+.slot[data-kind="tasks"] > .slot-columns {
+  display: none;
+}
+
+.slot[data-kind="status"] {
+  background: var(--status-bg);
+  color: var(--status-fg, var(--fg));
+  border-top: 1px solid var(--separator, var(--border));
+}
+
+.slot[data-kind="status"] > .statusbar {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* El panel que NO tiene el teclado se atenúa (spec 2026-09-15, ADR 0115).
@@ -667,6 +711,33 @@ body {
   white-space: nowrap;
   color: var(--title-fg);
   border-bottom: 1px solid var(--separator, var(--border));
+}
+
+/* Un panel que no es un listado no tiene columnas, y la fila vacía de su
+   cabecera se comía 22 px bajo cada título — el hueco en blanco que había
+   debajo de «Árbol», «Sitios» y «Registro» (captura del 2026-09-21). */
+.slot-columns:empty {
+  display: none;
+}
+
+/* El título de un PANEL (no de un listado, que lleva sus migas) como el de
+   una vista de VS Code: la fuente del cromo, un punto más pequeña y
+   atenuada, con un filete debajo. En su caja de siempre: el de «Detalles»
+   lleva una ruta, y cambiarle las mayúsculas a un nombre de fichero sería
+   enseñar otro nombre. */
+.slot:not([data-kind="browser"]) > .slot-title {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted, var(--title-fg));
+  align-items: center;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--separator, var(--border)) 70%, transparent);
+}
+
+.slot[data-role="active"]:not([data-kind="browser"]) > .slot-title {
+  color: var(--title-fg);
 }
 
 /* Las cabeceras en VERSALITAS con un poco de aire (spec 2026-09-11, V2):
@@ -988,9 +1059,19 @@ body {
   color: inherit;
   background: none;
   border: 0;
-  padding: 0 6px;
-  height: var(--cell-h);
+  padding: 0 8px;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
   unicode-bidi: isolate;
+  transition: background-color 0.12s;
+}
+
+/* La barra de estado con la fuente del cromo, como la de VS Code: son datos
+   sueltos, no columnas que alinear con el listado. */
+.statusbar {
+  font-family: var(--font-ui);
+  font-size: 12px;
 }
 
 button.status-item {
@@ -1112,28 +1193,56 @@ button.status-item:hover {
   /* Un WIDGET flotante, no un panel: se apoya sobre el fondo base y por eso
      lleva su propia superficie (spec 2026-09-11, F3). */
   background: var(--widget-bg, var(--panel-bg));
-  border: 1px solid var(--border-focus);
-  box-shadow: 0 4px 16px var(--widget-shadow, rgb(0 0 0 / 35%));
+  border: 1px solid var(--separator, var(--border));
+  border-radius: 8px;
+  box-shadow:
+    0 10px 30px var(--widget-shadow, rgb(0 0 0 / 45%)),
+    0 0 0 1px rgb(0 0 0 / 20%);
   overflow: hidden;
+  animation: norte-emerge 110ms ease-out;
+}
+
+/* Lo que se abre ENCIMA —paleta, menú, diálogo— aparece con un deslizamiento
+   corto, no de golpe: dice de dónde sale sin hacer esperar a nadie. Con el
+   movimiento reducido, de golpe (ver al final). */
+@keyframes norte-emerge {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .palette-query {
-  flex: 0 0 var(--cell-h);
-  padding: 0 6px;
+  flex: 0 0 auto;
+  min-height: 30px;
+  align-items: center;
+  padding: 0 10px;
   border-bottom: 1px solid var(--separator, var(--border));
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  /* El texto va PEGADO al `>` y la cuenta a la derecha: con
+     `space-between` el `::before`, el texto y la cuenta eran tres piezas
+     repartidas y lo tecleado salía centrado (captura del 2026-09-21). */
+  gap: 0;
   unicode-bidi: isolate;
 }
 
 .palette-query::before {
-  content: "> ";
+  content: "›";
+  margin-right: 8px;
   color: var(--border-focus);
+  font-weight: 600;
 }
 
 .palette-count {
-  opacity: 0.7;
+  margin-left: auto;
+  padding-left: 12px;
+  opacity: 0.6;
+  font-size: 0.9em;
 }
 
 .palette-rows {
@@ -1145,10 +1254,23 @@ button.status-item:hover {
 
 .palette-row {
   display: flex;
+  align-items: center;
   gap: 12px;
-  padding: 0 6px;
+  min-height: 26px;
+  padding: 0 10px;
+  margin: 0 4px;
+  border-radius: 4px;
   white-space: nowrap;
   unicode-bidi: isolate;
+  cursor: pointer;
+}
+
+.palette-row:hover:not([aria-selected="true"]) {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.palette-rows {
+  padding: 4px 0;
 }
 
 .palette-row[aria-selected="true"] {
@@ -1398,13 +1520,18 @@ button.status-item:hover {
   max-width: 70vw;
   background: var(--widget-bg, var(--panel-bg));
   border: 1px solid var(--border-focus);
-  box-shadow: 0 4px 16px var(--widget-shadow, rgb(0 0 0 / 35%));
-  padding: 12px;
+  border-radius: 8px;
+  box-shadow:
+    0 14px 40px var(--widget-shadow, rgb(0 0 0 / 50%)),
+    0 0 0 1px rgb(0 0 0 / 20%);
+  padding: 16px 18px;
+  animation: norte-emerge 120ms ease-out;
 }
 
 .dialog h2 {
-  margin: 0 0 8px;
-  font-size: 1em;
+  margin: 0 0 10px;
+  font-size: 1.05em;
+  font-weight: 600;
   color: var(--title-fg);
 }
 
@@ -1654,14 +1781,42 @@ button.status-item:hover {
   background: var(--panel-focus-bg);
   color: var(--fg);
   border: 1px solid var(--border);
-  padding: 4px 10px;
+  border-radius: 4px;
+  padding: 5px 14px;
+  min-width: 88px;
   font: inherit;
   cursor: pointer;
+  transition:
+    background-color 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+
+.choices button:hover {
+  background: var(--hover, var(--panel-focus-bg));
+  border-color: var(--focus-border, var(--border-focus));
 }
 
 .choices button[data-destructive="true"] {
   border-color: var(--error-fg);
   color: var(--error-fg);
+}
+
+/* Lo que borra se ENCIENDE al señalarlo: el color de peligro a plena
+   superficie dice qué va a pasar justo antes de pulsar. */
+.choices button[data-destructive="true"]:hover {
+  background: var(--error-fg);
+  color: var(--bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .choices button {
+    transition: none;
+  }
+}
+
+:root[data-reduce-motion="true"] .choices button {
+  transition: none;
 }
 
 /* Un aviso persistente es una PÍLDORA (spec 2026-09-11, V5): fondo tenue
@@ -1683,10 +1838,10 @@ button.status-item:hover {
   opacity: 0.8;
 }
 
-/* El mensaje efímero es un TOAST: abajo a la derecha, sobre la barra de
-   teclas, con una entrada de 120 ms. El host lo caduca (`[ui]
-   notice_seconds`); vacío no se pinta. Un mensaje largo se recorta a
-   media pantalla y no tapa el listado entero. */
+/* El mensaje efímero es un TOAST: abajo a la derecha, ENCIMA de la barra de
+   estado —no sobre sus elementos—, con una entrada de 120 ms. El host lo
+   caduca (`[ui] notice_seconds`); vacío no se pinta. Un mensaje largo se
+   recorta a media pantalla y no tapa el listado entero. */
 .status-message:empty {
   display: none;
 }
@@ -1694,7 +1849,7 @@ button.status-item:hover {
 .status-message {
   position: fixed;
   right: 12px;
-  bottom: 10px;
+  bottom: calc(var(--cell-h) + 10px);
   max-width: 50vw;
   padding: 4px 12px;
   border-radius: 6px;
@@ -3520,6 +3675,19 @@ button.status-item:hover {
   flex: 1 1 auto;
 }
 
+/* El visor sin fichero que enseñar dice POR QUÉ en el centro y atenuado,
+   como la vista vacía de VS Code: pegado arriba a la izquierda se leía como
+   un fichero que se llama «directorio». */
+.preview > .slot-note {
+  margin: auto;
+  padding: 12px;
+  text-align: center;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--muted, var(--title-fg));
+  font-style: italic;
+}
+
 .preview .viewer-via {
   padding: 0 6px;
 }
@@ -3607,6 +3775,12 @@ button.status-item:hover {
   gap: 0.5ch;
   white-space: nowrap;
   overflow: hidden;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.timeline-row:hover:not([aria-selected="true"]) {
+  background: var(--hover, var(--panel-focus-bg));
 }
 
 .timeline-row[aria-selected="true"] {
@@ -3689,18 +3863,63 @@ button.status-item:hover {
   display: flex;
   gap: 4px;
   align-items: center;
-  padding: 2px 6px;
+  padding: 4px 6px;
   flex: 0 0 auto;
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+/* Los mandos del registro con el aspecto del resto del cromo (captura del
+   2026-09-21): eran botones y un campo del SISTEMA —grises, y el filtro una
+   caja blanca— en medio de un tema oscuro. */
+.log-controls button {
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--separator, var(--border));
+  border-radius: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+  transition:
+    background-color 0.12s,
+    border-color 0.12s;
+}
+
+.log-controls button:hover:not(:disabled) {
+  background: var(--hover, var(--panel-focus-bg));
 }
 
 .log-controls button[data-on="true"] {
   background: var(--selection-bg);
+  border-color: var(--selection-bg);
   color: var(--selection-fg);
+}
+
+.log-controls button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .log-filter {
   flex: 1 1 auto;
   min-width: 6ch;
+  font: inherit;
+  color: var(--fg);
+  background: var(--input-bg, var(--panel-bg));
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 3px;
+  padding: 2px 8px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+
+.log-filter::placeholder {
+  color: var(--muted, var(--title-fg));
+  opacity: 0.8;
+}
+
+.log-filter:focus {
+  border-color: var(--focus-border, var(--border-focus));
 }
 
 .log-lines {
@@ -3798,21 +4017,54 @@ button.status-item:hover {
      partir la fila rompería la única cosa que un árbol tiene que enseñar
      —qué cuelga de qué. */
   display: grid;
-  grid-template-columns: 2ch 1fr;
-  gap: 0 2px;
+  grid-template-columns: 2ch 16px 1fr;
+  align-items: center;
+  gap: 0 4px;
   padding-right: 6px;
   /* La sangría por nivel, con la profundidad que el host mandó. */
   padding-left: calc(6px + var(--depth, 0) * 1.5ch);
   cursor: pointer;
+  /* Las GUÍAS de sangría (captura del 2026-09-21): una raya tenue por
+     nivel, como en VS Code. Es lo que deja seguir qué cuelga de qué en una
+     rama larga sin contar espacios. */
+  background-image: repeating-linear-gradient(
+    to right,
+    transparent 0 calc(1.5ch - 1px),
+    color-mix(in srgb, var(--border) 80%, transparent) calc(1.5ch - 1px) 1.5ch
+  );
+  background-repeat: no-repeat;
+  background-position: calc(6px + 0.75ch) 0;
+  background-size: calc(var(--depth, 0) * 1.5ch) 100%;
+}
+
+.tree-row:hover:not([aria-selected="true"]) {
+  background-color: var(--hover, var(--panel-focus-bg));
 }
 
 .tree-row[aria-selected="true"] {
-  background: var(--selection-bg);
+  background-color: var(--selection-bg);
   color: var(--selection-fg);
 }
 
 .tree-twisty {
   color: var(--title-fg);
+  display: inline-block;
+  text-align: center;
+  transition: transform 0.1s;
+}
+
+.tree-twisty[data-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.tree-icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  opacity: 0.8;
 }
 
 .tree-name {
@@ -3894,6 +4146,38 @@ button.status-item:hover {
 /* Un favorito roto se ve, y se ve QUE está roto. */
 .places-broken {
   color: var(--error-fg);
+}
+
+/* Una unidad o un favorito en UNA línea (captura del 2026-09-21): icono,
+   nombre corto y, en una unidad, el libre corto a la derecha — como en la
+   TUI. El montaje entero y el destino, en el título de la fila. */
+.places-row[data-line="one"] {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
+  gap: 0 6px;
+  padding-left: 1ch;
+}
+
+.places-row[data-line="one"] .places-detail {
+  padding-left: 0;
+  font-size: 0.9em;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.places-row:hover:not([aria-selected="true"]) {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.places-icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  opacity: 0.8;
 }
 
 /* --- El selector de disposiciones ------------------------------------- */
@@ -4316,12 +4600,14 @@ button.status-item:hover {
   }
 
   .row,
-  .resize-handle {
+  .resize-handle,
+  .tree-twisty {
     transition: none;
   }
 }
 
-:root[data-reduce-motion="true"] .resize-handle {
+:root[data-reduce-motion="true"] .resize-handle,
+:root[data-reduce-motion="true"] .tree-twisty {
   transition: none;
 }
 
@@ -4335,6 +4621,36 @@ button.status-item:hover {
 }
 
 :root[data-reduce-motion="true"] ::-webkit-scrollbar-thumb {
+  transition: none;
+}
+
+/* Los efectos del pulido de 2026-09-21 —lo que se abre encima emerge, los
+   mandos se iluminan— tampoco se mueven con el movimiento reducido. */
+@media (prefers-reduced-motion: reduce) {
+  .palette,
+  .menu-items,
+  .dialog {
+    animation: none;
+  }
+
+  .log-controls button,
+  .log-filter,
+  .status-item,
+  .panelbar-button {
+    transition: none;
+  }
+}
+
+:root[data-reduce-motion="true"] .palette,
+:root[data-reduce-motion="true"] .menu-items,
+:root[data-reduce-motion="true"] .dialog {
+  animation: none;
+}
+
+:root[data-reduce-motion="true"] .log-controls button,
+:root[data-reduce-motion="true"] .log-filter,
+:root[data-reduce-motion="true"] .status-item,
+:root[data-reduce-motion="true"] .panelbar-button {
   transition: none;
 }
 

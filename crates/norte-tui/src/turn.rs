@@ -648,8 +648,8 @@ pub async fn after_frame(
         // directorio de diez mil entradas o un remoto lento no pueden
         // trabar el bucle, y la siguiente vuelta pide la siguiente.
         if let Some(dir) = app.tree().and_then(crate::tree::Tree::wants) {
-            let child_dirs = match backend.list(&dir).await {
-                Ok(mut entries) => {
+            let child_dirs: Option<Vec<_>> = match backend.list(&dir).await {
+                Ok(mut entries) => Some({
                     // El MISMO orden que el listado de al lado, con el
                     // mismo comparador: dos columnas que enseñan lo mismo
                     // en distinto orden se leen como si dijeran cosas
@@ -660,14 +660,16 @@ pub async fn after_frame(
                         .filter(|e| e.kind == norte_proto::EntryKind::Dir)
                         .map(|e| e.path)
                         .collect()
-                }
-                // Una rama que no se deja leer se marca como leída y VACÍA:
-                // sin esto se volvería a pedir en cada vuelta, que es un
-                // bucle de peticiones contra un directorio prohibido.
-                Err(_) => Vec::new(),
+                }),
+                // Una rama que no se deja leer: la decide el modelo
+                // compartido —vacía, o re-anclar si era la raíz—.
+                Err(_) => None,
             };
             if let Some(t) = app.tree_mut() {
-                t.insert_children(dir, child_dirs);
+                match child_dirs {
+                    Some(hijos) => t.insert_children(dir, hijos),
+                    None => t.branch_unreadable(dir),
+                }
             }
         }
         // La hoja de atributos NO pide nada: lo que enseña ya vino en el

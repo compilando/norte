@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 86;
+export const BRIDGE_VERSION = 87;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -425,7 +425,20 @@ export interface LogSlotView {
 
 export type PlaceRowView =
   | { row: "header"; label: string; folded: boolean }
-  | { row: "drive"; label: string; hostile: boolean; detail: string }
+  | {
+      row: "drive";
+      /** El nombre CORTO (puente 87): la etiqueta o el último tramo. */
+      label: string;
+      hostile: boolean;
+      /** La frase entera del espacio, para el título. */
+      detail: string;
+      /** El libre corto (`159G`, `?`). Opcional: host anterior al 87. */
+      free?: string;
+      /** El montaje entero, para el título. */
+      mount?: string;
+      /** `fixed` | `removable` | `network` | `unknown`: elige el icono. */
+      kind?: string;
+    }
   | {
       row: "favorite";
       name: string;

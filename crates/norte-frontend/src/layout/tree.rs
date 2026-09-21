@@ -553,7 +553,22 @@ impl Node {
         }
         let mut nc = children.clone();
         let mut ns = sizes.clone();
-        let at = if edge.is_front() { 0 } else { nc.len() };
+        // Por detrás, pero por DELANTE de las filas de cromo del final (la
+        // franja de tareas y la barra de estado): un panel acoplado abajo
+        // va encima de la barra de estado, como en VS Code, y en el
+        // terminal la barra tiene que seguir siendo la última fila.
+        let at = if edge.is_front() {
+            0
+        } else {
+            nc.len()
+                - nc.iter()
+                    .rev()
+                    .take_while(|c| {
+                        matches!(c, Self::Slot { kind, .. }
+                            if kind.as_str() == "status" || kind.as_str() == "tasks")
+                    })
+                    .count()
+        };
         nc.insert(at, nuevo.clone());
         ns.insert(at.min(ns.len()), peso_entre_hermanos(size, sizes));
         Some(Self::Split {
@@ -2076,6 +2091,39 @@ mod tests {
             panic!("split")
         };
         assert_eq!(sizes.last(), Some(&Size::Fixed(30)));
+    }
+
+    /// Un panel acoplado ABAJO entra por ENCIMA de la franja de tareas y de
+    /// la barra de estado, no debajo (captura del 2026-09-21): el registro y
+    /// procesos salían por debajo de la barra de estado. En VS Code el panel
+    /// de abajo está siempre encima de la barra; y en el terminal, la barra
+    /// de estado tiene que ser la última fila.
+    #[test]
+    fn abajo_entra_por_encima_de_la_barra_de_estado() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            children: vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(3), KindId::new("tasks")),
+                Node::slot(SlotId(4), KindId::new("status")),
+            ],
+            sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
+        };
+        let con = arbol.dock(
+            SlotId(1),
+            Edge::Bottom,
+            Size::Fixed(12),
+            &Node::slot(SlotId(9), KindId::new("log")),
+        );
+        let Node::Split {
+            children, sizes, ..
+        } = &con
+        else {
+            panic!("split")
+        };
+        let ids: Vec<_> = children.iter().filter_map(Node::first_slot_id).collect();
+        assert_eq!(ids, [SlotId(1), SlotId(9), SlotId(3), SlotId(4)]);
+        assert_eq!(sizes[1], Size::Fixed(12), "el tamaño va con su hijo");
     }
 
     /// Sin ancestro en el eje pedido, se ENVUELVE. Un solo pane es el caso

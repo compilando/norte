@@ -410,7 +410,7 @@ impl Estado {
                             time: norte_frontend::format::hora_utc(f.ts_ms),
                             actor: clamp_display(f.actor_kind.clone()),
                             op: clamp_display(f.op.clone()),
-                            path: clamp_display(f.path.clone()),
+                            path: clamp_display(norte_frontend::timeline::path_label(&f.path)),
                             hostile: f.hostile,
                             tail: cola.join(" · "),
                         }

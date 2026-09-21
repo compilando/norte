@@ -760,6 +760,10 @@ pub fn vpath_de_ruta_nativa(nativa: &str) -> Option<norte_proto::VPath> {
 /// normal— y envolverlo obligaría a hacer async una decisión que los dos
 /// frontends toman en medio de pintar. Si alguna vez cuelga, es aquí.
 ///
+/// Desde el 2026-09-21 también lo llama anclar el árbol
+/// (`Tree::anchor_near`, en la TUI y en el host) una vez por apertura del
+/// panel: la misma excepción, con la misma frecuencia que un gesto.
+///
 /// ```
 /// use norte_frontend::shell::home_vpath;
 /// // Siempre nombra algo: con `$HOME` o sin él.

@@ -501,7 +501,12 @@ use serde::{Deserialize, Serialize};
 ///   y la acción `layout_button_activate { id }`; la acción
 ///   `tab_action { slot_id, verb: "new" | "close" }`, que elige la pestaña
 ///   y corre la orden, como el `[+]`/`[x]` de la TUI.
-pub const BRIDGE_VERSION: u32 = 86;
+/// - **87**: las unidades de la barra de sitios (captura del 2026-09-21).
+///   `PlaceRowView::Drive.label` pasa a ser el nombre CORTO
+///   (`places::drive_name`, el de la TUI) y gana `mount` —el montaje
+///   entero, para el título—, `free` —el libre corto de la columna
+///   derecha— y `kind`, que elige el icono.
+pub const BRIDGE_VERSION: u32 = 87;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///
