@@ -4,6 +4,7 @@
 import type { Screen } from "../render";
 import type {
   BrowserSlotView,
+  ChromeButtonView,
   ColumnHeader,
   MenuView,
   PanelBarView,
@@ -183,7 +184,11 @@ export function paintWizard(this: Screen, wizard: WizardView | null): void {
  * Una entrada apagada SIGUE saliendo, atenuada: esconder lo que esta
  * ventana no hace convertiría una limitación en un misterio.
  */
-export function paintMenu(this: Screen, menu: MenuView): void {
+export function paintMenu(
+  this: Screen,
+  menu: MenuView,
+  botones: ChromeButtonView[] = [],
+): void {
   // La fila que la barra ocupa sale del CSS y entra en el reparto: el host
   // reparte sobre el alto que este renderer le declare, así que si la barra
   // no reservara su fila taparía la primera del listado — el mismo bug que
@@ -194,7 +199,7 @@ export function paintMenu(this: Screen, menu: MenuView): void {
     this.menuBarHeight = alto;
     this.viewportSucio = true;
   }
-  if (sinCambios(this.menuRoot, JSON.stringify(menu))) {
+  if (sinCambios(this.menuRoot, JSON.stringify({ menu, botones }))) {
     return;
   }
   if (!menu.bar && menu.open === null) {
@@ -220,6 +225,34 @@ export function paintMenu(this: Screen, menu: MenuView): void {
       this.send({ action: "menu_open", menu: i });
     });
     barra.append(boton);
+  }
+  // Los botones de disposición (ADR 0133), en el borde derecho: un icono
+  // por orden, con su nombre y su atajo al pasar. Un clic vuelve como el
+  // id; la orden la corre el host (ADR 0069).
+  if (botones.length > 0) {
+    const acciones = document.createElement("div");
+    acciones.className = "menubar-actions";
+    acciones.setAttribute("role", "toolbar");
+    acciones.setAttribute("aria-label", this.t("layout-buttons-label"));
+    for (const b of botones) {
+      const boton = document.createElement("button");
+      boton.type = "button";
+      boton.className = "menubar-action";
+      boton.dataset["id"] = b.id;
+      boton.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
+      boton.setAttribute("aria-label", b.label);
+      const icono = iconoDePanel(document, `layout:${b.id}`);
+      if (icono !== null) {
+        boton.append(icono);
+      } else {
+        boton.textContent = b.label;
+      }
+      boton.addEventListener("click", () => {
+        this.send({ action: "layout_button_activate", id: b.id });
+      });
+      acciones.append(boton);
+    }
+    barra.append(acciones);
   }
   const caja = document.createElement("div");
   caja.className = "menu";
@@ -535,9 +568,38 @@ export function paintTabs(
       // ningún grupo en vez de acertar por casualidad.
       this.send({ action: "select_tab", slot_id: t.slot_id });
     });
+    // Cerrar ESTA pestaña (ADR 0133): la `×` de cada una, visible en la
+    // activa y al pasar por encima, como en VS Code. El host la elige y
+    // luego la cierra, por el despacho de `pane.tab-close`.
+    const cerrar = document.createElement("button");
+    cerrar.type = "button";
+    cerrar.className = "tab-close";
+    cerrar.textContent = "×";
+    cerrar.title = this.t("menu-item-pane-tab-close");
+    cerrar.setAttribute("aria-label", this.t("menu-item-pane-tab-close"));
+    cerrar.addEventListener("click", (e) => {
+      // Sin esto el clic también elegiría la pestaña, y serían dos órdenes.
+      e.stopPropagation();
+      this.send({ action: "tab_action", slot_id: t.slot_id, verb: "close" });
+    });
+    li.append(cerrar);
     lista.append(li);
   }
-  dom.tabs.replaceChildren(lista);
+  // Abrir una pestaña EN ESTE GRUPO: se elige la activa del grupo y se abre
+  // detrás, igual que el `[+]` de la barra de la TUI.
+  const nueva = document.createElement("button");
+  nueva.type = "button";
+  nueva.className = "tab-new";
+  nueva.textContent = "+";
+  nueva.title = this.t("menu-item-pane-tab-new");
+  nueva.setAttribute("aria-label", this.t("menu-item-pane-tab-new"));
+  const activa = grupo.tabs[grupo.active] ?? grupo.tabs[0];
+  if (activa !== undefined) {
+    nueva.addEventListener("click", () => {
+      this.send({ action: "tab_action", slot_id: activa.slot_id, verb: "new" });
+    });
+  }
+  dom.tabs.replaceChildren(lista, nueva);
 }
 
 /**

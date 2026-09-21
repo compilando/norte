@@ -496,7 +496,12 @@ use serde::{Deserialize, Serialize};
 ///   derecha, ya redactada, recortada por prioridad y en el orden de
 ///   `[ui] status_items`. La acción `status_item_activate { id }` pulsa uno,
 ///   por ID porque la lista se mueve con el cursor.
-pub const BRIDGE_VERSION: u32 = 85;
+/// - **86**: botones de disposición y de pestañas (ADR 0133).
+///   `ViewSnapshot.layout_buttons` (`ChromeButtonView`: id, nombre, atajo)
+///   y la acción `layout_button_activate { id }`; la acción
+///   `tab_action { slot_id, verb: "new" | "close" }`, que elige la pestaña
+///   y corre la orden, como el `[+]`/`[x]` de la TUI.
+pub const BRIDGE_VERSION: u32 = 86;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

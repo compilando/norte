@@ -229,6 +229,8 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::WizardActivateRow { .. } => "wizard_activate_row",
         UiAction::PanelBarActivate { .. } => "panel_bar_activate",
         UiAction::StatusItemActivate { .. } => "status_item_activate",
+        UiAction::LayoutButtonActivate { .. } => "layout_button_activate",
+        UiAction::TabAction { .. } => "tab_action",
         UiAction::ResizeSlot { .. } => "resize_slot",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
@@ -560,6 +562,19 @@ fn acciones_de_cromo() -> Vec<(&'static str, UiAction)> {
             "status_item_activate",
             UiAction::StatusItemActivate {
                 id: "sort".to_owned(),
+            },
+        ),
+        (
+            "layout_button_activate",
+            UiAction::LayoutButtonActivate {
+                id: "split-h".to_owned(),
+            },
+        ),
+        (
+            "tab_action",
+            UiAction::TabAction {
+                slot_id: 3,
+                verb: norte_ui_host::TabVerb::Close,
             },
         ),
         (
@@ -1556,6 +1571,11 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         menu: menu_de_referencia(),
         panel_bar: barra_de_paneles_de_referencia(),
         status_items: elementos_de_estado_de_referencia(),
+        layout_buttons: vec![norte_ui_host::dto::ChromeButtonView {
+            id: "split-h".to_owned(),
+            label: "Partir lado a lado".to_owned(),
+            chord: "—".to_owned(),
+        }],
         // El pijama ENCENDIDO en la referencia (puente 80): un booleano que
         // el golden fija a `false` no distingue «lo manda» de «no existe».
         row_stripes: true,
@@ -2830,7 +2850,9 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // botón `count`, la cifra de su insignia.
     // Puente 85: `View::status_items` y su cambio, la mitad derecha de la
     // barra de estado (ADR 0132).
-    const FORMA: u64 = 4_174_435_362_060_295_429;
+    // Puente 86: `View::layout_buttons`, los botones de disposición (ADR
+    // 0133).
+    const FORMA: u64 = 5_446_401_236_544_408_442;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

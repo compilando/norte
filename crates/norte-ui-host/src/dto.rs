@@ -58,6 +58,10 @@ pub struct ViewSnapshot {
     /// orden. Ausente en un host anterior = ninguno.
     #[serde(default)]
     pub status_items: Vec<StatusItemView>,
+    /// Los botones de disposición de la derecha de la barra de menús (ADR
+    /// 0133, puente 86), en su orden. Ausente en un host anterior = ninguno.
+    #[serde(default)]
+    pub layout_buttons: Vec<ChromeButtonView>,
     /// `[ui] row_stripes` (spec 2026-09-20): si las filas impares de un
     /// listado van sobre una banda. Puente 80.
     ///
@@ -282,6 +286,20 @@ pub struct StatusItemView {
     pub tooltip: String,
     /// Si pulsarlo hace algo.
     pub clickable: bool,
+}
+
+/// Un botón del cromo que corre una orden (ADR 0133): los de disposición.
+///
+/// Qué botones hay y qué corren lo decide `norte_frontend::layoutbar`; un
+/// clic vuelve como el `id`, nunca como la orden (ADR 0069).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChromeButtonView {
+    /// Id estable (`split-h`, `pick`…): vuelve con el clic y elige el icono.
+    pub id: String,
+    /// Su nombre corto, el de su entrada del menú.
+    pub label: String,
+    /// El atajo que hace lo mismo, o `—`.
+    pub chord: String,
 }
 
 /// `true` para un campo que un host anterior no mandaba y que encendido es

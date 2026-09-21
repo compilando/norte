@@ -133,3 +133,4 @@ edits.
 | [0130](0130-the-window-edits-settings-with-its-own-controls.md) | The window edits settings with its own controls | accepted |
 | [0131](0131-the-window-has-an-activity-bar-and-no-key-bar.md) | The window has an activity bar and no key bar | accepted |
 | [0132](0132-the-status-bar-is-made-of-items.md) | The status bar is made of items | accepted |
+| [0133](0133-layout-and-tab-buttons-run-existing-commands.md) | Layout and tab buttons run existing commands | accepted |

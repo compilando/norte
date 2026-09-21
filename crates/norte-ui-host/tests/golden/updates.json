@@ -713,6 +713,13 @@
         }
       ]
     },
+    "layout_buttons": [
+      {
+        "chord": "—",
+        "id": "split-h",
+        "label": "Partir lado a lado"
+      }
+    ],
     "layouts": {
       "cursor": 0,
       "preview": [

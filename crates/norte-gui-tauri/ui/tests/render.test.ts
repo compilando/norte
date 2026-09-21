@@ -2254,6 +2254,53 @@ describe("la barra de menús", () => {
     expect(enviadas).toEqual([{ action: "panel_bar_activate", button: 1 }]);
   });
 
+  it("los botones de disposición van a la derecha del menú y vuelven por id", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.layout_buttons = [
+      { id: "split-h", label: "Partir lado a lado", chord: "ctrl+\\" },
+      { id: "pick", label: "Disposición...", chord: "—" },
+    ];
+    screen.paint(v);
+    const botones = [
+      ...document.querySelectorAll(".menubar .menubar-actions .menubar-action"),
+    ] as HTMLButtonElement[];
+    expect(botones.map((b) => b.dataset["id"])).toEqual(["split-h", "pick"]);
+    expect(botones[0]?.querySelector("svg.panelbar-icon")).not.toBeNull();
+    expect(botones[0]?.title).toBe("Partir lado a lado (ctrl+\\)");
+    expect(botones[1]?.title).toBe("Disposición...");
+    expect(botones[1]?.getAttribute("aria-label")).toBe("Disposición...");
+    botones[1]?.click();
+    expect(enviadas).toEqual([{ action: "layout_button_activate", id: "pick" }]);
+  });
+
+  it("las pestañas de un grupo llevan su × y el grupo su +, y la × no elige", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.layout.tabs = [
+      {
+        slot_id: 1,
+        active: 0,
+        tabs: [
+          { slot_id: 1, title: "casa", title_hostile: false },
+          { slot_id: 7, title: "tmp", title_hostile: false },
+        ],
+      },
+    ];
+    screen.paint(v);
+    const cerrar = [
+      ...document.querySelectorAll(".tab .tab-close"),
+    ] as HTMLButtonElement[];
+    expect(cerrar).toHaveLength(2);
+    cerrar[1]?.click();
+    // UNA orden: la × no deja que el clic llegue a la pestaña y la elija.
+    expect(enviadas).toEqual([{ action: "tab_action", slot_id: 7, verb: "close" }]);
+    enviadas.length = 0;
+    (document.querySelector(".tab-new") as HTMLButtonElement).click();
+    // El `+` abre detrás de la ACTIVA del grupo.
+    expect(enviadas).toEqual([{ action: "tab_action", slot_id: 1, verb: "new" }]);
+  });
+
   it("la mitad derecha de la barra de estado pinta sus elementos y se pulsan", () => {
     const { screen, enviadas } = montar();
     const v = vista({});

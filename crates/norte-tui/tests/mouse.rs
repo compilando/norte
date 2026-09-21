@@ -573,6 +573,40 @@ fn en_columna_cada_boton_es_una_fila_del_borde_izquierdo() {
     assert!(mouse::hit_test(&app, 1, FILA0 - 1).is_none());
 }
 
+/// Los botones de disposición (ADR 0133) van en el borde derecho de la barra
+/// de menús y corren su orden; en un terminal que no los deja caber enteros
+/// junto a los títulos, no hay ninguno que pulsar.
+#[test]
+fn los_botones_de_disposicion_caen_en_el_borde_derecho() {
+    let mut app = app_pintada(5);
+    let lineas = pintar_en(&mut app, 120, H);
+    // `[#]` es el último: sus tres celdas son las tres últimas de la fila 0.
+    assert!(
+        lineas[0].trim_end_matches('"').ends_with("[#]"),
+        "{:?}",
+        lineas[0]
+    );
+    let pulsa = |app: &mut norte_tui::app::App, col: u16| {
+        app.pending_panel_command = None;
+        let _ = mouse::handle(app, ev(ABAJO, col, 0));
+        app.pending_panel_command.clone()
+    };
+    assert_eq!(pulsa(&mut app, 119).as_deref(), Some("layout.pick"));
+    assert_eq!(pulsa(&mut app, 105).as_deref(), Some("layout.split-h"));
+    assert_eq!(pulsa(&mut app, 108), None, "el hueco entre dos botones");
+    // Con un overlay delante (la revisión lo cazó): ni se pintan ni se
+    // pulsan. Pintados y muertos era la clase de BLOCKER que ya tuvo la
+    // barra de paneles.
+    app.open_theme_picker();
+    let lineas = pintar_en(&mut app, 120, H);
+    assert!(!lineas[0].contains("[#]"), "{:?}", lineas[0]);
+    assert_eq!(pulsa(&mut app, 119), None);
+    app.theme_picker = None;
+    // A sesenta columnas los títulos se quedan el sitio.
+    let lineas = pintar(&mut app);
+    assert!(!lineas[0].contains("[#]"), "{:?}", lineas[0]);
+}
+
 /// REGRESIÓN de un BLOCKER: con un overlay delante, la barra ni se pinta ni se
 /// puede pulsar.
 ///

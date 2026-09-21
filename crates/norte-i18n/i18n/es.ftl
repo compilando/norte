@@ -795,6 +795,8 @@ menu-bar-label = Barra de menús
 # Lo mismo para la barra de paneles (#324), que en la ventana es una fila de
 # botones con landmark propio.
 panelbar-label = Barra de paneles
+# Los botones de disposición de la derecha de la barra de menús (ADR 0133).
+layout-buttons-label = Disposición
 # La marca de novedad de un botón de la barra, para un lector de pantalla.
 panelbar-attention = Novedades
 # H3c, y clave SEPARADA a propósito: `palette-hint` lo pintan los DOS

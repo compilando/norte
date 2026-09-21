@@ -3771,6 +3771,50 @@ async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
     );
 }
 
+/// ADR 0133: la foto trae los cuatro botones de disposición con su nombre,
+/// pulsar «partir» coloca un listado más, y un id o una pestaña que no
+/// existen son una carrera que pide foto.
+#[tokio::test]
+async fn los_botones_de_disposicion_y_de_pestana_se_pulsan() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let ids: Vec<&str> = snap.layout_buttons.iter().map(|b| b.id.as_str()).collect();
+    assert_eq!(ids, ["split-h", "split-v", "equalize", "pick"]);
+    assert_eq!(snap.layout_buttons[0].label, "Partir lado a lado");
+    let listados = |s: &norte_ui_host::ViewSnapshot| {
+        s.slots
+            .iter()
+            .filter(|v| matches!(v, SlotView::Browser(_)))
+            .count()
+    };
+    let antes = listados(&snap);
+
+    let mut sub = h.subscribe();
+    let ack = h
+        .dispatch(UiAction::LayoutButtonActivate {
+            id: "split-h".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "fue {ack:?}");
+    let () = foto_hasta(&h, &mut sub, "un listado más", |s| {
+        (listados(s) > antes).then_some(())
+    })
+    .await;
+
+    for accion in [
+        UiAction::LayoutButtonActivate {
+            id: "no-existe".to_owned(),
+        },
+        UiAction::TabAction {
+            slot_id: 9999,
+            verb: norte_ui_host::TabVerb::New,
+        },
+    ] {
+        let ack = h.dispatch(accion).await.expect("host vivo");
+        assert!(matches!(ack, ActionAck::Stale { .. }), "fue {ack:?}");
+    }
+}
+
 /// ADR 0132: la foto trae la mitad derecha de la barra de estado, con los
 /// elementos por defecto que tienen algo que decir, y pulsar uno corre su
 /// comando; un id que ya no está es una carrera y pide foto.
@@ -4269,6 +4313,54 @@ async fn las_pestanas_se_abren_se_recorren_y_se_cierran() {
         foto.layout.tabs.is_empty(),
         "un grupo de una no es un grupo: {:?}",
         foto.layout.tabs
+    );
+}
+
+/// ADR 0133 (lo pidió la revisión): el `×` y el `+` de una pestaña actúan
+/// sobre SU grupo, no sobre el que tenía el foco. Dos grupos, el foco en el
+/// segundo, y se cierra una pestaña del primero: el primero se disuelve y el
+/// segundo sigue con sus dos.
+#[tokio::test]
+async fn el_boton_de_una_pestana_actua_sobre_su_grupo_y_no_sobre_el_del_foco() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    // Dos listados, un grupo en cada uno.
+    ejecutar_por_paleta(&h, &mut sub, "layout.split-h").await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.tab-new").await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.switch").await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.tab-new").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = foto_hasta(&h, &mut sub, "dos grupos", |s| {
+        (s.layout.tabs.len() == 2).then(|| s.clone())
+    })
+    .await;
+    let (a, b) = (foto.layout.tabs[0].clone(), foto.layout.tabs[1].clone());
+    let enfocado = foto.focus.expect("hay foco");
+    // El foco está en uno de los dos; se pulsa el OTRO.
+    let (pulsado, otro) = if b.tabs.iter().any(|t| t.slot_id == enfocado) {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let ack = h
+        .dispatch(UiAction::TabAction {
+            slot_id: pulsado.tabs[0].slot_id,
+            verb: norte_ui_host::TabVerb::Close,
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = foto_hasta(&h, &mut sub, "un grupo menos", |s| {
+        (s.layout.tabs.len() == 1).then(|| s.clone())
+    })
+    .await;
+    let queda = &foto.layout.tabs[0];
+    assert_eq!(
+        queda.tabs.iter().map(|t| t.slot_id).collect::<Vec<_>>(),
+        otro.tabs.iter().map(|t| t.slot_id).collect::<Vec<_>>(),
+        "el grupo del foco sigue entero; se cerró el del clic"
     );
 }
 

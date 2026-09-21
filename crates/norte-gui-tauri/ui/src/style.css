@@ -322,6 +322,39 @@ body {
   unicode-bidi: isolate;
 }
 
+/* Los botones de disposición (ADR 0133): en el borde derecho de la barra,
+   un icono cada uno, como los de arriba a la derecha de VS Code. */
+.menubar-actions {
+  display: flex;
+  margin-left: auto;
+  height: 100%;
+  padding-right: 4px;
+}
+
+.menubar-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.menubar-action:hover {
+  opacity: 1;
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.menubar-action .panelbar-icon {
+  width: 16px;
+  height: 16px;
+}
+
 .menubar-title[aria-expanded="true"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
@@ -3011,6 +3044,46 @@ button.status-item:hover {
 .tab[data-active="true"] {
   opacity: 1;
   border-bottom: 2px solid var(--border-focus);
+}
+
+/* La barra de pestañas y su `+` en una fila (ADR 0133). */
+.slot-tabs[data-open="true"] {
+  display: flex;
+  align-items: center;
+}
+
+/* La `×` de cada pestaña: siempre en la activa, al pasar en las demás,
+   como en VS Code. Ocupa su sitio aunque no se vea, para que el rótulo no
+   baile al pasar el ratón. */
+.tab-close,
+.tab-new {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.tab-close {
+  visibility: hidden;
+  margin-left: 4px;
+}
+
+.tab[data-active="true"] .tab-close,
+.tab:hover .tab-close {
+  visibility: visible;
+}
+
+.tab-close:hover,
+.tab-new:hover {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.tab-new {
+  flex: 0 0 auto;
+  opacity: 0.7;
 }
 
 .agents-note,

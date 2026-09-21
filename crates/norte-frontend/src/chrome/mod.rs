@@ -9,6 +9,7 @@ pub mod banners;
 pub mod footer;
 pub mod frame;
 pub mod keybar;
+pub mod layoutbar;
 pub mod menu;
 pub mod panelbar;
 pub mod splash;

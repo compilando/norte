@@ -994,7 +994,21 @@ fn por_encima_de_los_paneles(app: &mut App, ev: MouseEvent) -> Option<After> {
     // la abre. Va aquí y no más abajo porque esa fila no pertenece a ningún
     // panel: sin este brazo el clic caía en el hit-test de los listados, que
     // devuelve `None` para ella, y no pasaba nada.
+    // Salvo en un botón de disposición (ADR 0133), que vive en esa misma fila
+    // y corre su orden por el despacho de su atajo, como la barra de paneles.
     if app.menu_bar && ev.row == 0 && clic {
+        if let Some(cmd) = app
+            .mouse
+            .panel_zones
+            .iter()
+            .find(|z| z.row == 0 && ev.column >= z.x0 && ev.column <= z.x1)
+            .map(|z| z.command.clone())
+        {
+            app.mouse.drag.cancel();
+            app.mouse.last_click = None;
+            app.pending_panel_command = Some(cmd);
+            return Some(After::PanelBar);
+        }
         return Some(menu_click(app, ev.column, ev.row));
     }
     // La barra de teclas (spec 2026-09-10): una celda pulsada es la tecla

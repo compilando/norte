@@ -27,6 +27,12 @@ independently through `PROTOCOL_VERSION`.
   by importance. The left half — messages and warnings — is not
   configurable, and a warning always wins the space. The window's status
   bar, empty until now when nothing was happening, uses the same items.
+- **Layout and tab buttons** (ADR 0133, bridge 86). The right end of the
+  menu bar has four buttons — split side by side, split top and bottom,
+  equalize, pick a layout — as icons in the window and as `[|] [-] [=] [#]`
+  in a terminal wide enough. In the window every tab has a `×` and each tab
+  group ends with a `+`, as the terminal's tab strip already had. They run
+  the same commands as their keys.
 - **The window edits settings with real controls** (ADR 0130, bridge 83). A
   boolean is a switch, a fixed list is a dropdown — with the installed
   themes and keymap presets already in it — and a number is a number field

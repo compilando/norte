@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 85;
+export const BRIDGE_VERSION = 86;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -849,6 +849,16 @@ export interface PanelButtonView {
   count?: number;
 }
 
+/** Un botón del cromo que corre una orden (ADR 0133): los de disposición. */
+export interface ChromeButtonView {
+  /** El id estable: vuelve con el clic y elige el icono. */
+  id: string;
+  /** Su nombre corto, el de su entrada del menú. */
+  label: string;
+  /** El atajo, o `—`. */
+  chord: string;
+}
+
 /** Un elemento de la mitad derecha de la barra de estado (ADR 0132). */
 export interface StatusItemView {
   /** El id estable: vuelve con el clic. */
@@ -1407,6 +1417,9 @@ export interface ViewSnapshot {
   /** La mitad derecha de la barra de estado (ADR 0132, puente 85).
    *  Opcional: un host anterior no la manda. */
   status_items?: StatusItemView[];
+  /** Los botones de disposición (ADR 0133, puente 86). Opcional: un host
+   *  anterior no los manda. */
+  layout_buttons?: ChromeButtonView[];
   /** `[ui] row_stripes` (puente 80): el «pijama» del listado. Opcional: un
    *  host anterior no lo manda, y entonces no hay banda. */
   row_stripes?: boolean;
@@ -1654,6 +1667,8 @@ export type UiAction =
   | { action: "splash_activate_row"; number: number }
   | { action: "panel_bar_activate"; button: number }
   | { action: "status_item_activate"; id: string }
+  | { action: "layout_button_activate"; id: string }
+  | { action: "tab_action"; slot_id: number; verb: "new" | "close" }
   | { action: "resize_slot"; slot_id: number; cells: number }
   | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };

@@ -156,7 +156,9 @@ keymap = [ { on = ['j'], run = 'cursor.down' } ]
 
     let mut app = app_with_sized_entries(vec![("a", 10), ("b", 20)]);
     assert!(
-        !status_text(&app).contains('['),
+        // ` …]` y no `[`: la pantalla entera incluye los botones de
+        // disposición de la barra de menús (`[|]`, ADR 0133).
+        !status_text(&app).contains(" …]"),
         "sin contador la barra no abre el segmento"
     );
     app.pending = pending_display(&resolver);

@@ -41,6 +41,20 @@ const FIGURAS: Record<string, Figura> = {
   "disk-map": { paths: ["M11 4a8 8 0 1 0 9 9h-9z", "M14 3.5a7 7 0 0 1 6.5 6.5H14z"] },
   // Línea de tiempo: un reloj.
   timeline: { paths: ["M12 7v5l3.5 2"], circles: [[12, 12, 9]] },
+  // Los botones de disposición (ADR 0133), con el prefijo `layout:` para
+  // que no se crucen con un kind de panel.
+  // Partir lado a lado: un marco con una raya vertical.
+  "layout:split-h": { paths: ["M3.5 5h17v14h-17z", "M12 5v14"] },
+  // Partir arriba y abajo: la raya en horizontal.
+  "layout:split-v": { paths: ["M3.5 5h17v14h-17z", "M3.5 12h17"] },
+  // Igualar: la raya en medio y dos mitades iguales a cada lado.
+  "layout:equalize": {
+    paths: ["M3.5 5h17v14h-17z", "M12 5v14", "M6.5 12h3", "M14.5 12h3"],
+  },
+  // Elegir disposición: una rejilla de cuatro.
+  "layout:pick": {
+    paths: ["M4 4h7v7H4z", "M13 4h7v7h-7z", "M4 13h7v7H4z", "M13 13h7v7h-7z"],
+  },
   // Historia de git: una rama que se separa y vuelve.
   gitlog: {
     paths: ["M6 8v8", "M18 8.5c0 5-6 4-11 7"],

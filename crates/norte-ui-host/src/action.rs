@@ -21,6 +21,16 @@ use serde::{Deserialize, Serialize};
 use crate::bridge::{ModalId, RowKey};
 use crate::keys::KeyInput;
 
+/// Qué hace un botón de la barra de pestañas (ADR 0133).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabVerb {
+    /// Abrir una pestaña en el grupo (`pane.tab-new`).
+    New,
+    /// Cerrar la pestaña (`pane.tab-close`).
+    Close,
+}
+
 /// Una petición del renderer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "action")]
@@ -751,6 +761,26 @@ pub enum UiAction {
     StatusItemActivate {
         /// El id del elemento (`sort`, `tasks`…).
         id: String,
+    },
+    /// Pulsa un botón de disposición de la barra de menús (ADR 0133,
+    /// puente 86), por ID.
+    LayoutButtonActivate {
+        /// El id del botón (`split-h`, `pick`…).
+        id: String,
+    },
+    /// Un botón de la barra de pestañas de un grupo (ADR 0133, puente 86):
+    /// abrir una pestaña en ese grupo, o cerrar la de `slot_id`.
+    ///
+    /// Primero se ELIGE la pestaña de `slot_id` —el grupo pulsado pasa a
+    /// tener el foco, como en la TUI— y después corre la orden por el
+    /// despacho de su atajo. Pulsar el `+` de un grupo y que la pestaña
+    /// naciera en el otro sería lo contrario de lo que el dedo dijo.
+    TabAction {
+        /// La pestaña sobre la que se actúa.
+        slot_id: u32,
+        /// Qué hacer. `verb` y no `action`: `action` es la etiqueta del
+        /// enum en el JSON.
+        verb: TabVerb,
     },
     /// Arrastra el borde que hay entre `slot_id` y el hueco de al lado.
     ///

@@ -2,7 +2,7 @@
 source: crates/norte-tui/tests/places.rs
 expression: terminal.backend().to_string()
 ---
-" Archivo  Operar  Marcar  Ir  Paneles  Pestañas  Buscar  Ver  Herramientas  Ayuda                   "
+" Archivo  Operar  Marcar  Ir  Paneles  Pestañas  Buscar  Ver  Herramientas  Ayuda    [|] [-] [=] [#]"
 " Sitios  Visor  Procesos  Detalles  Árbol  Registro  Mapa  Historial                                "
 "┌ Sitios ──────┐┌/casa───────────────────────────────────┐┌/casa───────────────────────────────────┐"
 "│▾ Unidades    ││Nombre▲               Tamaño       Fecha││Nombre▲               Tamaño       Fecha│"

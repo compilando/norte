@@ -148,6 +148,7 @@ impl Estado {
             menu: self.vista_menu(),
             panel_bar: self.vista_barra_de_paneles(),
             status_items: self.vista_elementos_de_estado(),
+            layout_buttons: self.vista_botones_de_disposicion(),
             // El pijama (spec 2026-09-20). Va en la vista ENTERA y no en un
             // parche: es configuración, y la recarga en caliente reconstruye
             // la vista.
@@ -436,6 +437,23 @@ impl Estado {
                     tooltip: clamp_display(v.tooltip.clone()),
                     clickable: v.command.is_some(),
                 }
+            })
+            .collect()
+    }
+
+    /// Los botones de disposición (ADR 0133), con el nombre de su entrada
+    /// del menú y el atajo del keymap VIVO. Van en la foto: el keymap
+    /// cambia con un perfil o una recarga, y las dos mandan foto.
+    pub(super) fn vista_botones_de_disposicion(&self) -> Vec<crate::dto::ChromeButtonView> {
+        norte_frontend::layoutbar::BUTTONS
+            .iter()
+            .map(|b| crate::dto::ChromeButtonView {
+                id: b.id.to_owned(),
+                label: clamp_display(norte_frontend::layoutbar::label(b, self.lang)),
+                chord: clamp_display(
+                    norte_frontend::palette::first_chord(b.command, &self.efectivo)
+                        .unwrap_or_else(|| "—".to_owned()),
+                ),
             })
             .collect()
     }

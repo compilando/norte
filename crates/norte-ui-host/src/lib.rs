@@ -43,7 +43,7 @@ pub mod keys;
 pub mod pickers;
 pub mod settings;
 
-pub use action::UiAction;
+pub use action::{TabVerb, UiAction};
 pub use backend::HostBackend;
 pub use bridge::{
     ActionAck, BRIDGE_VERSION, BridgeEnvelope, InstanceId, MAX_TASKS_RETAINED, MAX_TRANSFER_BATCH,

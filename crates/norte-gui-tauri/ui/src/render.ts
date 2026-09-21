@@ -259,7 +259,7 @@ export class Screen {
       );
       this.paintSlot(dom, slot, view, cell);
     }
-    this.paintMenu(view.menu);
+    this.paintMenu(view.menu, view.layout_buttons ?? []);
     this.paintPanelBar(view.panel_bar);
     this.paintPalette(view.palette);
     this.paintGoto(view.goto ?? null);

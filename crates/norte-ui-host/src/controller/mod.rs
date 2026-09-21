@@ -3796,6 +3796,12 @@ impl Estado {
             UiAction::StatusItemActivate { id } => {
                 self.pulsar_elemento_de_estado(id, backend, buzon)
             }
+            UiAction::LayoutButtonActivate { id } => {
+                self.pulsar_boton_de_disposicion(id, backend, buzon)
+            }
+            UiAction::TabAction { slot_id, verb } => {
+                self.boton_de_pestana(*slot_id, *verb, backend, buzon)
+            }
             UiAction::ResizeSlot { slot_id, cells } => {
                 self.arrastrar_borde(*slot_id, *cells, backend, buzon)
             }
