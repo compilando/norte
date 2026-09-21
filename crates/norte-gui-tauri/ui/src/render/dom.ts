@@ -146,6 +146,12 @@ const firmas = new WeakMap<object, string>();
  * maqueta, el `:hover` se pierde y vuelve, y en WebKitGTK se ve como un
  * parpadeo sutil mientras se desplaza.
  */
+/** Con qué fila (el objeto) y dónde se pintó cada nodo, para `updateRow`. */
+const filasPintadas = new WeakMap<
+  HTMLElement,
+  { row: RowView; selected: boolean; index: number; rowH: number; iconColumn: boolean }
+>();
+
 export function sinCambios(nodo: object, firma: string): boolean {
   if (firmas.get(nodo) === firma) {
     return true;
@@ -268,6 +274,24 @@ export function updateRow(
   // Todo lo que esta función lee está en la firma: la fila entera, su
   // posición, el alto y la columna de iconos. Si nada cambió, el nodo ya
   // dice lo que tiene que decir.
+  //
+  // Primero por IDENTIDAD, que no cuesta nada: la sesión sustituye las filas
+  // cuando llega un lote y solo muta en su sitio `selected` (el parche del
+  // cursor), así que el mismo objeto con el mismo `selected` es la misma
+  // fila. Serializar cada fila visible en cada repintado —y cada parche
+  // repinta— era trabajo tirado en el caso más común.
+  const previa = filasPintadas.get(el);
+  if (
+    previa !== undefined &&
+    previa.row === row &&
+    previa.selected === row.selected &&
+    previa.index === index &&
+    previa.rowH === rowH &&
+    previa.iconColumn === iconColumn
+  ) {
+    return;
+  }
+  filasPintadas.set(el, { row, selected: row.selected, index, rowH, iconColumn });
   if (sinCambios(el, JSON.stringify([row, index, rowH, iconColumn]))) {
     return;
   }

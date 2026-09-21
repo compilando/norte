@@ -24,10 +24,30 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   // medir el cuerpo, que es lo que hace el final de esta función, sí.
   const celda = this.cell();
   const firma = `${String(window.innerWidth)}x${String(window.innerHeight)}|${String(celda.w)}x${String(celda.h)}`;
-  if (this.visorPintado?.viewer === viewer && this.visorPintado.firma === firma) {
+  const previo = this.visorPintado;
+  if (previo?.viewer === viewer && previo.firma === firma) {
     return;
   }
   this.visorPintado = { viewer, firma };
+  if (previo !== null && previo.firma === firma && desplazado(previo.viewer, viewer)) {
+    // Solo se ha DESPLAZADO: el mismo fichero, la misma cabecera, el mismo
+    // tamaño. Se cambian el cuerpo, las marcas y las barras en su sitio.
+    // Rehacer la caja entera en cada paso de la rueda, y medir el cuerpo
+    // nuevo —un reflujo—, era lo que hacía pesado desplazarse.
+    const box = this.viewerRoot.querySelector<HTMLElement>(".viewer");
+    const viejo = box?.querySelector<HTMLElement>(".viewer-body");
+    const meta = box?.querySelector<HTMLElement>(".viewer-meta");
+    if (box && viejo && meta) {
+      meta.textContent = marcasDelVisor(this, viewer);
+      box.querySelectorAll(".viewer-bar").forEach((b) => {
+        b.remove();
+      });
+      const body = cuerpoDelVisor(viewer);
+      viejo.replaceWith(body);
+      ponerBarras(this, viewer, box, body);
+      return;
+    }
+  }
   this.viewerRoot.dataset["open"] = "true";
   const box = document.createElement("section");
   box.className = "viewer";
@@ -49,36 +69,7 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   }
   const meta = document.createElement("span");
   meta.className = "viewer-meta";
-  // Cada marca es un DATO que el host resolvió: encoding, fin de línea, si
-  // lo forzó el usuario, si la decodificación tuvo errores, si el fichero
-  // seguía. Ninguna se calcula aquí.
-  const marcas = [viewer.encoding, viewer.eol];
-  if (viewer.hex) {
-    marcas.push("hex");
-  }
-  if (viewer.forced) {
-    marcas.push(this.t("viewer-forced"));
-  }
-  if (viewer.had_errors) {
-    // `viewer-lossy`, que es como se llama esta marca en el catálogo desde
-    // que existe el visor del TUI: inventar `viewer-errors` fue pedir una
-    // clave que no está, y `t` contesta con la clave misma.
-    marcas.push(this.t("viewer-lossy"));
-  }
-  if (viewer.truncated) {
-    marcas.push(this.t("viewer-truncated"));
-  }
-  // La fila y la COLUMNA, en palabras: es lo que lee quien no ve las barras,
-  // que son indicadores visuales y van `aria-hidden`.
-  marcas.push(
-    `${String(viewer.first_line + 1)}/${String(Math.max(1, viewer.total_rows))}`,
-  );
-  if (viewer.first_col > 0) {
-    marcas.push(
-      `${String(viewer.first_col + 1)}/${String(Math.max(1, viewer.total_cols))}`,
-    );
-  }
-  meta.textContent = marcas.join(" · ");
+  meta.textContent = marcasDelVisor(this, viewer);
   head.append(meta);
   if (viewer.preview_by !== "") {
     // Lo que se enseña lo produjo un PLUGIN. En su propio nodo y con su
@@ -113,9 +104,7 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
     head.append(no);
   }
 
-  const body = viewerBody(viewer);
-  body.setAttribute("tabindex", "-1");
-  body.setAttribute("aria-describedby", `viewer-meta-${String(viewer.first_line)}`);
+  const body = cuerpoDelVisor(viewer);
 
   // El cuerpo y la barra VERTICAL van en una fila; la HORIZONTAL debajo de las
   // dos. Las barras son propias porque el host manda solo la ventana visible:
@@ -124,31 +113,7 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   lienzo.className = "viewer-canvas";
   lienzo.append(body);
   box.append(head, lienzo);
-  // Ninguna barra sobre una IMAGEN. Un fichero de imagen se lee en
-  // hexadecimal por debajo, así que las cuentas que llegan describen ese
-  // volcado — y dibujarlas encima de la foto sería una barra hablando de un
-  // contenido que no está en pantalla. La imagen se escala al hueco: no hay
-  // nada que desplazar.
-  if (viewer.image === null) {
-    const vertical = viewerBar(
-      true,
-      viewer.total_rows,
-      viewer.first_line,
-      this.viewerRows,
-    );
-    if (vertical !== null) {
-      lienzo.append(vertical);
-    }
-    const horizontal = viewerBar(
-      false,
-      viewer.total_cols,
-      viewer.first_col,
-      this.viewerCols,
-    );
-    if (horizontal !== null) {
-      box.append(horizontal);
-    }
-  }
+  ponerBarras(this, viewer, box, body);
   // La rueda desplaza por el HOST, como el visor acoplado y el registro: la
   // ventana visible la decide él. Con `shift`, de lado — es el gesto normal
   // para un eje horizontal, y el visor no envuelve.
@@ -370,4 +335,106 @@ export function paintPreview(this: Screen, dom: SlotDom, slot: PreviewSlotView):
     cabecera.push(marca);
   }
   dom.scroller.replaceChildren(...cabecera, viewerBody(slot.viewer));
+}
+
+/**
+ * Las marcas de la cabecera del visor, en una línea.
+ *
+ * Aparte porque el desplazamiento las cambia (la fila y la columna) sin
+ * cambiar nada más de la cabecera, y `paintViewer` las reescribe solas.
+ */
+function marcasDelVisor(screen: Screen, viewer: ViewerView): string {
+  // Cada marca es un DATO que el host resolvió: encoding, fin de línea, si
+  // lo forzó el usuario, si la decodificación tuvo errores, si el fichero
+  // seguía. Ninguna se calcula aquí.
+  const marcas = [viewer.encoding, viewer.eol];
+  if (viewer.hex) {
+    marcas.push("hex");
+  }
+  if (viewer.forced) {
+    marcas.push(screen.t("viewer-forced"));
+  }
+  if (viewer.had_errors) {
+    // `viewer-lossy`, que es como se llama esta marca en el catálogo desde
+    // que existe el visor del TUI: inventar `viewer-errors` fue pedir una
+    // clave que no está, y `t` contesta con la clave misma.
+    marcas.push(screen.t("viewer-lossy"));
+  }
+  if (viewer.truncated) {
+    marcas.push(screen.t("viewer-truncated"));
+  }
+  // La fila y la COLUMNA, en palabras: es lo que lee quien no ve las barras,
+  // que son indicadores visuales y van `aria-hidden`.
+  marcas.push(
+    `${String(viewer.first_line + 1)}/${String(Math.max(1, viewer.total_rows))}`,
+  );
+  if (viewer.first_col > 0) {
+    marcas.push(
+      `${String(viewer.first_col + 1)}/${String(Math.max(1, viewer.total_cols))}`,
+    );
+  }
+  return marcas.join(" · ");
+}
+
+/** El cuerpo del visor, con lo que lo hace enfocable y anunciable. */
+function cuerpoDelVisor(viewer: ViewerView): HTMLElement {
+  const body = viewerBody(viewer);
+  body.setAttribute("tabindex", "-1");
+  body.setAttribute("aria-describedby", `viewer-meta-${String(viewer.first_line)}`);
+  return body;
+}
+
+/**
+ * Las barras del visor: la vertical junto al cuerpo, en su lienzo; la
+ * horizontal al pie de la caja.
+ */
+function ponerBarras(
+  screen: Screen,
+  viewer: ViewerView,
+  box: HTMLElement,
+  body: HTMLElement,
+): void {
+  // Ninguna barra sobre una IMAGEN. Un fichero de imagen se lee en
+  // hexadecimal por debajo, así que las cuentas que llegan describen ese
+  // volcado — y dibujarlas encima de la foto sería una barra hablando de un
+  // contenido que no está en pantalla. La imagen se escala al hueco: no hay
+  // nada que desplazar.
+  if (viewer.image !== null) {
+    return;
+  }
+  const vertical = viewerBar(
+    true,
+    viewer.total_rows,
+    viewer.first_line,
+    screen.viewerRows,
+  );
+  if (vertical !== null) {
+    body.parentElement?.append(vertical);
+  }
+  const horizontal = viewerBar(
+    false,
+    viewer.total_cols,
+    viewer.first_col,
+    screen.viewerCols,
+  );
+  if (horizontal !== null) {
+    box.append(horizontal);
+  }
+}
+
+/**
+ * `ahora` es `antes` desplazado: el mismo fichero leído igual, con la misma
+ * cabecera salvo las marcas. Una imagen nunca, porque su cuerpo lo sustituye
+ * la foto cuando llega.
+ */
+function desplazado(antes: ViewerView, ahora: ViewerView): boolean {
+  return (
+    antes.image === null &&
+    ahora.image === null &&
+    antes.path_display === ahora.path_display &&
+    antes.path_hostile === ahora.path_hostile &&
+    antes.preview_by === ahora.preview_by &&
+    antes.preview_lossy === ahora.preview_lossy &&
+    antes.image_refused === ahora.image_refused
+  );
 }

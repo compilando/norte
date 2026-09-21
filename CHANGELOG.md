@@ -152,7 +152,10 @@ independently through `PROTOCOL_VERSION`.
   settings, search and every other overlay rebuilt their contents each
   time — with a task running, several times a second, and the viewer also
   forced a layout pass to measure itself. They now repaint only when their
-  own data, the window size or the cell size change.
+  own data, the window size or the cell size change. Scrolling the viewer
+  replaces only its text, position and scroll bars instead of the whole
+  viewer, and listing rows that did not change are skipped without
+  comparing their contents.
 - **Marking in a very large folder no longer walks it three times per key.**
   The window's pane header counted the marked bytes, the marked folders and
   the marks ruler in three separate passes over the whole listing, on every
