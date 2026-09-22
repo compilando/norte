@@ -523,7 +523,12 @@ use serde::{Deserialize, Serialize};
 ///   byte a byte el de 90. El primero que lo usa es la búsqueda de la
 ///   ventana, que pedía un glob y nada más mientras el terminal ofrecía
 ///   siete campos (protocolo 0.81.0).
-pub const BRIDGE_VERSION: u32 = 91;
+/// - **92**: la barra de progreso ligera (ADR 0146).
+///   `StatusItemView.progress` (`StatusProgressView`: `percent` y `phase`)
+///   en el item `tasks`: el renderer pinta la barra DETRÁS del texto, con el
+///   ancho de `BAR_CELLS` celdas. Ausente = sin barra, así que el JSON de
+///   cualquier otro item es byte a byte el de 91.
+pub const BRIDGE_VERSION: u32 = 92;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

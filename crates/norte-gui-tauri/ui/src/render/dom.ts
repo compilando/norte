@@ -598,6 +598,26 @@ export function statusNodes(
       el.dataset["id"] = it.id;
       el.textContent = it.text;
       el.title = it.tooltip;
+      if (it.progress !== undefined) {
+        // La barra ligera (ADR 0146): detrás del texto, fina. Sin porcentaje
+        // se anima en vez de pintarse vacía: «no se sabe» no es 0 %.
+        const barra = document.createElement("span");
+        barra.className = "status-bar";
+        barra.dataset["phase"] = it.progress.phase;
+        barra.setAttribute("role", "progressbar");
+        barra.setAttribute("aria-valuemin", "0");
+        barra.setAttribute("aria-valuemax", "100");
+        const relleno = document.createElement("span");
+        relleno.className = "status-bar-fill";
+        if (it.progress.percent === null) {
+          barra.dataset["indeterminate"] = "true";
+        } else {
+          barra.setAttribute("aria-valuenow", String(it.progress.percent));
+          relleno.style.width = `${String(it.progress.percent)}%`;
+        }
+        barra.append(relleno);
+        el.append(barra);
+      }
       if (el instanceof HTMLButtonElement) {
         el.type = "button";
         if (onItem !== null) {

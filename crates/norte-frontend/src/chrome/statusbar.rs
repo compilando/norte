@@ -34,8 +34,9 @@ pub struct StatusInput {
     /// La reinterpretación de nombres del pane; `None` = los bytes tal cual,
     /// leídos como UTF-8.
     pub encoding: Option<norte_encoding::NameEncoding>,
-    /// Tareas en marcha.
-    pub tasks: usize,
+    /// La barra de progreso ligera (ADR 0146): lo que el item `tasks` dice
+    /// ahora, o nada — antes del umbral, o sin trabajo.
+    pub strip: Option<crate::task_strip::StripView>,
     /// Avisos que caducaron sin leerse.
     pub notices: u32,
 }
@@ -45,7 +46,11 @@ impl StatusInput {
     /// frontends: con el FILTRO activo no hay posición (review MINOR-2 T4:
     /// la selección no es el cursor real, y el pie ya da el `n/m` honesto).
     #[must_use]
-    pub fn from_pane(pane: &crate::PaneState, tasks: usize, notices: u32) -> Self {
+    pub fn from_pane(
+        pane: &crate::PaneState,
+        strip: Option<crate::task_strip::StripView>,
+        notices: u32,
+    ) -> Self {
         let total = pane.entries().len();
         let pos = if total == 0 { 0 } else { pane.cursor() + 1 };
         Self {
@@ -55,7 +60,7 @@ impl StatusInput {
             marked_dirs: pane.marked_dirs(),
             sort: pane.sort(),
             encoding: pane.name_encoding(),
-            tasks,
+            strip,
             notices,
         }
     }
@@ -76,6 +81,36 @@ pub struct StatusItemView {
     pub command: Option<&'static str>,
     /// Mayor = cede más tarde cuando no caben todos.
     pub priority: u8,
+    /// Si detrás del texto va la barra de progreso (ADR 0146): solo el item
+    /// `tasks`, con trabajo en marcha.
+    pub bar: bool,
+    /// El progreso que esa barra pinta, y en qué fase está la ráfaga.
+    pub progress: Option<ItemProgress>,
+    /// Formas más cortas del mismo item, de más larga a más corta:
+    /// [`fit`] las prueba antes de quitar ningún item.
+    pub shorter: Vec<crate::task_strip::Form>,
+}
+
+/// El progreso del item `tasks`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemProgress {
+    /// Del total; `None` = no se sabe (una barra que pulsa, no un 0 %).
+    pub percent: Option<u8>,
+    /// En marcha, hecho o fallido.
+    pub phase: crate::task_strip::StripPhase,
+}
+
+impl StatusItemView {
+    /// Las celdas que ocupa, con su barra si la lleva.
+    #[must_use]
+    pub fn cells(&self) -> usize {
+        crate::display::cells(&self.text)
+            + if self.bar {
+                crate::task_strip::BAR_CELLS + 3
+            } else {
+                0
+            }
+    }
 }
 
 /// Los elementos de `list`, en su orden, sin los que ahora no tienen nada
@@ -87,6 +122,7 @@ pub fn items(input: &StatusInput, list: StatusItems, lang: Lang) -> Vec<StatusIt
 }
 
 fn item(input: &StatusInput, which: StatusItem, lang: Lang) -> Option<StatusItemView> {
+    let mut forma: Option<(bool, Option<ItemProgress>, Vec<crate::task_strip::Form>)> = None;
     let (text, command, priority) = match which {
         StatusItem::Position => {
             let (pos, total) = input.position?;
@@ -108,10 +144,18 @@ fn item(input: &StatusInput, which: StatusItem, lang: Lang) -> Option<StatusItem
             40,
         ),
         StatusItem::Tasks => {
-            if input.tasks == 0 {
-                return None;
-            }
-            (format!("⟳ {}", input.tasks), Some("layout.processes"), 80)
+            let v = input.strip.as_ref()?;
+            let mut formas = crate::task_strip::forms(v, lang).into_iter();
+            let primera = formas.next()?;
+            forma = Some((
+                primera.bar,
+                Some(ItemProgress {
+                    percent: v.percent,
+                    phase: v.phase,
+                }),
+                formas.collect(),
+            ));
+            (primera.text, Some("layout.processes"), 80)
         }
         StatusItem::Notices => {
             if input.notices == 0 {
@@ -126,12 +170,16 @@ fn item(input: &StatusInput, which: StatusItem, lang: Lang) -> Option<StatusItem
         &format!("status-item-{id}-tip"),
         &[("n", &tip_count(input, which))],
     );
+    let (bar, progress, shorter) = forma.unwrap_or_default();
     Some(StatusItemView {
         id: id.to_owned(),
         text,
         tooltip,
         command,
         priority,
+        bar,
+        progress,
+        shorter,
     })
 }
 
@@ -178,6 +226,9 @@ pub fn plugin_items(
                 tooltip,
                 command: None,
                 priority: 10,
+                bar: false,
+                progress: None,
+                shorter: Vec::new(),
             })
         })
         .collect()
@@ -217,7 +268,7 @@ fn acotar(s: &str, max: usize) -> String {
 /// La cifra que el tooltip de un elemento necesita, si alguna.
 fn tip_count(input: &StatusInput, which: StatusItem) -> String {
     match which {
-        StatusItem::Tasks => input.tasks.to_string(),
+        StatusItem::Tasks => input.strip.as_ref().map_or(0, |v| v.count).to_string(),
         StatusItem::Notices => input.notices.to_string(),
         _ => String::new(),
     }
@@ -244,8 +295,13 @@ fn sort_text(s: &SortSpec, lang: Lang) -> String {
 }
 
 /// Qué elementos caben en `width` celdas con `sep` celdas entre dos
-/// seguidos: se descartan los de MENOR prioridad hasta que quepan, y los que
-/// quedan conservan el orden configurado. Devuelve sus índices en `items`.
+/// seguidos, ya en la forma en que se pintan.
+///
+/// Primero se ACORTA: un item con formas más cortas (el de tareas, ADR 0146)
+/// baja de forma antes de que se quite ningún otro, porque una forma corta
+/// conserva el dato y quitar un item lo pierde. Luego se descartan los de
+/// MENOR prioridad hasta que quepan, y los que quedan conservan el orden
+/// configurado.
 ///
 /// Media palabra no es un elemento: el que no cabe entero no se pinta.
 ///
@@ -253,30 +309,36 @@ fn sort_text(s: &SortSpec, lang: Lang) -> String {
 /// use norte_frontend::statusbar::{StatusItemView, fit};
 /// let v = |id: &str, text: &str, priority| StatusItemView {
 ///     id: id.into(), text: text.into(), tooltip: String::new(), command: None, priority,
+///     bar: false, progress: None, shorter: Vec::new(),
 /// };
 /// let items = [v("a", "aaaa", 10), v("b", "bb", 90), v("c", "cc", 50)];
-/// assert_eq!(fit(&items, 100, 2), [0, 1, 2]);
+/// let ids = |w| fit(&items, w, 2).into_iter().map(|i| i.id).collect::<Vec<_>>();
+/// assert_eq!(ids(100), ["a", "b", "c"]);
 /// // 2 + 2 + 2 = 6 caben; con «aaaa» serían 12.
-/// assert_eq!(fit(&items, 6, 2), [1, 2]);
-/// assert_eq!(fit(&items, 1, 2), Vec::<usize>::new());
+/// assert_eq!(ids(6), ["b", "c"]);
+/// assert!(ids(1).is_empty());
 /// ```
 #[must_use]
-pub fn fit(items: &[StatusItemView], width: usize, sep: usize) -> Vec<usize> {
-    let mut quedan: Vec<usize> = (0..items.len()).collect();
+pub fn fit(items: &[StatusItemView], width: usize, sep: usize) -> Vec<StatusItemView> {
+    let mut quedan: Vec<StatusItemView> = items.to_vec();
+    let ancho = |q: &[StatusItemView]| {
+        q.iter().map(StatusItemView::cells).sum::<usize>() + sep * q.len().saturating_sub(1)
+    };
     loop {
-        let ancho: usize = quedan
-            .iter()
-            .map(|&i| crate::display::cells(&items[i].text))
-            .sum::<usize>()
-            + sep * quedan.len().saturating_sub(1);
-        if ancho <= width {
+        if ancho(&quedan) <= width {
             return quedan;
+        }
+        if let Some(v) = quedan.iter_mut().find(|v| !v.shorter.is_empty()) {
+            let f = v.shorter.remove(0);
+            v.text = f.text;
+            v.bar = f.bar;
+            continue;
         }
         // El de menor prioridad; a igual prioridad, el más a la derecha.
         let Some(pos) = quedan
             .iter()
             .enumerate()
-            .min_by_key(|&(p, &i)| (items[i].priority, std::cmp::Reverse(p)))
+            .min_by_key(|&(p, v)| (v.priority, std::cmp::Reverse(p)))
             .map(|(p, _)| p)
         else {
             return quedan;
@@ -297,7 +359,7 @@ mod tests {
             marked_dirs: 0,
             sort: SortSpec::default(),
             encoding: None,
-            tasks: 0,
+            strip: None,
             notices: 0,
         }
     }
@@ -328,7 +390,15 @@ mod tests {
     #[test]
     fn los_comandos_existen() {
         let mut i = input();
-        i.tasks = 2;
+        i.strip = Some(crate::task_strip::StripView {
+            phase: crate::task_strip::StripPhase::Running,
+            count: 2,
+            percent: Some(40),
+            kind: None,
+            name: None,
+            rate: String::new(),
+            eta: "1m".to_owned(),
+        });
         i.notices = 1;
         i.marked = 1;
         for v in items(&i, StatusItems::DEFAULT, Lang::Es) {
@@ -356,5 +426,40 @@ mod tests {
         let de = |id| v.iter().find(|x| x.id == id).map(|x| x.text.clone());
         assert_eq!(de("sort").as_deref(), Some("Tamaño ↓"));
         assert_eq!(de("encoding").as_deref(), Some("CP437"));
+    }
+
+    /// ADR 0146: el item de tareas se ACORTA antes de que caiga otro, y
+    /// solo cae cuando ni su forma más corta cabe.
+    #[test]
+    fn las_tareas_se_acortan_antes_de_quitar_nada() {
+        let mut i = input();
+        i.strip = Some(crate::task_strip::StripView {
+            phase: crate::task_strip::StripPhase::Running,
+            count: 1,
+            percent: Some(62),
+            kind: Some(norte_proto::TaskKind::Copy),
+            name: Some("foto-grande.jpg".to_owned()),
+            rate: "48 MiB/s".to_owned(),
+            eta: String::new(),
+        });
+        let lista = StatusItems::parse(&["tasks", "position"]).unwrap();
+        let v = items(&i, lista, Lang::Es);
+        let entera = fit(&v, 200, 2);
+        assert!(entera[0].text.contains("foto-grande.jpg") && entera[0].bar);
+        // Justo lo que ocupa la más corta con barra, más la posición.
+        let corta = v[0].shorter.iter().rfind(|f| f.bar).expect("forma corta");
+        let w = crate::task_strip::form_cells(corta) + 2 + 5;
+        let ajustada = fit(&v, w, 2);
+        let ids: Vec<_> = ajustada.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, ["tasks", "position"], "no cae nada");
+        assert_eq!(ajustada[0].text, corta.text);
+        assert!(ajustada.iter().map(StatusItemView::cells).sum::<usize>() + 2 <= w);
+    }
+
+    /// Sin barra (antes del umbral, o sin trabajo) el item no sale.
+    #[test]
+    fn sin_barra_no_hay_item_de_tareas() {
+        let lista = StatusItems::parse(&["tasks"]).unwrap();
+        assert!(items(&input(), lista, Lang::Es).is_empty());
     }
 }

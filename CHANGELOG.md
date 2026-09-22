@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A light progress bar in the status bar** (ADR 0146, bridge 92). The
+  `tasks` item shows one bar for the running work once it has lasted 400 ms,
+  with the file name and rate for a single task or the time left for
+  several; it leaves `✓ copied photo.jpg` briefly when done (even for copies
+  too quick for a bar) and `✗ n failed` for longer. It shrinks before any
+  other item is dropped. The automatic processes panel now waits 2 s before
+  opening, so a quick copy no longer flashes a third of the screen.
 - **Owner and group by name** (ADR 0145). Two new local columns,
   `attr:posix.owner` and `attr:posix.group`, show names as `ls -l` does,
   resolved through the C library (so LDAP/SSSD names too) only while the

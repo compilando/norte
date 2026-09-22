@@ -410,7 +410,7 @@ impl Estado {
     pub(super) fn elementos_de_estado(&self) -> Vec<norte_frontend::statusbar::StatusItemView> {
         let input = norte_frontend::statusbar::StatusInput::from_pane(
             &self.hueco().pane,
-            self.filas_de_tablero(),
+            self.tira.view(self.reloj_tira()),
             self.status.notices_unread,
         );
         // Los de los plugins primero (ADR 0137), como en la TUI: a la
@@ -436,13 +436,24 @@ impl Estado {
         let ancho = usize::from(self.viewport.0);
         norte_frontend::statusbar::fit(&lista, ancho / 2, 2)
             .into_iter()
-            .map(|i| {
-                let v = &lista[i];
+            .map(|v| {
+                use norte_frontend::task_strip::StripPhase;
                 crate::dto::StatusItemView {
                     id: clamp_display(v.id.clone()),
                     text: clamp_display(v.text.clone()),
                     tooltip: clamp_display(v.tooltip.clone()),
                     clickable: v.command.is_some(),
+                    progress: v.progress.filter(|_| v.bar).map(|p| {
+                        crate::dto::StatusProgressView {
+                            percent: p.percent,
+                            phase: match p.phase {
+                                StripPhase::Running => "running",
+                                StripPhase::Done => "done",
+                                StripPhase::Failed => "failed",
+                            }
+                            .to_owned(),
+                        }
+                    }),
                 }
             })
             .collect()

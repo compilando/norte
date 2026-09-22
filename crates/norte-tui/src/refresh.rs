@@ -61,6 +61,9 @@ pub async fn on_tick(
     // tick ANTERIOR, así que colgar la limpieza de `finished` la dejaría en
     // pantalla hasta que otra task cualquiera volviera a pasar por aquí.
     app.board.prune_terminal(app.now_ms());
+    // La barra ligera mira el tablero DESPUÉS de copiar los snapshots: el
+    // mismo instante que pinta el panel de procesos (ADR 0146).
+    app.note_strip();
     if finished.is_empty() {
         app.open_next_pending();
         return [false; 2];

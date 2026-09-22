@@ -88,6 +88,7 @@ mod sort;
 pub mod space;
 pub mod subshell;
 pub mod sync;
+pub mod task_strip;
 pub mod tasks;
 pub mod theme;
 pub mod timeline;

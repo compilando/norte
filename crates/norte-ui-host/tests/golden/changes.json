@@ -1044,6 +1044,16 @@
     "change": "status_items",
     "status_items": [
       {
+        "clickable": true,
+        "id": "tasks",
+        "progress": {
+          "percent": 62,
+          "phase": "running"
+        },
+        "text": "⟳ copiando foto.jpg 62 % · 48 MiB/s",
+        "tooltip": "1 tareas en marcha. Pulsa para ver los procesos"
+      },
+      {
         "clickable": false,
         "id": "position",
         "text": "3/120",
