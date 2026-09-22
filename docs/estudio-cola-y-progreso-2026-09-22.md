@@ -135,6 +135,8 @@ Tres cosas distintas, en orden de valor/coste:
 
 ### 4.1 Pausar y reanudar
 
+(Implementado en la fase B, ADR 0147: protocolo 0.82.0, puente 93.)
+
 - `task.pause` / `task.resume` (protocolo +1 menor, `protocol-guardian`
   obligatorio). El estado `Paused` ya existe en el wire.
 - `TaskCtx` gana una **puerta** (`watch<bool>`) junto al token de

@@ -724,6 +724,9 @@ enum Mensaje {
     /// caducar por número desalojaría a una task viva que solo comparte el
     /// número con la que se fue.
     TaskCaducada(u64, u64),
+    /// Algo que se pidió fuera del actor terminó y hay que DECIRLO: la clave
+    /// del mensaje (hoy, una pausa que el daemon no sabe hacer).
+    Decir(&'static str),
     /// La barra de progreso ligera cambia sin que llegue progreso: pasó su
     /// umbral, el del panel, o se acabó el rato del «✓» (ADR 0146).
     Tira,
@@ -1497,6 +1500,11 @@ async fn actor(
             }
             Mensaje::TaskCaducada(id, epoca) => {
                 for u in estado.caducar_task(id, epoca, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::Decir(clave) => {
+                for u in estado.decir(clave) {
                     let _ = updates.send(u);
                 }
             }

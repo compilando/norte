@@ -1423,6 +1423,7 @@ mod tests {
 
     fn ctx(cancel: CancellationToken) -> TaskCtx {
         TaskCtx {
+            pause: crate::scheduler::PauseGate::default(),
             cancel,
             progress: Arc::new(
                 ProgressReporter::new(norte_proto::TaskId::new(1), TaskKind::Sync).0,

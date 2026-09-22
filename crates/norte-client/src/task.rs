@@ -28,6 +28,16 @@ impl RemoteTaskCanceller {
     pub fn cancel(&self) {
         self.backend.spawn_cancel(self.id);
     }
+
+    /// Pausa (`true`) o reanuda (`false`) la task (0.82.0, ADR 0147). Vive
+    /// en la misma asa que cancelar porque es el mismo control sobre la
+    /// misma task; el estado `paused` llega por `task.progress`.
+    ///
+    /// # Errors
+    /// `Unsupported` contra un daemon que no sabe pausar (0.81 o anterior).
+    pub async fn set_paused(&self, paused: bool) -> Result<(), norte_proto::Error> {
+        self.backend.set_paused(self.id, paused).await
+    }
 }
 
 /// Una task en marcha en el daemon.

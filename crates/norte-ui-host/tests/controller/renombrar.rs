@@ -2106,6 +2106,7 @@ pub(super) fn inyectar_task(
         id: norte_proto::TaskId::new(id),
         progress: prx,
         cancel: Arc::new(move || canceladas.lock().expect("canceladas").push(id)),
+        pause: None,
         foreign: true,
     })
     .expect("el host escucha");
@@ -2370,6 +2371,7 @@ pub(super) fn inyectar_task_de(
         id: norte_proto::TaskId::new(id),
         progress: prx,
         cancel: Arc::new(|| {}),
+        pause: None,
         foreign: false,
     })
     .expect("el host escucha");

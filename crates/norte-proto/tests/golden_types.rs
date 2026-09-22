@@ -4889,7 +4889,10 @@ fn method_names_frozen() {
     // 0.81.0: ningún método nuevo — `fs.search` gana diez filtros opcionales,
     // y ninguno viaja cuando no se pide, así que el JSON de una búsqueda
     // corriente no se mueve.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.81.0");
+    // 0.82.0: una task se puede pausar (ADR 0147).
+    assert_eq!(methods::TASK_PAUSE, "task.pause");
+    assert_eq!(methods::TASK_RESUME, "task.resume");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.82.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

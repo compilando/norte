@@ -1217,6 +1217,7 @@ mod tests {
         let (reporter, _rx) =
             crate::progress::ProgressReporter::new(TaskId::new(1), norte_proto::TaskKind::Search);
         crate::scheduler::TaskCtx {
+            pause: crate::scheduler::PauseGate::default(),
             cancel: CancellationToken::new(),
             progress: Arc::new(reporter),
             actor: crate::journal::Actor::User,

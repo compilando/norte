@@ -733,6 +733,7 @@ impl Falso {
                 cancel: Arc::new(move || {
                     cancelaciones.fetch_add(1, Ordering::SeqCst);
                 }),
+                pause: None,
                 foreign: false,
             })
         })
@@ -788,6 +789,7 @@ impl Falso {
                 cancel: Arc::new(move || {
                     cancelaciones.fetch_add(1, Ordering::SeqCst);
                 }),
+                pause: None,
                 foreign: false,
             })
         })
@@ -1069,6 +1071,7 @@ impl HostBackend for Falso {
                     cancel: Arc::new(move || {
                         cancelaciones.fetch_add(1, Ordering::SeqCst);
                     }),
+                    pause: None,
                     foreign: false,
                 },
                 rx,
@@ -1243,6 +1246,7 @@ impl HostBackend for Falso {
                 id,
                 progress: rx,
                 cancel: Arc::new(|| {}),
+                pause: None,
                 foreign: false,
             })
         })
@@ -1310,6 +1314,7 @@ impl HostBackend for Falso {
                 id,
                 progress: rx,
                 cancel: Arc::new(|| {}),
+                pause: None,
                 foreign: false,
             })
         })
@@ -1591,6 +1596,7 @@ impl HostBackend for Falso {
                     canceladas.lock().expect("canceladas").push(id.get());
                     pulso.notify_waiters();
                 }),
+                pause: None,
                 foreign: false,
             })
         })
@@ -1665,6 +1671,7 @@ impl HostBackend for Falso {
                     id,
                     progress: rx,
                     cancel: Arc::new(|| {}),
+                    pause: None,
                     foreign: false,
                 },
                 erx,
@@ -1727,6 +1734,7 @@ impl HostBackend for Falso {
                     id,
                     progress: rx,
                     cancel: Arc::new(|| {}),
+                    pause: None,
                     foreign: false,
                 },
                 frx,
@@ -1796,6 +1804,7 @@ impl HostBackend for Falso {
                 id: norte_proto::TaskId::new(10),
                 progress: rx,
                 cancel: Arc::new(|| {}),
+                pause: None,
                 foreign: false,
             })
         })
@@ -1831,6 +1840,7 @@ impl HostBackend for Falso {
                 id: norte_proto::TaskId::new(11),
                 progress: rx,
                 cancel: Arc::new(|| {}),
+                pause: None,
                 foreign: false,
             })
         })
@@ -1895,6 +1905,7 @@ impl HostBackend for Falso {
                 id: norte_proto::TaskId::new(9),
                 progress: rx,
                 cancel: Arc::new(|| {}),
+                pause: None,
                 foreign: false,
             })
         })
@@ -1921,6 +1932,7 @@ impl HostBackend for Falso {
                 id: norte_proto::TaskId::new(8),
                 progress: rx,
                 cancel: Arc::new(|| {}),
+                pause: None,
                 foreign: false,
             })
         })
@@ -1969,6 +1981,7 @@ impl HostBackend for Falso {
                 id: norte_proto::TaskId::new(14),
                 progress: rx,
                 cancel: Arc::new(|| {}),
+                pause: None,
                 foreign: false,
             })
         })
@@ -2300,6 +2313,7 @@ impl HostBackend for Falso {
                 id,
                 progress: rx,
                 cancel: Arc::new(|| {}),
+                pause: None,
                 foreign: false,
             })
         })
@@ -2355,6 +2369,7 @@ impl HostBackend for Falso {
                 id,
                 progress: rx,
                 cancel: Arc::new(|| {}),
+                pause: None,
                 foreign: false,
             })
         })
@@ -2449,6 +2464,7 @@ impl HostBackend for Falso {
                 cancel: Arc::new(move || {
                     cancelaciones.fetch_add(1, Ordering::SeqCst);
                 }),
+                pause: None,
                 foreign: false,
             })
         })
@@ -2621,6 +2637,7 @@ impl HostBackend for Falso {
                 cancel: Arc::new(move || {
                     cancelaciones.fetch_add(1, Ordering::SeqCst);
                 }),
+                pause: None,
                 foreign: false,
             })
         })

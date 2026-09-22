@@ -30,11 +30,26 @@ pub struct HostTask {
     /// Pide la cancelación cooperativa. Llamarla dos veces no es un error:
     /// cancelar es idempotente por contrato.
     pub cancel: Arc<dyn Fn() + Send + Sync>,
+    /// Pausa (`true`) o reanuda (`false`) la task (ADR 0147), o `None` si esta
+    /// task no se puede pausar desde aquí. Devuelve `Unsupported` contra un
+    /// daemon que no sabe pausar, para que la ventana lo diga.
+    pub pause: Option<Pausa>,
     /// La lanzó OTRO cliente de la misma sesión. Se pinta igual y se puede
     /// cancelar igual —es la misma sesión—, pero el tablero lo dice: una
     /// operación que uno no ha pedido y no se distingue de las suyas es una
     /// sorpresa.
     pub foreign: bool,
+}
+
+/// Cómo pausar o reanudar una [`HostTask`] (ADR 0147).
+pub type Pausa = Arc<dyn Fn(bool) -> BoxFuture<'static, Result<(), Error>> + Send + Sync>;
+
+/// La pausa de una task del daemon, por su asa del SDK.
+fn pausa_remota(c: norte_client::RemoteTaskCanceller) -> Pausa {
+    Arc::new(move |pausar| {
+        let c = c.clone();
+        Box::pin(async move { c.set_paused(pausar).await })
+    })
 }
 
 impl std::fmt::Debug for HostTask {
@@ -902,10 +917,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.checksum(params).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -927,10 +944,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.dir_usage(params).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -952,10 +971,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.set_mode(params).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -966,10 +987,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.mkdir(&path).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -980,10 +1003,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.create_file(&path).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1053,10 +1078,12 @@ impl HostBackend for norte_client::RemoteBackend {
         tokio::spawn(async move {
             while let Some(t) = origen.recv().await {
                 let canceller = t.canceller();
+                let pausador = canceller.clone();
                 let task = HostTask {
                     id: t.id(),
                     progress: t.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
+                    pause: Some(pausa_remota(pausador)),
                     foreign: true,
                 };
                 if tx.send(task).is_err() {
@@ -1212,11 +1239,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let (task, rx) = backend.search(params).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok((
                 HostTask {
                     id: task.id(),
                     progress: task.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
+                    pause: Some(pausa_remota(pausador)),
                     foreign: false,
                 },
                 rx,
@@ -1241,11 +1270,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let (task, rx) = backend.sync_plan(params).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok((
                 HostTask {
                     id: task.id(),
                     progress: task.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
+                    pause: Some(pausa_remota(pausador)),
                     foreign: false,
                 },
                 rx,
@@ -1261,10 +1292,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.sync_apply(&plan_hash).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1295,11 +1328,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let (task, rx) = backend.compare(params).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok((
                 HostTask {
                     id: task.id(),
                     progress: task.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
+                    pause: Some(pausa_remota(pausador)),
                     foreign: false,
                 },
                 rx,
@@ -1319,10 +1354,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.delete(&path, mode).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1345,10 +1382,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.pack(params).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1362,10 +1401,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.test_archive(params).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1398,10 +1439,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.split_file(params).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1415,10 +1458,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.combine_files(params).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1429,10 +1474,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.dir_size(methods::FsDirSizeParams { paths }).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1498,10 +1545,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.organize(&dir, &moves, &plan_hash).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1526,10 +1575,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.rename_batch(&dir, &pairs, &plan_hash).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1548,10 +1599,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.undo_session(&session).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1583,10 +1636,12 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.undo_after(seq, upto_seq).await?;
             let canceller = task.canceller();
+            let pausador = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                pause: Some(pausa_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1666,10 +1721,12 @@ fn transferir(
             )
             .await?;
         let canceller = task.canceller();
+        let pausador = canceller.clone();
         Ok(HostTask {
             id: task.id(),
             progress: task.progress(),
             cancel: Arc::new(move || canceller.cancel()),
+            pause: Some(pausa_remota(pausador)),
             foreign: false,
         })
     })

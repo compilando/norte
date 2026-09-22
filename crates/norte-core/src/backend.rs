@@ -97,6 +97,7 @@ pub struct TaskRef {
     id: TaskId,
     rx: watch::Receiver<TaskProgress>,
     canceller: TaskCanceller,
+    pauser: TaskPauser,
 }
 
 impl TaskRef {
@@ -114,6 +115,7 @@ impl TaskRef {
             id,
             rx,
             canceller: TaskCanceller::Embedded(CancellationToken::new()),
+            pauser: TaskPauser::Embedded(crate::scheduler::PauseGate::default()),
         }
     }
 
@@ -155,6 +157,7 @@ impl TaskRef {
             id: self.id,
             rx: self.rx.clone(),
             canceller: self.canceller.clone(),
+            pauser: self.pauser.clone(),
         }
     }
 
@@ -189,6 +192,7 @@ impl TaskRef {
             id: handle.id(),
             rx: handle.progress(),
             canceller: TaskCanceller::Embedded(handle.cancel_token()),
+            pauser: TaskPauser::Embedded(handle.pause_gate()),
         }
     }
 }
@@ -223,6 +227,7 @@ pub struct TaskObserver {
     id: TaskId,
     rx: watch::Receiver<TaskProgress>,
     canceller: TaskCanceller,
+    pauser: TaskPauser,
 }
 
 impl TaskObserver {
@@ -242,6 +247,55 @@ impl TaskObserver {
     /// terminada no hace nada.
     pub fn cancel(&self) {
         self.canceller.cancel();
+    }
+
+    /// Pausa (`true`) o reanuda (`false`) la task (ADR 0147). Cooperativa:
+    /// el estado `Paused` llega por el progreso cuando de verdad se para.
+    ///
+    /// # Errors
+    /// `Unsupported` si la task es de un daemon que no sabe pausar.
+    pub async fn set_paused(&self, paused: bool) -> Result<(), Error> {
+        self.pauser.set_paused(paused).await
+    }
+
+    /// Un asa de pausa clonable, para pedirla desde otra task sin llevarse
+    /// el observador entero.
+    #[must_use]
+    pub fn pauser(&self) -> TaskPauser {
+        self.pauser.clone()
+    }
+}
+
+/// Pausa clonable de una task (ADR 0147), del scheduler embebido o del
+/// daemon. Aparte de [`TaskCanceller`] para no cambiar su forma, que usan
+/// otras superficies (MCP) que no pausan.
+#[derive(Clone)]
+pub enum TaskPauser {
+    /// La puerta del scheduler embebido.
+    Embedded(crate::scheduler::PauseGate),
+    /// `task.pause`/`task.resume` contra el daemon.
+    #[cfg(unix)]
+    Remote(norte_client::RemoteTaskCanceller),
+}
+
+impl TaskPauser {
+    /// Pausa (`true`) o reanuda (`false`).
+    ///
+    /// # Errors
+    /// `Unsupported` contra un daemon que no sabe pausar.
+    pub async fn set_paused(&self, paused: bool) -> Result<(), Error> {
+        match self {
+            Self::Embedded(g) => {
+                if paused {
+                    g.pause();
+                } else {
+                    g.resume();
+                }
+                Ok(())
+            }
+            #[cfg(unix)]
+            Self::Remote(c) => c.set_paused(paused).await,
+        }
     }
 }
 
@@ -265,7 +319,13 @@ impl From<norte_client::RemoteTask> for TaskRef {
         let id = t.id();
         let rx = t.progress();
         let canceller = TaskCanceller::Remote(t.canceller());
-        Self { id, rx, canceller }
+        let pauser = TaskPauser::Remote(t.canceller());
+        Self {
+            id,
+            rx,
+            canceller,
+            pauser,
+        }
     }
 }
 

@@ -433,3 +433,132 @@ async fn cada_evento_de_una_tarea_lleva_su_span_y_el_de_la_peticion() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Pausa (ADR 0147).
+// ---------------------------------------------------------------------------
+
+/// Espera a que el progreso publicado cumpla `f`, con un plazo de socorro
+/// que no es la espera: solo evita colgar el test si nunca llega.
+async fn hasta(
+    rx: &mut tokio::sync::watch::Receiver<norte_proto::TaskProgress>,
+    f: impl Fn(&norte_proto::TaskProgress) -> bool,
+) {
+    tokio::time::timeout(Duration::from_secs(10), rx.wait_for(|p| f(p)))
+        .await
+        .expect("el estado esperado llegó")
+        .expect("el emisor sigue vivo");
+}
+
+/// Un cuerpo que avanza de uno en uno por puntos de control hasta que el
+/// test levanta `fin`: acabar por su cuenta sería una carrera con la pausa.
+fn contador(fin: Arc<std::sync::atomic::AtomicBool>) -> TaskBody {
+    body(move |ctx| {
+        Box::pin(async move {
+            let mut i = 0u64;
+            while !fin.load(Ordering::SeqCst) {
+                ctx.checkpoint().await?;
+                i += 1;
+                ctx.progress.update(|p| p.entries_done = i);
+                tokio::task::yield_now().await;
+            }
+            Ok(())
+        })
+    })
+}
+
+/// Pausar para la task en su punto de control y lo publica; reanudar la
+/// deja seguir hasta el final.
+#[tokio::test]
+async fn pausar_para_y_reanudar_sigue() {
+    let sched = Scheduler::new(1);
+    let fin = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let handle = sched.submit(
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        contador(Arc::clone(&fin)),
+    );
+    let mut rx = handle.progress();
+    hasta(&mut rx, |p| p.entries_done >= 3).await;
+    handle.pause_gate().pause();
+    hasta(&mut rx, |p| p.state == TaskState::Paused).await;
+    let parada = rx.borrow().entries_done;
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        handle.progress().borrow().entries_done,
+        parada,
+        "pausada no avanza"
+    );
+    handle.pause_gate().resume();
+    hasta(&mut rx, |p| p.entries_done > parada).await;
+    fin.store(true, Ordering::SeqCst);
+    assert_eq!(handle.join().await, TaskState::Completed);
+}
+
+/// Cancelar una task PAUSADA la termina limpia (regla dura 3): la espera
+/// escucha al token.
+#[tokio::test]
+async fn cancelar_una_pausada_la_termina() {
+    let sched = Scheduler::new(1);
+    let handle = sched.submit(
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        contador(Arc::new(std::sync::atomic::AtomicBool::new(false))),
+    );
+    let mut rx = handle.progress();
+    hasta(&mut rx, |p| p.entries_done >= 1).await;
+    handle.pause_gate().pause();
+    hasta(&mut rx, |p| p.state == TaskState::Paused).await;
+    handle.cancel();
+    assert_eq!(handle.join().await, TaskState::Cancelled);
+}
+
+/// Una task pausada ANTES de empezar no ejecuta su cuerpo hasta reanudarse,
+/// aunque el cuerpo no tenga puntos de control propios.
+#[tokio::test]
+async fn pausada_antes_de_empezar_no_empieza() {
+    let sched = Scheduler::new(1);
+    let corrio = Arc::new(AtomicUsize::new(0));
+    // Ocupa el único hueco para que la segunda espere en la cola.
+    let (suelta_tx, suelta_rx) = tokio::sync::oneshot::channel::<()>();
+    let bloqueo = sched.submit(
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        body(move |_ctx| {
+            Box::pin(async move {
+                let _ = suelta_rx.await;
+                Ok(())
+            })
+        }),
+    );
+    let c = Arc::clone(&corrio);
+    let handle = sched.submit(
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        body(move |_ctx| {
+            Box::pin(async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }),
+    );
+    handle.pause_gate().pause();
+    let _ = suelta_tx.send(());
+    assert_eq!(bloqueo.join().await, TaskState::Completed);
+    let mut rx = handle.progress();
+    hasta(&mut rx, |p| p.state == TaskState::Paused).await;
+    assert_eq!(corrio.load(Ordering::SeqCst), 0, "el cuerpo no corrió");
+    handle.pause_gate().resume();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(corrio.load(Ordering::SeqCst), 1);
+}

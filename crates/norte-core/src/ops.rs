@@ -1728,9 +1728,9 @@ async fn copy_tree(
 
     let mut skipped: Vec<VPath> = Vec::new();
     for pe in plan {
-        if ctx.cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
+        // Entre entrada y entrada se puede PAUSAR (ADR 0147): es el único
+        // sitio donde se para una copia sin chunks (servidor-a-servidor).
+        ctx.checkpoint().await?;
         let entry = &pe.entry;
         let target = rebase(&entry.path, from, to)?;
         ctx.progress
@@ -2006,10 +2006,12 @@ async fn copy_file(
     let mut written = base + already;
     while let Some(item) = stream.next().await {
         // Cancelación por chunk: destino limpio, o `.norte-partial`
-        // reanudable (resume), jamás un archivo a medias sin marcar.
-        if ctx.cancel.is_cancelled() {
+        // reanudable (resume), jamás un archivo a medias sin marcar. Y la
+        // PAUSA (ADR 0147), en el mismo sitio: se espera con el fichero
+        // abierto, y cancelar durante la espera limpia igual.
+        if let Err(e) = ctx.checkpoint().await {
             release(sink, to, resume).await;
-            return Err(Error::Cancelled);
+            return Err(e);
         }
         let chunk = match item {
             Ok(c) => c,
@@ -2454,9 +2456,7 @@ async fn move_by_copy(
             // caminos, saltada en uno y movida por el otro, termina solo en
             // el destino (sin pérdida: el contenido vive allí).
             for pe in plan.iter().rev() {
-                if ctx.cancel.is_cancelled() {
-                    return Err(Error::Cancelled);
-                }
+                ctx.checkpoint().await?;
                 let keep = match pe.provenance {
                     Provenance::ViaLink => true,
                     Provenance::LinkRoot => {
@@ -2577,9 +2577,7 @@ pub(crate) async fn delete_task(
         // El walk emite cada padre antes que sus hijos: recorrerlo al revés
         // ES el post-order (todo dir llega vacío a su remove).
         for e in entries.iter().rev() {
-            if ctx.cancel.is_cancelled() {
-                return Err(Error::Cancelled);
-            }
+            ctx.checkpoint().await?;
             ctx.progress.update(|p| p.current = Some(e.path.clone()));
             remove_retrying(&*provider, &e.path, &ctx.cancel).await?;
             observer
@@ -4138,6 +4136,7 @@ mod tests {
         cancel.cancel();
         let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Mkdir);
         let ctx = TaskCtx {
+            pause: crate::scheduler::PauseGate::default(),
             cancel,
             progress: Arc::new(reporter),
             actor: Actor::User,
@@ -4183,6 +4182,7 @@ mod tests {
         cancel.cancel();
         let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Create);
         let ctx = TaskCtx {
+            pause: crate::scheduler::PauseGate::default(),
             cancel,
             progress: Arc::new(reporter),
             actor: Actor::User,
@@ -4224,6 +4224,7 @@ mod tests {
         cancel.cancel();
         let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Create);
         let ctx = TaskCtx {
+            pause: crate::scheduler::PauseGate::default(),
             cancel,
             progress: Arc::new(reporter),
             actor: Actor::Plugin {
@@ -4250,6 +4251,7 @@ mod tests {
         // Un directorio con el nombre del sidecar: `Conflict`, y sigue ahí.
         let (reporter, _rx) = ProgressReporter::new(TaskId::new(2), TaskKind::Create);
         let ctx = TaskCtx {
+            pause: crate::scheduler::PauseGate::default(),
             cancel: CancellationToken::new(),
             progress: Arc::new(reporter),
             actor: Actor::Plugin {
@@ -4288,6 +4290,141 @@ mod tests {
         }
     }
 
+    /// ADR 0147 y regla dura 3, el camino de más riesgo: una COPIA pausada a
+    /// mitad —con el fichero de staging abierto— y cancelada en la espera deja
+    /// el destino LIMPIO (sin `resume`): ni el nombre final ni un parcial sin
+    /// marcar.
+    #[tokio::test]
+    async fn una_copia_pausada_y_cancelada_deja_el_destino_limpio() {
+        use crate::journal::Actor;
+        use crate::progress::ProgressReporter;
+        use crate::scheduler::{PauseGate, TaskCtx};
+        use futures::StreamExt as _;
+        use norte_proto::{Error, TaskId, TaskKind, TaskState, VPath};
+        use norte_testkit::MemProvider;
+        use norte_vfs::Provider as _;
+        use std::sync::Arc;
+        use tokio_util::sync::CancellationToken;
+
+        let mem = Arc::new(MemProvider::new());
+        let origen = VPath::parse("mem:///o/grande.bin").expect("wire");
+        let dir_destino = VPath::parse("mem:///d").expect("wire");
+        let destino = VPath::parse("mem:///d/grande.bin").expect("wire");
+        mem.mkdir(&VPath::parse("mem:///o").expect("wire"))
+            .await
+            .expect("mkdir");
+        mem.mkdir(&dir_destino).await.expect("mkdir");
+        {
+            let mut sink = mem.write(&origen).await.expect("write");
+            sink.write(bytes::Bytes::from(vec![7u8; 200_000]))
+                .await
+                .expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+        let (reporter, mut rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Copy);
+        let cancel = CancellationToken::new();
+        let pause = PauseGate::default();
+        pause.pause();
+        let ctx = TaskCtx {
+            pause,
+            cancel: cancel.clone(),
+            progress: Arc::new(reporter),
+            actor: Actor::User,
+        };
+        let proveedor = Arc::clone(&mem) as Arc<dyn norte_vfs::Provider>;
+        let copia = super::copy_task(
+            Arc::clone(&proveedor),
+            proveedor,
+            origen,
+            destino.clone(),
+            crate::engine::TransferOptions::default(),
+            None,
+            Arc::new(crate::observer::NoopObserver),
+            &ctx,
+        );
+        let vigia = async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                rx.wait_for(|p| p.state == TaskState::Paused),
+            )
+            .await
+            .expect("llega a pausarse")
+            .expect("emisor vivo");
+            cancel.cancel();
+        };
+        let (r, ()) = tokio::join!(copia, vigia);
+        assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+        assert!(mem.stat(&destino).await.is_err(), "sin nombre final");
+        let quedan: Vec<_> = mem
+            .list(&dir_destino)
+            .await
+            .expect("list")
+            .collect::<Vec<_>>()
+            .await;
+        assert!(quedan.is_empty(), "ni staging ni parcial: {quedan:?}");
+    }
+
+    /// ADR 0147 y regla dura 3: un borrado recursivo PAUSADO no toca nada
+    /// mientras espera, lo dice (`Paused`), y cancelarlo en la espera termina
+    /// limpio con el árbol entero en su sitio.
+    #[tokio::test]
+    async fn un_borrado_pausado_espera_y_cancelarlo_no_toca_nada() {
+        use crate::journal::Actor;
+        use crate::progress::ProgressReporter;
+        use crate::scheduler::{PauseGate, TaskCtx};
+        use norte_proto::{DeleteMode, Error, TaskId, TaskKind, TaskState, VPath};
+        use norte_testkit::MemProvider;
+        use norte_vfs::Provider as _;
+        use std::sync::Arc;
+        use tokio_util::sync::CancellationToken;
+
+        let mem = Arc::new(MemProvider::new());
+        let dir = VPath::parse("mem:///d").expect("wire");
+        mem.mkdir(&dir).await.expect("mkdir");
+        for n in ["a", "b", "c"] {
+            let f = VPath::parse(&format!("mem:///d/{n}")).expect("wire");
+            let mut sink = mem.write(&f).await.expect("write");
+            sink.write(bytes::Bytes::from_static(b"x"))
+                .await
+                .expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+        let (reporter, mut rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Delete);
+        let cancel = CancellationToken::new();
+        let pause = PauseGate::default();
+        pause.pause();
+        let ctx = TaskCtx {
+            pause,
+            cancel: cancel.clone(),
+            progress: Arc::new(reporter),
+            actor: Actor::User,
+        };
+        let borrado = super::delete_task(
+            Arc::clone(&mem) as Arc<dyn norte_vfs::Provider>,
+            dir.clone(),
+            DeleteMode::Permanent,
+            Arc::new(crate::observer::NoopObserver),
+            &ctx,
+        );
+        let vigia = async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                rx.wait_for(|p| p.state == TaskState::Paused),
+            )
+            .await
+            .expect("llega a pausarse")
+            .expect("emisor vivo");
+            for n in ["a", "b", "c"] {
+                let f = VPath::parse(&format!("mem:///d/{n}")).expect("wire");
+                assert!(mem.stat(&f).await.is_ok(), "pausado no borra {n}");
+            }
+            cancel.cancel();
+        };
+        let (r, ()) = tokio::join!(borrado, vigia);
+        assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+        assert!(mem.stat(&dir).await.is_ok(), "el árbol sigue entero");
+    }
+
     /// #160, la misma forma que en `sync::exec::bury` y por el camino que anda
     /// un F8: la papelera se llevó el fichero y el observer del journal falló
     /// después. Se devuelve, y el borrado falla con el árbol como estaba.
@@ -4316,6 +4453,7 @@ mod tests {
         // (no hay helper compartido; no se añade uno para un solo test más).
         let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Delete);
         let ctx = TaskCtx {
+            pause: crate::scheduler::PauseGate::default(),
             cancel: CancellationToken::new(),
             progress: Arc::new(reporter),
             actor: Actor::User,
@@ -4368,6 +4506,7 @@ mod tests {
 
         let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Delete);
         let ctx = TaskCtx {
+            pause: crate::scheduler::PauseGate::default(),
             cancel: CancellationToken::new(),
             progress: Arc::new(reporter),
             actor: Actor::User,

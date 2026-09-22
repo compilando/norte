@@ -71,6 +71,9 @@
 # y el Norton Commander de 1986 no tenía dónde poner algo así. `ctrl+g` está
 # libre en los siete y lo llevan orthodox, cua y vim; aquí se llega por el
 # menú Ir (F9), donde está el primero.
+#
+# `task.pause` (ADR 0147) se queda SIN ATAR aquí, igual que `task.cancel`:
+# Norton Commander no tiene operaciones en segundo plano: no hay tecla que transcribir. Los dos se alcanzan desde la paleta.
 
 dialog_from = "orthodox"
 

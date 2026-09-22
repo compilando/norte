@@ -6,6 +6,25 @@
 //! ENTRADAS cuando no había bytes totales y la ventana gráfica no, así que un
 //! borrado —que no cuenta bytes— pintaba una barra clavada en cero.
 
+/// Si una task de esta clase se para de verdad al pausarla EN MARCHA
+/// (ADR 0147): solo las que tienen puntos de control —copiar, mover y
+/// borrar—. Las demás aceptarían la pausa y seguirían, y un control que no
+/// hace lo que dice es peor que uno que falta: los frontends dicen que no.
+///
+/// ```
+/// use norte_frontend::tasks::pausable;
+/// use norte_proto::TaskKind;
+/// assert!(pausable(TaskKind::Copy));
+/// assert!(!pausable(TaskKind::Search));
+/// ```
+#[must_use]
+pub fn pausable(kind: norte_proto::TaskKind) -> bool {
+    matches!(
+        kind,
+        norte_proto::TaskKind::Copy | norte_proto::TaskKind::Move | norte_proto::TaskKind::Delete
+    )
+}
+
 /// El porcentaje de una task: por bytes si se conocen, si no por entradas.
 ///
 /// `None` = no se sabe todavía (el walk no ha terminado y no hay totales).

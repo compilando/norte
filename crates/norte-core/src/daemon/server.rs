@@ -6305,12 +6305,52 @@ async fn dispatch_task_family(
             }
             to_value(&methods::TaskCancelResult {})
         }
+        methods::TASK_PAUSE => {
+            let p: methods::TaskPauseParams = parse_params(req.params)?;
+            pausar_task(&p, true, &actor, shared);
+            to_value(&methods::TaskPauseResult {})
+        }
+        methods::TASK_RESUME => {
+            let p: methods::TaskPauseParams = parse_params(req.params)?;
+            pausar_task(&p, false, &actor, shared);
+            to_value(&methods::TaskPauseResult {})
+        }
         methods::CONNECTION_TRUST_HOST_KEY => dispatch_trust_host_key(req, &actor, shared).await,
         methods::CONNECTION_PROVIDE_SECRET => dispatch_provide_secret(req, &actor, shared).await,
         other => Err(RpcError::protocol(
             codes::METHOD_NOT_FOUND,
             format!("unknown method: {other}"),
         )),
+    }
+}
+
+/// `task.pause` / `task.resume` (ADR 0147). Mismo contrato que `task.cancel`:
+/// terminal o desconocida no es error, y una ajena se trata como desconocida
+/// — mismo ack, sin filtrar existencia; el intento sí se traza.
+fn pausar_task(
+    p: &methods::TaskPauseParams,
+    pausar: bool,
+    actor: &crate::journal::Actor,
+    shared: &Arc<Shared>,
+) {
+    let tasks = shared.tasks.lock().expect("tasks lock sano");
+    let Some(task) = tasks.get(&p.task_id.get()) else {
+        return;
+    };
+    if !may_observe(actor, &task.owner) {
+        tracing::warn!(
+            task_id = p.task_id.get(),
+            actor = ?actor,
+            pausar,
+            "task.pause/resume sobre task ajena: ignorado por el gate de actor"
+        );
+        return;
+    }
+    let puerta = task.handle.pause_gate();
+    if pausar {
+        puerta.pause();
+    } else {
+        puerta.resume();
     }
 }
 

@@ -14,6 +14,7 @@ commands = [
     "pane.delete",
     "pane.delete-permanent",
     "task.cancel",
+    "task.pause",
     "dialog.overwrite",
     "dialog.skip",
     "dialog.rename",
@@ -87,6 +88,22 @@ they landed — each one whole, none of them half-written, but the directory is
 there and it is partial. Nothing sweeps it up for you.
 
 > ⚠ Cancelling a copy INTO object storage is the one case that stays ambiguous: the server may finish a copy it had already begun, so the object can appear after you cancelled, and abandoned multipart parts can go on costing money until a lifecycle rule clears them.
+
+# Pausing
+
+{{cmd:task.pause}} pauses the same task that would be cancelled, and resumes it
+if it is already paused. Pausing is cooperative, like cancelling: a copy stops
+at the end of the chunk it was writing, with the staging file open, and carries
+on from there. A copy that has no chunks — server to server, or the kernel's
+fast copy on one disk — stops at the end of the current file, and until then
+the bar says "pausing…", not "paused".
+
+Only copies, moves and deletes pause: they are the ones that check whether they
+have been asked to stop. On a search or a checksum you are told no, rather than
+being given a pause that will not happen.
+
+Cancelling a paused task works just like cancelling a running one. Against a
+daemon older than 0.82 pausing is not possible, and you are told so.
 
 Resumable copies are asked for explicitly, from the command line. There a
 cancelled copy leaves a file whose name carries `.norte-partial` —

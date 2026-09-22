@@ -1183,6 +1183,10 @@ button.status-item:hover {
   transition: width 0.2s linear;
 }
 
+.status-bar[data-phase="paused"] .status-bar-fill {
+  background: var(--warning-fg);
+}
+
 .status-bar[data-indeterminate="true"] .status-bar-fill {
   width: 30%;
   animation: status-bar-pulse 1.2s ease-in-out infinite alternate;

@@ -28,16 +28,104 @@ pub enum Priority {
     High,
 }
 
+/// La puerta de PAUSA de una task (ADR 0147): cerrada = pausada.
+///
+/// Cooperativa, como la cancelación: la task solo se para en sus
+/// [`TaskCtx::checkpoint`], que están en el bucle por chunk de una copia en
+/// streaming y entre entrada y entrada de copiar, mover y borrar. Una copia
+/// servidor-a-servidor o por `copy_file_range` no tiene chunks, así que se
+/// para al acabar el fichero en curso, no antes.
+///
+/// Clonable: la comparten el cuerpo, el [`TaskHandle`] y quien la pause
+/// desde fuera. Pausar o reanudar dos veces no es un error.
+///
+/// ```
+/// use norte_core::PauseGate;
+/// let g = PauseGate::default();
+/// assert!(!g.is_paused());
+/// g.pause();
+/// assert!(g.clone().is_paused(), "los clones comparten la puerta");
+/// g.resume();
+/// assert!(!g.is_paused());
+/// ```
+#[derive(Clone)]
+pub struct PauseGate(Arc<watch::Sender<bool>>);
+
+impl Default for PauseGate {
+    fn default() -> Self {
+        Self(Arc::new(watch::channel(false).0))
+    }
+}
+
+impl PauseGate {
+    /// Cierra la puerta: la task se parará en su próximo punto de control.
+    pub fn pause(&self) {
+        self.0.send_replace(true);
+    }
+
+    /// Abre la puerta: la task pausada sigue.
+    pub fn resume(&self) {
+        self.0.send_replace(false);
+    }
+
+    /// Si está cerrada.
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        *self.0.borrow()
+    }
+}
+
 /// Contexto que recibe el cuerpo de una task: cancelación cooperativa
-/// (chequéala en el inner loop, regla dura 3) y emisor de progreso.
+/// (chequéala en el inner loop, regla dura 3), pausa y emisor de progreso.
 pub struct TaskCtx {
     /// Token de cancelación; el cuerpo debe observarlo con frecuencia.
     pub cancel: CancellationToken,
+    /// La puerta de pausa; el cuerpo la respeta con [`Self::checkpoint`].
+    pub pause: PauseGate,
     /// Emisor de progreso coalescido.
     pub progress: Arc<ProgressReporter>,
     /// Origen de las mutaciones de esta task (default `User`; los agentes lo
     /// fijan vía MCP en M3-4). Lo consume el journal.
     pub actor: crate::journal::Actor,
+}
+
+impl TaskCtx {
+    /// Punto de control: `Err(Cancelled)` si la task se canceló, y si está
+    /// PAUSADA espera aquí —publicando `Paused`, y `Running` al seguir—
+    /// hasta que se reanude o se cancele.
+    ///
+    /// Cancelar una task pausada funciona: la espera escucha también al
+    /// token, y vuelve con `Cancelled` para que el cuerpo limpie como en
+    /// cualquier otra cancelación.
+    ///
+    /// # Errors
+    /// [`Error::Cancelled`] si se canceló antes o durante la pausa.
+    pub async fn checkpoint(&self) -> Result<(), Error> {
+        if self.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        if !self.pause.is_paused() {
+            return Ok(());
+        }
+        self.progress.update(|p| p.state = TaskState::Paused);
+        let mut rx = self.pause.0.subscribe();
+        tokio::select! {
+            () = self.cancel.cancelled() => {
+                // Mientras el cuerpo limpia se ve lo mismo que en cualquier
+                // cancelación —en marcha hasta el desenlace—, no «pausada».
+                self.progress.update(|p| p.state = TaskState::Running);
+                return Err(Error::Cancelled);
+            }
+            // `wait_for` solo falla si el emisor cae, y el emisor lo tiene
+            // este mismo contexto: no puede caer mientras se espera.
+            _ = rx.wait_for(|pausada| !*pausada) => {}
+        }
+        if self.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        self.progress.update(|p| p.state = TaskState::Running);
+        Ok(())
+    }
 }
 
 /// El cuerpo de una task: una factoría que recibe su [`TaskCtx`] y devuelve
@@ -50,6 +138,7 @@ pub struct TaskHandle {
     id: TaskId,
     progress: watch::Receiver<TaskProgress>,
     cancel: CancellationToken,
+    pause: PauseGate,
 }
 
 impl TaskHandle {
@@ -75,6 +164,12 @@ impl TaskHandle {
     #[must_use]
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel.clone()
+    }
+
+    /// La puerta de pausa de la task (ADR 0147).
+    #[must_use]
+    pub fn pause_gate(&self) -> PauseGate {
+        self.pause.clone()
     }
 
     /// Espera el estado terminal y lo devuelve.
@@ -223,9 +318,11 @@ impl Scheduler {
         let (reporter, rx) = ProgressReporter::new(id, kind);
         let reporter = Arc::new(reporter);
         let cancel = CancellationToken::new();
+        let pause = PauseGate::default();
 
         let ctx = TaskCtx {
             cancel: cancel.clone(),
+            pause: pause.clone(),
             progress: Arc::clone(&reporter),
             // El actor real lo fija el llamante (M3-3): `User` en el camino
             // humano, `Agent{session}` en el agéntico. Alimenta el journal.
@@ -273,6 +370,7 @@ impl Scheduler {
             id,
             progress: rx,
             cancel,
+            pause,
         }
     }
 
@@ -293,6 +391,14 @@ async fn run_job(job: QueuedJob) {
     let QueuedJob { body, ctx, .. } = job;
     let progress = Arc::clone(&ctx.progress);
     progress.update(|p| p.state = TaskState::Running);
+    // Una task pausada ANTES de empezar no empieza: espera aquí, y un cuerpo
+    // sin puntos de control propios también respeta la pausa al arrancar.
+    // Si la cancelan mientras espera, el cuerpo corre IGUAL: es él quien
+    // sabe limpiar y contar lo que no hizo (un informe marcado incompleto),
+    // y lo hace al ver el token, como con cualquier otra cancelación.
+    if ctx.pause.is_paused() {
+        let _ = ctx.checkpoint().await;
+    }
 
     let fut = std::panic::AssertUnwindSafe(body(ctx));
     let outcome = fut.catch_unwind().await;

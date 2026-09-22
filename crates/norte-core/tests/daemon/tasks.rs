@@ -168,6 +168,71 @@ async fn task_cancel_por_el_socket_cancela_limpio() {
     );
 }
 
+/// ADR 0147: `task.pause` para la copia en su próximo chunk —lo dice con
+/// `paused`, y el destino aún no existe con su nombre— y `task.resume` la
+/// deja acabar entera.
+#[tokio::test]
+async fn task_pause_y_resume_por_el_socket() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///grande.bin", &vec![0xCD; 100_000]).await;
+    d.mem
+        .faults()
+        .set_latency_per_op(Some(Duration::from_millis(30)));
+    let mut c = connected_client(&d).await;
+    let task: FsTaskResult = c
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///grande.bin"),
+                to: vp("mem:///copia.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
+            },
+        )
+        .await
+        .expect("fs.copy");
+    let _: norte_proto::methods::TaskPauseResult = c
+        .call(
+            methods::TASK_PAUSE,
+            &norte_proto::methods::TaskPauseParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("task.pause");
+    loop {
+        let n = tokio::time::timeout(Duration::from_secs(5), c.notification())
+            .await
+            .expect("notificación antes del timeout")
+            .expect("conexión viva");
+        let p: TaskProgress =
+            serde_json::from_value(n.params.expect("params")).expect("TaskProgress");
+        if p.task_id != task.task_id {
+            continue;
+        }
+        assert!(!p.state.is_terminal(), "acabó sin pausarse: {:?}", p.state);
+        if p.state == TaskState::Paused {
+            break;
+        }
+    }
+    let _: norte_proto::methods::TaskPauseResult = c
+        .call(
+            methods::TASK_RESUME,
+            &norte_proto::methods::TaskPauseParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("task.resume");
+    let seen = drain_task(&mut c, task.task_id.get()).await;
+    let last = seen.last().expect("terminal");
+    assert_eq!(last.state, TaskState::Completed);
+    assert_eq!(last.bytes_done, 100_000);
+}
+
 /// La base de la fase 3: un SEGUNDO cliente ve el progreso de las tasks
 /// que encoló el primero.
 #[tokio::test]
@@ -304,6 +369,60 @@ async fn fs_read_devuelve_tramos_con_eof_honesto() {
             .expect("base64"),
         b"0123456789"
     );
+}
+
+/// `task.pause` de un AGENTE sobre una task ajena (ADR 0147): el mismo ack
+/// que a una desconocida, y SIN efecto — la copia del humano no se para
+/// nunca y completa.
+#[tokio::test]
+async fn task_pause_de_agente_no_toca_task_del_humano() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///grande.bin", &vec![0xCD; 100_000]).await;
+    d.mem
+        .faults()
+        .set_latency_per_op(Some(Duration::from_millis(500)));
+    let mut human = connected_client(&d).await;
+    let agent = connected_agent(&d, "sess-pause").await;
+    let task: FsTaskResult = human
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///grande.bin"),
+                to: vp("mem:///copia.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
+            },
+        )
+        .await
+        .expect("fs.copy del humano");
+    let ajena: norte_proto::methods::TaskPauseResult = agent
+        .call(
+            methods::TASK_PAUSE,
+            &norte_proto::methods::TaskPauseParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("ack: no se filtra existencia de tasks ajenas");
+    let desconocida: norte_proto::methods::TaskPauseResult = agent
+        .call(
+            methods::TASK_PAUSE,
+            &norte_proto::methods::TaskPauseParams {
+                task_id: norte_proto::TaskId::new(u64::MAX - 3),
+            },
+        )
+        .await
+        .expect("ack también para una que no existe");
+    assert_eq!(ajena, desconocida, "ajena y desconocida, indistinguibles");
+    let seen = drain_task(&mut human, task.task_id.get()).await;
+    assert!(
+        seen.iter().all(|p| p.state != TaskState::Paused),
+        "la pausa de un agente sobre una task ajena NO surte efecto"
+    );
+    assert_eq!(seen.last().expect("terminal").state, TaskState::Completed);
 }
 
 /// `task.cancel` de un AGENTE sobre una task ajena: ack (el contrato no

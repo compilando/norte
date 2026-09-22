@@ -1357,10 +1357,13 @@ fn version_ventana_actual() {
     // misma cara. Por eso el SDK no se los manda y rehúsa con `Unsupported`
     // nombrando el filtro. Al revés es inofensivo: un cliente 0.80 no los
     // manda y el daemon los lee ausentes, que es la búsqueda de 0.80.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.81.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.80.0"), "N-1");
+    // 0.82.0: `task.pause` y `task.resume`. Un daemon 0.81 contesta
+    // `METHOD_NOT_FOUND` y el SDK lo dice como `Unsupported`; un cliente 0.81
+    // ve `Paused`, que ya sabía leer como no terminal.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.82.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.81.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.79.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.80.9"),
         "N-2 fuera de la ventana"
     );
 }

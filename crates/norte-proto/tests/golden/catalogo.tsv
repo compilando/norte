@@ -82,4 +82,6 @@ sync.report	Request	Direct	methods::SyncReportParams	methods::SyncReportResult
 sync.steps	Notification	Stream	methods::SyncStepsBatch	()	
 task.cancel	Request	Direct	methods::TaskCancelParams	methods::TaskCancelResult	
 task.list	Request	Direct	methods::TaskListParams	methods::TaskListResult	
+task.pause	Request	Direct	methods::TaskPauseParams	methods::TaskPauseResult	
 task.progress	Notification	Stream	crate::TaskProgress	()	
+task.resume	Request	Direct	methods::TaskPauseParams	methods::TaskPauseResult	

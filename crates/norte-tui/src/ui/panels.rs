@@ -936,6 +936,9 @@ pub(crate) fn draw_processes(
             let (state_txt, role) = match &p.state {
                 norte_proto::TaskState::Completed => ("✓".to_owned(), Some(Role::Info)),
                 norte_proto::TaskState::Cancelled => (t("task-cancelled"), Some(Role::Warning)),
+                // Pausada (ADR 0147): el porcentaje donde se quedó, y que está
+                // parada — un número quieto sin más se lee como atascado.
+                norte_proto::TaskState::Paused => (format!("⏸ {pct}%"), Some(Role::Warning)),
                 norte_proto::TaskState::Failed { .. } => (t("task-failed"), Some(Role::Error)),
                 _ => (format!("{pct}%"), None),
             };
@@ -1088,6 +1091,9 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
             let (state, role) = match &p.state {
                 norte_proto::TaskState::Completed => ("✓".to_owned(), Some(Role::Info)),
                 norte_proto::TaskState::Cancelled => (t("task-cancelled"), Some(Role::Warning)),
+                // Pausada (ADR 0147): el porcentaje donde se quedó, y que está
+                // parada — un número quieto sin más se lee como atascado.
+                norte_proto::TaskState::Paused => (format!("⏸ {pct}%"), Some(Role::Warning)),
                 norte_proto::TaskState::Failed { error } => {
                     (format!("✗ {error}"), Some(Role::Error))
                 }

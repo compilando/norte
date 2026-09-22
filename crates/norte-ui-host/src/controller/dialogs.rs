@@ -228,10 +228,7 @@ impl Estado {
     /// Cerrar no preguntaba nunca. El rustdoc de `quit_needs_confirm` ya
     /// nombraba un `confirm_quit_should_open` de la ventana que no existía.
     pub(super) fn pedir_salir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let hay_trabajo = self
-            .tasks
-            .values()
-            .any(|t| t.vista.state == crate::dto::TaskStateView::Running);
+        let hay_trabajo = self.tasks.values().any(|t| !Self::terminal(t.vista.state));
         if !norte_frontend::settings::quit_needs_confirm(
             self.config.common.ui_confirm_quit,
             hay_trabajo,
@@ -247,7 +244,7 @@ impl Estado {
             let n = self
                 .tasks
                 .values()
-                .filter(|t| t.vista.state == crate::dto::TaskStateView::Running)
+                .filter(|t| !Self::terminal(t.vista.state))
                 .count();
             vec![crate::dto::DialogLine {
                 text: clamp_display(norte_i18n::ta_in(

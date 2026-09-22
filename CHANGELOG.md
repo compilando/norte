@@ -9,6 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Pause and resume a task** (ADR 0147, protocol 0.82.0, bridge 93).
+  `task.pause` (`Ctrl+Alt+K` next to cancel's `Ctrl+K` in orthodox, cua and
+  vim) pauses the task cancel would pick, or resumes it if paused. A copy
+  stops at the end of the current chunk, or of the current file when it has
+  no chunks; only copies, moves and deletes can be paused once running, and
+  anything else is refused out loud. Cancelling a paused task works. The board shows `⏸`, the status
+  bar's light bar says paused, and against an older daemon pausing is refused
+  out loud.
 - **A light progress bar in the status bar** (ADR 0146, bridge 92). The
   `tasks` item shows one bar for the running work once it has lasted 400 ms,
   with the file name and rate for a single task or the time left for

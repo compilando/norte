@@ -1313,7 +1313,18 @@ use crate::{
 /// que este daemon no conozca le llegará como `Other` y filtrará por ella
 /// — o sea que ESTRECHA en vez de ensanchar, que es la dirección segura,
 /// pero no es «no pasa nada».
-pub const PROTOCOL_VERSION: &str = "0.81.0";
+///
+/// # 0.82.0 — una task se puede PAUSAR (`task.pause`, `task.resume`)
+///
+/// [`TASK_PAUSE`] y [`TASK_RESUME`], con el mismo alcance por actor que
+/// [`TASK_CANCEL`] (ADR 0147). `TaskState::Paused` existía desde M0 y aquí
+/// se estrena: un cliente N-1 ya lo sabe leer, y lo trata como no terminal.
+///
+/// Un **cliente 0.82 contra un daemon 0.81** recibe `METHOD_NOT_FOUND`, que
+/// el SDK traduce a `Unsupported`: pausar no funciona y se DICE, no se finge.
+/// Un **cliente 0.81 contra un daemon 0.82** no pide pausas, y ve `Paused` en
+/// las tasks que otro cliente pausó — como no terminal, que es lo correcto.
+pub const PROTOCOL_VERSION: &str = "0.82.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2134,6 +2145,22 @@ pub const SYNC_MAX_INCLUDE: usize = 4096;
 /// desconocida (no se filtra existencia) y la task sigue. Una conexión
 /// humana cancela cualquiera.
 pub const TASK_CANCEL: &str = "task.cancel";
+/// `task.pause` — pide que una task se PARE en su próximo punto de control
+/// (0.82.0, ADR 0147). Cooperativa como la cancelación: la respuesta solo
+/// confirma la recepción, y el estado `paused` llega por [`TASK_PROGRESS`]
+/// cuando la task de verdad se para. Una copia sin chunks
+/// (servidor-a-servidor) se para al acabar el fichero en curso.
+///
+/// Mismo alcance por actor que [`TASK_CANCEL`], y por el mismo motivo: sobre
+/// una task ajena, terminal o desconocida el ack es idéntico y no pasa nada.
+///
+/// En marcha solo la respetan las clases con puntos de control: `copy`,
+/// `move` y `delete`. Cualquier otra se para si aún no había empezado, y si
+/// ya corría sigue hasta el final; un cliente no debería ofrecerla.
+pub const TASK_PAUSE: &str = "task.pause";
+/// `task.resume` — deja seguir una task pausada (0.82.0, ADR 0147). Sobre una
+/// que no está pausada no hace nada. Mismo alcance que [`TASK_PAUSE`].
+pub const TASK_RESUME: &str = "task.resume";
 /// `connection.trust_host_key` — registra una host key SSH en el `known_hosts`
 /// tras confirmación del usuario (flujo TOFU, ADR 0015 D; 0.7.0, fase 6). Se
 /// llama tras un [`Error::HostKeyUnknown`](crate::Error::HostKeyUnknown) y
@@ -7673,6 +7700,27 @@ pub struct TaskCancelParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskCancelResult {}
+
+/// Params de [`TASK_PAUSE`] y de [`TASK_RESUME`] (0.82.0).
+///
+/// ```
+/// use norte_proto::TaskId;
+/// use norte_proto::methods::TaskPauseParams;
+/// let p = TaskPauseParams { task_id: TaskId::new(3) };
+/// assert_eq!(serde_json::to_string(&p).unwrap(), r#"{"task_id":3}"#);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPauseParams {
+    /// Task a pausar o reanudar. Una terminal o inexistente no es error.
+    pub task_id: TaskId,
+}
+
+/// Result de [`TASK_PAUSE`] y de [`TASK_RESUME`]: objeto vacío, reservado
+/// para extensión.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPauseResult {}
 
 /// Params de [`CONNECTION_TRUST_HOST_KEY`] (flujo TOFU, ADR 0015 D). Lleva el
 /// fingerprint que el usuario VERIFICÓ; el core lo compara con la clave que
