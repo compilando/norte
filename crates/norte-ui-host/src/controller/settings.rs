@@ -457,6 +457,7 @@ impl Estado {
             input: Some(clamp_display(pintable)),
             input_hostile: hostil,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {

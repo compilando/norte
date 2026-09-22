@@ -267,6 +267,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             // «⚠ SIN papelera: esto no se puede deshacer», con la clave del
             // terminal. Va por el mismo canal que los avisos de una copia
             // porque es la misma pregunta —qué pasa con los bytes cuando esto
@@ -369,6 +370,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
@@ -440,6 +442,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
@@ -643,6 +646,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
@@ -723,6 +727,7 @@ impl Estado {
             input: Some(modo.clone()),
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
@@ -836,6 +841,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {

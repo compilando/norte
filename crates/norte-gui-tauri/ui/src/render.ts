@@ -75,6 +75,15 @@ export class Screen {
   dialogoPintado: number | null = null;
   /// El campo de texto vivo del diálogo de arriba, para REUSARLO.
   dialogoInput: HTMLInputElement | null = null;
+  /** Los nodos VIVOS de un diálogo-formulario, por id de campo (puente 91).
+   *
+   *  La caja del diálogo se rehace entera en cada parche y cada tecla produce
+   *  uno. Reutilizar el nodo —en vez de crear otro y sembrarlo con lo que
+   *  mandó el host— es lo que impide que la PROYECCIÓN enmascarada vuelva al
+   *  host como si fuera lo tecleado, y de paso conserva el caret. Es lo mismo
+   *  que `dialogoInput` hace para el diálogo de un solo campo; con doce
+   *  controles hace falta un mapa. */
+  dialogoCampos: Map<string, HTMLInputElement | HTMLButtonElement> = new Map();
   /**
    * La barra de búsqueda de los ajustes, conservada entre repintados.
    *

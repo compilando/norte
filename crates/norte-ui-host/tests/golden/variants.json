@@ -30,6 +30,27 @@
   "dest_check_not_asked": {
     "state": "not_asked"
   },
+  "dialog_field_kind_cycle": {
+    "kind": "cycle",
+    "value_key": "search-kinds-files"
+  },
+  "dialog_field_kind_text": {
+    "kind": "text"
+  },
+  "dialog_field_kind_toggle": {
+    "kind": "toggle",
+    "on": true
+  },
+  "dialog_field_value_cycled": {
+    "set": "cycled"
+  },
+  "dialog_field_value_text": {
+    "set": "text",
+    "text": "1M"
+  },
+  "dialog_field_value_toggled": {
+    "set": "toggled"
+  },
   "dialog_input_none": {
     "asker": null,
     "body": [],

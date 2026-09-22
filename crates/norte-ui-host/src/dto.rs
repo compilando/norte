@@ -3035,6 +3035,69 @@ pub struct DialogView {
     /// su ausencia significa «no es un secreto», que es lo que era antes.
     #[serde(default)]
     pub input_secret: bool,
+    /// Los CAMPOS de un diálogo que es un formulario (puente 91).
+    ///
+    /// Vacío —y entonces ausente del JSON— es el diálogo de siempre: una
+    /// pregunta con un [`Self::input`] a lo sumo. La búsqueda es el primero
+    /// que necesita siete campos y cuatro interruptores, pero la lista es
+    /// GENÉRICA a propósito: cualquier diálogo futuro con formulario la
+    /// quiere, y hacerla a medida de la búsqueda obligaría a rehacerla con el
+    /// segundo.
+    ///
+    /// Convive con `input` en vez de sustituirlo: aquel es el camino del
+    /// diálogo de un solo campo y el de la CONTRASEÑA, que no viaja por aquí
+    /// (#327) — un formulario guarda lo tecleado en el host para poder
+    /// proyectarlo, y eso es exactamente lo que un secreto no hace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<DialogFieldView>,
+}
+
+/// Un campo de un diálogo-formulario (puente 91).
+///
+/// El renderer pinta lo que diga [`Self::kind`] y no decide nada más: la
+/// etiqueta es una CLAVE Fluent, el valor viene ya enmascarado y acotado, y
+/// qué valores existen en un ciclo lo resuelve Rust antes de mandarlo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DialogFieldView {
+    /// Id ESTABLE del campo (`name`, `min-size`, `recursive`…).
+    ///
+    /// Por id y no por índice, por lo mismo que las filas del listado: un
+    /// campo que se inserte en medio renumeraría a todos los de debajo, y lo
+    /// que el renderer manda de vuelta nombraría otro.
+    pub id: String,
+    /// Clave Fluent de la etiqueta.
+    pub label_key: String,
+    /// Lo que se pinta del valor: enmascarado y acotado. Vacío para los que
+    /// no son de texto.
+    pub value: String,
+    /// Lo pintado DIFIERE de lo real (controles, marcas de dirección). El
+    /// renderer lo marca; jamás lo esconde.
+    pub hostile: bool,
+    /// Qué clase de control es.
+    pub kind: DialogFieldKind,
+}
+
+/// Qué clase de control es un campo de formulario.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum DialogFieldKind {
+    /// Texto libre: el renderer es dueño del caret y manda el texto ENTERO.
+    Text,
+    /// Interruptor de dos estados.
+    Toggle {
+        /// Encendido.
+        on: bool,
+    },
+    /// Un ciclo de valores cerrados; la etiqueta del valor ACTUAL, ya
+    /// elegida en Rust.
+    ///
+    /// La clave y no el índice: cuántos valores hay y en qué orden es una
+    /// decisión de Rust, y un renderer que la supiera podría quedarse
+    /// desfasado sin que nada se ponga rojo.
+    Cycle {
+        /// Clave Fluent del valor actual.
+        value_key: String,
+    },
 }
 
 /// Qué se sabe de A DÓNDE VAN LOS BYTES, mientras se pregunta.

@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 90;
+export const BRIDGE_VERSION = 91;
 
 /** Dónde se suelta un panel arrastrado sobre otro (ADR 0138): a un lado, o
  *  en el centro para unirse a él como pestaña. */
@@ -564,6 +564,35 @@ export interface DialogChoice {
   destructive: boolean;
 }
 
+/** Un campo de un diálogo-FORMULARIO (puente 91).
+ *
+ *  El renderer pinta lo que diga `kind` y no decide nada más: la etiqueta es
+ *  una clave Fluent, el valor viene ya enmascarado y acotado, y qué valores
+ *  tiene un ciclo lo resuelve Rust antes de mandarlo. */
+export interface DialogFieldView {
+  /** Id estable: es lo que vuelve en `dialog_field`, y no el índice — un
+   *  campo insertado en medio renumeraría a los de debajo. */
+  id: string;
+  label_key: string;
+  /** Ya enmascarado y acotado; vacío en los que no son de texto. */
+  value: string;
+  /** Lo pintado DIFIERE de lo real. Se marca, jamás se esconde. */
+  hostile: boolean;
+  kind: DialogFieldKind;
+}
+
+/** Qué clase de control es un campo de formulario. */
+export type DialogFieldKind =
+  | { kind: "text" }
+  | { kind: "toggle"; on: boolean }
+  | { kind: "cycle"; value_key: string };
+
+/** Qué se le hizo a un campo. Un interruptor y un ciclo no llevan valor: el
+ *  renderer dice que se tocaron y a qué estado van lo decide Rust — mandar el
+ *  destino dejaría que dos pulsaciones rápidas se pisaran. */
+export type DialogFieldValue =
+  { set: "text"; text: string } | { set: "toggled" } | { set: "cycled" };
+
 /** Qué se sabe del DESTINO de una transferencia mientras se pregunta.
  *
  *  Tres estados y no una lista de avisos porque el silencio tiene que
@@ -610,6 +639,9 @@ export interface DialogView {
   choices: DialogChoice[];
   input: string | null;
   input_hostile: boolean;
+  /** Los CAMPOS, cuando el diálogo es un formulario (puente 91). Ausente o
+   *  vacío = el diálogo de siempre, con un `input` a lo sumo. */
+  fields?: DialogFieldView[];
   /** El campo es una CONTRASEÑA (#327). Lo que llega en `input` son PUNTOS,
    *  uno por carácter, jamás el texto: el host guarda lo tecleado aparte, en
    *  un buffer que se pisa con ceros al soltarlo. El renderer pinta el campo
@@ -1612,6 +1644,15 @@ export type UiAction =
       secret?: string;
     }
   | { action: "dialog_input"; id: ModalId; text: string }
+  /** Toca un campo de un diálogo-FORMULARIO (puente 91). Aparte de
+   *  `dialog_input` porque tiene que decir CUÁL de sus campos se tocó, y
+   *  porque por aquí no viaja jamás una contraseña. */
+  | {
+      action: "dialog_field";
+      id: ModalId;
+      field: string;
+      value: DialogFieldValue;
+    }
   | { action: "refresh_slot"; slot_id: number }
   | { action: "log_set_level"; level: string }
   | { action: "log_set_filter"; filter: string }

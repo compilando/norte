@@ -1027,6 +1027,121 @@ describe("Screen", () => {
     expect(destructivo).not.toBeNull();
   });
 
+  it("un formulario pinta sus campos y cada uno manda SU id", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.dialogs = [
+      {
+        id: 7,
+        title_key: "modal-search-title",
+        subject: null,
+        asker: null,
+        deadline: null,
+        destination: null,
+        body: [{ text: "/casa", hostile: false }],
+        overflow_note: "",
+        choices: [
+          { id: "confirm", label_key: "dialog-confirm", destructive: false },
+          { id: "cancel", label_key: "dialog-cancel", destructive: false },
+        ],
+        input: null,
+        input_hostile: false,
+        input_secret: false,
+        fields: [
+          {
+            id: "name",
+            label_key: "search-name",
+            value: "*.rs",
+            hostile: false,
+            kind: { kind: "text" },
+          },
+          {
+            id: "min-size",
+            label_key: "search-min-size",
+            value: "",
+            hostile: false,
+            kind: { kind: "text" },
+          },
+          {
+            id: "recursive",
+            label_key: "search-toggle-recursive",
+            value: "",
+            hostile: false,
+            kind: { kind: "toggle", on: true },
+          },
+          {
+            id: "kinds",
+            label_key: "search-toggle-kinds",
+            value: "",
+            hostile: false,
+            kind: { kind: "cycle", value_key: "search-kinds-any" },
+          },
+        ],
+      },
+    ];
+    screen.paint(v);
+    const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
+    const textos = dialog.querySelectorAll<HTMLInputElement>('input[type="text"]');
+    expect(textos.length).toBe(2);
+    expect(textos[0]?.value).toBe("*.rs");
+    expect(dialog.querySelectorAll('input[type="checkbox"]').length).toBe(1);
+
+    // Teclear en el SEGUNDO campo manda el id del segundo, no el del primero:
+    // es la razón de que los campos se nombren por id y no por posición.
+    const segundo = textos[1];
+    expect(segundo).toBeDefined();
+    if (segundo !== undefined) {
+      segundo.value = "1M";
+      segundo.dispatchEvent(new Event("input"));
+    }
+    expect(enviadas.at(-1)).toEqual({
+      action: "dialog_field",
+      id: 7,
+      field: "min-size",
+      value: { set: "text", text: "1M" },
+    });
+
+    // Un interruptor dice que se TOCÓ y no a qué estado va: el destino lo
+    // decide el host, para que dos pulsaciones rápidas no se pisen.
+    const casilla = dialog.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    casilla?.dispatchEvent(new Event("change"));
+    expect(enviadas.at(-1)).toEqual({
+      action: "dialog_field",
+      id: 7,
+      field: "recursive",
+      value: { set: "toggled" },
+    });
+
+    // Y el ciclo, que es un botón.
+    const boton = dialog.querySelector<HTMLButtonElement>('button[data-campo="kinds"]');
+    boton?.click();
+    expect(enviadas.at(-1)).toEqual({
+      action: "dialog_field",
+      id: 7,
+      field: "kinds",
+      value: { set: "cycled" },
+    });
+
+    // **Un repintado NO re-siembra un campo de texto.**
+    //
+    // Lo que manda el host es su PROYECCIÓN —enmascarada y acotada—, así que
+    // sembrarla de vuelta haría que la siguiente tecla la devolviera como si
+    // fuera lo tecleado: un `U+FFFD` de pantalla acabaría siendo el patrón que
+    // se busca. El nodo se reutiliza, que es lo que ya hace el diálogo de un
+    // solo campo.
+    const antes = dialog.querySelector<HTMLInputElement>('input[data-campo="name"]');
+    expect(antes).not.toBeNull();
+    if (antes !== null) {
+      antes.value = "a medio escribir";
+    }
+    const v2 = vista({});
+    v2.dialogs = v.dialogs;
+    screen.paint(v2);
+    const despues = document.querySelector<HTMLInputElement>('input[data-campo="name"]');
+    expect(despues).toBe(antes);
+    expect(despues?.value).toBe("a medio escribir");
+  });
+
   it("un destino a medio comprobar lo DICE, y sus avisos salen antes de los botones", () => {
     const { screen } = montar();
     const base = {

@@ -46,6 +46,15 @@
     "choice": "confirm",
     "id": 3
   },
+  "dialog_field": {
+    "action": "dialog_field",
+    "field": "min-size",
+    "id": 3,
+    "value": {
+      "set": "text",
+      "text": "1M"
+    }
+  },
   "dialog_input": {
     "action": "dialog_input",
     "id": 3,

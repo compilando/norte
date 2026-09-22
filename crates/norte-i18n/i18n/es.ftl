@@ -1530,6 +1530,16 @@ search-kinds-any = cualquier cosa
 search-kinds-files = ficheros
 search-kinds-dirs = carpetas
 search-hint = [tab] campo · [enter] buscar · [esc] cancelar
+# Las etiquetas de los interruptores en la VENTANA: sin el nombre de la tecla
+# y sin el estado dentro del texto — ahí el estado es la casilla.
+search-toggle-regex = regex
+search-toggle-case = distinguir mayúsculas
+search-toggle-whole-word = palabra entera
+search-toggle-recursive = buscar en subcarpetas
+search-toggle-kinds = busco
+# La consulta que enseña la cabecera cuando la búsqueda es SOLO de filtros:
+# «todo lo que pese más de un giga» no tiene patrón que enseñar.
+search-query-filters-only = (solo filtros)
 search-empty = introduce un nombre, un contenido o un filtro
 search-bad-field = ese campo no se entiende — arréglalo o déjalo vacío
 search-status-running = búsqueda: { $n } hits (buscando…)
@@ -2345,6 +2355,7 @@ host-key-unmapped = esa tecla no está ligada
 host-cannot-view-dir = un directorio no se ve
 host-nothing-to-view = nada que ver
 host-no-sibling = no hay más ficheros de esta clase en este listado
+host-unknown-field = ese diálogo no tiene ese campo
 host-column-not-sortable = por esa columna no se ordena
 host-help-over-input = la ayuda no se abre sobre un campo de texto
 host-layout-broken = ese fichero de disposición no parsea

@@ -360,6 +360,23 @@ pub enum UiAction {
         /// del caret, y mandar el texto entero evita reconstruirlo en Rust).
         text: String,
     },
+    /// Toca un campo de un diálogo-FORMULARIO (puente 91).
+    ///
+    /// Aparte de [`Self::DialogInput`] y no una extensión suya, por dos
+    /// motivos: aquel nombra «el» campo —no hay más— y es el camino por el
+    /// que NO viaja una contraseña (#327), y un formulario tiene que decir
+    /// CUÁL de sus campos se tocó. Mezclarlos obligaría a que el diálogo de
+    /// la contraseña llevara un id de campo que no significa nada.
+    DialogField {
+        /// Diálogo.
+        id: ModalId,
+        /// Id estable del campo, de los que mandó `DialogFieldView::id`. Uno
+        /// que el diálogo no tenga se descarta: los campos los decide el
+        /// host.
+        field: String,
+        /// Qué se le hizo.
+        value: DialogFieldValue,
+    },
     /// Elige una fila del panel de diferencias, POR SU ID.
     ///
     /// Por id y no por índice: un filtro esconde filas y las renumeraría, y
@@ -849,4 +866,25 @@ pub enum ExtensionChange {
     /// Desinstalarla: borrar sus ficheros y retirar su consentimiento.
     /// PREGUNTA, porque es irreversible.
     Uninstall,
+}
+
+/// Qué se le hizo a un campo de un diálogo-formulario (puente 91).
+///
+/// Un interruptor y un ciclo no llevan valor: lo que el renderer dice es que
+/// se TOCARON, y a qué estado van lo decide Rust. Mandar el estado destino
+/// dejaría que dos pulsaciones rápidas se pisaran —la segunda nacida de una
+/// foto anterior—, y el renderer no es dueño de ese estado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "set")]
+pub enum DialogFieldValue {
+    /// Texto completo tras la edición, por lo mismo que
+    /// [`UiAction::DialogInput`]: el caret es del renderer.
+    Text {
+        /// Lo que hay escrito en el campo.
+        text: String,
+    },
+    /// Se pulsó el interruptor.
+    Toggled,
+    /// Se pasó al siguiente valor del ciclo.
+    Cycled,
 }

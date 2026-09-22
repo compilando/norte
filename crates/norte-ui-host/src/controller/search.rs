@@ -14,6 +14,75 @@ use super::*;
 /// crate compartido: aquí estaban escritos aparte y ya discrepaban.
 use norte_frontend::search_status::Outcome as Desenlace;
 
+/// Los CAMPOS del formulario de búsqueda, tal como cruzan el puente (91).
+///
+/// Los valores se enmascaran y se acotan AQUÍ, como todo lo que cruza: lo que
+/// se teclea acaba pintado en una etiqueta, y un `U+202E` pegado desde otro
+/// sitio no puede reordenar la línea. Lo tecleado de verdad se queda en
+/// `Tecleado::Formulario`, sin recortar — es la misma separación que
+/// `input`/`Tecleado::Texto` de un diálogo de un campo.
+///
+/// Las etiquetas de los interruptores son claves PROPIAS (`search-toggle-*`)
+/// y no las del terminal: aquellas llevan dentro el nombre de la tecla y un
+/// `{ $on }` con el estado, que aquí es estructural — el renderer pinta una
+/// casilla, no una frase.
+pub(super) fn campos_de_busqueda(
+    form: &norte_frontend::search::SearchForm,
+) -> Vec<crate::dto::DialogFieldView> {
+    use crate::dto::{DialogFieldKind, DialogFieldView};
+    use norte_frontend::search::{self as busqueda, SearchField};
+
+    let texto = |f: SearchField| {
+        let (pintable, hostil) = norte_frontend::display_name(form.texto(f).as_bytes());
+        DialogFieldView {
+            id: f.id().to_owned(),
+            label_key: f.clave().to_owned(),
+            value: clamp_display(pintable),
+            hostile: hostil,
+            kind: DialogFieldKind::Text,
+        }
+    };
+    let interruptor = |id: &str, clave: &str, on: bool| DialogFieldView {
+        id: id.to_owned(),
+        label_key: clave.to_owned(),
+        value: String::new(),
+        hostile: false,
+        kind: DialogFieldKind::Toggle { on },
+    };
+
+    let mut campos: Vec<DialogFieldView> = SearchField::ORDEN.into_iter().map(texto).collect();
+    campos.push(interruptor(
+        busqueda::ID_REGEX,
+        "search-toggle-regex",
+        form.regex,
+    ));
+    campos.push(interruptor(
+        busqueda::ID_CASE,
+        "search-toggle-case",
+        form.case,
+    ));
+    campos.push(interruptor(
+        busqueda::ID_WHOLE_WORD,
+        "search-toggle-whole-word",
+        form.whole_word,
+    ));
+    campos.push(interruptor(
+        busqueda::ID_RECURSIVE,
+        "search-toggle-recursive",
+        form.recursive,
+    ));
+    campos.push(DialogFieldView {
+        id: busqueda::ID_KINDS.to_owned(),
+        label_key: "search-toggle-kinds".to_owned(),
+        value: String::new(),
+        hostile: false,
+        kind: DialogFieldKind::Cycle {
+            value_key: form.kinds.clave().to_owned(),
+        },
+    });
+    campos
+}
+
 /// Una búsqueda viva y lo que lleva encontrado.
 pub(super) struct Busqueda {
     /// Cuál de todas las búsquedas de esta ventana es.
@@ -129,6 +198,7 @@ impl Estado {
                 input: Some(String::new()),
                 input_hostile: false,
                 input_secret: false,
+                fields: Vec::new(),
                 dest_check: crate::dto::DestCheckView::NotAsked,
             },
             tecleado: Tecleado::Texto(String::new()),
@@ -168,6 +238,7 @@ impl Estado {
     }
 
     pub(super) fn pedir_busqueda(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let form = norte_frontend::search::SearchForm::new();
         let root = self.hueco().pane.dir().clone();
         let donde = Self::linea_de_ruta(&root);
         let id = ModalId(self.siguiente_modal);
@@ -198,12 +269,16 @@ impl Estado {
                         destructive: false,
                     },
                 ],
-                input: Some(String::new()),
+                // Un formulario no tiene «el» campo: los tiene todos en
+                // `fields`. `input` se queda en `None` para que un renderer
+                // no pinte además una caja suelta sin etiqueta.
+                input: None,
                 input_hostile: false,
                 input_secret: false,
+                fields: campos_de_busqueda(&form),
                 dest_check: crate::dto::DestCheckView::NotAsked,
             },
-            tecleado: Tecleado::Texto(String::new()),
+            tecleado: Tecleado::Formulario(Box::new(form)),
             al_confirmar: Some(Pendiente::Buscar { root }),
         });
         let cambio = ViewChange::Dialogs {
@@ -214,21 +289,21 @@ impl Estado {
 
     /// Lanza la búsqueda y engancha el canal por el que llegan sus lotes.
     ///
-    /// El patrón va como GLOB de nombre, que es lo que un usuario teclea
-    /// cuando busca `*.rs`. La búsqueda por CONTENIDO es otra cosa —otro
-    /// campo, otro coste— y llega con su propia rebanada.
+    /// Los parámetros vienen YA construidos, del mapeo compartido
+    /// (`norte_frontend::search::params`): el terminal pregunta la misma
+    /// búsqueda, y dos mapeos divergen en silencio. `etiqueta` es lo que la
+    /// vista de resultados enseña como consulta — el patrón de nombre, o el
+    /// de contenido si aquel está vacío—, y no se usa para buscar.
     pub(super) fn lanzar_busqueda(
         &mut self,
-        root: VPath,
-        patron: String,
+        params: norte_proto::methods::FsSearchParams,
+        etiqueta: String,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let params = norte_proto::methods::FsSearchParams {
-            name_glob: Some(patron.clone()),
-            max_hits: Some(Self::MAX_RESULTADOS),
-            ..norte_proto::methods::FsSearchParams::new(root.clone())
-        };
+        // La raíz se copia ANTES: `params` se mueve al backend, y la vista de
+        // resultados la necesita para decir dónde se buscó.
+        let root = params.root.clone();
         let backend = Arc::clone(backend);
         let buzon2 = buzon.clone();
         self.epoca_busqueda += 1;
@@ -301,7 +376,7 @@ impl Estado {
             // es una Task real.
             task: norte_proto::TaskId::new(0),
             abandonada,
-            query: patron,
+            query: etiqueta,
             root,
             hits: Vec::new(),
             cursor: 0,
@@ -595,6 +670,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {

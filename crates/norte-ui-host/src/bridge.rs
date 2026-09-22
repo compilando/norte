@@ -516,7 +516,14 @@ use serde::{Deserialize, Serialize};
 /// - **90**: mover un panel arrastrándolo (ADR 0138). La acción
 ///   `move_slot { slot_id, target, zone }`, con `zone` uno de `left`,
 ///   `right`, `top`, `bottom` o `center`.
-pub const BRIDGE_VERSION: u32 = 90;
+/// - **91**: un diálogo puede ser un FORMULARIO. `DialogView.fields`, una
+///   lista genérica de `DialogFieldView` (texto, interruptor o ciclo), y la
+///   acción `dialog_field { id, field, value }` para tocarlos. Ausente y
+///   vacío = el diálogo de siempre, así que el JSON de uno sin formulario es
+///   byte a byte el de 90. El primero que lo usa es la búsqueda de la
+///   ventana, que pedía un glob y nada más mientras el terminal ofrecía
+///   siete campos (protocolo 0.81.0).
+pub const BRIDGE_VERSION: u32 = 91;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///
