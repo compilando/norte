@@ -25,7 +25,9 @@ impl Estado {
         let hay_tasks = self.tasks.values().any(|t| {
             matches!(
                 t.vista.state,
-                crate::dto::TaskStateView::Queued | crate::dto::TaskStateView::Running
+                crate::dto::TaskStateView::Queued
+                    | crate::dto::TaskStateView::Running
+                    | crate::dto::TaskStateView::Paused
             )
         });
         if !self.sesion.owner || self.sesion.futuro {

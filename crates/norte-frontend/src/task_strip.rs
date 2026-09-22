@@ -52,6 +52,9 @@ pub struct StripTask<'a> {
 pub enum StripPhase {
     /// Hay trabajo en marcha.
     Running,
+    /// Todo el trabajo vivo está PAUSADO (ADR 0147): la barra se queda donde
+    /// iba, con ⏸ y sin velocidad, que ahora no hay.
+    Paused,
     /// Acabó todo bien.
     Done,
     /// Acabó, y algo falló o se canceló.
@@ -303,8 +306,16 @@ fn vista_en_marcha(rafaga: &Rafaga, tareas: &[&StripTask<'_>]) -> StripView {
         _ => None,
     };
     let una = vivas.len() == 1 && rafaga.ids.len() == 1;
+    let pausada = !vivas.is_empty()
+        && vivas
+            .iter()
+            .all(|tarea| tarea.progress.state == TaskState::Paused);
     StripView {
-        phase: StripPhase::Running,
+        phase: if pausada {
+            StripPhase::Paused
+        } else {
+            StripPhase::Running
+        },
         count: vivas.len(),
         percent,
         kind: rafaga.kind,
@@ -317,8 +328,18 @@ fn vista_en_marcha(rafaga: &Rafaga, tareas: &[&StripTask<'_>]) -> StripView {
         } else {
             None
         },
-        rate: crate::tasks::human_rate(bps),
-        eta: crate::tasks::human_eta(eta),
+        // Parada no tiene ritmo ni hora de acabar: el último medido
+        // mentiría sobre ahora.
+        rate: if pausada {
+            String::new()
+        } else {
+            crate::tasks::human_rate(bps)
+        },
+        eta: if pausada {
+            String::new()
+        } else {
+            crate::tasks::human_eta(eta)
+        },
     }
 }
 
@@ -344,17 +365,22 @@ pub fn forms(v: &StripView, lang: Lang) -> Vec<Form> {
     };
     let f = |text: String, bar: bool| Form { text, bar };
     match v.phase {
-        StripPhase::Running => {
+        StripPhase::Running | StripPhase::Paused => {
+            let pausada = v.phase == StripPhase::Paused;
+            let icono = if pausada { '⏸' } else { '⟳' };
+            let verbo = if pausada {
+                t_in(lang, "strip-paused")
+            } else {
+                t_in(lang, &format!("strip-running-{clase}"))
+            };
             let pct = v.percent.map(|p| format!(" {p} %")).unwrap_or_default();
             let cabeza = match &v.name {
-                Some(n) if v.count == 1 => {
-                    format!("⟳ {} {n}", t_in(lang, &format!("strip-running-{clase}")))
-                }
-                _ => format!("⟳ {}", v.count),
+                Some(n) if v.count == 1 => format!("{icono} {verbo} {n}"),
+                _ => format!("{icono} {}", v.count),
             };
             let corta = match &v.name {
-                Some(n) if v.count == 1 => format!("⟳ {n}"),
-                _ => format!("⟳ {}", v.count),
+                Some(n) if v.count == 1 => format!("{icono} {n}"),
+                _ => format!("{icono} {}", v.count),
             };
             // Lo que se añade al final: el ritmo con una tarea, lo que queda
             // con varias (con varias el ritmo es una suma, y lo que el lector
@@ -366,8 +392,8 @@ pub fn forms(v: &StripView, lang: Lang) -> Vec<Form> {
             }
             out.push(f(format!("{cabeza}{pct}"), true));
             out.push(f(format!("{corta}{pct}"), true));
-            out.push(f(format!("⟳ {}{pct}", v.count), true));
-            out.push(f(format!("⟳ {}{pct}", v.count), false));
+            out.push(f(format!("{icono} {}{pct}", v.count), true));
+            out.push(f(format!("{icono} {}{pct}", v.count), false));
             out.dedup();
             out
         }
@@ -649,6 +675,26 @@ mod tests {
         assert!(anchos.windows(2).all(|w| w[0] >= w[1]), "{anchos:?}");
         assert!(fs[0].text.contains("foto.jpg") && fs[0].text.contains("48 MiB/s"));
         assert_eq!(fs.last().map(|f| f.text.as_str()), Some("⟳ 1 62 %"));
+    }
+
+    /// ADR 0147: con todo lo vivo pausado la barra lo dice —⏸, sin ritmo— y
+    /// se queda en su porcentaje.
+    #[test]
+    fn todo_pausado_se_dice_y_no_tiene_ritmo() {
+        let mut s = TaskStrip::default();
+        let a = p(1, TaskKind::Copy, TaskState::Paused, 40, Some(100));
+        let tarea = StripTask {
+            progress: &a,
+            operand: None,
+            bps: Some(1_000_000.0),
+        };
+        let a0 = p(1, TaskKind::Copy, R, 40, Some(100));
+        s.update(0, [t(&a0)]);
+        s.update(UMBRAL_MS, [tarea]);
+        let v = s.view(UMBRAL_MS).expect("barra");
+        assert_eq!((v.phase, v.percent), (StripPhase::Paused, Some(40)));
+        assert!(v.rate.is_empty() && v.eta.is_empty());
+        assert!(forms(&v, Lang::Es)[0].text.starts_with('⏸'));
     }
 
     /// La barra ocupa siempre lo mismo, llena, vacía o sin saber.

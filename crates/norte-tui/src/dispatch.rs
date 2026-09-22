@@ -989,6 +989,34 @@ pub async fn dispatch(
             } else {
                 t("msg-no-tasks")
             });
+        }
+        // La misma tarea que cancelaría, y el sentido por su estado EN VIVO
+        // (ADR 0147). Contra un daemon que no sabe pausar se DICE: una pausa
+        // que no ocurre y no se dice es peor que no ofrecerla.
+        //
+        // La llamada va en su propia task y se espera POCO: contra un daemon
+        // remoto colgado, esperarla aquí congelaría el bucle de la interfaz
+        // hasta su plazo de treinta segundos. Si no contesta a tiempo se
+        // queda el «pausando…», y el estado real llega por el progreso.
+        Command::TaskPause => {
+            app.message = Some(match app.board.last_running() {
+                None => t("msg-no-tasks"),
+                Some((task, _))
+                    if !norte_frontend::tasks::pausable(task.progress().borrow().kind) =>
+                {
+                    t("msg-pause-not-this")
+                }
+                Some((task, pausada)) => {
+                    let pedida = tokio::spawn(async move { task.set_paused(!pausada).await });
+                    let espera = std::time::Duration::from_millis(300);
+                    match tokio::time::timeout(espera, pedida).await {
+                        Ok(Ok(Err(norte_proto::Error::Unsupported))) => t("msg-pause-unsupported"),
+                        Ok(Ok(Err(e))) => error_message(&e),
+                        _ if pausada => t("msg-resuming"),
+                        _ => t("msg-pausing"),
+                    }
+                }
+            });
         } // Sin comodín (#112): `Command` es exhaustivo — un comando nuevo
           // sin brazo es un error de COMPILACIÓN, no un pánico de runtime.
     }

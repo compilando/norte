@@ -4,8 +4,8 @@
 //! guarda una segunda copia, porque dos listas de tareas se separan y la que
 //! se ve deja de ser la que se cancela.
 //!
-//! **No hay pausa.** El protocolo tiene `task.cancel` y no tiene otra cosa, y
-//! un control que no hace lo que dice es peor que un control que falta.
+//! Sobre la elegida se cancela (`task.cancel`) y, desde el protocolo 0.82, se
+//! pausa y se reanuda (`task.pause`, ADR 0147).
 //!
 //! Vive aquí y no en un frontend porque lo que hay dentro no es de pintar: es
 //! la respuesta a «¿qué tarea se pararía?», y esa pregunta tiene que tener una

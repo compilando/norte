@@ -51,6 +51,9 @@ impl Estado {
         if matches!(efecto, Efecto::CancelarTask) {
             return self.cancelar_por_comando();
         }
+        if matches!(efecto, Efecto::PausarTask) {
+            return self.pausar_por_comando(buzon);
+        }
         // Recorrer y descartar el tablero, por el mismo motivo y antes del
         // foco: son comandos del TABLERO, no del panel que lo pinta, y con el
         // panel de procesos cerrado tienen que seguir significando lo mismo.
@@ -108,6 +111,7 @@ impl Estado {
             Efecto::CancelarTask | Efecto::TaskVecina { .. } | Efecto::DescartarTask => {
                 self.cancelar_por_comando()
             }
+            Efecto::PausarTask => self.pausar_por_comando(buzon),
             Efecto::Tamano(_)
             | Efecto::Igualar
             | Efecto::Girar

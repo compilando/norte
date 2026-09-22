@@ -3001,6 +3001,7 @@ mod variantes {
         match t {
             TaskStateView::Queued => "task_queued",
             TaskStateView::Running => "task_running",
+            TaskStateView::Paused => "task_paused",
             TaskStateView::Done => "task_done",
             TaskStateView::Failed => "task_failed",
             TaskStateView::Cancelled => "task_cancelled",
@@ -3230,6 +3231,7 @@ mod variantes {
         let tasks = vec![
             TaskStateView::Queued,
             TaskStateView::Running,
+            TaskStateView::Paused,
             TaskStateView::Done,
             TaskStateView::Failed,
             TaskStateView::Cancelled,

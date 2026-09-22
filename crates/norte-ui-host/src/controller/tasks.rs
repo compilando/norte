@@ -72,6 +72,8 @@ pub(super) struct TaskViva {
     rate: norte_frontend::tasks::Rate,
     /// Cómo pedirle que pare. Cancelar dos veces no es un error.
     pub(super) cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
+    /// Cómo pausarla o reanudarla (ADR 0147); `None` si no se puede.
+    pub(super) pause: Option<crate::backend::Pausa>,
     /// Su informe ya se pidió. Lo llevan las clases que TIENEN informe —un
     /// lote de renombrado y un undo— y evita pedirlo dos veces si el daemon
     /// repite el último progreso (una reconexión reanuncia las tasks,
@@ -445,6 +447,7 @@ impl Estado {
                 // que haya velocidad, y hasta entonces la fila calla.
                 rate: norte_frontend::tasks::Rate::default(),
                 cancel: task.cancel,
+                pause: task.pause,
                 afectados,
                 reintento,
                 informe_pedido,
@@ -1420,6 +1423,54 @@ impl Estado {
                 (ack, fuera)
             }
         }
+    }
+
+    /// Pausa la tarea elegida, o la reanuda si ya está pausada (ADR 0147).
+    ///
+    /// La elige como cancelar —la del cursor con el panel de procesos
+    /// enfocado, y si no la más reciente viva—, y mira su estado EN VIVO para
+    /// decidir el sentido. La petición va al daemon fuera del actor; si no
+    /// sabe pausar (`Unsupported`, un daemon 0.81) vuelve un mensaje que lo
+    /// dice, porque una pausa que no ocurre y no se dice es peor que no
+    /// ofrecerla.
+    pub(super) fn pausar_por_comando(
+        &mut self,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let id = match self.task_a_cancelar() {
+            Objetivo::Ninguna => return (self.aplicada(), self.decir("msg-no-tasks")),
+            Objetivo::Terminada => return (self.aplicada(), self.decir("msg-task-finished")),
+            Objetivo::Viva(id) => id,
+        };
+        let Some(viva) = self.tasks.get(&id) else {
+            return (self.aplicada(), self.decir("msg-no-tasks"));
+        };
+        if self.efectos == crate::commands::Efectos::SoloLectura && viva.vista.foreign {
+            return Self::no_muta();
+        }
+        let (clase, estado) = {
+            let p = viva.progreso.borrow();
+            (p.kind, p.state.clone())
+        };
+        if !norte_frontend::tasks::pausable(clase) {
+            return (self.aplicada(), self.decir("msg-pause-not-this"));
+        }
+        let Some(mando) = viva.pause.clone() else {
+            return (self.aplicada(), self.decir("msg-pause-unsupported"));
+        };
+        let pausar = estado != norte_proto::TaskState::Paused;
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            if let Err(norte_proto::Error::Unsupported) = mando(pausar).await {
+                let _ = buzon.send(Mensaje::Decir("msg-pause-unsupported")).await;
+            }
+        });
+        let aviso = if pausar {
+            "msg-pausing"
+        } else {
+            "msg-resuming"
+        };
+        (self.aplicada(), self.decir(aviso))
     }
 
     /// Mueve la fila elegida del tablero.

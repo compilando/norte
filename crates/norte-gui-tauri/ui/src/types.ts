@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 92;
+export const BRIDGE_VERSION = 93;
 
 /** Dónde se suelta un panel arrastrado sobre otro (ADR 0138): a un lado, o
  *  en el centro para unirse a él como pestaña. */
@@ -720,7 +720,8 @@ export interface AiRenameView {
   seen_all: boolean;
 }
 
-export type TaskStateView = "queued" | "running" | "done" | "failed" | "cancelled";
+export type TaskStateView =
+  "queued" | "running" | "paused" | "done" | "failed" | "cancelled";
 
 export interface TaskView {
   task_id: number;
@@ -944,7 +945,7 @@ export interface StatusItemView {
 export interface StatusProgressView {
   /** 0–100 del total; `null` = no se sabe, y la barra se anima. */
   percent: number | null;
-  phase: "running" | "done" | "failed";
+  phase: "running" | "paused" | "done" | "failed";
 }
 
 /** La barra de paneles (#324, puente 51): qué paneles hay y cómo están. */

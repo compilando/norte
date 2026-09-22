@@ -196,6 +196,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.select-drive-left",
     "pane.select-drive-right",
     "task.cancel",
+    "task.pause",
     "task.next",
     "task.prev",
     "task.dismiss",
@@ -679,6 +680,10 @@ pub enum Efecto {
     /// transferencia de OTRO cliente y dejarle un parcial. Sus propias tasks
     /// son otra cosa: si pudo lanzarlas, puede pararlas.
     CancelarTask,
+    /// Pausa la tarea elegida, o la reanuda si ya está pausada (ADR 0147).
+    /// La misma elección que [`Self::CancelarTask`], y la misma regla para
+    /// las de OTRO cliente en una ventana sin efectos.
+    PausarTask,
     /// Ordena el listado enfocado por esta columna.
     ///
     /// La misma semántica que un click en la cabecera: la columna activa
@@ -960,6 +965,7 @@ fn efecto_del_tablero(command: &str) -> Option<Efecto> {
         "task.prev" => Efecto::TaskVecina { atras: true },
         "task.dismiss" => Efecto::DescartarTask,
         "task.cancel" => Efecto::CancelarTask,
+        "task.pause" => Efecto::PausarTask,
         _ => return None,
     })
 }

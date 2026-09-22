@@ -67,6 +67,9 @@
 # que las junte, y atar `ctrl+g` a algo que la fuente no dice es lo que este
 # fichero no hace. `ctrl+g` está libre en los siete presets y lo llevan
 # orthodox, cua y vim; aquí, el menú Ir (F9), donde está el primero.
+#
+# `task.pause` (ADR 0147) se queda SIN ATAR aquí, igual que `task.cancel`:
+# Total Commander pausa desde el diálogo de la transferencia en segundo plano (su botón «Pausa»), no desde una tecla de panel que su documentación nombre. Los dos se alcanzan desde la paleta.
 
 dialog_from = "orthodox"
 

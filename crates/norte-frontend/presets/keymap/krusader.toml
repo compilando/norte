@@ -84,6 +84,9 @@
 # primero del menú Ir (F9), que es preset-independiente, así que no es una
 # capacidad que falte: es un atajo que no se atribuye a una fuente que no lo
 # dice.
+#
+# `task.pause` (ADR 0147) se queda SIN ATAR aquí, igual que `task.cancel`:
+# Krusader pausa desde su JobMan (el botón de la barra de herramientas), no desde una tecla que su documentación nombre. Los dos se alcanzan desde la paleta.
 
 dialog_from = "orthodox"
 

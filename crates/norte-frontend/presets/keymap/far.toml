@@ -111,6 +111,9 @@
 # Far no tiene una sola tecla que haga eso. `ctrl+g` está libre en los siete
 # presets y lo llevan orthodox, cua y vim. Aquí se llega por el menú Ir
 # (F9), donde está el primero, y por la paleta.
+#
+# `task.pause` (ADR 0147) se queda SIN ATAR aquí, igual que `task.cancel`:
+# Far pausa y cancela desde el diálogo de la operación en curso, no desde una tecla de panel que su documentación nombre. Los dos se alcanzan desde la paleta.
 
 dialog_from = "orthodox"
 

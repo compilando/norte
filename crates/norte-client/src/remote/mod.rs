@@ -1969,6 +1969,34 @@ impl RemoteBackend {
         });
     }
 
+    /// `task.pause` / `task.resume` (0.82.0, ADR 0147). NO es fire-and-forget
+    /// como cancelar: un daemon 0.81 no sabe pausar, contesta
+    /// `METHOD_NOT_FOUND`, y eso vuelve como `Unsupported` para que el
+    /// frontend lo DIGA en vez de pintar una pausa que no ocurrió.
+    ///
+    /// # Errors
+    /// `Unsupported` contra un daemon sin el método; lo que responda el
+    /// daemon en otro caso.
+    pub(crate) async fn set_paused(&self, id: TaskId, paused: bool) -> Result<(), Error> {
+        let client = self.client().await?;
+        let method = if paused {
+            methods::TASK_PAUSE
+        } else {
+            methods::TASK_RESUME
+        };
+        let params = methods::TaskPauseParams { task_id: id };
+        let call = client.call::<_, methods::TaskPauseResult>(method, &params);
+        match tokio::time::timeout(CALL_TIMEOUT, call).await {
+            Ok(Err(ClientError::Rpc(ref rpc)))
+                if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+            {
+                Err(Error::Unsupported)
+            }
+            Ok(res) => res.map(|_| ()).map_err(to_taxonomy),
+            Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+        }
+    }
+
     /// El canal de tasks AJENAS (las que otro cliente lanzó y este observa).
     /// Es del PRIMER dueño: un clon del backend no debe llamarlo.
     ///

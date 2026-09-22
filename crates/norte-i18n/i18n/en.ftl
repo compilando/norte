@@ -214,6 +214,10 @@ msg-pack-warnings = packed, but { $risky } name(s) mean something else on anothe
 msg-pack-warnings-partial = packed, but at least { $risky } name(s) mean something else on another system
 msg-cancelled = cancelled
 msg-cancelling = cancelling…
+msg-pausing = pausing… (it stops at the end of the current chunk or file)
+msg-resuming = resuming…
+msg-pause-unsupported = this daemon cannot pause tasks: update it to be able to
+msg-pause-not-this = this task cannot be paused: only copy, move and delete can
 msg-no-tasks = no running tasks
 msg-task-finished = that task already finished
 msg-error = error: { $error }
@@ -584,6 +588,7 @@ strip-running-copy = copying
 strip-running-move = moving
 strip-running-delete = deleting
 strip-running-other = working on
+strip-paused = paused
 strip-done-copy = copied
 strip-done-move = moved
 strip-done-delete = deleted
@@ -1460,6 +1465,7 @@ help-cmd-pane-select-drive = pick a drive for the focused pane
 help-cmd-pane-select-drive-left = pick a drive for the LEFT pane
 help-cmd-pane-select-drive-right = pick a drive for the RIGHT pane
 help-cmd-task-cancel = cancel the selected task, or the most recent one
+help-cmd-task-pause = pause the selected task, or the most recent one; resume it if it is already paused
 # G3c: GUI-only commands (no TUI equivalent — its multi-select/task strip
 # use different bindings) surfaced now that the GUI's command palette lists
 # `app.palette`/`app.extensions` and needs help text for every GUI command.

@@ -14,6 +14,7 @@ commands = [
     "pane.delete",
     "pane.delete-permanent",
     "task.cancel",
+    "task.pause",
     "dialog.overwrite",
     "dialog.skip",
     "dialog.rename",
@@ -87,6 +88,22 @@ aterrizaron —cada uno completo, ninguno a medias—, pero el directorio está 
 y está incompleto. Nadie lo recoge por ti.
 
 > ⚠ Cancelar una copia HACIA almacenamiento de objetos es el caso que se queda ambiguo: el servidor puede terminar una copia que ya había empezado, así que el objeto puede aparecer después de que canceles, y las partes sueltas de un multipart siguen costando dinero hasta que las barra una regla de ciclo de vida.
+
+# Pausar
+
+{{cmd:task.pause}} pausa la misma tarea que se cancelaría, y si ya está
+pausada la reanuda. La pausa es cooperativa, como la cancelación: una copia se
+para al acabar el trozo que estaba escribiendo, con el fichero de staging
+abierto, y sigue donde iba. Una copia que no tiene trozos —de servidor a
+servidor, o la copia rápida del núcleo en un mismo disco— se para al acabar el
+fichero en curso, y hasta entonces la barra dice «pausando…» y no «pausada».
+
+Solo se pausan copiar, mover y borrar: son las que miran si se les ha pedido
+parar. Sobre una búsqueda o una suma se te dice que no, en vez de aceptar una
+pausa que no va a ocurrir.
+
+Cancelar una tarea pausada funciona igual que cancelar una en marcha. Contra un
+daemon anterior a la 0.82 pausar no se puede, y se dice.
 
 Las copias reanudables se piden a propósito, desde la línea de comandos. Ahí
 lo que deja una copia cancelada es un fichero con `.norte-partial` en el

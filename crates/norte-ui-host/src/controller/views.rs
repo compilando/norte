@@ -37,9 +37,8 @@ impl Estado {
                 norte_proto::TaskState::Completed => TaskStateView::Done,
                 norte_proto::TaskState::Cancelled => TaskStateView::Cancelled,
                 norte_proto::TaskState::Failed { .. } => TaskStateView::Failed,
-                norte_proto::TaskState::Running | norte_proto::TaskState::Paused => {
-                    TaskStateView::Running
-                }
+                norte_proto::TaskState::Running => TaskStateView::Running,
+                norte_proto::TaskState::Paused => TaskStateView::Paused,
                 // Un estado que este host todavía no conoce se pinta como
                 // encolado: es lo único que no miente sobre algo que sigue
                 // vivo (`TaskState` es no exhaustivo por contrato del wire).
@@ -448,6 +447,7 @@ impl Estado {
                             percent: p.percent,
                             phase: match p.phase {
                                 StripPhase::Running => "running",
+                                StripPhase::Paused => "paused",
                                 StripPhase::Done => "done",
                                 StripPhase::Failed => "failed",
                             }

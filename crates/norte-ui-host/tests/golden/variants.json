@@ -237,6 +237,7 @@
   "task_cancelled": "cancelled",
   "task_done": "done",
   "task_failed": "failed",
+  "task_paused": "paused",
   "task_queued": "queued",
   "task_running": "running"
 }

@@ -236,6 +236,8 @@ struct ProtocolSchema {
     task_kind: TaskKind,
     task_list_params: TaskListParams,
     task_list_result: TaskListResult,
+    task_pause_params: TaskPauseParams,
+    task_pause_result: TaskPauseResult,
     task_progress: TaskProgress,
     task_state: TaskState,
     undo_blocked: UndoBlocked,

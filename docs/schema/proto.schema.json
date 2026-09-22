@@ -6323,6 +6323,23 @@
       ],
       "type": "object"
     },
+    "TaskPauseParams": {
+      "description": "Params de [`TASK_PAUSE`] y de [`TASK_RESUME`] (0.82.0).\n\n```\nuse norte_proto::TaskId;\nuse norte_proto::methods::TaskPauseParams;\nlet p = TaskPauseParams { task_id: TaskId::new(3) };\nassert_eq!(serde_json::to_string(&p).unwrap(), r#\"{\"task_id\":3}\"#);\n```",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "Task a pausar o reanudar. Una terminal o inexistente no es error."
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "TaskPauseResult": {
+      "description": "Result de [`TASK_PAUSE`] y de [`TASK_RESUME`]: objeto vacío, reservado\npara extensión.",
+      "type": "object"
+    },
     "TaskProgress": {
       "description": "Snapshot de progreso de una Task (payload de la notificación `task.progress`).\n\nTotales `None` = aún desconocidos (walk en curso), jamás un 0 fingido.\nEl emisor coalesce; el último snapshot de una Task siempre lleva estado\nterminal y totales finales.\n\n```\nuse norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};\nlet p = TaskProgress {\n    task_id: TaskId::new(7),\n    kind: TaskKind::Copy,\n    state: TaskState::Running,\n    bytes_done: 512,\n    bytes_total: Some(4096),\n    entries_done: 0,\n    entries_total: Some(2),\n    current: None,\n    // `None` = esta task no cuenta ilegibles; `Some(0)` sería «los cuenta\n    // y no hubo». Ver el campo.\n    unreadable: None,\n    unvisited: None,\n};\nlet json = serde_json::to_string(&p).unwrap();\nassert_eq!(serde_json::from_str::<TaskProgress>(&json).unwrap(), p);\n```",
       "properties": {
@@ -7267,6 +7284,12 @@
     "task_list_result": {
       "$ref": "#/$defs/TaskListResult"
     },
+    "task_pause_params": {
+      "$ref": "#/$defs/TaskPauseParams"
+    },
+    "task_pause_result": {
+      "$ref": "#/$defs/TaskPauseResult"
+    },
     "task_progress": {
       "$ref": "#/$defs/TaskProgress"
     },
@@ -7500,6 +7523,8 @@
     "task_kind",
     "task_list_params",
     "task_list_result",
+    "task_pause_params",
+    "task_pause_result",
     "task_progress",
     "task_state",
     "undo_blocked",

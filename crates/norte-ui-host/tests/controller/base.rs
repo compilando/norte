@@ -2307,6 +2307,7 @@ async fn una_task_ajena_se_ve_y_se_dice_ajena() {
         id: norte_proto::TaskId::new(11),
         progress: prx,
         cancel: Arc::new(|| {}),
+        pause: None,
         foreign: true,
     })
     .expect("el host escucha");

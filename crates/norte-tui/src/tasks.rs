@@ -237,6 +237,16 @@ impl TaskBoard {
         false
     }
 
+    /// La task en marcha más RECIENTE —la que cancelaría
+    /// [`Self::cancel_last_running`]— y si está pausada, consultado EN VIVO.
+    #[must_use]
+    pub fn last_running(&self) -> Option<(TaskObserver, bool)> {
+        self.rows.iter().rev().find_map(|row| {
+            let estado = row.rx.borrow().state.clone();
+            (!estado.is_terminal()).then(|| (row.task.clone(), estado == TaskState::Paused))
+        })
+    }
+
     /// Cancela la task de la fila `i`. `false` si no hay fila, o si ya
     /// terminó.
     ///
@@ -334,6 +344,22 @@ mod has_active_tests {
         board.push(&task_ref(1, TaskState::Completed), None);
         board.push(&task_ref(2, TaskState::Running), None);
         assert!(board.has_active());
+    }
+
+    /// ADR 0147: pausar elige la MISMA tarea que cancelar —la viva más
+    /// reciente— y dice si ya está pausada, leído en vivo.
+    #[test]
+    fn pausar_elige_la_viva_mas_reciente_y_sabe_si_esta_pausada() {
+        let mut board = TaskBoard::default();
+        board.push(&task_ref(1, TaskState::Running), None);
+        board.push(&task_ref(2, TaskState::Paused), None);
+        board.push(&task_ref(3, TaskState::Completed), None);
+        let (task, pausada) = board.last_running().expect("hay una viva");
+        assert_eq!(task.id(), norte_proto::TaskId::new(2));
+        assert!(pausada);
+        let mut vacio = TaskBoard::default();
+        vacio.push(&task_ref(9, TaskState::Completed), None);
+        assert!(vacio.last_running().is_none());
     }
 
     /// #173: el tablero se queda un OBSERVADOR, así que quien lanzó la task

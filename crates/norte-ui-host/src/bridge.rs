@@ -528,7 +528,10 @@ use serde::{Deserialize, Serialize};
 ///   en el item `tasks`: el renderer pinta la barra DETRÁS del texto, con el
 ///   ancho de `BAR_CELLS` celdas. Ausente = sin barra, así que el JSON de
 ///   cualquier otro item es byte a byte el de 91.
-pub const BRIDGE_VERSION: u32 = 92;
+/// - **93**: una task se puede pausar (ADR 0147). `TaskStateView` gana
+///   `paused`: viva y parada. Antes el host la pintaba como `running`, que
+///   es justo lo que no está haciendo.
+pub const BRIDGE_VERSION: u32 = 93;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

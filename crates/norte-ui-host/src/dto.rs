@@ -3415,6 +3415,8 @@ pub enum TaskStateView {
     Queued,
     /// Corriendo.
     Running,
+    /// Pausada (ADR 0147, puente 93): viva, parada hasta que se reanude.
+    Paused,
     /// Terminada bien.
     Done,
     /// Falló.

@@ -216,6 +216,10 @@ msg-pack-warnings = empaquetado, pero { $risky } nombre(s) significan otra cosa 
 msg-pack-warnings-partial = empaquetado, pero al menos { $risky } nombre(s) significan otra cosa en otro sistema
 msg-cancelled = cancelado
 msg-cancelling = cancelando…
+msg-pausing = pausando… (se para al acabar el trozo o el fichero en curso)
+msg-resuming = reanudando…
+msg-pause-unsupported = este daemon no sabe pausar tareas: actualízalo para poder hacerlo
+msg-pause-not-this = esta tarea no se puede pausar: solo copiar, mover y borrar
 msg-no-tasks = no hay tasks en marcha
 msg-task-finished = esa task ya había terminado
 msg-error = error: { $error }
@@ -585,6 +589,7 @@ strip-running-copy = copiando
 strip-running-move = moviendo
 strip-running-delete = borrando
 strip-running-other = trabajando en
+strip-paused = pausada
 strip-done-copy = copiado
 strip-done-move = movido
 strip-done-delete = borrado
@@ -1410,6 +1415,7 @@ help-cmd-pane-select-drive = elegir unidad para el panel con foco
 help-cmd-pane-select-drive-left = elegir unidad para el panel IZQUIERDO
 help-cmd-pane-select-drive-right = elegir unidad para el panel DERECHO
 help-cmd-task-cancel = cancelar la task señalada, o la más reciente
+help-cmd-task-pause = pausar la task señalada, o la más reciente; si ya está pausada, reanudarla
 # G3c: comandos SOLO de la GUI (sin equivalente en la TUI, que usa otros
 # bindings para multi-selección/franja de tasks) — hacen falta ahora que la
 # paleta de comandos de la GUI lista `app.palette`/`app.extensions` y
