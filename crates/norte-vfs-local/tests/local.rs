@@ -832,6 +832,38 @@ async fn attrs_posix_en_stat_y_list() {
     assert!(le.attrs.is_empty() && le.size.is_none());
 }
 
+/// ADR 0145: el dueño y el grupo por NOMBRE, en bytes, por los dos caminos
+/// (`stat` y la promoción de `list`). Qué nombre sea depende de la máquina;
+/// lo que se fija es que llega, sin el NUL de C, y que es el mismo en los
+/// dos caminos.
+#[cfg(unix)]
+#[tokio::test]
+async fn attrs_posix_dueno_y_grupo_por_nombre() {
+    use norte_proto::AttrValue;
+    use norte_vfs::{AttrRequest, ListOptions};
+    let (p, root, base) = provider();
+    std::fs::write(base.join("a.txt"), b"hola").expect("seed");
+    let opt = ListOptions {
+        attrs: AttrRequest::sanitized(["posix.owner", "posix.group"].map(str::to_owned)),
+    };
+    let e = p
+        .stat_with(&child(&root, b"a.txt"), &opt)
+        .await
+        .expect("stat_with");
+    for id in ["posix.owner", "posix.group"] {
+        match e.attrs.get(id) {
+            Some(AttrValue::Bytes(n)) => {
+                assert!(!n.is_empty() && !n.contains(&0), "{id}: {n:?}");
+            }
+            otro => panic!("{id} por nombre en bytes: {otro:?}"),
+        }
+    }
+    let mut s = p.list_with(&root, &opt).await.expect("list_with");
+    let le = s.next().await.expect("una entrada").expect("ok");
+    assert_eq!(le.attrs.get("posix.owner"), e.attrs.get("posix.owner"));
+    assert_eq!(le.attrs.get("posix.group"), e.attrs.get("posix.group"));
+}
+
 // ---------------------------------------------------------------------------
 // Papelera freedesktop (`trash_fdo`): la que SABE dónde dejó el fichero.
 //
