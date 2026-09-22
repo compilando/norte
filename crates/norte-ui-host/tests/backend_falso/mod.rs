@@ -293,6 +293,16 @@ pub struct Falso {
     /// Lo que TARDA el modelo. Es lo que abre la ventana en la que el lector
     /// puede descartar la revisión antes de que llegue el plan.
     pub retraso_ia_ms: u64,
+    /// Retiene el plan de IA hasta que el test la abre.
+    ///
+    /// `retraso_ia_ms` simula latencia, y eso vale para ver qué hace la
+    /// ventana MIENTRAS el modelo piensa. Lo que no vale es para sincronizar:
+    /// un test que necesite que el plan siga en vuelo mientras teclea está
+    /// apostando a que sus pulsaciones tardan menos que el reloj, y bajo carga
+    /// esa apuesta se pierde. Con la puerta, «sigue pensando» es un hecho y no
+    /// una ventana de tiempo. Mismo pestillo que [`Puerta`] usa para el
+    /// drenaje, y por el mismo motivo.
+    pub puerta_ia: Option<Arc<Puerta>>,
     /// Las instrucciones que se pidieron, en orden.
     pub instrucciones: std::sync::Mutex<Vec<String>>,
     /// Los NOMBRES que viajaron con cada plan (#121): vacío = el directorio
@@ -2160,6 +2170,7 @@ impl HostBackend for Falso {
         self.latido();
         let plan = self.plan_ia.clone();
         let retraso = self.retraso_ia_ms;
+        let puerta = self.puerta_ia.clone();
         // Pedir un plan es una LECTURA: el modelo no muta nada. Entra en la
         // misma cuenta que los listados, que es lo que permite esperar a que
         // «no vuele ninguna» sin contar a mano las respuestas de cada caso.
@@ -2167,6 +2178,12 @@ impl HostBackend for Falso {
         let servidos = Arc::clone(&self.servidos);
         let pulso = Arc::clone(&self.pulso);
         Box::pin(async move {
+            // Con puerta, el plan no contesta hasta que el test la abre: el
+            // modelo «sigue pensando» como un HECHO, no como una ventana de
+            // milisegundos que una máquina cargada se salta.
+            if let Some(puerta) = puerta {
+                puerta.esperar().await;
+            }
             if retraso > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
             }

@@ -1223,13 +1223,29 @@ fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
     );
     // …y la barra lo PINTA (por encima de cualquier mensaje pendiente).
     app.message = Some("un mensaje cualquiera".to_owned());
+    let cabeza = copia
+        .split_once("  ")
+        .map_or(copia.as_str(), |(head, _)| head)
+        .to_owned();
+    let lineas = pintar(&mut app);
+    let barra = lineas.last().expect("barra de estado");
+    // La barra CEDE por la derecha: sus ELEMENTOS —posición, marcas,
+    // codificación (ADR 0132)— se quedan su parte y el aviso se corta por
+    // donde haga falta. Exigir la cabeza ENTERA ataba este test al idioma sin
+    // decirlo: la frase española mide unas cuarenta celdas y la inglesa unas
+    // treinta, así que la misma pantalla de sesenta pasaba en inglés y fallaba
+    // en español. Lo que aquí se afirma no es cuánto cabe, sino QUIÉN MANDA:
+    // el aviso empieza la barra y el mensaje pendiente no aparece.
+    let principio: String = cabeza.chars().take(15).collect();
     assert!(
-        pintar(&mut app).last().expect("barra de estado").contains(
-            copia
-                .split_once("  ")
-                .map_or(copia.as_str(), |(head, _)| head)
-        ),
-        "el aviso manda sobre la barra mientras dura el arrastre"
+        barra.contains(&principio),
+        "el aviso manda sobre la barra mientras dura el arrastre.\n\
+         esperaba que la barra empezara por: {principio:?}\n\
+         y la barra pintada es:              {barra:?}"
+    );
+    assert!(
+        !barra.contains("un mensaje cualquiera"),
+        "y el mensaje pendiente no se cuela debajo: {barra:?}"
     );
 
     // Con Mayús, MOVER — y el drop hace lo prometido.

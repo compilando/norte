@@ -118,6 +118,16 @@ pub fn spelling_twins() -> Vec<SpellingTwin> {
             right: "nfd_e_acute",
             kind: TwinKind::Normalization,
         },
+        // La misma pareja, pero CON EXTENSIÓN. Existe aparte porque lo que
+        // fija es distinto: las dos se clasifican igual —la normalización no
+        // toca los bytes ASCII de `.png`— y aun así son dos ficheros que
+        // coexisten en ext4. El día que alguien «arregle» una búsqueda de
+        // hermanas casando nombres normalizados, abrirá el que llegue primero.
+        SpellingTwin {
+            left: "image_ext_nfc",
+            right: "image_ext_nfd",
+            kind: TwinKind::Normalization,
+        },
         // ΟΔΟΣ / οδοσ: `str::to_lowercase` aplica Final_Sigma y da ς, que NO
         // es el pliegue simple.
         SpellingTwin {

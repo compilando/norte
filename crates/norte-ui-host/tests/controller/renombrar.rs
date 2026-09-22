@@ -1610,7 +1610,15 @@ async fn con_un_plan_en_vuelo_escape_cancela_el_filtro() {
     f.pon("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
     f.veredicto = Some(veredicto_ok(&pares));
-    f.retraso_ia_ms = 120;
+    // El plan se RETIENE hasta que este test lo suelte, en vez de tardar unos
+    // milisegundos. Con un retraso, «sigue pensando» duraba lo que durase el
+    // reloj: bajo carga la revisión aterrizaba en mitad de las catorce teclas
+    // de la paleta, se quedaba el teclado (se atiende ANTES que el filtro y
+    // que la paleta, `input.rs`), el `Escape` la descartaba a ELLA, y este
+    // test esperaba quince segundos una revisión que ya había venido y se
+    // había ido. Con la puerta, lo que el test afirma es un hecho.
+    let puerta = Arc::new(crate::backend_falso::Puerta::default());
+    f.puerta_ia = Some(Arc::clone(&puerta));
     let backend = Arc::new(f);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1626,12 +1634,12 @@ async fn con_un_plan_en_vuelo_escape_cancela_el_filtro() {
         listado(&foto).quick.is_none(),
         "el Escape canceló el filtro"
     );
-    // Por la FOTO y no esperando el parche de la revisión: el
-    // `siguiente_foto` de arriba consume sobres hasta encontrar una foto, y
-    // con `retraso_ia_ms = 120` el parche de la revisión puede caer justo
-    // ahí — se lo tragaba y luego esperaba para siempre un evento que ya
-    // había pasado (rojo intermitente bajo carga). Un `Resync` reenvía el
-    // ESTADO, así que preguntar por la foto no puede perderse nada.
+
+    // Y el plan seguía en vuelo mientras tanto: ahora se suelta y aterriza.
+    // Por la FOTO y no esperando su parche: `siguiente_foto` consume sobres
+    // hasta encontrar una, así que podría tragarse el parche y luego esperar
+    // para siempre un evento ya pasado. Un `Resync` reenvía el ESTADO.
+    puerta.abrir();
     let r = foto_hasta(&h, &mut sub, "la revisión del plan aterrizó", |foto| {
         foto.ai_rename.clone()
     })

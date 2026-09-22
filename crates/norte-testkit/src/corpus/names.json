@@ -5,6 +5,36 @@
     "why": "é en Latin-1: byte suelto inválido como UTF-8; el clásico archivo pre-Unicode"
   },
   {
+    "id": "image_ext_invalid_stem",
+    "hex": "636166e9ff2e706e67",
+    "why": "caf\\xe9\\xff.png: stem no-UTF8 con extensión ASCII. Clasificar por extensión debe validar SOLO la extensión — un decoder que mire el nombre entero deja este fichero fuera del carrete del visor y de todo lo que mire extensiones, sin error en ninguna parte"
+  },
+  {
+    "id": "image_ext_lone_surrogate",
+    "hex": "eda0802e6a7067",
+    "why": "\\xed\\xa0\\x80.jpg: la mitad Windows/WTF-8 de lo mismo, para que la propiedad no sea solo de unix"
+  },
+  {
+    "id": "image_ext_trailing_dot",
+    "hex": "666f746f2e706e672e",
+    "why": "foto.png.: Windows se come el punto final sin el prefijo \\\\?\\, así que el MISMO fichero se llama «foto.png.» en una grafía y «foto.png» en la otra — y una clasifica como imagen y la otra no"
+  },
+  {
+    "id": "image_ext_dotfile",
+    "hex": "2e706e67",
+    "why": ".png: nombre que es SOLO extensión. El visor lo toma por imagen y la columna de extensión lo deja sin ninguna (`ext_bytes` rechaza el punto en la posición 0): el corpus fija la divergencia para que se decida a propósito"
+  },
+  {
+    "id": "image_ext_nfd",
+    "hex": "63616665cc812e706e67",
+    "why": "café.png en NFD, con extensión: la pareja de image_ext_nfc. Clasifican IGUAL —la normalización no toca ASCII— pero son dos ficheros distintos en ext4, así que casarlos por normalización abriría el equivocado"
+  },
+  {
+    "id": "image_ext_nfc",
+    "hex": "636166c3a92e706e67",
+    "why": "café.png en NFC: la otra mitad del par con extensión"
+  },
+  {
     "id": "overlong_slash",
     "hex": "c0af",
     "why": "encoding overlong de '/': ataque clásico de path traversal vía decoders laxos"
