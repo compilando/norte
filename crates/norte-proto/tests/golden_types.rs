@@ -4146,6 +4146,7 @@ fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
             resume: ResumePolicy::Off,
             verify: VerifyPolicy::Length,
             dest_anchor: None,
+            queued: false,
         },
     );
     check_one(
@@ -4159,6 +4160,7 @@ fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
             resume: ResumePolicy::On,
             verify: VerifyPolicy::Hash,
             dest_anchor: None,
+            queued: false,
         },
     );
     check_one(
@@ -4172,6 +4174,7 @@ fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
             resume: ResumePolicy::Off,
             verify: VerifyPolicy::Length,
             dest_anchor: None,
+            queued: false,
         },
     );
     // 0.54.0 (#295): el ancla del listado VOLVIENDO con la petición que
@@ -4191,6 +4194,7 @@ fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
             dest_anchor: Some(norte_proto::DirAnchor::new(
                 "3f2a91c40b7d6e58aa10c4d9f8e37b62".to_owned(),
             )),
+            queued: false,
         },
     );
     check_one(
@@ -4206,6 +4210,7 @@ fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
             dest_anchor: Some(norte_proto::DirAnchor::new(
                 "3f2a91c40b7d6e58aa10c4d9f8e37b62".to_owned(),
             )),
+            queued: false,
         },
     );
 }
@@ -4892,7 +4897,9 @@ fn method_names_frozen() {
     // 0.82.0: una task se puede pausar (ADR 0147).
     assert_eq!(methods::TASK_PAUSE, "task.pause");
     assert_eq!(methods::TASK_RESUME, "task.resume");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.82.0");
+    // 0.83.0: la cola en serie (ADR 0149).
+    assert_eq!(methods::TASK_MOVE, "task.move");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.83.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

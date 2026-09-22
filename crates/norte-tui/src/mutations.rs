@@ -701,6 +701,13 @@ pub async fn submit_transfer(
     to: VPath,
     opts: TransferOptions,
 ) -> bool {
+    // El interruptor de la sesión decide por dónde entra (ADR 0149); el
+    // reintento de una colisión hereda lo que se pidió la primera vez, así
+    // que se respeta lo que ya trajeran las opciones.
+    let opts = TransferOptions {
+        queued: opts.queued || app.encolar,
+        ..opts
+    };
     let res = match kind {
         TransferKind::Copy => backend.copy(&from, &to, opts).await,
         TransferKind::Move => backend.move_(&from, &to, opts).await,

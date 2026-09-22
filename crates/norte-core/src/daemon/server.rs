@@ -6074,6 +6074,9 @@ async fn dispatch_fs_task(
                 symlinks: p.symlinks,
                 resume: p.resume,
                 verify: p.verify,
+                // A la cola si el cliente lo pidió (ADR 0149); un cliente
+                // N-1 no manda el campo y va en paralelo, como siempre.
+                queued: p.queued,
             };
             let handle = shared
                 .engine
@@ -6094,6 +6097,9 @@ async fn dispatch_fs_task(
                 symlinks: p.symlinks,
                 resume: p.resume,
                 verify: p.verify,
+                // A la cola si el cliente lo pidió (ADR 0149); un cliente
+                // N-1 no manda el campo y va en paralelo, como siempre.
+                queued: p.queued,
             };
             let handle = shared
                 .engine
@@ -6310,6 +6316,11 @@ async fn dispatch_task_family(
             pausar_task(&p, true, &actor, shared);
             to_value(&methods::TaskPauseResult {})
         }
+        methods::TASK_MOVE => {
+            let p: methods::TaskMoveParams = parse_params(req.params)?;
+            mover_task_en_cola(&p, &actor, shared);
+            to_value(&methods::TaskMoveResult {})
+        }
         methods::TASK_RESUME => {
             let p: methods::TaskPauseParams = parse_params(req.params)?;
             pausar_task(&p, false, &actor, shared);
@@ -6321,6 +6332,26 @@ async fn dispatch_task_family(
             codes::METHOD_NOT_FOUND,
             format!("unknown method: {other}"),
         )),
+    }
+}
+
+/// `task.move` (ADR 0149): reordena lo que aún no empezó. Mismo contrato que
+/// pausar — sobre una ajena, una que ya corre o una desconocida el ack es el
+/// mismo y no pasa nada.
+fn mover_task_en_cola(
+    p: &methods::TaskMoveParams,
+    actor: &crate::journal::Actor,
+    shared: &Arc<Shared>,
+) {
+    let suya = shared
+        .tasks
+        .lock()
+        .expect("tasks lock sano")
+        .get(&p.task_id.get())
+        .is_some_and(|t| may_observe(actor, &t.owner));
+    if suya {
+        // El ack no dice si se movió: no se filtra en qué estado estaba.
+        let _ = shared.engine.mover_en_cola(p.task_id, p.up);
     }
 }
 

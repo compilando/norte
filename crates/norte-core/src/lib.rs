@@ -71,5 +71,5 @@ pub use policy::{
     ScopeRegistry, ScopedPolicy, scope_key,
 };
 pub use progress::ProgressReporter;
-pub use scheduler::{PauseGate, Priority, Scheduler, TaskBody, TaskCtx, TaskHandle};
+pub use scheduler::{Lane, PauseGate, Priority, Scheduler, TaskBody, TaskCtx, TaskHandle};
 pub use undo::{OP_ORGANIZED, UNDO_MAX_UNREVERTED_PATHS, UndoReport};

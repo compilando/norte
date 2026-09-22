@@ -198,6 +198,9 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "task.cancel",
     "task.pause",
     "task.retry",
+    "task.queue",
+    "task.up",
+    "task.down",
     "task.next",
     "task.prev",
     "task.dismiss",
@@ -688,6 +691,14 @@ pub enum Efecto {
     /// Repite la transferencia fallida más reciente con sus mismas opciones
     /// (ADR 0148). Muta, así que una ventana sin efectos la rehúsa.
     ReintentarTask,
+    /// Manda a la cola en serie las transferencias que se lancen a partir de
+    /// ahora, o deja de hacerlo (ADR 0149). No toca lo ya encolado.
+    AlternarCola,
+    /// Sube (`arriba`) o baja en la cola la tarea señalada, si aún no empezó.
+    MoverEnCola {
+        /// Hacia el principio de la cola.
+        arriba: bool,
+    },
     /// Ordena el listado enfocado por esta columna.
     ///
     /// La misma semántica que un click en la cabecera: la columna activa
@@ -971,6 +982,9 @@ fn efecto_del_tablero(command: &str) -> Option<Efecto> {
         "task.cancel" => Efecto::CancelarTask,
         "task.pause" => Efecto::PausarTask,
         "task.retry" => Efecto::ReintentarTask,
+        "task.queue" => Efecto::AlternarCola,
+        "task.up" => Efecto::MoverEnCola { arriba: true },
+        "task.down" => Efecto::MoverEnCola { arriba: false },
         _ => return None,
     })
 }

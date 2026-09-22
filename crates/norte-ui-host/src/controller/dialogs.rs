@@ -721,8 +721,9 @@ impl Estado {
             // cada una ES una política distinta, y cuál se pulsó es la
             // respuesta entera. `cancel` no traduce a ninguna y entonces no se
             // relanza nada — la task fallida se queda como estaba.
+            let encolar = self.encolar;
             if let Some(politica) = politica_de_colision(choice) {
-                Self::lanzar_reintento(con.clone(), politica, backend, buzon);
+                Self::lanzar_reintento(con.clone(), politica, encolar, backend, buzon);
             }
         }
         let cambio = ViewChange::Dialogs {

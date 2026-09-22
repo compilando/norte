@@ -116,6 +116,8 @@ pub struct Falso {
     pub sesion: std::sync::Mutex<(norte_proto::methods::Session, bool)>,
     /// Lo ÚLTIMO que se escribió, para comprobar qué guarda el host.
     pub escrito: std::sync::Mutex<Option<serde_json::Value>>,
+    /// La última transferencia pidió la COLA (ADR 0149).
+    pub encoladas: std::sync::Mutex<bool>,
     /// TODOS los cuerpos que se intentaron poner, en orden — rechazados
     /// incluidos. Es lo que permite ver que un reintento manda algo DISTINTO
     /// (#316), que es la diferencia entre degradar y repetir el mismo error.
@@ -734,6 +736,7 @@ impl Falso {
                     cancelaciones.fetch_add(1, Ordering::SeqCst);
                 }),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -790,6 +793,7 @@ impl Falso {
                     cancelaciones.fetch_add(1, Ordering::SeqCst);
                 }),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -1072,6 +1076,7 @@ impl HostBackend for Falso {
                         cancelaciones.fetch_add(1, Ordering::SeqCst);
                     }),
                     pause: None,
+                    cola: None,
                     foreign: false,
                 },
                 rx,
@@ -1247,6 +1252,7 @@ impl HostBackend for Falso {
                 progress: rx,
                 cancel: Arc::new(|| {}),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -1315,6 +1321,7 @@ impl HostBackend for Falso {
                 progress: rx,
                 cancel: Arc::new(|| {}),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -1597,6 +1604,7 @@ impl HostBackend for Falso {
                     pulso.notify_waiters();
                 }),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -1672,6 +1680,7 @@ impl HostBackend for Falso {
                     progress: rx,
                     cancel: Arc::new(|| {}),
                     pause: None,
+                    cola: None,
                     foreign: false,
                 },
                 erx,
@@ -1735,6 +1744,7 @@ impl HostBackend for Falso {
                     progress: rx,
                     cancel: Arc::new(|| {}),
                     pause: None,
+                    cola: None,
                     foreign: false,
                 },
                 frx,
@@ -1805,6 +1815,7 @@ impl HostBackend for Falso {
                 progress: rx,
                 cancel: Arc::new(|| {}),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -1841,6 +1852,7 @@ impl HostBackend for Falso {
                 progress: rx,
                 cancel: Arc::new(|| {}),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -1906,6 +1918,7 @@ impl HostBackend for Falso {
                 progress: rx,
                 cancel: Arc::new(|| {}),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -1933,6 +1946,7 @@ impl HostBackend for Falso {
                 progress: rx,
                 cancel: Arc::new(|| {}),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -1982,6 +1996,7 @@ impl HostBackend for Falso {
                 progress: rx,
                 cancel: Arc::new(|| {}),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -2162,7 +2177,9 @@ impl HostBackend for Falso {
         from: VPath,
         to: VPath,
         on_collision: norte_proto::CollisionPolicy,
+        queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        *self.encoladas.lock().expect("encoladas") = queued;
         self.transferir(from, to, false, on_collision)
     }
 
@@ -2314,6 +2331,7 @@ impl HostBackend for Falso {
                 progress: rx,
                 cancel: Arc::new(|| {}),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -2370,6 +2388,7 @@ impl HostBackend for Falso {
                 progress: rx,
                 cancel: Arc::new(|| {}),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -2419,7 +2438,9 @@ impl HostBackend for Falso {
         from: VPath,
         to: VPath,
         on_collision: norte_proto::CollisionPolicy,
+        queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        *self.encoladas.lock().expect("encoladas") = queued;
         self.transferir(from, to, true, on_collision)
     }
 
@@ -2465,6 +2486,7 @@ impl HostBackend for Falso {
                     cancelaciones.fetch_add(1, Ordering::SeqCst);
                 }),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })
@@ -2638,6 +2660,7 @@ impl HostBackend for Falso {
                     cancelaciones.fetch_add(1, Ordering::SeqCst);
                 }),
                 pause: None,
+                cola: None,
                 foreign: false,
             })
         })

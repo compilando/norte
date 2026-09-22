@@ -247,6 +247,12 @@ impl TaskBoard {
         })
     }
 
+    /// La task de la fila `i`, para actuar sobre ella sin llevarse la fila.
+    #[must_use]
+    pub fn task_at(&self, i: usize) -> Option<TaskObserver> {
+        self.rows.get(i).map(|r| r.task.clone())
+    }
+
     /// El contexto de reintento de la transferencia fallida más reciente
     /// (ADR 0148): la que `task.retry` repetiría. `None` si ninguna falló, o
     /// si la que falló no era una transferencia.

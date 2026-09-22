@@ -962,6 +962,7 @@ fn spawn_agent_copy(
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
                     dest_anchor: None,
+                    queued: false,
                 },
             )
             .await

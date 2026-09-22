@@ -38,6 +38,15 @@ impl RemoteTaskCanceller {
     pub async fn set_paused(&self, paused: bool) -> Result<(), norte_proto::Error> {
         self.backend.set_paused(self.id, paused).await
     }
+
+    /// Sube (`true`) o baja la task en la cola en serie, si aún no empezó
+    /// (0.83.0, ADR 0149).
+    ///
+    /// # Errors
+    /// `Unsupported` contra un daemon que no conoce la cola (0.82 o anterior).
+    pub async fn mover_en_cola(&self, up: bool) -> Result<(), norte_proto::Error> {
+        self.backend.mover_en_cola(self.id, up).await
+    }
 }
 
 /// Una task en marcha en el daemon.

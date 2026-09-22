@@ -9,6 +9,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A serial queue for transfers** (ADR 0149, protocol 0.83.0).
+  `task.queue` (`Ctrl+Alt+Q`) sends the transfers you start from then on to a
+  queue that runs them one at a time — on a spinning disk that is faster than
+  four at once — and `task.up`/`task.down` (`Ctrl+Alt+↑/↓`) reorder what has
+  not started yet. The switch is session state and applies to the next
+  transfer, not to what is already queued.
 - **Repeat a failed transfer, and a thin line where work lands** (ADR 0148,
   bridge 94). `task.retry` (`Ctrl+Alt+R`) repeats the most recent failed
   transfer with the same verb and options, reusing the context already kept

@@ -57,6 +57,12 @@ impl Estado {
         if matches!(efecto, Efecto::ReintentarTask) {
             return self.reintentar_por_comando(backend, buzon);
         }
+        if matches!(efecto, Efecto::AlternarCola) {
+            return self.alternar_cola();
+        }
+        if let Efecto::MoverEnCola { arriba } = efecto {
+            return self.mover_en_cola_por_comando(arriba, buzon);
+        }
         // Recorrer y descartar el tablero, por el mismo motivo y antes del
         // foco: son comandos del TABLERO, no del panel que lo pinta, y con el
         // panel de procesos cerrado tienen que seguir significando lo mismo.
@@ -116,6 +122,8 @@ impl Estado {
             }
             Efecto::PausarTask => self.pausar_por_comando(buzon),
             Efecto::ReintentarTask => self.reintentar_por_comando(backend, buzon),
+            Efecto::AlternarCola => self.alternar_cola(),
+            Efecto::MoverEnCola { arriba } => self.mover_en_cola_por_comando(arriba, buzon),
             Efecto::Tamano(_)
             | Efecto::Igualar
             | Efecto::Girar

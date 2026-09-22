@@ -562,3 +562,123 @@ async fn pausada_antes_de_empezar_no_empieza() {
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(corrio.load(Ordering::SeqCst), 1);
 }
+
+// ---------------------------------------------------------------------------
+// La cola en serie (ADR 0149).
+// ---------------------------------------------------------------------------
+
+/// Lo encolado corre de UNA EN UNA, en el orden en que entró, mientras lo
+/// paralelo sigue admitiendo varias a la vez.
+#[tokio::test]
+async fn la_cola_corre_de_una_en_una_y_en_orden() {
+    use norte_core::Lane;
+    let sched = Scheduler::new(4);
+    let vivas = Arc::new(AtomicUsize::new(0));
+    let maximo = Arc::new(AtomicUsize::new(0));
+    let orden = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut handles = Vec::new();
+    for i in 0..4u64 {
+        let vivas = Arc::clone(&vivas);
+        let maximo = Arc::clone(&maximo);
+        let orden = Arc::clone(&orden);
+        handles.push(sched.submit_en(
+            Lane::Cola,
+            "mem",
+            TaskKind::Copy,
+            Priority::Normal,
+            Actor::User,
+            body(move |_ctx| {
+                Box::pin(async move {
+                    let a_la_vez = vivas.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximo.fetch_max(a_la_vez, Ordering::SeqCst);
+                    orden.lock().expect("orden").push(i);
+                    tokio::task::yield_now().await;
+                    vivas.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            }),
+        ));
+    }
+    for h in handles {
+        assert_eq!(h.join().await, TaskState::Completed);
+    }
+    assert_eq!(maximo.load(Ordering::SeqCst), 1, "de una en una");
+    assert_eq!(*orden.lock().expect("orden"), vec![0, 1, 2, 3], "en orden");
+}
+
+/// Subir una que AÚN NO EMPEZÓ la adelanta; sobre la que ya corre, sobre la
+/// primera de la cola o sobre una desconocida, no hay nada que mover.
+#[tokio::test]
+async fn mover_en_la_cola_adelanta_lo_que_no_empezo() {
+    use norte_core::Lane;
+    let sched = Scheduler::new(4);
+    let orden = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (suelta_tx, suelta_rx) = tokio::sync::oneshot::channel::<()>();
+    // La primera ocupa el único hueco de la cola hasta que el test la suelta:
+    // así las otras tres están EN ESPERA cuando se reordena.
+    let o = Arc::clone(&orden);
+    let primera = sched.submit_en(
+        Lane::Cola,
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        body(move |_ctx| {
+            Box::pin(async move {
+                o.lock().expect("orden").push(0u64);
+                let _ = suelta_rx.await;
+                Ok(())
+            })
+        }),
+    );
+    let mut esperando = Vec::new();
+    for i in 1..4u64 {
+        let o = Arc::clone(&orden);
+        esperando.push(sched.submit_en(
+            Lane::Cola,
+            "mem",
+            TaskKind::Copy,
+            Priority::Normal,
+            Actor::User,
+            body(move |_ctx| {
+                Box::pin(async move {
+                    o.lock().expect("orden").push(i);
+                    Ok(())
+                })
+            }),
+        ));
+    }
+    // Que la primera haya arrancado de verdad antes de reordenar.
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        primera
+            .progress()
+            .wait_for(|p| p.state == TaskState::Running),
+    )
+    .await
+    .expect("arranca")
+    .expect("emisor vivo");
+
+    assert!(
+        sched.mover_en_cola(esperando[2].id(), true),
+        "la última sube"
+    );
+    assert!(
+        !sched.mover_en_cola(primera.id(), true),
+        "la que ya corre no está en la cola"
+    );
+    assert!(
+        !sched.mover_en_cola(norte_proto::TaskId::new(u64::MAX - 1), true),
+        "una desconocida no se mueve"
+    );
+    let _ = suelta_tx.send(());
+    assert_eq!(primera.join().await, TaskState::Completed);
+    for h in esperando {
+        assert_eq!(h.join().await, TaskState::Completed);
+    }
+    assert_eq!(
+        *orden.lock().expect("orden"),
+        vec![0, 1, 3, 2],
+        "la tercera adelantó a la segunda… de las que esperaban"
+    );
+}

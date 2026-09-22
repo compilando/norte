@@ -2550,6 +2550,10 @@ struct Estado {
     procesos_auto: bool,
     /// La barra de progreso ligera del item `tasks` (ADR 0146).
     tira: norte_frontend::task_strip::TaskStrip,
+    /// Las transferencias que se lancen van a la COLA (ADR 0149). De la
+    /// sesión, no de la configuración: se enciende para un rato de mover
+    /// cosas y se apaga después.
+    encolar: bool,
     /// El origen del reloj de [`Self::tira`]: el de tokio, que los tests
     /// pueden pausar y adelantar.
     tira_base: tokio::time::Instant,
@@ -3225,6 +3229,7 @@ impl Estado {
             splash_visto: false,
             procesos_auto: false,
             tira: norte_frontend::task_strip::TaskStrip::default(),
+            encolar: false,
             tira_base: tokio::time::Instant::now(),
             tira_despertar: None,
             paleta_recientes: Vec::new(),

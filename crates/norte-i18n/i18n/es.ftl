@@ -222,6 +222,10 @@ msg-pause-unsupported = este daemon no sabe pausar tareas: actualízalo para pod
 msg-pause-not-this = esta tarea no se puede pausar: solo copiar, mover y borrar
 msg-retrying = repitiendo la transferencia…
 msg-no-retry = no hay ninguna transferencia fallida que repetir
+msg-queue-on = las transferencias que lances ahora van a la cola: de una en una
+msg-queue-off = las transferencias que lances ahora van en paralelo
+msg-queued-moved = movida en la cola
+msg-queued-not-moved = ahí no se mueve: ya está corriendo, o ya es la primera
 msg-no-tasks = no hay tasks en marcha
 msg-task-finished = esa task ya había terminado
 msg-error = error: { $error }
@@ -1419,6 +1423,9 @@ help-cmd-pane-select-drive-right = elegir unidad para el panel DERECHO
 help-cmd-task-cancel = cancelar la task señalada, o la más reciente
 help-cmd-task-pause = pausar la task señalada, o la más reciente; si ya está pausada, reanudarla
 help-cmd-task-retry = repetir la transferencia que falló, con las mismas opciones
+help-cmd-task-queue = mandar a la cola las transferencias que lances a partir de ahora, o dejar de hacerlo
+help-cmd-task-up = subir en la cola la tarea señalada
+help-cmd-task-down = bajarla
 # G3c: comandos SOLO de la GUI (sin equivalente en la TUI, que usa otros
 # bindings para multi-selección/franja de tasks) — hacen falta ahora que la
 # paleta de comandos de la GUI lista `app.palette`/`app.extensions` y

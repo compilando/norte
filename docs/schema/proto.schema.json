@@ -2065,6 +2065,10 @@
           "default": "fail",
           "description": "Qué hacer si el destino existe. `#[serde(default)]`: un cliente N-1\nque no lo envía obtiene `Fail` (el comportamiento de siempre)."
         },
+        "queued": {
+          "description": "A la COLA en vez de en paralelo (0.83.0, ADR 0149): las encoladas\ncorren de una en una, en el orden en que entraron. `#[serde(default)]`:\nun cliente N-1 no lo manda y su transferencia va en paralelo, que es\nlo de siempre, y una transferencia que no la pide viaja byte a byte\ncomo en 0.82.",
+          "type": "boolean"
+        },
         "resume": {
           "$ref": "#/$defs/ResumePolicy",
           "default": "off",
@@ -2349,6 +2353,10 @@
           "$ref": "#/$defs/CollisionPolicy",
           "default": "fail",
           "description": "Qué hacer si el destino existe (ver [`FsCopyParams::on_collision`])."
+        },
+        "queued": {
+          "description": "A la COLA en vez de en paralelo (0.83.0, ADR 0149): las encoladas\ncorren de una en una, en el orden en que entraron. `#[serde(default)]`:\nun cliente N-1 no lo manda y su transferencia va en paralelo, que es\nlo de siempre, y una transferencia que no la pide viaja byte a byte\ncomo en 0.82.",
+          "type": "boolean"
         },
         "resume": {
           "$ref": "#/$defs/ResumePolicy",
@@ -6323,6 +6331,28 @@
       ],
       "type": "object"
     },
+    "TaskMoveParams": {
+      "description": "Params de [`TASK_MOVE`] (0.83.0).\n\n```\nuse norte_proto::TaskId;\nuse norte_proto::methods::TaskMoveParams;\nlet p = TaskMoveParams { task_id: TaskId::new(3), up: true };\nassert_eq!(serde_json::to_string(&p).unwrap(), r#\"{\"task_id\":3,\"up\":true}\"#);\n```",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "Qué task se mueve."
+        },
+        "up": {
+          "description": "Hacia el principio de la cola (`true`) o hacia el final.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task_id",
+        "up"
+      ],
+      "type": "object"
+    },
+    "TaskMoveResult": {
+      "description": "Result de [`TASK_MOVE`]: objeto vacío, reservado para extensión.",
+      "type": "object"
+    },
     "TaskPauseParams": {
       "description": "Params de [`TASK_PAUSE`] y de [`TASK_RESUME`] (0.82.0).\n\n```\nuse norte_proto::TaskId;\nuse norte_proto::methods::TaskPauseParams;\nlet p = TaskPauseParams { task_id: TaskId::new(3) };\nassert_eq!(serde_json::to_string(&p).unwrap(), r#\"{\"task_id\":3}\"#);\n```",
       "properties": {
@@ -7284,6 +7314,12 @@
     "task_list_result": {
       "$ref": "#/$defs/TaskListResult"
     },
+    "task_move_params": {
+      "$ref": "#/$defs/TaskMoveParams"
+    },
+    "task_move_result": {
+      "$ref": "#/$defs/TaskMoveResult"
+    },
     "task_pause_params": {
       "$ref": "#/$defs/TaskPauseParams"
     },
@@ -7523,6 +7559,8 @@
     "task_kind",
     "task_list_params",
     "task_list_result",
+    "task_move_params",
+    "task_move_result",
     "task_pause_params",
     "task_pause_result",
     "task_progress",

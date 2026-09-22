@@ -994,6 +994,27 @@ pub async fn dispatch(
         // (ADR 0147). Contra un daemon que no sabe pausar se DICE: una pausa
         // que no ocurre y no se dice es peor que no ofrecerla.
         //
+        // La cola en serie (ADR 0149): el interruptor de la sesión, y mover
+        // en la cola la tarea señalada del panel de procesos.
+        Command::TaskQueue => {
+            app.encolar = !app.encolar;
+            app.message = Some(t(if app.encolar {
+                "msg-queue-on"
+            } else {
+                "msg-queue-off"
+            }));
+        }
+        Command::TaskUp | Command::TaskDown => {
+            let arriba = cmd == Command::TaskUp;
+            app.message = Some(match app.processes_selected() {
+                None => t("msg-no-tasks"),
+                Some(task) => match task.mover_en_cola(arriba).await {
+                    Ok(()) => t("msg-queued-moved"),
+                    Err(norte_proto::Error::Unsupported) => t("msg-queued-not-moved"),
+                    Err(e) => error_message(&e),
+                },
+            });
+        }
         // Repetir la transferencia que falló, con sus MISMAS opciones
         // (ADR 0148): el contexto ya se guardaba para el diálogo de colisión,
         // y sin esto un fallo de red obligaba a rehacer la operación a mano.
