@@ -148,3 +148,4 @@ edits.
 | [0145](0145-owner-and-group-by-name.md) | Owner and group by name | accepted |
 | [0146](0146-a-light-progress-bar-in-the-status-bar.md) | A light progress bar in the status bar | accepted |
 | [0147](0147-a-task-can-be-paused.md) | A task can be paused | accepted |
+| [0148](0148-repeating-a-failed-transfer-and-the-thin-line.md) | Repeating a failed transfer, and the thin line | accepted |

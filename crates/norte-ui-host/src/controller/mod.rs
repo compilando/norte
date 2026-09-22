@@ -2839,6 +2839,9 @@ struct Estado {
     /// Los últimos elementos de la barra de estado que cruzaron (ADR 0132),
     /// por lo mismo que la barra de paneles.
     ultimos_elementos: Option<Vec<crate::dto::StatusItemView>>,
+    /// La última línea fina que cruzó por hueco (ADR 0148), para mandar solo
+    /// lo que cambia.
+    ultima_linea: std::collections::HashMap<u32, Option<u8>>,
     /// El último ajuste de columnas que cruzó, por hueco
     /// (`norte_frontend::columns::fitted_columns`). Depende del ancho del
     /// hueco y de los nombres de su listado, y los dos cambian por caminos
@@ -3297,6 +3300,7 @@ impl Estado {
             kinds,
             ultima_barra: None,
             ultimos_elementos: None,
+            ultima_linea: std::collections::HashMap::new(),
             ultimo_ajuste: std::collections::HashMap::new(),
             mensaje_ticks: 0,
             mensaje_contado: None,

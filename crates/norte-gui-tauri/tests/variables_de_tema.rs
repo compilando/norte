@@ -43,6 +43,10 @@ const NO_SON_COLOR: &[&str] = &[
     // no tiene el teclado (ADR 0115). Pedirle un rol al tema sería pedirle
     // que eligiera un color para algo que no pinta ninguno.
     "inactive-dim",
+    // Una ANCHURA en tanto por ciento: cuánto de la línea fina del borde
+    // está llena (ADR 0148). El color lo pone `border-focus`; esto solo dice
+    // hasta dónde llega.
+    "slot-progress",
     // Y un ANCHO: lo que lleva hecho la task de esa fila, en tanto por
     // ciento. Lo pone el renderer fila a fila, no el tema.
     "pct",

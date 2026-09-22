@@ -68,7 +68,8 @@
 # fichero no hace. `ctrl+g` está libre en los siete presets y lo llevan
 # orthodox, cua y vim; aquí, el menú Ir (F9), donde está el primero.
 #
-# `task.pause` (ADR 0147) se queda SIN ATAR aquí, igual que `task.cancel`:
+# `task.pause` (ADR 0147) y `task.retry` (ADR 0148) se quedan SIN ATAR aquí,
+# igual que `task.cancel`:
 # Total Commander pausa desde el diálogo de la transferencia en segundo plano (su botón «Pausa»), no desde una tecla de panel que su documentación nombre. Los dos se alcanzan desde la paleta.
 
 dialog_from = "orthodox"

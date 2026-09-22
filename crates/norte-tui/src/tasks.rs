@@ -247,6 +247,21 @@ impl TaskBoard {
         })
     }
 
+    /// El contexto de reintento de la transferencia fallida más reciente
+    /// (ADR 0148): la que `task.retry` repetiría. `None` si ninguna falló, o
+    /// si la que falló no era una transferencia.
+    #[must_use]
+    pub fn last_failed_retry(&self) -> Option<RetrySpec> {
+        self.rows.iter().rev().find_map(|row| {
+            matches!(
+                row.last.state,
+                TaskState::Failed { .. } | TaskState::Cancelled
+            )
+            .then(|| row.retry.clone())
+            .flatten()
+        })
+    }
+
     /// Cancela la task de la fila `i`. `false` si no hay fila, o si ya
     /// terminó.
     ///

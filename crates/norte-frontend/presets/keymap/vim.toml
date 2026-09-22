@@ -98,6 +98,7 @@ keymap = [
     { on = ["shift+f8"], run = "pane.delete-permanent" },
     { on = ["ctrl+k"], run = "task.cancel" },
     { on = ["ctrl+alt+k"], run = "task.pause" },
+    { on = ["ctrl+alt+r"], run = "task.retry" },
     { on = ["f3"], run = "pane.view" },
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },

@@ -2315,6 +2315,12 @@ pub struct BrowserSlotView {
     pub slot_id: u32,
     /// Sube en cada re-listado. Una [`RowKey`] de otra generación es vieja.
     pub generation: u64,
+    /// El trabajo que está llegando A ESTE directorio, 0–100 (ADR 0148,
+    /// puente 94): una línea fina en el borde del panel, como la de carga de
+    /// un navegador. `None` = nada que pintar. Se mueve por su propio cambio
+    /// ([`ViewChange::SlotProgress`]), no reenviando el listado.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
     /// La localización, ya saneada para pintar.
     pub path_display: String,
     /// El texto de arriba DIFIERE de la ruta real (bytes no UTF-8, controles
@@ -3565,6 +3571,16 @@ pub enum ViewChange {
     StatusItems {
         /// La lista entera.
         status_items: Vec<StatusItemView>,
+    },
+    /// La línea fina de un hueco se mueve (ADR 0148, puente 94).
+    ///
+    /// Aparte del listado a propósito: el progreso llega a 30 Hz y reenviar
+    /// las filas en cada tic sería pagar un listado entero por dos píxeles.
+    SlotProgress {
+        /// Qué hueco.
+        slot_id: u32,
+        /// 0–100, o nada que pintar.
+        progress: Option<u8>,
     },
     /// El tablero de tasks cambió.
     ///

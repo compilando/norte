@@ -9,6 +9,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Repeat a failed transfer, and a thin line where work lands** (ADR 0148,
+  bridge 94). `task.retry` (`Ctrl+Alt+R`) repeats the most recent failed
+  transfer with the same verb and options, reusing the context already kept
+  for collisions. In the window, a pane receiving work draws a 2 px line
+  along its bottom border, filling with the least advanced task landing
+  there.
 - **Pause and resume a task** (ADR 0147, protocol 0.82.0, bridge 93).
   `task.pause` (`Ctrl+Alt+K` next to cancel's `Ctrl+K` in orthodox, cua and
   vim) pauses the task cancel would pick, or resumes it if paused. A copy

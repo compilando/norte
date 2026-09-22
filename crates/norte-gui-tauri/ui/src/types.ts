@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 93;
+export const BRIDGE_VERSION = 94;
 
 /** Dónde se suelta un panel arrastrado sobre otro (ADR 0138): a un lado, o
  *  en el centro para unirse a él como pestaña. */
@@ -211,6 +211,11 @@ export interface BrowserSlotView {
   kind: "browser";
   slot_id: number;
   generation: number;
+  /**
+   * Lo que está llegando A ESTE directorio, 0–100 (ADR 0148, puente 94): la
+   * línea fina del borde. Ausente = nada que pintar.
+   */
+  progress?: number | null;
   path_display: string;
   path_hostile: boolean;
   total_rows: number | null;
@@ -1571,6 +1576,7 @@ export type ViewChange =
    *  task que caduca quita una fila y desplaza el resto. `null` = ninguna,
    *  que es lo que dice un tablero vacío. Nunca falta: este puente no tolera
    *  versiones distintas, las rechaza. */
+  | { change: "slot_progress"; slot_id: number; progress: number | null }
   | { change: "tasks"; tasks: TaskView[]; cursor: number | null }
   | { change: "dialogs"; dialogs: DialogView[] }
   | ({ change: "connection" } & ConnectionView)

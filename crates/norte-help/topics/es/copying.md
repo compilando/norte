@@ -15,6 +15,8 @@ commands = [
     "pane.delete-permanent",
     "task.cancel",
     "task.pause",
+    "task.retry",
+    "task.retry",
     "dialog.overwrite",
     "dialog.skip",
     "dialog.rename",
@@ -112,6 +114,30 @@ nombre, inconfundible de un vistazo, y por donde sigue el siguiente intento:
 ```sh
 norte cp --resume sftp://host/big.iso ./big.iso
 ```
+
+# Repetir lo que falló
+
+{{cmd:task.retry}} vuelve a lanzar la transferencia fallida más reciente con
+las MISMAS opciones y el mismo verbo: una copia se repite como copia. Sirve
+para lo que no fue culpa tuya —una red que se cayó, un destino que se llenó—
+sin tener que rehacer la operación a mano. Si vuelve a chocar con un nombre
+ocupado, se te vuelve a preguntar como la primera vez.
+
+Y en la ventana, mientras algo está llegando a un panel, su borde inferior
+lleva una línea fina que se llena: dice que ahí está entrando trabajo sin
+robarle una fila al listado.
+
+# Repetir lo que falló
+
+{{cmd:task.retry}} vuelve a lanzar la transferencia fallida más reciente con
+las MISMAS opciones y el mismo verbo: una copia se repite como copia. Sirve
+para lo que no fue culpa tuya —una red que se cayó, un destino que se llenó—
+sin tener que rehacer la operación a mano. Si vuelve a chocar con un nombre
+ocupado, se te vuelve a preguntar como la primera vez.
+
+Y en la ventana, mientras algo está llegando a un panel, su borde inferior
+lleva una línea fina que se llena: dice que ahí está entrando trabajo sin
+robarle una fila al listado.
 
 # Cuando el nombre ya está ocupado
 
