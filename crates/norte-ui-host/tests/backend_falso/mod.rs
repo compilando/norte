@@ -253,6 +253,13 @@ pub struct Falso {
     pub hallazgos: HashMap<String, Vec<VPath>>,
     /// Los patrones que se buscaron, en orden.
     pub busquedas: std::sync::Mutex<Vec<String>>,
+    /// Y los PARÁMETROS enteros de cada una, también en orden.
+    ///
+    /// Aparte del patrón porque desde el puente 91 la ventana manda siete
+    /// campos y cuatro interruptores: un test que solo pueda mirar el glob no
+    /// distingue «se aplicó el filtro» de «se ignoró», que es justo lo que
+    /// hay que demostrar.
+    pub params_busqueda: std::sync::Mutex<Vec<norte_proto::methods::FsSearchParams>>,
     /// Los volúmenes que contesta `host.volumes`.
     pub volumenes: Vec<norte_proto::methods::Volume>,
     /// Cómo PLIEGA nombres cada ubicación (#268/#274). Clave: el wire del
@@ -972,6 +979,10 @@ impl HostBackend for Falso {
             .lock()
             .expect("mutex de búsquedas")
             .push(patron.clone());
+        self.params_busqueda
+            .lock()
+            .expect("mutex de parámetros")
+            .push(params.clone());
         self.latido();
         if let Some(e) = self.error_de_busqueda.clone() {
             return Box::pin(async move { Err(e) });

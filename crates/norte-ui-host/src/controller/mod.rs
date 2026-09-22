@@ -2111,6 +2111,16 @@ enum Tecleado {
     /// devuelve nada sobre ella, así que una pendiente de texto que aterrizara
     /// por error sobre este diálogo no puede leer un secreto — no hay ninguno.
     Secreto,
+    /// Un FORMULARIO: varios campos a la vez (puente 91).
+    ///
+    /// El modelo es el COMPARTIDO (`norte_frontend::search::SearchForm`), no
+    /// uno de esta ventana: el terminal pregunta la misma búsqueda, y dos
+    /// modelos divergen en silencio — que es lo que ya pasó con el desenlace
+    /// de una búsqueda (ADR 0077).
+    ///
+    /// `Box` porque es el doble de grande que las otras dos variantes juntas
+    /// y hay un `Tecleado` por diálogo abierto.
+    Formulario(Box<norte_frontend::search::SearchForm>),
 }
 
 /// El tope de una contraseña, del crate COMPARTIDO: lo que se rechaza aquí es
@@ -2127,7 +2137,10 @@ impl Tecleado {
     fn texto(&self) -> &str {
         match self {
             Self::Texto(s) => s,
-            Self::Secreto => "",
+            // Un formulario no tiene «el» texto: tiene siete campos, y una
+            // pendiente de texto que aterrizara aquí por error no puede
+            // llevarse uno cualquiera haciéndolo pasar por el que pidió.
+            Self::Secreto | Self::Formulario(_) => "",
         }
     }
 }
@@ -3883,6 +3896,11 @@ impl Estado {
             // (crear directorio, renombrar). Decirlo es más honesto que
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
+            // Y un diálogo-FORMULARIO (puente 91): dice CUÁL de sus campos se
+            // tocó, que es lo que el de un solo campo no necesita decir.
+            UiAction::DialogField { id, field, value } => {
+                self.tocar_campo_de_dialogo(*id, field, value)
+            }
             UiAction::DirectoryPicked { path } => {
                 self.destino_elegido(path.clone(), backend, buzon)
             }

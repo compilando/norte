@@ -609,6 +609,7 @@ impl Estado {
             input: Some(clamp_display(sugerido.clone())),
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
@@ -713,6 +714,7 @@ impl Estado {
             input: Some(clamp_display(sugerido.clone())),
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
@@ -1224,6 +1226,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: true,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         let mut fuera = self.apilar_dialogo(Dialogo {

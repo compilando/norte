@@ -835,6 +835,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
@@ -1368,6 +1369,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         let caidos = self.apilar_dialogo(Dialogo {

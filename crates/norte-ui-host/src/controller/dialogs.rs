@@ -64,6 +64,159 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
+    /// Rehúsa confirmar un formulario que todavía no se puede lanzar, sin
+    /// cerrarlo.
+    ///
+    /// `None` = adelante (o no es un formulario). Vive fuera de
+    /// `ejecutar_pendiente` a propósito: allí el diálogo ya se ha sacado de la
+    /// pila, así que «no cerrar» no es una opción, y un `1 gigabyte` mal
+    /// escrito se llevaba por delante los doce controles mientras el aviso
+    /// señalaba un campo que ya no existía — un consejo que no se puede
+    /// seguir. Es el mismo sitio, y el mismo motivo, que la guarda del
+    /// secreto vacío.
+    fn rechaza_formulario_invalido(
+        &mut self,
+        pos: usize,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        let (clave, campo) = match &self.dialogos[pos].tecleado {
+            Tecleado::Formulario(form) => {
+                if let Some(campo) = form.campo_ilegible() {
+                    ("search-bad-field", Some(campo))
+                } else if form.has_criteria() {
+                    return None;
+                } else {
+                    // Sin ningún criterio no es una búsqueda, es un listado
+                    // recursivo con otro nombre.
+                    ("search-empty", None)
+                }
+            }
+            Tecleado::Texto(_) | Tecleado::Secreto => return None,
+        };
+        // El foco va al campo culpable y la proyección se rehace, para que la
+        // ventana lo enseñe señalado en vez de solo decirlo.
+        if let (Some(campo), Tecleado::Formulario(form)) = (campo, &mut self.dialogos[pos].tecleado)
+        {
+            form.field = campo;
+        }
+        if let Tecleado::Formulario(form) = &self.dialogos[pos].tecleado {
+            let campos = super::search::campos_de_busqueda(form);
+            self.dialogos[pos].vista.fields = campos;
+        }
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+        let cambios = vec![
+            ViewChange::Status(self.status.clone()),
+            ViewChange::Dialogs {
+                dialogs: self.vistas_de_dialogos(),
+            },
+        ];
+        Some((
+            ActionAck::Unavailable {
+                reason_key: clave.to_owned(),
+            },
+            vec![self.parche(cambios)],
+        ))
+    }
+
+    /// Toca un campo de un diálogo-FORMULARIO (puente 91).
+    ///
+    /// Tres guardas, y cada una tapa algo distinto: un diálogo que no es un
+    /// formulario no tiene campos que tocar; un id que no es de este
+    /// formulario no se inventa —los campos los decide el host, no quien
+    /// pinta—; y un texto más largo que un nombre no se recorta ni se acepta
+    /// a medias, igual que en [`Self::escribir_en_dialogo`].
+    ///
+    /// Un interruptor y un ciclo llegan SIN valor: el renderer dice que se
+    /// tocaron y a qué estado van lo decide aquí. Mandar el destino dejaría
+    /// que dos pulsaciones rápidas se pisaran, la segunda nacida de una foto
+    /// anterior.
+    pub(super) fn tocar_campo_de_dialogo(
+        &mut self,
+        id: ModalId,
+        campo: &str,
+        valor: &crate::action::DialogFieldValue,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use crate::action::DialogFieldValue as Valor;
+        use norte_frontend::search::{self as busqueda, SearchField};
+
+        let Some(dialogo) = self.dialogos.iter_mut().find(|d| d.id == id) else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let Tecleado::Formulario(form) = &mut dialogo.tecleado else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        if let Valor::Text { text } = valor
+            && text.len() > MAX_NOMBRE
+        {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-name-too-long".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        // Un `U+FFFD` no se teclea: lo pone la PROYECCIÓN de este host al
+        // enmascarar, y llega de vuelta cuando el renderer re-siembra el campo
+        // con lo que pintó. Aceptarlo convertiría lo pintado en lo tecleado —
+        // el patrón de búsqueda acabaría llevando el reemplazo en vez del
+        // nombre— y nada lo diría. Es el mismo cinturón que `segmento_tecleado`
+        // le pone al diálogo de un solo campo; el otro (que el renderer no
+        // re-siembre) vive en `dialogs.ts`.
+        if let Valor::Text { text } = valor
+            && text.contains('\u{FFFD}')
+        {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        let conocido = match (SearchField::por_id(campo), valor) {
+            (Some(f), Valor::Text { text }) => {
+                form.set_texto(f, text.clone());
+                true
+            }
+            (None, Valor::Toggled) => match campo {
+                busqueda::ID_REGEX => {
+                    form.toggle_regex();
+                    true
+                }
+                busqueda::ID_CASE => {
+                    form.toggle_case();
+                    true
+                }
+                busqueda::ID_WHOLE_WORD => {
+                    form.toggle_whole_word();
+                    true
+                }
+                busqueda::ID_RECURSIVE => {
+                    form.toggle_recursive();
+                    true
+                }
+                _ => false,
+            },
+            (None, Valor::Cycled) if campo == busqueda::ID_KINDS => {
+                form.cycle_kinds();
+                true
+            }
+            // Todo lo demás es un control contestando lo que no es suyo —un
+            // campo de texto «tocado», un interruptor con texto— o un id que
+            // este formulario no tiene. En los dos casos, nada que aplicar.
+            _ => false,
+        };
+        if !conocido {
+            // No es un modal obsoleto —está abierto y es el mismo—, es un
+            // renderer nombrando un control que este formulario no tiene.
+            // Decir «resincroniza» escondería ese fallo suyo.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-unknown-field".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        dialogo.vista.fields = super::search::campos_de_busqueda(form);
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
     /// El lector quiere cerrar: se pregunta, o se cierra.
     ///
     /// La decisión de SI hay que preguntar es la compartida
@@ -138,6 +291,7 @@ impl Estado {
                 input: None,
                 input_hostile: false,
                 input_secret: false,
+                fields: Vec::new(),
                 dest_check: crate::dto::DestCheckView::NotAsked,
             },
             tecleado: Tecleado::Texto(String::new()),
@@ -263,20 +417,43 @@ impl Estado {
                 salidas.push(self.parche_filas());
             }
             Some(Pendiente::Buscar { root }) => {
-                let patron = dialogo.tecleado.texto().to_owned();
-                if patron.is_empty() {
-                    // Un patrón vacío casaría el árbol entero: no es una
-                    // búsqueda, es un listado recursivo, y se dice en vez
-                    // de lanzarlo.
-                    self.status.message = Some(clamp_display(norte_i18n::t_in(
-                        self.lang,
-                        "err-empty-pattern",
-                    )));
-                    let cambio = ViewChange::Status(self.status.clone());
-                    salidas.push(self.parche(vec![cambio]));
+                use norte_frontend::search::SearchField;
+                // El formulario se COPIA antes de tocar `self`: lanzar la
+                // búsqueda necesita el estado entero, y el diálogo lo tiene
+                // prestado.
+                // El formulario se MUEVE: el diálogo llega por valor y su
+                // `al_confirmar` ya se consumió arriba, así que no hay nada
+                // que clonar.
+                let Tecleado::Formulario(form) = dialogo.tecleado else {
+                    // Un diálogo de búsqueda sin formulario es un error de
+                    // cableado, no del lector. La guarda existe porque el tipo
+                    // la exige: no hay nada que lanzar, y tampoco nada que
+                    // decirle a quien está delante.
+                    return (None, salidas);
+                };
+                let form = *form;
+                // Ya está validado: `responder_dialogo` lo comprueba ANTES de
+                // sacar el diálogo de la pila, que es donde todavía se puede
+                // no cerrarlo.
+                //
+                // El reloj se lee AQUÍ y se le dice al mapeo: «cambiado hace
+                // siete días» se cuenta desde este instante.
+                let ahora_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+                // Qué enseña la cabecera de resultados como consulta. Una
+                // búsqueda de solo filtros no tiene patrón que enseñar, y
+                // dejarla en blanco pintaba una cabecera muda.
+                let etiqueta = if !form.texto(SearchField::Name).is_empty() {
+                    form.texto(SearchField::Name).to_owned()
+                } else if !form.texto(SearchField::Content).is_empty() {
+                    form.texto(SearchField::Content).to_owned()
                 } else {
-                    salidas.extend(self.lanzar_busqueda(root, patron, backend, buzon));
-                }
+                    norte_i18n::t_in(self.lang, "search-query-filters-only")
+                };
+                let params =
+                    norte_frontend::search::params(&form, root, ahora_ms, Self::MAX_RESULTADOS);
+                salidas.extend(self.lanzar_busqueda(params, etiqueta, backend, buzon));
             }
             // Los dos que crean un nodo VACÍO a partir de un nombre tecleado.
             // Juntos porque son la misma forma —validar el segmento, encolar,
@@ -514,6 +691,15 @@ impl Estado {
                     Vec::new(),
                 );
             }
+        }
+        // Un FORMULARIO se valida aquí, antes del `remove`, y por el mismo
+        // motivo que el secreto de arriba: dentro de `ejecutar_pendiente` el
+        // diálogo ya se ha ido de la pila y «no cerrar» deja de ser una
+        // opción.
+        if choice == "confirm"
+            && let Some(rehuso) = self.rechaza_formulario_invalido(pos)
+        {
+            return rehuso;
         }
         let dialogo = self.dialogos.remove(pos);
         let mut salidas = Vec::new();

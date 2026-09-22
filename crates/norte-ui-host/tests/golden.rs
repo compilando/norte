@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::Path;
 
-use norte_ui_host::action::{ExtensionChange, UiAction};
+use norte_ui_host::action::{DialogFieldValue, ExtensionChange, UiAction};
 use norte_ui_host::bridge::{ActionAck, BridgeEnvelope, InstanceId, ModalId, RowKey, StaleAction};
 use norte_ui_host::dto::{
     BrowserSlotView, CellView, ColumnHeader, ConnectionView, DialogChoice, DialogView, LayoutView,
@@ -170,6 +170,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::FocusSlot { .. } => "focus_slot",
         UiAction::Dialog { .. } => "dialog",
         UiAction::DialogInput { .. } => "dialog_input",
+        UiAction::DialogField { .. } => "dialog_field",
         UiAction::DirectoryPicked { .. } => "directory_picked",
         UiAction::WindowFocus { .. } => "window_focus",
         UiAction::FilesDropped { .. } => "files_dropped",
@@ -339,6 +340,18 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
             UiAction::DialogInput {
                 id: ModalId(3),
                 text: "carpeta nueva".to_owned(),
+            },
+        ),
+        // Un campo de FORMULARIO (puente 91). El de texto es el que lleva
+        // payload; el interruptor y el ciclo dicen solo que se tocaron.
+        (
+            "dialog_field",
+            UiAction::DialogField {
+                id: ModalId(3),
+                field: "min-size".to_owned(),
+                value: DialogFieldValue::Text {
+                    text: "1M".to_owned(),
+                },
             },
         ),
         // La vuelta del selector del escritorio (#284). Un caso por variante,
@@ -801,6 +814,7 @@ fn dialogo_de_referencia() -> DialogView {
         input: Some(String::new()),
         input_hostile: false,
         input_secret: false,
+        fields: Vec::new(),
         dest_check: norte_ui_host::dto::DestCheckView::NotAsked,
     }
 }
@@ -2872,7 +2886,14 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // `kind` (captura del 2026-09-21).
     // Puente 88: `TabGroupView.panels`, el grupo de paneles (ADR 0134).
     // Puente 89: `mark_ruler` en el listado y su cabecera (ADR 0135).
-    const FORMA: u64 = 8_274_109_617_083_728_450;
+    // (El 90 no aparece: añadió una ACCIÓN —`move_slot`— y este resumen solo
+    // mira las FORMAS que viajan dentro de una foto.)
+    // Puente 91: un diálogo puede ser un FORMULARIO (ADR 0143).
+    // `DialogView.fields`, con `DialogFieldView` y sus tres clases de control
+    // (`text`, `toggle`, `cycle`); de vuelta, `dialog_field` con
+    // `DialogFieldValue`. Ausente y vacío = el diálogo de siempre, así que un
+    // diálogo sin formulario sigue cruzando byte a byte como en el 90.
+    const FORMA: u64 = 16_756_752_514_943_338_322;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {
@@ -2993,6 +3014,48 @@ mod variantes {
             (
                 "dest_check_not_asked",
                 serde_json::to_value(norte_ui_host::dto::DestCheckView::NotAsked).expect("json"),
+            ),
+            // Las tres clases de campo de un formulario (puente 91): el
+            // interruptor y el ciclo llevan datos dentro del tag, así que su
+            // forma de wire no aparece en ninguna otra fixture.
+            (
+                "dialog_field_kind_text",
+                serde_json::to_value(norte_ui_host::dto::DialogFieldKind::Text).expect("json"),
+            ),
+            (
+                "dialog_field_kind_toggle",
+                serde_json::to_value(norte_ui_host::dto::DialogFieldKind::Toggle { on: true })
+                    .expect("json"),
+            ),
+            (
+                "dialog_field_kind_cycle",
+                serde_json::to_value(norte_ui_host::dto::DialogFieldKind::Cycle {
+                    value_key: "search-kinds-files".to_owned(),
+                })
+                .expect("json"),
+            ),
+            // Y las tres formas de TOCAR un campo. Aquí y no entre las
+            // acciones porque aquel corpus se llama como el tag de wire de la
+            // acción —uno por variante de `UiAction`, y `dialog_field` es una
+            // sola—, así que las dos que no llevan payload no tendrían dónde
+            // aparecer: un desliz en su `tag` pasaría toda la suite de Rust y
+            // se rompería solo dentro de la ventana.
+            (
+                "dialog_field_value_text",
+                serde_json::to_value(norte_ui_host::action::DialogFieldValue::Text {
+                    text: "1M".to_owned(),
+                })
+                .expect("json"),
+            ),
+            (
+                "dialog_field_value_toggled",
+                serde_json::to_value(norte_ui_host::action::DialogFieldValue::Toggled)
+                    .expect("json"),
+            ),
+            (
+                "dialog_field_value_cycled",
+                serde_json::to_value(norte_ui_host::action::DialogFieldValue::Cycled)
+                    .expect("json"),
             ),
             (
                 "dest_check_checking",
@@ -3117,6 +3180,7 @@ mod variantes {
                     input: None,
                     input_hostile: false,
                     input_secret: false,
+                    fields: Vec::new(),
                     dest_check: norte_ui_host::dto::DestCheckView::NotAsked,
                 })
                 .expect("json"),

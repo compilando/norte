@@ -37,6 +37,11 @@ A name and some content are rarely enough in a big tree, so the dialog also
 has seven fields and four switches. All optional, and all pulling the same
 way: getting out of sight what you are not looking for.
 
+They are the same ones in the terminal and in the window, and they ask the
+same thing: the form lives in a single place so the two cannot drift apart.
+The function keys named below are the TERMINAL's; in the window the switches
+are checkboxes and the cycle is a button, reached with the mouse or with tab.
+
 **Skip folders** is the one you feel most. Comma-separated names — `target,
 node_modules, .git` — skipped at ANY level, which is how they turn up. Names
 and not paths for exactly that reason: the folder in the way is in a hundred

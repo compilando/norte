@@ -38,6 +38,12 @@ diálogo tiene además siete campos y cuatro interruptores. Todos son
 opcionales y todos van en la misma dirección: quitar de en medio lo que no
 estás buscando.
 
+Son los mismos en el terminal y en la ventana, y preguntan lo mismo: el
+formulario vive en un solo sitio para que no puedan separarse. Las teclas de
+función que se nombran aquí abajo son las del TERMINAL; en la ventana los
+interruptores son casillas y el ciclo es un botón, y se pulsan con el ratón o
+con el tabulador.
+
 **Saltar carpetas** es el que más se nota. Nombres separados por comas
 —`target, node_modules, .git`— y se saltan en CUALQUIER nivel, que es como
 aparecen. Es un nombre y no una ruta justamente por eso: la carpeta que sobra

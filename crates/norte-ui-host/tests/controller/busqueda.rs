@@ -60,11 +60,14 @@ async fn buscar_abre_su_vista_y_los_hallazgos_llegan_en_lotes() {
     let dialogo = foto
         .dialogs
         .iter()
-        .find(|d| d.input.is_some())
+        .find(|d| !d.fields.is_empty())
         .expect("el prompt de buscar pide un patrón");
-    h.dispatch(UiAction::DialogInput {
+    h.dispatch(UiAction::DialogField {
         id: dialogo.id,
-        text: "*.txt".to_owned(),
+        field: "name".to_owned(),
+        value: norte_ui_host::action::DialogFieldValue::Text {
+            text: "*.txt".to_owned(),
+        },
     })
     .await
     .expect("host vivo");
@@ -291,14 +294,20 @@ pub(super) async fn buscar(
     por_la_paleta(h, sub, "pane.search").await;
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     let foto = siguiente_foto(sub).await;
+    // El de buscar es un FORMULARIO desde el puente 91: se localiza por sus
+    // campos, no por el `input` de un diálogo de una sola caja —que es lo que
+    // sigue siendo el de la búsqueda semántica.
     let dialogo = foto
         .dialogs
         .iter()
-        .find(|d| d.input.is_some())
+        .find(|d| !d.fields.is_empty())
         .expect("el prompt de buscar pide un patrón");
-    h.dispatch(UiAction::DialogInput {
+    h.dispatch(UiAction::DialogField {
         id: dialogo.id,
-        text: patron.to_owned(),
+        field: "name".to_owned(),
+        value: norte_ui_host::action::DialogFieldValue::Text {
+            text: patron.to_owned(),
+        },
     })
     .await
     .expect("host vivo");
@@ -408,7 +417,7 @@ async fn un_dialogo_se_queda_el_teclado() {
     let dialogo = foto
         .dialogs
         .iter()
-        .find(|d| d.input.is_some())
+        .find(|d| !d.fields.is_empty())
         .expect("el prompt pide un patrón")
         .clone();
 
@@ -431,9 +440,12 @@ async fn un_dialogo_se_queda_el_teclado() {
     );
 
     // `Enter` CONFIRMA el diálogo, no abre el directorio bajo el cursor.
-    h.dispatch(UiAction::DialogInput {
+    h.dispatch(UiAction::DialogField {
         id: dialogo.id,
-        text: "*.txt".to_owned(),
+        field: "name".to_owned(),
+        value: norte_ui_host::action::DialogFieldValue::Text {
+            text: "*.txt".to_owned(),
+        },
     })
     .await
     .expect("host vivo");
@@ -458,7 +470,7 @@ async fn escape_cancela_el_dialogo_de_arriba() {
             .await
             .dialogs
             .iter()
-            .any(|d| d.input.is_some()),
+            .any(|d| !d.fields.is_empty()),
         "el prompt abre"
     );
     h.dispatch(tecla("Escape")).await.expect("host vivo");
@@ -496,11 +508,14 @@ async fn ir_a_un_resultado_navega_y_deja_el_cursor_encima() {
     let dialogo = foto
         .dialogs
         .iter()
-        .find(|d| d.input.is_some())
+        .find(|d| !d.fields.is_empty())
         .expect("el prompt está");
-    h.dispatch(UiAction::DialogInput {
+    h.dispatch(UiAction::DialogField {
         id: dialogo.id,
-        text: "hallado*".to_owned(),
+        field: "name".to_owned(),
+        value: norte_ui_host::action::DialogFieldValue::Text {
+            text: "hallado*".to_owned(),
+        },
     })
     .await
     .expect("host vivo");
@@ -558,7 +573,7 @@ async fn un_patron_vacio_no_lanza_nada() {
     let dialogo = foto
         .dialogs
         .iter()
-        .find(|d| d.input.is_some())
+        .find(|d| !d.fields.is_empty())
         .expect("el prompt está");
     h.dispatch(UiAction::Dialog {
         id: dialogo.id,
@@ -576,6 +591,254 @@ async fn un_patron_vacio_no_lanza_nada() {
     );
 }
 
+/// **Los filtros de la ventana llegan al wire** (puente 91).
+///
+/// Era el hueco: el terminal ofrecía siete campos y cuatro interruptores desde
+/// el protocolo 0.81.0 y esta ventana mandaba un glob de nombre y nada más. Un
+/// filtro que no se aplica no se ve como una función que falta — se ve como
+/// una búsqueda que encontró más cosas.
+///
+/// Se comprueba contra lo que LLEGÓ AL WIRE y no contra la vista: lo que hay
+/// que demostrar es que el formulario se convierte en parámetros, no que se
+/// pinte bonito.
+#[tokio::test]
+async fn los_filtros_del_formulario_llegan_al_wire() {
+    use norte_ui_host::action::DialogFieldValue as Valor;
+
+    let backend = arbol_con_hallazgos("*", &[]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    por_la_paleta(&h, &mut sub, "pane.search").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let dialogo = foto
+        .dialogs
+        .iter()
+        .find(|d| !d.fields.is_empty())
+        .expect("el prompt de buscar es un formulario");
+
+    // Los siete campos y los cinco controles, con sus ids estables.
+    let ids: Vec<&str> = dialogo.fields.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "name",
+            "content",
+            "exclude",
+            "min-size",
+            "max-size",
+            "days",
+            "encoding",
+            "regex",
+            "case",
+            "whole-word",
+            "recursive",
+            "kinds",
+        ],
+        "los campos viajan en el orden en que se pintan"
+    );
+
+    // Un FILTRO solo ya es una búsqueda: «todo lo que pese más de un mega»
+    // no necesita ningún nombre.
+    h.dispatch(UiAction::DialogField {
+        id: dialogo.id,
+        field: "min-size".to_owned(),
+        value: Valor::Text {
+            text: "1M".to_owned(),
+        },
+    })
+    .await
+    .expect("host vivo");
+    // Y un interruptor no manda su estado destino: dice que se TOCÓ.
+    h.dispatch(UiAction::DialogField {
+        id: dialogo.id,
+        field: "recursive".to_owned(),
+        value: Valor::Toggled,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: dialogo.id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+
+    let pedidas = backend.params_busqueda.lock().expect("mutex").clone();
+    let params = pedidas.first().expect("la búsqueda llegó al wire");
+    assert_eq!(params.min_size, Some(1024 * 1024), "«1M» son bytes");
+    assert!(
+        !params.recursive,
+        "el interruptor de subcarpetas se apagó: {params:?}"
+    );
+    assert!(
+        params.name_glob.is_none() && params.name_regex.is_none(),
+        "y sin nombre, porque no se tecleó ninguno"
+    );
+}
+
+/// **Un campo ilegible NO cierra el formulario.**
+///
+/// La validación vive antes de sacar el diálogo de la pila, y no dentro de lo
+/// que se ejecuta después: allí el formulario ya se ha ido, y un `1 gigabyte`
+/// mal escrito se llevaba por delante los doce controles mientras el aviso
+/// señalaba un campo que ya no existía — un consejo que no se puede seguir.
+#[tokio::test]
+async fn un_campo_ilegible_no_se_lleva_por_delante_el_formulario() {
+    use norte_ui_host::action::DialogFieldValue as Valor;
+
+    let backend = arbol_con_hallazgos("*", &[]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    por_la_paleta(&h, &mut sub, "pane.search").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let dialogo = foto
+        .dialogs
+        .iter()
+        .find(|d| !d.fields.is_empty())
+        .expect("el prompt de buscar es un formulario");
+
+    for (campo, texto) in [("name", "*.rs"), ("min-size", "1 gigabyte")] {
+        h.dispatch(UiAction::DialogField {
+            id: dialogo.id,
+            field: campo.to_owned(),
+            value: Valor::Text {
+                text: texto.to_owned(),
+            },
+        })
+        .await
+        .expect("host vivo");
+    }
+
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id: dialogo.id,
+            choice: "confirm".to_owned(),
+            secret: None,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "search-bad-field"),
+        "se rehúsa nombrando el motivo: {ack:?}"
+    );
+
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let despues = siguiente_foto(&mut sub).await;
+    let sigue = despues
+        .dialogs
+        .iter()
+        .find(|d| d.id == dialogo.id)
+        .expect("el formulario sigue abierto");
+    let valor = |id: &str| {
+        sigue
+            .fields
+            .iter()
+            .find(|f| f.id == id)
+            .map(|f| f.value.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(valor("name"), "*.rs", "y no se perdió lo tecleado");
+    assert_eq!(valor("min-size"), "1 gigabyte");
+    assert!(
+        backend.busquedas.lock().expect("mutex").is_empty(),
+        "y nada llegó al wire"
+    );
+}
+
+/// El ciclo de clases va y vuelve, y lo que llega al wire es su clase.
+#[tokio::test]
+async fn el_ciclo_de_clases_manda_la_clase_al_wire() {
+    use norte_ui_host::action::DialogFieldValue as Valor;
+
+    let backend = arbol_con_hallazgos("*", &[]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    por_la_paleta(&h, &mut sub, "pane.search").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let dialogo = foto
+        .dialogs
+        .iter()
+        .find(|d| !d.fields.is_empty())
+        .expect("el prompt de buscar es un formulario");
+
+    // Una vuelta del ciclo: «cualquier cosa» → «ficheros».
+    h.dispatch(UiAction::DialogField {
+        id: dialogo.id,
+        field: "kinds".to_owned(),
+        value: Valor::Cycled,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: dialogo.id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+
+    let pedidas = backend.params_busqueda.lock().expect("mutex").clone();
+    let params = pedidas.first().expect("la búsqueda llegó al wire");
+    assert_eq!(
+        params.kinds,
+        vec![norte_proto::EntryKind::File],
+        "el ciclo dejó «ficheros», y una clase sola ya es criterio"
+    );
+}
+
+/// Un campo que este formulario no tiene se rehúsa NOMBRÁNDOLO, y no se
+/// contesta «resincroniza»: el diálogo está abierto y es el mismo, así que
+/// decir que está obsoleto escondería el fallo del renderer.
+#[tokio::test]
+async fn un_campo_que_no_existe_se_rehusa_sin_fingir_un_modal_obsoleto() {
+    use norte_ui_host::action::DialogFieldValue as Valor;
+
+    let backend = arbol_con_hallazgos("*", &[]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    por_la_paleta(&h, &mut sub, "pane.search").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let dialogo = foto
+        .dialogs
+        .iter()
+        .find(|d| !d.fields.is_empty())
+        .expect("el prompt de buscar es un formulario");
+
+    let ack = h
+        .dispatch(UiAction::DialogField {
+            id: dialogo.id,
+            field: "no-existe".to_owned(),
+            value: Valor::Text {
+                text: "x".to_owned(),
+            },
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-unknown-field"),
+        "{ack:?}"
+    );
+
+    // Y un interruptor no recibe texto ni un campo de texto se «toca».
+    let ack = h
+        .dispatch(UiAction::DialogField {
+            id: dialogo.id,
+            field: "name".to_owned(),
+            value: Valor::Toggled,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-unknown-field"),
+        "cada control contesta lo suyo: {ack:?}"
+    );
+}
+
 /// Un nombre hostil llega a los resultados enmascarado y MARCADO.
 #[tokio::test]
 async fn un_hallazgo_hostil_va_marcado() {
@@ -589,11 +852,14 @@ async fn un_hallazgo_hostil_va_marcado() {
     let dialogo = foto
         .dialogs
         .iter()
-        .find(|d| d.input.is_some())
+        .find(|d| !d.fields.is_empty())
         .expect("el prompt está");
-    h.dispatch(UiAction::DialogInput {
+    h.dispatch(UiAction::DialogField {
         id: dialogo.id,
-        text: "*".to_owned(),
+        field: "name".to_owned(),
+        value: norte_ui_host::action::DialogFieldValue::Text {
+            text: "*".to_owned(),
+        },
     })
     .await
     .expect("host vivo");

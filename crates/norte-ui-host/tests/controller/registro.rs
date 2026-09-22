@@ -865,6 +865,30 @@ async fn la_ventana_pide_el_secreto_y_reintenta_la_navegacion() {
         "un campo de contraseña no se teclea por `dialog_input`"
     );
 
+    // Ni por el camino de un FORMULARIO (puente 91), que es el otro sitio
+    // donde el host SÍ guarda lo que se escribe: un diálogo de contraseña no
+    // lleva campos, y `tocar_campo_de_dialogo` lo comprueba antes de tocar
+    // nada. Sin este test, la invariante de #327 quedaba enforzada en dos
+    // sitios y probada en uno — el viejo.
+    assert!(d.fields.is_empty(), "una contraseña no es un formulario");
+    let ack = h
+        .dispatch(UiAction::DialogField {
+            id: d.id,
+            field: "name".to_owned(),
+            value: norte_ui_host::action::DialogFieldValue::Text {
+                text: "s3cr3t".to_owned(),
+            },
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Stale {
+            reason: StaleAction::Modal
+        },
+        "un campo de contraseña tampoco se teclea por `dialog_field`"
+    );
+
     // Confirmar entrega el secreto TAL CUAL y reintenta ESA navegación. Va
     // CON la respuesta: cruza una vez, en el instante en que se decide.
     h.dispatch(UiAction::Dialog {

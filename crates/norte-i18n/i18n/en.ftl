@@ -1579,6 +1579,16 @@ search-kinds-any = anything
 search-kinds-files = files
 search-kinds-dirs = folders
 search-hint = [tab] field · [enter] search · [esc] cancel
+# The toggle labels for the WINDOW: no key name and no state inside the text —
+# there the state is the checkbox itself.
+search-toggle-regex = regular expressions
+search-toggle-case = match case
+search-toggle-whole-word = whole word
+search-toggle-recursive = search subfolders
+search-toggle-kinds = looking for
+# What the results header shows as the query when the search is filters ONLY:
+# "everything over a gigabyte" has no pattern to show.
+search-query-filters-only = (filters only)
 search-empty = enter a name, some content, or a filter
 search-bad-field = that field cannot be read — fix it or clear it
 search-status-running = search: { $n } hits (searching…)
@@ -2317,6 +2327,7 @@ host-key-unmapped = that key is not bound
 host-cannot-view-dir = a directory has no viewer
 host-nothing-to-view = nothing to view
 host-no-sibling = no more files of this kind in this listing
+host-unknown-field = that dialog has no such field
 host-column-not-sortable = that column does not sort
 host-help-over-input = help does not open over a text field
 host-layout-broken = that layout file does not parse

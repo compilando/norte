@@ -1824,6 +1824,34 @@ button.status-item:hover {
   margin-top: 6px;
 }
 
+/* Un campo de FORMULARIO (puente 91): etiqueta y control en una fila. La
+   casilla de un interruptor no se estira —`.dialog input` las quiere al 100 %
+   y una casilla de ancho completo no se lee como una casilla—. */
+.dialog-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.dialog-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.dialog-field-label {
+  flex: 0 0 auto;
+  min-width: 12ch;
+  color: var(--fg);
+}
+
+.dialog-fields input[type="checkbox"] {
+  width: auto;
+  flex: 0 0 auto;
+}
+
 .dialog input {
   width: 100%;
   background: var(--input-bg, var(--panel-bg));

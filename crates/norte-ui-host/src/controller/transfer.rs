@@ -357,6 +357,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::Checking,
         };
         self.dialogos.push(Dialogo {
@@ -547,6 +548,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::Checking,
         };
         // Lo que se va a escribir, con la regla COMPARTIDA: es todo o nada,
