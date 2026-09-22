@@ -225,6 +225,7 @@ commands! {
     "pane.open" => PaneOpen,
     "task.cancel" => TaskCancel,
     "task.pause" => TaskPause,
+    "task.retry" => TaskRetry,
     "viewer.close" => ViewerClose,
     "viewer.up" => ViewerUp,
     "viewer.down" => ViewerDown,

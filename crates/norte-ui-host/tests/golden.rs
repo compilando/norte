@@ -1143,6 +1143,9 @@ fn slots_de_referencia() -> Vec<SlotView> {
         SlotView::Browser(Box::new(BrowserSlotView {
             slot_id: 1,
             generation: 4,
+            // Con la línea fina puesta (ADR 0148, puente 94): una copia
+            // llegando a este directorio.
+            progress: Some(62),
             path_display: "⟨file⟩/home/oscar".to_owned(),
             path_hostile: false,
             total_rows: Some(3),
@@ -2909,7 +2912,10 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     //
     // 92 (ADR 0146): `StatusItemView.progress`, con `StatusProgressView`
     // (`percent`, `phase`). Ausente en los demás items, que cruzan como en 91.
-    const FORMA: u64 = 4_364_103_568_922_771_759;
+    //
+    // 93 (ADR 0147): `TaskStateView::Paused`, un valor más del mismo campo.
+    // 94 (ADR 0148): `BrowserSlotView.progress` y el cambio `slot_progress`.
+    const FORMA: u64 = 7_145_087_327_109_203_787;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

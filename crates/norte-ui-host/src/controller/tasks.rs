@@ -586,10 +586,11 @@ impl Estado {
         // del gesto, nunca por el interruptor.
         self.anotar_tira(buzon);
         let del_panel = self.procesos_automaticos(backend, buzon);
-        let mut cambios = vec![ViewChange::Tasks {
+        let mut cambios = self.cambios_de_linea();
+        cambios.push(ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
             cursor: self.cursor_del_tablero(),
-        }];
+        });
         // El desenlace entra en la cuenta del lote (#271). Solo cuando el lote
         // queda RESUELTO viaja algo: doscientas frases de «una más» no dicen
         // nada que la fila no diga ya.
@@ -1471,6 +1472,77 @@ impl Estado {
             "msg-resuming"
         };
         (self.aplicada(), self.decir(aviso))
+    }
+
+    /// Lo que está llegando a `hueco`, 0–100 (ADR 0148): el porcentaje de la
+    /// tarea de TRABAJO viva cuyos directorios afectados incluyen el suyo.
+    ///
+    /// Con varias manda la MENOS avanzada, como en la regla de la fila
+    /// (`processes::progress_for`): lo que falta para que ese panel esté
+    /// tranquilo es lo que le falte a la más atrasada.
+    pub(super) fn progreso_de_hueco(&self, hueco: &Hueco) -> Option<u8> {
+        let dir = hueco.pane.dir();
+        self.tasks
+            .values()
+            .filter(|t| t.epoca == self.epoca_conexion && !Self::terminal(t.vista.state))
+            .filter(|t| t.afectados.iter().any(|d| d == dir))
+            .filter(|t| norte_frontend::tasks::counts_as_work(t.progreso.borrow().kind))
+            .filter_map(|t| norte_frontend::tasks::progress_pct(&t.progreso.borrow()))
+            .min()
+    }
+
+    /// Los cambios de línea fina que haya que mandar, comparando con lo
+    /// último que cruzó: dos píxeles no valen un listado.
+    pub(super) fn cambios_de_linea(&mut self) -> Vec<ViewChange> {
+        let ahora: Vec<(u32, Option<u8>)> = self
+            .huecos
+            .iter()
+            .map(|(id, h)| (*id, self.progreso_de_hueco(h)))
+            .collect();
+        let mut cambios = Vec::new();
+        for (id, pct) in ahora {
+            if self.ultima_linea.get(&id).copied() != Some(pct) {
+                self.ultima_linea.insert(id, pct);
+                cambios.push(ViewChange::SlotProgress {
+                    slot_id: id,
+                    progress: pct,
+                });
+            }
+        }
+        cambios
+    }
+
+    /// Repite la transferencia fallida más reciente, con sus MISMAS opciones
+    /// (ADR 0148).
+    ///
+    /// El contexto ya se guardaba para el diálogo de colisión (#274); lo que
+    /// faltaba era poder usarlo cuando lo que falló no fue una colisión —una
+    /// red que se cayó, un destino que se llenó— y había que rehacer la
+    /// operación a mano.
+    pub(super) fn reintentar_por_comando(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.efectos == crate::commands::Efectos::SoloLectura {
+            return Self::no_muta();
+        }
+        let visibles: Vec<_> = self.tasks_visibles().collect();
+        let con = visibles.into_iter().rev().find_map(|(_, t)| {
+            matches!(
+                t.vista.state,
+                crate::dto::TaskStateView::Failed | crate::dto::TaskStateView::Cancelled
+            )
+            .then(|| t.reintento.clone())
+            .flatten()
+        });
+        let Some(con) = con else {
+            return (self.aplicada(), self.decir("msg-no-retry"));
+        };
+        // Con la política que se pidió la primera vez: repetir no es decidir
+        // otra cosa, y una colisión vuelve a preguntar como entonces.
+        Self::lanzar_reintento(con, norte_proto::CollisionPolicy::Fail, backend, buzon);
+        (self.aplicada(), self.decir("msg-retrying"))
     }
 
     /// Mueve la fila elegida del tablero.

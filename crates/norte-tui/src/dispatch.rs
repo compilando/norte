@@ -994,6 +994,17 @@ pub async fn dispatch(
         // (ADR 0147). Contra un daemon que no sabe pausar se DICE: una pausa
         // que no ocurre y no se dice es peor que no ofrecerla.
         //
+        // Repetir la transferencia que falló, con sus MISMAS opciones
+        // (ADR 0148): el contexto ya se guardaba para el diálogo de colisión,
+        // y sin esto un fallo de red obligaba a rehacer la operación a mano.
+        Command::TaskRetry => {
+            if let Some(r) = app.board.last_failed_retry() {
+                app.message = Some(t("msg-retrying"));
+                crate::mutations::submit_transfer(app, backend, r.kind, r.from, r.to, r.opts).await;
+            } else {
+                app.message = Some(t("msg-no-retry"));
+            }
+        }
         // La llamada va en su propia task y se espera POCO: contra un daemon
         // remoto colgado, esperarla aquí congelaría el bucle de la interfaz
         // hasta su plazo de treinta segundos. Si no contesta a tiempo se

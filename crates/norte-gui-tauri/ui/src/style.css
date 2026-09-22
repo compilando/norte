@@ -537,6 +537,25 @@ body {
   flex-direction: column;
 }
 
+/* Lo que está llegando a este directorio (ADR 0148): una línea de dos
+   píxeles en el borde inferior, como la de carga de un navegador. Sin texto,
+   sin ocupar una fila, y solo mientras hay trabajo. */
+.slot[data-progress]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: var(--slot-progress, 0%);
+  background: var(--border-focus);
+  transition: width 0.2s linear;
+  pointer-events: none;
+}
+
+:root[data-reduce-motion="true"] .slot[data-progress]::after {
+  transition: none;
+}
+
 .slot[data-role="active"] {
   border-color: var(--border-focus);
   background: var(--panel-focus-bg);

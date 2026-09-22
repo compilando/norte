@@ -531,7 +531,11 @@ use serde::{Deserialize, Serialize};
 /// - **93**: una task se puede pausar (ADR 0147). `TaskStateView` gana
 ///   `paused`: viva y parada. Antes el host la pintaba como `running`, que
 ///   es justo lo que no está haciendo.
-pub const BRIDGE_VERSION: u32 = 93;
+/// - **94**: la línea fina de progreso de un hueco (ADR 0148).
+///   `BrowserSlotView.progress` y el cambio `slot_progress { slot_id,
+///   progress }`: lo que está llegando A ESE directorio, para pintar dos
+///   píxeles en su borde sin reenviar el listado.
+pub const BRIDGE_VERSION: u32 = 94;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

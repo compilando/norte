@@ -91,7 +91,7 @@ Se **degrada con el ancho**, que es lo que la barra de estado ya hace con
 la barra, y por último queda `⟳ 3 41 %` — nunca desaparece entera mientras hay
 trabajo, que es lo que pasa hoy con un item que no cabe.
 
-**Opcional, en la ventana: la línea de 2 px** en el borde inferior del panel
+**Opcional, en la ventana: la línea de 2 px** (hecha en la fase E, ADR 0148) en el borde inferior del panel
 DESTINO, como la de carga de un navegador. Dice «aquí está llegando algo» sin
 texto. En el terminal el equivalente sería colorear el borde inferior del
 panel destino proporcionalmente; es bonito pero pelea con los temas y con el
@@ -175,6 +175,8 @@ Solo tiene sentido en la cola en serie y solo para lo que aún no empezó.
 - Teclas en el panel de procesos (subir/bajar), siete presets.
 
 ### 4.4 Reintentar
+
+(Implementado en la fase D, ADR 0148.)
 
 Generalizar el `RetrySpec` del terminal a cualquier transferencia fallida,
 y llevarlo a la ventana. Es de frontend (los parámetros los tiene quien

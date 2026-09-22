@@ -765,6 +765,7 @@ impl Estado {
         BrowserSlotView {
             slot_id: id,
             generation: hueco.pane.listing_epoch(),
+            progress: self.progreso_de_hueco(hueco),
             path_display,
             path_hostile,
             total_rows: Some(hueco.pane.entries().len() as u64),

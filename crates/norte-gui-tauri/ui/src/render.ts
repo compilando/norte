@@ -1066,6 +1066,16 @@ export class Screen {
     ) {
       this.paintBrowserFooter(dom, slot);
     }
+    // La línea fina del borde inferior (ADR 0148): dos píxeles que dicen que
+    // algo está llegando AQUÍ, sin texto y sin quitarle una fila al listado.
+    const llegando = slot.progress ?? null;
+    if (llegando === null) {
+      delete dom.root.dataset["progress"];
+      dom.root.style.removeProperty("--slot-progress");
+    } else {
+      dom.root.dataset["progress"] = String(llegando);
+      dom.root.style.setProperty("--slot-progress", `${String(llegando)}%`);
+    }
     this.paintBrowserRest(dom, slot, cell);
   }
 

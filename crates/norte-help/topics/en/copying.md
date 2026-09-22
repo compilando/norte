@@ -15,6 +15,8 @@ commands = [
     "pane.delete-permanent",
     "task.cancel",
     "task.pause",
+    "task.retry",
+    "task.retry",
     "dialog.overwrite",
     "dialog.skip",
     "dialog.rename",
@@ -112,6 +114,30 @@ unmistakable at a glance, and where the next attempt picks up:
 ```sh
 norte cp --resume sftp://host/big.iso ./big.iso
 ```
+
+# Repeating what failed
+
+{{cmd:task.retry}} launches the most recent failed transfer again, with the
+SAME options and the same verb: a copy repeats as a copy. It is for what was
+not your doing — a network that dropped, a destination that filled up —
+without redoing the operation by hand. If it collides with a taken name
+again, you are asked again, as the first time.
+
+And in the window, while something is arriving into a pane, its bottom border
+carries a thin line that fills: it says work is landing there without taking
+a row from the listing.
+
+# Repeating what failed
+
+{{cmd:task.retry}} launches the most recent failed transfer again, with the
+SAME options and the same verb: a copy repeats as a copy. It is for what was
+not your doing — a network that dropped, a destination that filled up —
+without redoing the operation by hand. If it collides with a taken name
+again, you are asked again, as the first time.
+
+And in the window, while something is arriving into a pane, its bottom border
+carries a thin line that fills: it says work is landing there without taking
+a row from the listing.
 
 # When the name is already taken
 

@@ -381,6 +381,8 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("task.cancel", false, Inert),
     // Pausa y reanuda la misma tarea que cancelaría (ADR 0147).
     live("task.pause", false, Inert),
+    // Relanza la transferencia fallida (ADR 0148).
+    live("task.retry", false, Inert),
     // Los tres de RECORRER el tablero estuvieron un rato en `Planned`: la
     // matriz de paridad de la fase 6 destapó que la tabla los declaraba vivos
     // sin que los implementara NINGÚN frontend. Vuelven a vivos porque la

@@ -160,6 +160,16 @@ export class Session {
         s.status = { message: c.message, banners: c.banners, pending: c.pending };
         return true;
       }
+      case "slot_progress": {
+        // Dos píxeles en el borde del panel al que está llegando algo
+        // (ADR 0148). Viaja aparte del listado porque el progreso va a 30 Hz.
+        for (const slot of s.slots) {
+          if (slot.kind === "browser" && slot.slot_id === c.slot_id) {
+            slot.progress = c.progress;
+          }
+        }
+        return true;
+      }
       case "tasks": {
         s.tasks = c.tasks;
         // El cursor del panel de procesos viaja con el tablero: una task que

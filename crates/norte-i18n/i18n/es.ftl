@@ -220,6 +220,8 @@ msg-pausing = pausando… (se para al acabar el trozo o el fichero en curso)
 msg-resuming = reanudando…
 msg-pause-unsupported = este daemon no sabe pausar tareas: actualízalo para poder hacerlo
 msg-pause-not-this = esta tarea no se puede pausar: solo copiar, mover y borrar
+msg-retrying = repitiendo la transferencia…
+msg-no-retry = no hay ninguna transferencia fallida que repetir
 msg-no-tasks = no hay tasks en marcha
 msg-task-finished = esa task ya había terminado
 msg-error = error: { $error }
@@ -1416,6 +1418,7 @@ help-cmd-pane-select-drive-left = elegir unidad para el panel IZQUIERDO
 help-cmd-pane-select-drive-right = elegir unidad para el panel DERECHO
 help-cmd-task-cancel = cancelar la task señalada, o la más reciente
 help-cmd-task-pause = pausar la task señalada, o la más reciente; si ya está pausada, reanudarla
+help-cmd-task-retry = repetir la transferencia que falló, con las mismas opciones
 # G3c: comandos SOLO de la GUI (sin equivalente en la TUI, que usa otros
 # bindings para multi-selección/franja de tasks) — hacen falta ahora que la
 # paleta de comandos de la GUI lista `app.palette`/`app.extensions` y
