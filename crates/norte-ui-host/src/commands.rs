@@ -279,6 +279,8 @@ pub const IMPLEMENTADOS_VISOR: &[&str] = &[
     "viewer.zoom-in",
     "viewer.zoom-out",
     "viewer.zoom-fit",
+    "viewer.next",
+    "viewer.prev",
 ];
 
 /// Todo lo que el host implementa, en las dos pantallas.
@@ -331,6 +333,11 @@ pub enum EfectoVisor {
     },
     /// Devuelve la imagen a AJUSTADA.
     ZoomAjustar,
+    /// Abre la hermana siguiente (o anterior) de la misma clase, sin salir.
+    Hermana {
+        /// `true` = la siguiente.
+        adelante: bool,
+    },
 }
 
 /// Traduce un comando de la pantalla del visor a su efecto.
@@ -356,6 +363,8 @@ pub fn efecto_visor_de(command: &str, veces: u32) -> Option<EfectoVisor> {
         "viewer.zoom-in" => EfectoVisor::Zoom { acercar: true },
         "viewer.zoom-out" => EfectoVisor::Zoom { acercar: false },
         "viewer.zoom-fit" => EfectoVisor::ZoomAjustar,
+        "viewer.next" => EfectoVisor::Hermana { adelante: true },
+        "viewer.prev" => EfectoVisor::Hermana { adelante: false },
         _ => return None,
     })
 }

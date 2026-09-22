@@ -20,6 +20,8 @@ commands = [
     "viewer.zoom-in",
     "viewer.zoom-out",
     "viewer.zoom-fit",
+    "viewer.next",
+    "viewer.prev",
     "pane.open",
     "pane.edit",
     "pane.edit-new",
@@ -143,6 +145,24 @@ what you see INSIDE it: the same ones that walk a long file
 
 This belongs to the pixel path: in half blocks the image IS text in cells, so
 getting closer uncovers nothing that was not already painted.
+
+## Moving on to the next one
+
+{{cmd:viewer.next}} and {{cmd:viewer.prev}} move on to the next file, or back
+to the previous one, WITHOUT leaving the viewer. The ladder is the listing
+behind it — the same order you see — and it only stops on files of the same
+kind BY NAME: looking at a photo you page through photos, and the README in the
+middle does not interrupt you; reading text you page through text.
+
+What you have open is classified by its BYTES, so a photo saved with the wrong
+extension still leads to the next photo. The candidates are classified by their
+NAME, and that is deliberate: finding out for real would cost reading every
+file that gets skipped — over a remote, one round trip each.
+
+It does not wrap. At the last one you are told there are no more, instead of
+landing back on the first and looking like the key did nothing. And the
+listing's cursor comes with you, so when you close the viewer you are on what
+you were looking at, not on what you opened.
 
 # Handing the file to another program
 

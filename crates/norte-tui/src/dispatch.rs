@@ -30,7 +30,7 @@ use crate::overlays::open_contextual_help;
 use crate::refresh::refresh_panes;
 use crate::screens::{open_drive_popup, plugin_config_summaries};
 use crate::trail::walk_trail;
-use crate::viewer_open::{open_viewer, viewer_do};
+use crate::viewer_open::{open_viewer, viewer_do, viewer_sibling};
 use norte_core::backend::Backend;
 use norte_i18n::{t, ta};
 use norte_proto::EntryKind;
@@ -755,6 +755,8 @@ pub async fn dispatch(
         Command::ViewerZoomIn => viewer_do(app, crate::viewer::Viewer::zoom_in),
         Command::ViewerZoomOut => viewer_do(app, crate::viewer::Viewer::zoom_out),
         Command::ViewerZoomFit => viewer_do(app, crate::viewer::Viewer::zoom_fit),
+        Command::ViewerNext => viewer_sibling(app, backend, events, true).await,
+        Command::ViewerPrev => viewer_sibling(app, backend, events, false).await,
         // H3c: la página de DONDE ESTÁ el lector, no el índice. Todo el cuerpo
         // vive en `open_contextual_help` (documentado allí) para que los tests
         // abran la ayuda por el MISMO sitio que F1.

@@ -20,6 +20,8 @@ commands = [
     "viewer.zoom-in",
     "viewer.zoom-out",
     "viewer.zoom-fit",
+    "viewer.next",
+    "viewer.prev",
     "pane.open",
     "pane.edit",
     "pane.edit-new",
@@ -144,6 +146,25 @@ lo que se ve DENTRO de ella: las mismas que recorren un fichero largo
 
 Esto es del camino de píxeles: en medios bloques la imagen ES texto en
 celdas, así que acercarse no descubre nada que no estuviera ya pintado.
+
+## Pasar a la siguiente
+
+{{cmd:viewer.next}} y {{cmd:viewer.prev}} pasan al fichero siguiente o al
+anterior SIN salir del visor. La escalera es la del listado que tienes detrás
+—en el mismo orden que ves— y solo para en los de la misma clase SEGÚN SU
+NOMBRE: viendo una foto pasas fotos, y el LÉEME que haya en medio no te
+interrumpe; leyendo un texto pasas textos.
+
+La clase de lo que tienes abierto la deciden sus BYTES, así que una foto
+guardada con la extensión equivocada sigue llevando a la foto siguiente. La de
+las candidatas la decide su NOMBRE, y eso es a propósito: averiguar la de
+verdad costaría leer entero cada fichero que se descarta — en un remoto, un
+viaje por cada uno.
+
+No da la vuelta. Al llegar a la última se te dice que no hay más, en vez de
+volver a la primera y parecer que la tecla no hizo nada. Y el cursor del
+listado va contigo, así que al cerrar el visor estás sobre lo que estabas
+mirando y no sobre lo que abriste.
 
 # Darle el fichero a otro programa
 

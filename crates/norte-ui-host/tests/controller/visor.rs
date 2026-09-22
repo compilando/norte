@@ -4,6 +4,71 @@ use super::*;
 // El visor (fase 4, tarea 4.3).
 // ---------------------------------------------------------------------------
 
+/// Bytes que `norte_encoding::detect` clasifica como BINARIO y que empiezan
+/// por la firma PNG: la firma sola son ocho bytes sin ningún NUL y la
+/// heurística los toma por texto, con lo que `is_image()` saldría `false`.
+/// Mismo molde que `png_bytes_binarios` de la TUI.
+fn png_binario() -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
+    bytes.resize(40, 0);
+    bytes
+}
+
+/// **Pasar fotos pasa fotos, y el cursor va contigo.**
+///
+/// El listado va ordenado, así que `b.txt` queda ENTRE las dos imágenes: es
+/// justo la fila que `viewer.next` tiene que saltarse. Y al final del carrete
+/// se dice que no hay más en vez de volver a la primera.
+#[tokio::test]
+async fn la_hermana_siguiente_salta_el_texto_de_en_medio() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"a.png".to_vec(), false),
+            (b"b.txt".to_vec(), false),
+            (b"c.png".to_vec(), false),
+        ],
+    );
+    f.contenido
+        .insert("mem:///casa/a.png".to_owned(), png_binario());
+    f.contenido
+        .insert("mem:///casa/c.png".to_owned(), png_binario());
+    f.contenido
+        .insert("mem:///casa/b.txt".to_owned(), b"texto\n".to_vec());
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    let v = siguiente_visor(&mut sub).await.expect("el visor abre");
+    assert!(v.path_display.ends_with("a.png"), "abre la primera foto");
+
+    // F9 = `viewer.next`: la SIGUIENTE imagen, no el texto de en medio.
+    h.dispatch(tecla("F9")).await.expect("host vivo");
+    let v = siguiente_visor(&mut sub).await.expect("el visor abre otra");
+    assert!(
+        v.path_display.ends_with("c.png"),
+        "salta b.txt: {}",
+        v.path_display
+    );
+
+    // Y desde la última no hay más: no da la vuelta a la primera.
+    let ack = h.dispatch(tecla("F9")).await.expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-no-sibling"),
+        "al final del carrete se dice que no hay más: {ack:?}"
+    );
+
+    // F8 vuelve, con la misma regla.
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let v = siguiente_visor(&mut sub).await.expect("el visor vuelve");
+    assert!(
+        v.path_display.ends_with("a.png"),
+        "hacia atrás también salta el texto: {}",
+        v.path_display
+    );
+}
+
 /// F3 sobre un fichero lo ABRE: se lee una cabecera acotada, se decodifica
 /// con la detección compartida y lo que viaja son líneas ya saneadas.
 #[tokio::test]

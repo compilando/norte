@@ -220,6 +220,13 @@ impl Pane {
         self.state.quick_visible()
     }
 
+    /// SEÑALA la entrada `i`: el cursor, o la selección del filtro cuando hay
+    /// un quick search vivo. Ver [`norte_frontend::PaneState::senalar`] — con
+    /// filtro, `set_cursor` mueve algo que nadie está mirando.
+    pub fn senalar(&mut self, i: usize) {
+        self.state.senalar(i);
+    }
+
     // --- Delegados de mutación de cursor + quick (#82) ---
 
     /// Arranca el quick search (`/`) en `mode` sobre las entries actuales.

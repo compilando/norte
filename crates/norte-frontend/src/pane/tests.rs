@@ -17,6 +17,56 @@ fn pane(names: &[&str]) -> PaneState {
     PaneState::new(VPath::parse("mem:///").unwrap(), es)
 }
 
+/// **Señalar no es mover el cursor**, y con un filtro vivo esa diferencia es
+/// la que hace que el visor acoplado se entere.
+///
+/// En `Mode::Filter` lo señalado es la selección del quick y el cursor real no
+/// se mira: `set_cursor` movía algo que nadie está siguiendo, así que la tecla
+/// decía que había funcionado y el panel se quedaba igual.
+#[test]
+fn senalar_mueve_la_seleccion_del_filtro_y_el_cursor_cuando_no_lo_hay() {
+    // Sin filtro: señala moviendo el cursor real.
+    let mut p = pane(&["a.png", "b.png", "c.png"]);
+    p.senalar(2);
+    assert_eq!(p.cursor(), 2);
+    assert_eq!(
+        p.selected().map(|e| e.path.to_wire()),
+        Some("mem:///c.png".to_owned())
+    );
+
+    // Con filtro: se mueve la SELECCIÓN, no el cursor.
+    //
+    // El listado se ORDENA, así que los índices son los de la lista ya
+    // ordenada: `alfa.png` (0), `alto.png` (1), `zeta.png` (2). Y el filtro
+    // casa por SUBCADENA, por eso la consulta es `al` y no `a`: con `a` sola
+    // también entraría `zeta.png` y no quedaría nada fuera que probar.
+    let mut p = pane(&["alfa.png", "zeta.png", "alto.png"]);
+    p.quick_start(crate::nav::Mode::Filter);
+    p.quick_char('a');
+    p.quick_char('l'); // visibles: "alfa.png" (0) y "alto.png" (1)
+    let cursor_antes = p.cursor();
+    assert_eq!(
+        p.selected().map(|e| e.path.to_wire()),
+        Some("mem:///alfa.png".to_owned()),
+        "el filtro empieza en su primer match"
+    );
+    p.senalar(1);
+    assert_eq!(
+        p.selected().map(|e| e.path.to_wire()),
+        Some("mem:///alto.png".to_owned()),
+        "señalar movió la selección DEL FILTRO"
+    );
+    assert_eq!(p.cursor(), cursor_antes, "y no el cursor real");
+
+    // Una fila que el filtro no enseña no se puede señalar: no se toca nada.
+    p.senalar(2);
+    assert_eq!(
+        p.selected().map(|e| e.path.to_wire()),
+        Some("mem:///alto.png".to_owned()),
+        "«zeta.png» está filtrada fuera: la selección se queda donde estaba"
+    );
+}
+
 /// Un pane sobre un subdirectorio, que es donde la fila `..` aparece.
 fn pane_hijo(names: &[&str]) -> PaneState {
     let es = names
