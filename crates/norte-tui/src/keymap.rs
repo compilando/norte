@@ -185,6 +185,7 @@ commands! {
     "profile.next" => ProfileNext,
     "profile.prev" => ProfilePrev,
     "pane.mirror" => PaneMirror,
+    "pane.sync-nav" => PaneSyncNav,
     "pane.mirror-target" => PaneMirrorTarget,
     "pane.pull" => PanePull,
     "pane.swap" => PaneSwap,

@@ -129,6 +129,9 @@ impl Estado {
             Efecto::Espejo | Efecto::EspejoObjetivo | Efecto::Traer | Efecto::Intercambiar => {
                 self.gesto_de_panel(efecto, backend, buzon)
             }
+            // Aparte del grupo de arriba: aquéllos NAVEGAN, y éste solo mueve
+            // un interruptor.
+            Efecto::EspejoPermanente => self.alternar_espejo_permanente(),
             Efecto::VolumenesDeLado { derecha } => {
                 self.abrir_volumenes_de_lado(derecha, backend, buzon)
             }

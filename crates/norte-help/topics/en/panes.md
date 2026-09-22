@@ -16,6 +16,7 @@ commands = [
     "pane.refresh",
     "pane.mirror",
     "pane.mirror-target",
+    "pane.sync-nav",
     "pane.pull",
     "pane.swap",
     "pane.select-drive",
@@ -101,6 +102,28 @@ the arrows with Ctrl. On the `..` row it sends this location, not the parent's:
 that row is the operand of nothing.
 
 Neither of them says anything when both panes are already in the same place.
+
+## Walking both at once
+
+{{cmd:pane.sync-nav}} turns **synchronised browsing** on: while it is on, every
+place you go with the focused pane, the other one goes too. It is for walking
+two trees that ought to match — a copy and its original, two branches of the
+same project — without steering both by hand.
+
+Turning it on moves nothing: it lines up the NEXT navigation, not the current
+one. Putting both where you are right now already has its own gesture, and that
+is {{cmd:pane.mirror}}.
+
+What gets mirrored is whatever leaves the focused pane, however you leave it: an
+arrow, a breadcrumb, the history, a jump from the palette. What the other pane
+does is **not** recorded in its own history, because it is not a step you took
+there: its "back" still walks your route, not the echo. And if the other pane is
+already where you are going, it stays put rather than re-listing and sliding the
+cursor out from under you for nothing.
+
+With three or four panes, "the other one" is the **designated target** — the
+same one {{cmd:pane.copy}} uses; with none designated there is nobody to mirror
+and nothing happens.
 Nothing was asked for that failed, and re-listing a pane for no reason would
 slide its listing out from under the cursor sitting in it.
 

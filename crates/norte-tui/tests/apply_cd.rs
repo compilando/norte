@@ -37,6 +37,74 @@ fn en_el_pane_0() -> BySlot<Fill> {
     f
 }
 
+/// **Una navegación en espejo archiva los DOS drenadores.**
+///
+/// Es la razón entera por la que `Cd::Espejado` existe. Un `cd` devuelve UN
+/// desenlace y los doce sitios que lo archivan no saben de espejos; si el del
+/// panel espejado se quedara por el camino, su `Fill` —que ES el drenador de
+/// ese listado— se soltaría sin `finish_listing`, y ese panel se quedaría con
+/// el listado truncado bajo un «cargando…» que ya no apaga nadie (#78).
+#[test]
+fn un_espejo_archiva_los_dos_rellenos() {
+    let mut f = BySlot::new();
+    let mut lp = Probed::new();
+    let mut df: BySlot<DecorateFetch> = BySlot::new();
+    let mut sr: Option<SearchRun> = None;
+    apply_cd(
+        &panes(),
+        &mut f,
+        &mut df,
+        &mut lp,
+        &mut sr,
+        Cd::Espejado {
+            lector: Box::new(Cd::Filling {
+                pane: 0,
+                fill: fill(),
+            }),
+            espejo: Box::new(Cd::Filling {
+                pane: 1,
+                fill: fill(),
+            }),
+        },
+    );
+    assert!(
+        f.get(hueco(0)).is_some(),
+        "el del panel que el lector movió"
+    );
+    assert!(
+        f.get(hueco(1)).is_some(),
+        "y el del panel que lo repitió: tirarlo lo deja a medio llenar"
+    );
+}
+
+/// Y cada mitad se archiva con SU semántica: un reemplazo suelta el relleno
+/// de su panel aunque la otra mitad esté paginando.
+#[test]
+fn en_un_espejo_cada_mitad_se_archiva_por_su_cuenta() {
+    let mut f = en_el_pane_0();
+    let mut lp = Probed::new();
+    let mut df: BySlot<DecorateFetch> = BySlot::new();
+    let mut sr: Option<SearchRun> = None;
+    apply_cd(
+        &panes(),
+        &mut f,
+        &mut df,
+        &mut lp,
+        &mut sr,
+        Cd::Espejado {
+            // El lector reemplazó: su relleno viejo sobra.
+            lector: Box::new(Cd::Replaced(0)),
+            // El espejo pagina: el suyo se queda.
+            espejo: Box::new(Cd::Filling {
+                pane: 1,
+                fill: fill(),
+            }),
+        },
+    );
+    assert!(f.get(hueco(0)).is_none(), "el reemplazo soltó el suyo");
+    assert!(f.get(hueco(1)).is_some(), "y el que pagina lo conserva");
+}
+
 /// Un REEMPLAZO del mismo pane suelta su relleno obsoleto.
 #[test]
 fn replaced_suelta_el_fill_del_pane() {

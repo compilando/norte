@@ -163,6 +163,9 @@ keymap = [
 
 [pane]
 keymap = [
+    # Far no tiene navegación sincronizada, así que no hay acorde que
+    # transcribir: va el nuestro, igual en los siete (ver `orthodox`).
+    { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
     { on = ["pgup"], run = "cursor.page-up" },

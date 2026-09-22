@@ -569,6 +569,14 @@ pub struct App {
     focus: usize,
     /// `true` cuando el usuario pidió salir.
     pub quit: bool,
+    /// Navegación SINCRONIZADA (`pane.sync-nav`): cada `cd` del panel con
+    /// foco lo repite el otro.
+    ///
+    /// Estado de ejecución y no configuración: es un modo que se enciende
+    /// mientras haces una cosa —comparar dos árboles a mano— y se apaga
+    /// después, como en Krusader. Guardarlo en el `norte.toml` del lector
+    /// sería convertir un gesto en una preferencia.
+    pub sync_nav: bool,
     /// `[ui] confirm_quit` vigente, para que salir desde DENTRO de un panel
     /// lateral honre lo mismo que salir desde un listado. El run loop tiene
     /// su copia para el despacho nombrado de `app.quit`; las dos se ponen en
@@ -1281,6 +1289,7 @@ impl App {
             kinds: norte_frontend::layout::KindRegistry::builtin(),
             roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
             key_owner: KeyOwner::Panes,
+            sync_nav: false,
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_filter_input: None,
             log_ring: None,

@@ -16,6 +16,7 @@ commands = [
     "pane.refresh",
     "pane.mirror",
     "pane.mirror-target",
+    "pane.sync-nav",
     "pane.pull",
     "pane.swap",
     "pane.select-drive",
@@ -102,6 +103,26 @@ espera de las flechas con Ctrl. Sobre la fila `..` manda esta ubicación, no la
 del padre: esa fila no es el operando de nada.
 
 Ninguno de los dos dice nada cuando los dos paneles ya están en el mismo sitio.
+
+## Andar los dos a la vez
+
+{{cmd:pane.sync-nav}} enciende la navegación **sincronizada**: mientras está
+puesta, cada sitio al que vas con el panel del foco lo repite el otro. Sirve
+para recorrer dos árboles que deberían parecerse —una copia y su original, dos
+ramas del mismo proyecto— sin ir moviendo los dos a mano.
+
+Encenderla no mueve nada: alinea la SIGUIENTE navegación, no la actual. Poner
+los dos donde estás ahora mismo ya tiene su gesto, que es {{cmd:pane.mirror}}.
+
+Se espeja lo que sale del panel con el foco, y da igual cómo salgas de él: una
+flecha, una miga, el historial o un salto desde la paleta. Lo que el otro panel
+hace **no** entra en su propio historial, porque no es un paso que tú dieras
+ahí: su «atrás» sigue contando tu recorrido, no el eco. Y si el otro ya está
+donde vas, se queda quieto en vez de re-listar y deslizarte el cursor por nada.
+
+Con tres o cuatro paneles, «el otro» es el **destino designado**, el mismo que
+usa {{cmd:pane.copy}}; sin ninguno designado no hay a quién espejar y no pasa
+nada.
 No ha fallado nada que hubieras pedido, y relistar un panel para nada le
 movería el listado por debajo del cursor.
 

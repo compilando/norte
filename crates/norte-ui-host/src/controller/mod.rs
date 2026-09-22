@@ -2856,6 +2856,12 @@ struct Estado {
     /// La época de la revisión: sube en cada PETICIÓN y al abandonar una en
     /// vuelo. Una respuesta con otra época llegó tarde y se descarta en Rust.
     epoca_ia: u64,
+    /// Navegación SINCRONIZADA (`pane.sync-nav`): mientras está puesta, cada
+    /// navegación del hueco activo la repite el hueco destino.
+    ///
+    /// Estado de ejecución y no configuración ni sesión: es un modo que se
+    /// enciende para hacer una cosa y se apaga después, como en Krusader.
+    espejo_permanente: bool,
     /// La petición de plan EN VUELO: su época y el DIRECTORIO para el que se
     /// pidió.
     ///
@@ -3277,6 +3283,7 @@ impl Estado {
             siguiente_modal: 1,
             revision_ia: None,
             epoca_ia: 0,
+            espejo_permanente: false,
             ia_en_vuelo: None,
             revision_organizar: None,
             epoca_organizar: 0,

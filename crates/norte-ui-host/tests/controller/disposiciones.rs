@@ -25,6 +25,53 @@ pub(super) async fn por_la_paleta(h: &UiHost, sub: &mut norte_ui_host::UiSubscri
     h.dispatch(tecla("Enter")).await.expect("host vivo");
 }
 
+/// **Con la navegación sincronizada puesta, los dos huecos andan juntos.**
+///
+/// Y el eco NO entra en el rastro del hueco espejado: viaja como
+/// `Trail::Seed`, que es lo que impide que su «atrás» cuente un paso que el
+/// lector no dio ahí — y, de paso, lo que corta la recursión.
+#[tokio::test]
+async fn con_la_navegacion_sincronizada_los_dos_huecos_andan_juntos() {
+    // `orthodox` y no la disposición de partida: hacen falta DOS listados,
+    // porque sin hueco destino no hay a quién espejar.
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+
+    // Encender NO mueve nada: alinea la siguiente navegación, no la actual.
+    por_la_paleta(&h, &mut sub, "sync-nav").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let antes: Vec<String> = foto
+        .slots
+        .iter()
+        .filter_map(|s| match s {
+            SlotView::Browser(b) => Some(b.path_display.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(antes.len(), 2, "la disposición de partida son dos listados");
+    assert_eq!(antes[0], antes[1], "y arrancan en el mismo sitio");
+
+    // Ahora una navegación del hueco activo: entra en `docs`.
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let despues = foto_hasta(&h, &mut sub, "los dos listados se movieron", |foto| {
+        let rutas: Vec<String> = foto
+            .slots
+            .iter()
+            .filter_map(|s| match s {
+                SlotView::Browser(b) => Some(b.path_display.clone()),
+                _ => None,
+            })
+            .collect();
+        (rutas.len() == 2 && rutas[0] != antes[0] && rutas[1] != antes[1]).then_some(rutas)
+    })
+    .await;
+    assert_eq!(
+        despues[0], despues[1],
+        "el destino repitió la navegación del activo: {despues:?}"
+    );
+}
+
 /// El ancho de un hueco en la foto.
 pub(super) fn ancho_de(snap: &norte_ui_host::ViewSnapshot, slot: u32) -> u16 {
     snap.layout

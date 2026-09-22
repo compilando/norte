@@ -120,6 +120,10 @@ keymap = [
 
 [pane]
 keymap = [
+    # Total Commander no tiene navegación sincronizada (su «sincronizar
+    # carpetas» es comparar y copiar, otra cosa): va el nuestro, igual en los
+    # siete (ver `orthodox`).
+    { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
     { on = ["pgup"], run = "cursor.page-up" },

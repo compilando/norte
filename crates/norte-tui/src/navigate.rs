@@ -48,6 +48,10 @@ pub fn cd_landed_pane(outcome: &Cd) -> Option<usize> {
         // lista nada: los dos listados ya existían, solo cambiaron de lado
         // (sus decoraciones viajan con ellos en [`reconcile_swap`]).
         Cd::Refreshed(..) | Cd::Swapped | Cd::Failed(..) | Cd::Cancelled | Cd::Suspended => None,
+        // El del LECTOR: es el que ordena su listado, pide decoraciones y
+        // arrastra al árbol. El del espejo se asienta por su cuenta en
+        // [`settle_cd`], que desdobla los dos.
+        Cd::Espejado { lector, .. } => cd_landed_pane(lector),
     }
 }
 
@@ -100,6 +104,20 @@ pub enum Cd {
     /// [`reconcile_swap`] cruce también esa mitad — mismo patrón que
     /// `Refreshed`.
     Swapped,
+    /// DOS aterrizajes de una sola navegación: el que el lector pidió y el que
+    /// la navegación sincronizada (`pane.sync-nav`) repitió en el otro panel.
+    ///
+    /// Viajan juntos porque un `cd` devuelve UN desenlace y los doce sitios
+    /// que lo archivan no tienen por qué saber de espejos. Tirar el del espejo
+    /// no era una opción: su `Fill` ES el drenador de ese listado, y sin
+    /// archivarlo el otro panel se queda a medio llenar y con el `loading`
+    /// puesto para siempre (#78).
+    Espejado {
+        /// El del panel que el lector movió.
+        lector: Box<Cd>,
+        /// El del panel que lo repitió.
+        espejo: Box<Cd>,
+    },
 }
 
 /// Pide al backend las decoraciones —iconos, insignias— y las columnas de
@@ -160,6 +178,31 @@ pub fn settle_cd(
     search_run: &mut Option<SearchRun>,
     outcome: Cd,
 ) {
+    // Un espejo son DOS navegaciones que aterrizaron: cada una se asienta
+    // entera —orden, decoraciones, volúmenes— porque las dos reemplazaron un
+    // listado. Asentar solo la del lector dejaba el otro panel sin iconos y
+    // con el orden del esquema anterior.
+    if let Cd::Espejado { lector, espejo } = outcome {
+        settle_cd(
+            app,
+            backend,
+            fill,
+            decorate_fetch,
+            last_probed,
+            search_run,
+            *lector,
+        );
+        settle_cd(
+            app,
+            backend,
+            fill,
+            decorate_fetch,
+            last_probed,
+            search_run,
+            *espejo,
+        );
+        return;
+    }
     if let Some(pane) = cd_landed_pane(&outcome) {
         app.apply_scheme_sort(pane);
         request_decorations(app, backend, decorate_fetch, pane);
@@ -240,6 +283,26 @@ pub fn apply_cd(
             last_probed,
             search_run,
         ),
+        // Los dos, cada uno contra SU pane. El orden no importa: son panes
+        // distintos, y los huecos de relleno están indexados por pane.
+        Cd::Espejado { lector, espejo } => {
+            apply_cd(
+                panes,
+                fill,
+                decorate_fetch,
+                last_probed,
+                search_run,
+                *lector,
+            );
+            apply_cd(
+                panes,
+                fill,
+                decorate_fetch,
+                last_probed,
+                search_run,
+                *espejo,
+            );
+        }
     }
 }
 
@@ -521,6 +584,35 @@ pub async fn cd_in(
     // camino futuro se saltara esta línea, `turn::drain_pending` lo limpia
     // también en la cabecera de cada vuelta: ninguna espera sobrevive a una.
     app.busy = None;
+    // Navegación SINCRONIZADA (`pane.sync-nav`): el otro panel repite ESTE
+    // `cd`. Va aquí, en el punto único por el que pasan las once llamadas que
+    // navegan —rastro, popups, teclas, búsqueda semántica—, y no en el
+    // despachador: colgado de allí, moverse por el historial no espejaba y el
+    // modo mentía a medias.
+    //
+    // El eco viaja como `Trail::Seed` y solo se dispara si ESTE `cd` no lo
+    // era: no es un paso del lector —no entra en su rastro— y es lo que corta
+    // la recursión sin una bandera aparte. Y solo espeja lo que sale del panel
+    // con FOCO: un listado que se coloca solo no arrastra al otro.
+    if app.sync_nav
+        && !matches!(trail, Trail::Seed)
+        && pane == app.focus()
+        && cd_landed_pane(&out).is_some()
+        && let Some(otro) = app.target_index()
+        && let Some(destino) = norte_frontend::nav::destino_en_espejo(
+            app.panes[pane].dir(),
+            app.panes[otro].dir(),
+            app.panes[otro].virtual_search,
+        )
+    {
+        // `Box::pin` porque es recursión en una `async fn`. Una sola vuelta:
+        // el eco entra con `Seed` y la guarda de arriba lo para.
+        let espejo = Box::pin(cd_in(app, backend, events, otro, destino, Trail::Seed)).await;
+        return Cd::Espejado {
+            lector: Box::new(out),
+            espejo: Box::new(espejo),
+        };
+    }
     out
 }
 

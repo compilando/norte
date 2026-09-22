@@ -185,6 +185,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.combine-files",
     "pane.mirror",
     "pane.mirror-target",
+    "pane.sync-nav",
     "pane.pull",
     "pane.swap",
     "pane.history",
@@ -699,6 +700,12 @@ pub enum Efecto {
     CiclarEncoding,
     /// La ubicación del hueco ACTIVO viaja al hueco DESTINO.
     Espejo,
+    /// Enciende o apaga la navegación SINCRONIZADA: mientras está puesta,
+    /// cada navegación del hueco activo la repite el destino.
+    ///
+    /// No navega por sí mismo, y por eso no está en el grupo de gestos de
+    /// panel de al lado: lo único que hace es mover un interruptor.
+    EspejoPermanente,
     /// Como [`Efecto::Espejo`], pero lo que viaja es el OBJETIVO DEL CURSOR:
     /// la carpeta bajo él si lo es, y si no la ubicación del hueco activo
     /// (`Ctrl+←`/`Ctrl+→` de Krusader). Qué directorio es eso lo decide
@@ -919,6 +926,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.toggle-hidden" => Efecto::AlternarOcultos,
         "pane.names-encoding" => Efecto::CiclarEncoding,
         "pane.mirror" => Efecto::Espejo,
+        "pane.sync-nav" => Efecto::EspejoPermanente,
         "pane.mirror-target" => Efecto::EspejoObjetivo,
         "pane.pull" => Efecto::Traer,
         "pane.swap" => Efecto::Intercambiar,

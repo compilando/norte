@@ -122,6 +122,9 @@ keymap = [
 
 [pane]
 keymap = [
+    # Norton Commander no tiene navegación sincronizada: no hay acorde que
+    # transcribir y va el nuestro, igual en los siete (ver `orthodox`).
+    { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
     { on = ["pgup"], run = "cursor.page-up" },

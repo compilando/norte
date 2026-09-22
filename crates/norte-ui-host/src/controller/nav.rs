@@ -208,7 +208,32 @@ impl Estado {
             slot_id: slot,
             state: Self::cargando_hacia(Some(&destino), enc),
         };
-        vec![self.parche(vec![cambio])]
+        let mut salidas = vec![self.parche(vec![cambio])];
+
+        // Navegación SINCRONIZADA (`pane.sync-nav`): el hueco destino repite
+        // ESTA navegación. Va aquí, en el punto único por el que pasan todas
+        // —teclas, migas, rastro, volúmenes—, y no en el despachador: colgado
+        // de allí, moverse por el historial no espejaría y el modo mentiría a
+        // medias.
+        //
+        // El eco viaja como `Trail::Seed` y solo se dispara si ESTA navegación
+        // no lo era: no es un paso del lector —no entra en su rastro— y es lo
+        // que corta la recursión sin una bandera aparte. Y solo espeja lo que
+        // sale del hueco ACTIVO: un listado que se coloca solo no arrastra al
+        // otro.
+        if self.espejo_permanente
+            && !matches!(trail, Trail::Seed)
+            && slot == self.activo()
+            && let Ok(otro) = self.hueco_destino()
+            && let Some(dir_otro) = self.dir_en_curso(otro)
+            // `false`: en esta ventana los hallazgos de una búsqueda no viven
+            // en un hueco —tienen su propia vista—, así que ningún listado
+            // puede estar enseñando algo que no sea una ubicación.
+            && let Some(eco) = norte_frontend::nav::destino_en_espejo(&destino, &dir_otro, false)
+        {
+            salidas.extend(self.navegar_hueco(otro, &eco, Trail::Seed, backend, buzon));
+        }
+        salidas
     }
 
     /// Enfoca `slot_id` si se puede, para que una acción que NOMBRA su hueco

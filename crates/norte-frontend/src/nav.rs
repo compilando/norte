@@ -867,6 +867,51 @@ fn scheme_de_sesion(scheme: &str) -> &str {
 /// frontend lo TRANSPORTA: el reintento tras confiar en la host key debe reanudar la
 /// MISMA navegación que el TOFU interrumpió, y la lib no puede referirse a
 /// un tipo declarado en `main.rs`.
+/// A dónde tiene que ir el OTRO panel cuando la navegación va en espejo, o
+/// `None` si no hay nada que hacer.
+///
+/// Vive aquí, y no en cada frontend, por lo mismo que [`Trail::Seed`]: el
+/// espejo de un disparo (`pane.mirror`) ya se escribió dos veces —una en el
+/// terminal y otra en la ventana— y las dos versiones no dicen lo mismo. Un
+/// modo que repite CADA navegación no puede permitirse esa diferencia, porque
+/// no se nota en un gesto: se nota en el tercer `cd`, cuando los dos paneles
+/// ya no están donde el lector cree.
+///
+/// Lo que se espeja es el DESTINO de la navegación que acaba de ocurrir, no lo
+/// que el panel de origen enseña: mientras un `cd` está en vuelo, `dir()`
+/// responde todavía por el sitio que se abandona, y espejar eso mandaría al
+/// otro panel justo de donde el lector acaba de salir. Ésa es la regla que la
+/// ventana tenía escrita y el terminal no.
+///
+/// `None` en los dos casos en que mover el otro panel sería peor que no
+/// hacerlo: ya está ahí —un `cd` redundante lo re-lista y le desliza el
+/// listado bajo el cursor para nada— o el destino es el mismo sitio. Un panel
+/// que enseña HALLAZGOS es la excepción: su `dir()` es la raíz por la que se
+/// buscó, no lo que se está mirando, así que ahí sí se navega.
+///
+/// ```
+/// use norte_frontend::nav::destino_en_espejo;
+/// use norte_proto::VPath;
+///
+/// let casa = VPath::parse("mem:///casa").unwrap();
+/// let docs = VPath::parse("mem:///casa/docs").unwrap();
+/// // El otro panel está en otro sitio: se le manda al destino.
+/// assert_eq!(destino_en_espejo(&docs, &casa, false), Some(docs.clone()));
+/// // Ya está ahí: no se le re-lista por nada.
+/// assert_eq!(destino_en_espejo(&docs, &docs, false), None);
+/// // Salvo que lo que enseñe sean hallazgos, que no son una ubicación.
+/// assert_eq!(destino_en_espejo(&docs, &docs, true), Some(docs));
+/// ```
+#[must_use]
+pub fn destino_en_espejo(
+    destino: &norte_proto::VPath,
+    otro_dir: &norte_proto::VPath,
+    otro_es_virtual: bool,
+) -> Option<norte_proto::VPath> {
+    (otro_dir != destino || otro_es_virtual).then(|| destino.clone())
+}
+
+/// Cómo entra una navegación en el rastro del panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trail {
     /// El usuario pidió este movimiento: entra en la MRU y en el rastro, y

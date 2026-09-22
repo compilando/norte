@@ -275,6 +275,12 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("profile.save-as", false, Inert),
     live("pane.mirror", false, Inert),
     live("pane.mirror-target", false, Inert),
+    // El espejo PERMANENTE: mientras está puesto, cada navegación del panel
+    // con foco la repite el otro. Es un interruptor, no un gesto — por eso no
+    // se llama `pane.mirror-mode`: lo que se enciende no es un espejo, es que
+    // los dos paneles andan juntos. Y nada que ver con `pane.sync-dirs`, que
+    // ESCRIBE ficheros.
+    live("pane.sync-nav", false, Inert),
     live("pane.pull", false, Inert),
     live("pane.swap", false, Inert),
     live("pane.copy", false, Writes),

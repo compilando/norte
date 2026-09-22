@@ -57,6 +57,9 @@ keymap = [
 
 [pane]
 keymap = [
+    # Ver la cabecera de `orthodox`: el acorde es nuestro y va igual en los
+    # siete. `alt+s` habría sido el natural aquí, pero este preset ya lo usa.
+    { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["k"], run = "cursor.up" },
     { on = ["j"], run = "cursor.down" },
     { on = ["up"], run = "cursor.up" },

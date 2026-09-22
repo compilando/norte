@@ -76,6 +76,13 @@ keymap = [
 
 [pane]
 keymap = [
+    # Navegación SINCRONIZADA: mientras está puesta, cada `cd` del panel con
+    # foco lo repite el otro. Ninguno de los cuatro gestores importados
+    # atestigua un acorde para esto —Krusader lo lleva en un botón, y Far,
+    # Norton y Total Commander no lo tienen—, así que la elección es nuestra y
+    # va IGUAL en los siete, como el zoom del visor. `ctrl+e` porque está
+    # libre en los siete y es entregable en cualquier terminal.
+    { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
     { on = ["pgup"], run = "cursor.page-up" },

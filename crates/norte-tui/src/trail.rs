@@ -114,6 +114,12 @@ pub fn rewind_for(outcome: &Cd) -> Rewind {
         Cd::Suspended | Cd::Filling { .. } | Cd::Replaced(_) | Cd::Refreshed(..) | Cd::Swapped => {
             Rewind::No
         }
+        // Manda el desenlace del LECTOR. El del espejo no puede decidir nada
+        // aquí: viajó con `Trail::Seed`, así que no dejó paso en ningún rastro
+        // —ni en el suyo— y no hay nada suyo que rebobinar. Quien recorre el
+        // rastro es el panel que el lector movió, y es su fallo el que tiene
+        // que devolverle el paso.
+        Cd::Espejado { lector, .. } => rewind_for(lector),
     }
 }
 

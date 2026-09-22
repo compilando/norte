@@ -51,6 +51,8 @@ keymap = [
 
 [pane]
 keymap = [
+    # Ver la cabecera de `orthodox`: el acorde es nuestro y va igual en los siete.
+    { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
     { on = ["pgup"], run = "cursor.page-up" },

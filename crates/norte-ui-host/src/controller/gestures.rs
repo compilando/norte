@@ -17,6 +17,25 @@ impl Estado {
     /// compartido —el mismo del que sale el destino de una copia—, nunca «el
     /// de al lado»: con tres listados, adivinar es mandar el panel de alguien
     /// a un sitio que no eligió.
+    /// Enciende o apaga la navegación SINCRONIZADA, y lo dice.
+    ///
+    /// No navega: encenderla no mueve el otro hueco a donde ya estás. Lo que
+    /// hace es que la SIGUIENTE navegación la repitan los dos — alinearlos
+    /// ahora mismo ya tiene su gesto, que es `pane.mirror`.
+    pub(super) fn alternar_espejo_permanente(
+        &mut self,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.espejo_permanente = !self.espejo_permanente;
+        let clave = if self.espejo_permanente {
+            "msg-sync-nav-on"
+        } else {
+            "msg-sync-nav-off"
+        };
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+        let cambio = ViewChange::Status(self.status.clone());
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
     pub(super) fn gesto_de_panel(
         &mut self,
         efecto: Efecto,

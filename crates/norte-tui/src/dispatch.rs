@@ -263,6 +263,17 @@ pub async fn dispatch(
                 matches!(cmd, Command::ProfileNext),
             );
         }
+        // `pane.sync-nav`: el espejo PERMANENTE. No navega nada por sí mismo
+        // —enciende o apaga el modo y lo dice—; quien espeja es el punto único
+        // por el que pasan todas las navegaciones.
+        Command::PaneSyncNav => {
+            app.sync_nav = !app.sync_nav;
+            app.message = Some(t(if app.sync_nav {
+                "msg-sync-nav-on"
+            } else {
+                "msg-sync-nav-off"
+            }));
+        }
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
             let plan = mirror_plan(app);

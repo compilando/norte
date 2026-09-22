@@ -155,6 +155,10 @@ keymap = [
 
 [pane]
 keymap = [
+    # Krusader TIENE esto («Synchron Browse»), pero como botón de la barra: su
+    # documentación no le asigna acorde, así que aquí no hay nada que
+    # transcribir y se usa el nuestro, igual en los siete (ver `orthodox`).
+    { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
     { on = ["pgup"], run = "cursor.page-up" },
