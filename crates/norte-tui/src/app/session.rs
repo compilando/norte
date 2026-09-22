@@ -205,7 +205,7 @@ impl App {
             self.adoptar_pane(
                 id,
                 Pane::new(estado.path.clone(), Vec::new()),
-                Some(estado.sort),
+                Some(estado.sort.clone()),
                 Some(estado.show_hidden),
             );
             self.session.cursors.insert(*raw, estado.cursor);

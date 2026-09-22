@@ -368,7 +368,7 @@ impl PaneState {
     #[must_use]
     pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
         let (entries, sort_keys) =
-            crate::sort::sort_with_keys_spec(entries, crate::sort::SortSpec::default());
+            crate::sort::sort_with_keys_spec(entries, &crate::sort::SortSpec::default());
         let name_cubos = cubos_de(&entries);
         Self {
             name_cubos,
@@ -571,7 +571,7 @@ impl PaneState {
     /// El orden activo del listado (#108).
     #[must_use]
     pub fn sort(&self) -> crate::sort::SortSpec {
-        self.sort
+        self.sort.clone()
     }
 
     /// Cambia el orden del listado (#108 L7): re-ordena EN SITIO (claves
@@ -600,7 +600,7 @@ impl PaneState {
             .into_iter()
             .zip(std::mem::take(&mut self.sort_keys))
             .collect();
-        pares.sort_by(|a, b| crate::sort::cmp_keyed_with((&a.1, &a.0), (&b.1, &b.0), self.sort));
+        pares.sort_by(|a, b| crate::sort::cmp_keyed_with((&a.1, &a.0), (&b.1, &b.0), &self.sort));
         (self.entries, self.sort_keys) = pares.into_iter().unzip();
         self.poner_padre();
         self.listing_moved();
@@ -701,7 +701,7 @@ impl PaneState {
         // entrar si la ocultación está activa.
         self.hidden_stash.clear();
         let entries = self.stash_hidden(entries);
-        let (entries, sort_keys) = crate::sort::sort_with_keys_spec(entries, self.sort);
+        let (entries, sort_keys) = crate::sort::sort_with_keys_spec(entries, &self.sort);
         self.dir = dir;
         self.entries = entries;
         self.sort_keys = sort_keys;
@@ -1267,13 +1267,13 @@ impl PaneState {
         // entero en cada página haría cuadrático el relleno que el merge
         // mantiene lineal.
         medir_nombres(&mut self.name_cubos, &batch);
-        let (batch, batch_keys) = crate::sort::sort_with_keys_spec(batch, self.sort);
+        let (batch, batch_keys) = crate::sort::sort_with_keys_spec(batch, &self.sort);
         crate::sort::merge_keyed_spec(
             &mut self.entries,
             &mut self.sort_keys,
             batch,
             batch_keys,
-            self.sort,
+            &self.sort,
         );
         self.poner_padre();
         // Una página de un relleno paginado también MUEVE índices: el
@@ -1307,7 +1307,7 @@ impl PaneState {
         // reconstruye fresco de él, nunca se acumula con el anterior.
         self.hidden_stash.clear();
         let entries = self.stash_hidden(entries);
-        let (entries, sort_keys) = crate::sort::sort_with_keys_spec(entries, self.sort);
+        let (entries, sort_keys) = crate::sort::sort_with_keys_spec(entries, &self.sort);
         self.entries = entries;
         self.sort_keys = sort_keys;
         // El listado se rehízo entero: la fila vuelve, y el cursor se acota

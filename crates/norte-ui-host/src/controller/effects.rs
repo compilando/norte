@@ -122,7 +122,7 @@ impl Estado {
             | Efecto::IrAPestana { .. } => {
                 self.efecto_de_disposicion(efecto, backend, buzon)
             }
-            Efecto::Ordenar(col) => self.ordenar_por_columna(slot, col),
+            Efecto::Ordenar(col) => self.ordenar_por_columna(slot, col.into()),
             Efecto::Refrescar => self.refrescar_visibles(backend, buzon),
             Efecto::AlternarOcultos => self.alternar_ocultos(),
             Efecto::CiclarEncoding => self.ciclar_encoding(),

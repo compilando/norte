@@ -112,7 +112,8 @@ no lo consulta. Y `norte-cli` no expone búsqueda ninguna.
 ### 2.3 Columna de permisos
 
 **Resuelto hoy** (ADR 0128): sale por defecto en `file` y `sftp`.
-Sigue faltando **ordenar** por ella, y **dueño/grupo**: `posix.uid` y
+**Ordenar** por ella y por cualquier atributo: resuelto (ADR 0144).
+Sigue faltando **dueño/grupo** por nombre: `posix.uid` y
 `posix.gid` existen como atributos crudos, sin resolver a nombre, y no hay
 columna. Para SFTP hace falta el `longname` crudo (#114, ya abierta).
 

@@ -262,7 +262,7 @@ impl ColumnsPicker {
     /// El orden en curso (se aplica al confirmar, no antes).
     #[must_use]
     pub fn sort(&self) -> SortSpec {
-        self.sort
+        self.sort.clone()
     }
 
     /// Scheme del pane que abrió el picker.
@@ -323,7 +323,7 @@ impl ColumnsPicker {
             .and_then(|r| r.builtin)
             .and_then(sort_column)
         {
-            self.sort = self.sort.after_click(sc);
+            self.sort = self.sort.clone().after_click(sc);
         }
     }
 
@@ -368,7 +368,7 @@ impl ColumnsPicker {
                 .filter(|r| r.enabled)
                 .map(|r| r.id.clone())
                 .collect(),
-            sort: self.sort,
+            sort: self.sort.clone(),
             scheme_target: self.scheme_override.then(|| self.scheme.clone()),
             // Las bloqueadas jamás se emiten (m2): el ciclo ya es no-op en
             // ellas — el filtro extra es defensa en profundidad.
