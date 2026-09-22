@@ -579,6 +579,24 @@ status-item-marks-tip = Lo marcado en este panel
 status-item-sort-tip = Orden del listado. Pulsa para cambiarlo
 status-item-encoding-tip = Cómo se leen los nombres. Pulsa para reinterpretarlos
 status-item-tasks-tip = { $n } tareas en marcha. Pulsa para ver los procesos
+
+## La barra de progreso ligera (ADR 0146)
+strip-running-copy = copiando
+strip-running-move = moviendo
+strip-running-delete = borrando
+strip-running-other = trabajando en
+strip-done-copy = copiado
+strip-done-move = movido
+strip-done-delete = borrado
+strip-done-other = hecho
+strip-done-many = { $n ->
+    [one] 1 hecha
+   *[other] { $n } hechas
+}
+strip-failed = { $n ->
+    [one] 1 falló
+   *[other] { $n } fallaron
+}
 status-item-notices-tip = { $n } avisos sin leer. Pulsa para abrir el registro
 # Un elemento aportado por un plugin (ADR 0137): de quién es y qué columna.
 status-item-plugin-tip = Del plugin { $plugin }, columna { $column }, para la entrada bajo el cursor

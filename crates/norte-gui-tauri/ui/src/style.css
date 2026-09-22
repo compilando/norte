@@ -1161,6 +1161,43 @@ button.status-item:hover {
   color: var(--warning-fg);
 }
 
+/* La barra de progreso ligera del item de tareas (ADR 0146): fina, detrás
+   del texto, del ancho de diez celdas del terminal para que el reparto de
+   la barra de estado sea el mismo. */
+.status-bar {
+  display: inline-block;
+  position: relative;
+  width: 10ch;
+  height: 4px;
+  margin-left: 8px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--panel-focus-bg);
+}
+
+.status-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: var(--border-focus);
+  transition: width 0.2s linear;
+}
+
+.status-bar[data-indeterminate="true"] .status-bar-fill {
+  width: 30%;
+  animation: status-bar-pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes status-bar-pulse {
+  from {
+    left: 0;
+  }
+
+  to {
+    left: 70%;
+  }
+}
+
 .pending {
   color: var(--border-focus);
   margin-left: 8px;
@@ -4840,8 +4877,10 @@ button.status-item:hover {
   .log-controls button,
   .log-filter,
   .status-item,
+  .status-bar-fill,
   .panelbar-button {
     transition: none;
+    animation: none;
   }
 }
 
@@ -4854,8 +4893,10 @@ button.status-item:hover {
 :root[data-reduce-motion="true"] .log-controls button,
 :root[data-reduce-motion="true"] .log-filter,
 :root[data-reduce-motion="true"] .status-item,
+:root[data-reduce-motion="true"] .status-bar-fill,
 :root[data-reduce-motion="true"] .panelbar-button {
   transition: none;
+  animation: none;
 }
 
 /* --- El selector de columnas ------------------------------------------- */

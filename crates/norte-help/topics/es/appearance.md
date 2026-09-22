@@ -70,6 +70,15 @@ orden, por ejemplo `status_items = ["tasks", "position"]`; una lista vacía
 deja la mitad derecha en blanco. Los que no caben ceden por importancia, y
 siempre antes que un aviso de la izquierda.
 
+`tasks` es una barra de progreso pequeña. No aparece hasta que el trabajo
+lleva un momento en marcha —una copia de un fichero pequeño acaba antes, y una
+barra de medio segundo es un parpadeo—; con varias tareas enseña una sola
+barra, la del total; y al acabar deja un rato `✓ copiado foto.jpg`, también
+cuando fue tan rápido que la barra no llegó a salir. Si algo falló dice
+`✗ 1 falló` y se queda más, lo que tarda en irse la fila del panel de procesos,
+que es donde se lee por qué. Sin sitio se acorta —pierde el nombre, luego el
+ritmo, luego la barra— antes de quitar ningún otro dato.
+
 Un plugin de columnas también puede hablar ahí: `status_plugins =
 ["plugin:git/branch"]` enseña el valor de esa columna para la entrada bajo
 el cursor —la rama, en el ejemplo—, a la izquierda de los demás. Hasta
@@ -132,8 +141,10 @@ enseña nada. El asistente de primer arranque le gana: si aún no tienes
 El panel de procesos
 --------------------
 
-Con `processes_panel = "auto"` (el de serie) el panel se abre solo en cuanto
-hay trabajo en marcha —una copia, un movimiento, un borrado— y se cierra solo
+Con `processes_panel = "auto"` (el de serie) el panel se abre solo cuando
+el trabajo —una copia, un movimiento, un borrado— lleva un par de segundos en
+marcha: lo que acaba antes lo cuenta la barra de estado, sin quitarle un tercio
+de pantalla al listado. Se cierra solo
 unos segundos después de que la última fila acabe, sin llevarse el teclado:
 sigues en tu listado. Esos segundos son los que la fila terminada se queda en el
 tablero, y son a propósito: un panel que desapareciera en el instante del

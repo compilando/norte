@@ -185,6 +185,7 @@ impl Estado {
             return Vec::new();
         }
         self.tasks.remove(&id);
+        self.anotar_tira(buzon);
         let mut envios = vec![self.parche(vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
             cursor: self.cursor_del_tablero(),
@@ -481,6 +482,10 @@ impl Estado {
         // `progreso` no se llama ni una vez. Sin esto, una copia rapidísima
         // dejaba el destino sin relistar para siempre — la carrera que la
         // tarea 5.1 nombra literalmente.
+        //
+        // La barra ligera también la ve desde aquí: una que nace terminada
+        // es la copia rápida cuyo «✓» es lo único que dirá que ocurrió.
+        self.anotar_tira(buzon);
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
             cursor: self.cursor_del_tablero(),
@@ -576,6 +581,7 @@ impl Estado {
         // marcha» no se lo gana, y buscar el botón justo cuando empieza una
         // copia tampoco. Solo cierra lo que abrió él, y va por las DOS MITADES
         // del gesto, nunca por el interruptor.
+        self.anotar_tira(buzon);
         let del_panel = self.procesos_automaticos(backend, buzon);
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
@@ -1653,9 +1659,14 @@ impl Estado {
         {
             return Vec::new();
         }
+        // ABRE cuando la ráfaga de trabajo ya DURA (ADR 0146): lo que acaba
+        // antes lo cuenta la barra de estado sin quitarle un tercio de
+        // pantalla al listado. CIERRA como siempre, cuando no queda ninguna
+        // fila de trabajo: así se ve terminada la que tardó.
+        let abre = self.tira.wants_panel(self.reloj_tira());
         let hay = self.hay_trabajo();
         let abierto = self.hueco_de_kind("processes").is_some();
-        if hay && !abierto {
+        if abre && !abierto {
             self.procesos_auto = true;
             return self.abrir_hueco_de_kind("processes", backend, buzon).1;
         }
@@ -1664,6 +1675,71 @@ impl Estado {
             return self.cerrar_hueco_de_kind("processes", backend, buzon).1;
         }
         Vec::new()
+    }
+
+    /// El reloj de la barra ligera, en ms desde que arrancó el host: de
+    /// tokio, para que los tests lo pausen y adelanten.
+    pub(super) fn reloj_tira(&self) -> i64 {
+        i64::try_from(self.tira_base.elapsed().as_millis()).unwrap_or(i64::MAX)
+    }
+
+    /// Le enseña el tablero a la barra ligera (ADR 0146) y programa el
+    /// próximo despertar si la barra va a cambiar sin que llegue progreso.
+    pub(super) fn anotar_tira(&mut self, buzon: &mpsc::Sender<Mensaje>) {
+        let ahora = self.reloj_tira();
+        // Copias: el progreso vive tras un `watch`, y su guarda no puede
+        // cruzar la llamada. Son pocas (el tablero tiene tope) y pequeñas.
+        //
+        // Solo las de ESTA conexión: una task de un daemon que ya no está no
+        // va a terminar nunca, y con ella dentro la ráfaga no se cerraría.
+        let fotos: Vec<(norte_proto::TaskProgress, Option<f64>)> = self
+            .tasks
+            .values()
+            .filter(|t| t.epoca == self.epoca_conexion)
+            .map(|t| (t.progreso.borrow().clone(), t.rate.bps()))
+            .collect();
+        self.tira.update(
+            ahora,
+            fotos
+                .iter()
+                .map(|(p, bps)| norte_frontend::task_strip::StripTask {
+                    progress: p,
+                    operand: p.current.as_ref(),
+                    bps: *bps,
+                }),
+        );
+        let Some(cuando) = self.tira.next_change_ms(ahora) else {
+            return;
+        };
+        if self.tira_despertar == Some(cuando) {
+            return;
+        }
+        self.tira_despertar = Some(cuando);
+        let espera = std::time::Duration::from_millis(u64::try_from(cuando - ahora).unwrap_or(0));
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(espera).await;
+            let _ = buzon.send(Mensaje::Tira).await;
+        });
+    }
+
+    /// Llegó la hora que la barra pidió: se reanota, y viaja un parche solo
+    /// si algo de lo que depende de ella cambió (los elementos de la barra de
+    /// estado los compara `parche` solo; el panel, `procesos_automaticos`).
+    pub(super) fn despertar_tira(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.tira_despertar = None;
+        self.anotar_tira(buzon);
+        let mut envios = self.procesos_automaticos(backend, buzon);
+        if envios.is_empty()
+            && self.ultimos_elementos.as_ref() != Some(&self.vista_elementos_de_estado())
+        {
+            envios.push(self.parche(Vec::new()));
+        }
+        envios
     }
 
     /// Cuántas filas tiene el tablero PINTADO.
@@ -1684,9 +1760,12 @@ impl Estado {
     /// Pregunta al progreso EN VIVO porque es donde está la clase tipada; la
     /// vista proyectada solo lleva su nombre.
     fn hay_trabajo(&self) -> bool {
-        self.tasks
-            .values()
-            .any(|t| norte_frontend::tasks::counts_as_work(t.progreso.borrow().kind))
+        // Solo de esta conexión, por lo mismo que en `anotar_tira`: el trabajo
+        // de un daemon anterior no va a acabar, y el panel no se cerraría.
+        self.tasks.values().any(|t| {
+            t.epoca == self.epoca_conexion
+                && norte_frontend::tasks::counts_as_work(t.progreso.borrow().kind)
+        })
     }
 
     /// Los ids de las tasks PINTADAS, en el orden en que se pintan.

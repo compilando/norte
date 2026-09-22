@@ -69,6 +69,15 @@ in what order, for example `status_items = ["tasks", "position"]`; an empty
 list leaves the right half blank. The ones that do not fit give way by
 importance, and always before a warning on the left.
 
+`tasks` is a small progress bar. It does not appear until the work has been
+running for a moment — copying a small file finishes sooner, and a bar that
+lives half a second is a flicker — ; with several tasks it shows one bar, for
+the total; and when they finish it leaves `✓ copied photo.jpg` for a while,
+even when it was so quick that the bar never showed. If something failed it
+says `✗ 1 failed` and stays longer, as long as the row stays in the jobs
+panel, which is where you read why. Short of room it shrinks — losing the
+name, then the rate, then the bar — before any other item is dropped.
+
 A columns plugin can speak there too: `status_plugins =
 ["plugin:git/branch"]` shows that column's value for the entry under the
 cursor — the branch, in the example — to the left of the others. Up to
@@ -131,8 +140,10 @@ screen stays away.
 The jobs panel
 --------------
 
-With `processes_panel = "auto"` (the default) the panel opens itself as soon
-as there is work running — a copy, a move, a delete — and closes itself a few
+With `processes_panel = "auto"` (the default) the panel opens itself once
+work — a copy, a move, a delete — has been running for a couple of seconds:
+whatever finishes sooner is told by the status bar, without taking a third of
+the screen from the listing. It closes itself a few
 seconds after the last row finishes, without taking the keyboard: you stay in
 your listing. Those seconds are how long a finished row stays on the board, and
 they are deliberate: a panel that vanished at the very moment of the outcome

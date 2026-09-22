@@ -286,6 +286,20 @@ pub struct StatusItemView {
     pub tooltip: String,
     /// Si pulsarlo hace algo.
     pub clickable: bool,
+    /// La barra de progreso ligera, detrás del texto (ADR 0146, puente 92).
+    /// Solo en el item `tasks` con trabajo en marcha; ausente en los demás.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<StatusProgressView>,
+}
+
+/// La barra del item `tasks` (ADR 0146).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusProgressView {
+    /// Del total de la ráfaga, 0–100; `None` = no se sabe, y el renderer
+    /// anima la barra en vez de pintarla vacía.
+    pub percent: Option<u8>,
+    /// `running`, `done` o `failed`.
+    pub phase: String,
 }
 
 /// Un botón del cromo que corre una orden (ADR 0133): los de disposición.

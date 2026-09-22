@@ -67,7 +67,7 @@ pub fn status_item_zones(app: &App, area: Rect) -> Vec<StatusItemZone> {
 fn status_input(app: &App) -> norte_frontend::statusbar::StatusInput {
     norte_frontend::statusbar::StatusInput::from_pane(
         app.focused().state(),
-        app.board.rows().len(),
+        app.strip.view(app.now_ms()),
         app.notices_unread,
     )
 }
@@ -176,15 +176,14 @@ fn compose(app: &App, area: Rect) -> Composed {
         .min(ancho.saturating_sub(reserva_aviso))
         .saturating_sub(2);
     let elegidos = norte_frontend::statusbar::fit(&lista, presupuesto, SEP);
-    let derecha: Vec<&norte_frontend::statusbar::StatusItemView> =
-        elegidos.iter().map(|&i| &lista[i]).collect();
+    let derecha: Vec<&norte_frontend::statusbar::StatusItemView> = elegidos.iter().collect();
     if derecha.is_empty() {
         return compose_line(app, area);
     }
     // Un espacio delante del primero y uno detrás del último, como los
     // márgenes de la izquierda.
     let ancho_der =
-        derecha.iter().map(|v| cells(&v.text)).sum::<usize>() + SEP * (derecha.len() - 1) + 2;
+        derecha.iter().map(|v| v.cells()).sum::<usize>() + SEP * (derecha.len() - 1) + 2;
     let ancho_izq = ancho.saturating_sub(ancho_der);
     let izquierda = Rect {
         width: u16::try_from(ancho_izq).unwrap_or(u16::MAX),
@@ -201,7 +200,16 @@ fn compose(app: &App, area: Rect) -> Composed {
             x += SEP;
         }
         linea.push_str(&v.text);
-        let w = cells(&v.text);
+        // La barra ligera (ADR 0146) va detrás del texto, separada por un
+        // espacio; `cells()` ya la cuenta en el reparto.
+        if v.bar {
+            linea.push(' ');
+            linea.push_str(&norte_frontend::task_strip::bar_glyphs(
+                v.progress.and_then(|p| p.percent),
+                app.now_ms(),
+            ));
+        }
+        let w = v.cells();
         if let Some(cmd) = v.command {
             let x0 = area.x.saturating_add(u16::try_from(x).unwrap_or(u16::MAX));
             let x1 = x0.saturating_add(u16::try_from(w).unwrap_or(u16::MAX).saturating_sub(1));
@@ -716,5 +724,50 @@ mod tests {
         let linea = barra(&app);
         assert!(!linea.contains(frame), "spinner antes de tiempo: {linea}");
         assert!(linea.contains("copiado 1 fichero"), "{linea}");
+    }
+
+    /// ADR 0146: con trabajo que ya dura, el item de tareas lleva su barra
+    /// detrás, y la zona pulsable la cubre entera: un clic en la barra abre
+    /// los procesos como un clic en el texto.
+    #[test]
+    fn el_item_de_tareas_pinta_su_barra_y_se_pulsa_entero() {
+        use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
+        let mut app = app_dos_panes();
+        app.chrome.status_items =
+            Some(norte_config::StatusItems::parse(&["tasks"]).expect("válida"));
+        let p = TaskProgress {
+            task_id: TaskId::new(1),
+            kind: TaskKind::Copy,
+            state: TaskState::Running,
+            bytes_done: 50,
+            bytes_total: Some(100),
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+            unreadable: None,
+            unvisited: None,
+        };
+        let t = norte_frontend::task_strip::StripTask {
+            progress: &p,
+            operand: None,
+            bps: None,
+        };
+        app.strip.update(0, [t]);
+        app.strip.update(norte_frontend::task_strip::UMBRAL_MS, [t]);
+        app.render_now_ms = Some(norte_frontend::task_strip::UMBRAL_MS);
+        let area = ratatui::layout::Rect::new(0, 0, 70, 1);
+        let c = super::compose(&app, area);
+        assert_eq!(super::cells(&c.text), 70, "la línea llena el ancho");
+        let barra = norte_frontend::task_strip::bar_glyphs(Some(50), 0);
+        assert!(c.text.contains(&barra), "{:?}", c.text);
+        let (x0, x1, cmd) = c.items[0];
+        assert_eq!(cmd, "layout.processes");
+        let zona: String = c
+            .text
+            .chars()
+            .skip(usize::from(x0))
+            .take(usize::from(x1 - x0) + 1)
+            .collect();
+        assert!(zona.starts_with('⟳') && zona.ends_with('▏'), "{zona:?}");
     }
 }

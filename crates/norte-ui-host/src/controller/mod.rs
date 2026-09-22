@@ -724,6 +724,9 @@ enum Mensaje {
     /// caducar por número desalojaría a una task viva que solo comparte el
     /// número con la que se fue.
     TaskCaducada(u64, u64),
+    /// La barra de progreso ligera cambia sin que llegue progreso: pasó su
+    /// umbral, el del panel, o se acabó el rato del «✓» (ADR 0146).
+    Tira,
     /// El `policy.decide` que APROBABA no llegó al daemon.
     /// Un `policy.decide` que no salió bien: qué aprobación y con qué clave
     /// se cuenta (#279).
@@ -1449,7 +1452,7 @@ async fn actor(
                 }
             }
             Mensaje::Conexion(ev) => {
-                for u in estado.cambio_de_conexion(ev) {
+                for u in estado.cambio_de_conexion(ev, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -1494,6 +1497,11 @@ async fn actor(
             }
             Mensaje::TaskCaducada(id, epoca) => {
                 for u in estado.caducar_task(id, epoca, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::Tira => {
+                for u in estado.despertar_tira(&backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -2532,6 +2540,14 @@ struct Estado {
     /// El panel de procesos lo abrió el AUTOMÁTICO (`[ui] processes_panel`),
     /// así que el automático puede cerrarlo. Uno que abrió el lector se queda.
     procesos_auto: bool,
+    /// La barra de progreso ligera del item `tasks` (ADR 0146).
+    tira: norte_frontend::task_strip::TaskStrip,
+    /// El origen del reloj de [`Self::tira`]: el de tokio, que los tests
+    /// pueden pausar y adelantar.
+    tira_base: tokio::time::Instant,
+    /// Para cuándo hay ya un despertar programado, para no apilar uno por
+    /// cada progreso.
+    tira_despertar: Option<i64>,
     /// Las últimas claves lanzadas desde la paleta, la más reciente primero
     /// (spec 2026-09-10). Viven en la sesión de UI, como en el terminal.
     paleta_recientes: Vec<String>,
@@ -3197,6 +3213,9 @@ impl Estado {
             splash_hasta_ms: None,
             splash_visto: false,
             procesos_auto: false,
+            tira: norte_frontend::task_strip::TaskStrip::default(),
+            tira_base: tokio::time::Instant::now(),
+            tira_despertar: None,
             paleta_recientes: Vec::new(),
             popular: norte_frontend::history::Popular::default(),
             volumenes_pie: Vec::new(),

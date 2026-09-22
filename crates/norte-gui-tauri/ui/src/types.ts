@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 91;
+export const BRIDGE_VERSION = 92;
 
 /** Dónde se suelta un panel arrastrado sobre otro (ADR 0138): a un lado, o
  *  en el centro para unirse a él como pestaña. */
@@ -933,6 +933,18 @@ export interface StatusItemView {
   tooltip: string;
   /** Si pulsarlo hace algo. */
   clickable: boolean;
+  /**
+   * La barra de progreso ligera, DETRÁS del texto (ADR 0146, puente 92).
+   * Solo en el item `tasks` con trabajo en marcha.
+   */
+  progress?: StatusProgressView;
+}
+
+/** La barra del item `tasks` (ADR 0146). */
+export interface StatusProgressView {
+  /** 0–100 del total; `null` = no se sabe, y la barra se anima. */
+  percent: number | null;
+  phase: "running" | "done" | "failed";
 }
 
 /** La barra de paneles (#324, puente 51): qué paneles hay y cómo están. */

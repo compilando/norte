@@ -1494,21 +1494,34 @@ fn asistente_de_referencia() -> norte_ui_host::dto::WizardView {
     }
 }
 
-/// Uno pulsable y uno que no: las dos formas que el renderer pinta.
+/// Uno pulsable, uno que no, y el de tareas con su barra (puente 92): las
+/// formas que el renderer pinta.
 fn elementos_de_estado_de_referencia() -> Vec<norte_ui_host::dto::StatusItemView> {
-    use norte_ui_host::dto::StatusItemView;
+    use norte_ui_host::dto::{StatusItemView, StatusProgressView};
     vec![
+        StatusItemView {
+            id: "tasks".to_owned(),
+            text: "⟳ copiando foto.jpg 62 % · 48 MiB/s".to_owned(),
+            tooltip: "1 tareas en marcha. Pulsa para ver los procesos".to_owned(),
+            clickable: true,
+            progress: Some(StatusProgressView {
+                percent: Some(62),
+                phase: "running".to_owned(),
+            }),
+        },
         StatusItemView {
             id: "position".to_owned(),
             text: "3/120".to_owned(),
             tooltip: "Posición del cursor en el listado".to_owned(),
             clickable: false,
+            progress: None,
         },
         StatusItemView {
             id: "sort".to_owned(),
             text: "Nombre ↑".to_owned(),
             tooltip: "Orden del listado. Pulsa para cambiarlo".to_owned(),
             clickable: true,
+            progress: None,
         },
     ]
 }
@@ -2893,7 +2906,10 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // (`text`, `toggle`, `cycle`); de vuelta, `dialog_field` con
     // `DialogFieldValue`. Ausente y vacío = el diálogo de siempre, así que un
     // diálogo sin formulario sigue cruzando byte a byte como en el 90.
-    const FORMA: u64 = 16_756_752_514_943_338_322;
+    //
+    // 92 (ADR 0146): `StatusItemView.progress`, con `StatusProgressView`
+    // (`percent`, `phase`). Ausente en los demás items, que cruzan como en 91.
+    const FORMA: u64 = 4_364_103_568_922_771_759;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {

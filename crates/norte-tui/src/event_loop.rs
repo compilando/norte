@@ -590,14 +590,25 @@ pub async fn run(
         // Abre SIN llevarse el teclado —el lector está en su listado— y solo
         // cierra lo que abrió él: un panel que abrió una persona se queda.
         if app.chrome.processes_panel() == norte_config::load::ProcessesPanel::Auto {
-            // Solo TRABAJO abre el panel: una búsqueda tiene su propia lista
-            // y no se gana medio tercio de pantalla (`counts_as_work`).
+            // Solo TRABAJO que DURA abre el panel (ADR 0146): una búsqueda
+            // tiene su propia lista, y una copia que acaba en un segundo la
+            // cuenta la barra de estado sin quitarle un tercio al listado.
+            //
+            // CIERRA como siempre, cuando no queda ninguna fila de trabajo:
+            // así se ve terminada la que tardó.
+            //
+            // La barra se reanota AQUÍ y no solo en el tic: esta vuelta puede
+            // venir de una tecla, y con la barra del tic anterior el panel se
+            // abriría por una ráfaga que ya acabó y se cerraría en el
+            // siguiente — el parpadeo que todo esto quiere evitar.
+            app.note_strip();
+            let abre = app.strip.wants_panel(app.now_ms());
             let hay_tareas = app
                 .board
                 .rows()
                 .iter()
                 .any(|r| norte_frontend::tasks::counts_as_work(r.last.kind));
-            if hay_tareas && app.processes_slot().is_none() {
+            if abre && app.processes_slot().is_none() {
                 app.open_processes(false);
                 app.processes_auto = true;
             } else if !hay_tareas && app.processes_auto {

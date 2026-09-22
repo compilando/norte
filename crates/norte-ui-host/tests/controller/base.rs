@@ -1931,7 +1931,8 @@ fn hay_procesos(snap: &norte_ui_host::ViewSnapshot) -> bool {
         .any(|s| matches!(s, SlotView::Processes { .. }))
 }
 
-/// El panel de procesos se abre solo al ENCOLAR y se va cuando la fila caduca.
+/// El panel de procesos se abre solo cuando el trabajo DURA (ADR 0146) y se
+/// va cuando la fila caduca.
 ///
 /// Las dos mitades del gesto, y la segunda es la que faltaba: el host solo
 /// reevaluaba desde `progreso`, y cuando la última fila caduca ya no llega
@@ -1972,6 +1973,19 @@ async fn el_panel_de_procesos_se_abre_solo_y_se_cierra_al_caducar_la_fila() {
     // entera, y hacerlo al encolar la mete en medio de cada operación que el
     // lector acaba de pedir—; está escrito en el ADR 0115.
     tx.send_modify(|p| p.bytes_done = 1);
+    // Antes de que la ráfaga DURE, el panel no se abre (ADR 0146): una
+    // copia que acaba en un segundo la cuenta la barra de estado.
+    assert!(
+        !hay_procesos(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await),
+        "una ráfaga recién empezada no abre el panel"
+    );
+    tokio::time::advance(std::time::Duration::from_millis(
+        u64::try_from(norte_frontend::task_strip::PANEL_MS).expect("positivo") + 100,
+    ))
+    .await;
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
     // HASTA que aparezca, no en la primera foto: el progreso viaja por el
     // buzón del actor y el `Resync` entra en ese mismo buzón, así que
     // afirmar sobre «la siguiente» sería afirmar sobre la que llegue antes.
@@ -1982,7 +1996,7 @@ async fn el_panel_de_procesos_se_abre_solo_y_se_cierra_al_caducar_la_fila() {
             break;
         }
     }
-    assert!(abierto, "se abrió solo en cuanto hubo trabajo en marcha");
+    assert!(abierto, "se abrió solo cuando el trabajo ya duraba");
 
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     // Otra vez HASTA, no «la siguiente»: el bucle de arriba dejó un `Resync`
@@ -2023,6 +2037,110 @@ async fn el_panel_de_procesos_se_abre_solo_y_se_cierra_al_caducar_la_fila() {
         "y se cerró solo cuando la última fila caducó: un panel que se abre \
          solo y no se cierra nunca ocupa un tercio de la pantalla para decir \
          que no pasa nada"
+    );
+}
+
+/// ADR 0146: una copia que acaba antes del umbral no abre el panel NI pinta
+/// la barra, pero deja el «✓» en el item de tareas; y el «✓» se va solo.
+#[tokio::test(start_paused = true)]
+async fn una_tarea_rapida_deja_el_hecho_y_no_abre_el_panel() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    assert_eq!(siguientes_tasks(&mut sub).await.len(), 1);
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    let tareas =
+        |s: &norte_ui_host::ViewSnapshot| s.status_items.iter().find(|i| i.id == "tasks").cloned();
+    let mut hecho = None;
+    for _ in 0..6 {
+        let foto = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
+        assert!(!hay_procesos(&foto), "una copia rápida no abre el panel");
+        if let Some(t) = tareas(&foto) {
+            hecho = Some(t);
+            break;
+        }
+    }
+    let hecho = hecho.expect("el item de tareas dice que acabó");
+    assert!(hecho.text.starts_with('✓'), "{:?}", hecho.text);
+    assert!(hecho.progress.is_none(), "un ✓ no lleva barra");
+
+    tokio::time::advance(std::time::Duration::from_millis(
+        u64::try_from(norte_frontend::task_strip::HECHO_MS).expect("positivo") + 100,
+    ))
+    .await;
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    let mut ido = false;
+    for _ in 0..6 {
+        if tareas(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await).is_none() {
+            ido = true;
+            break;
+        }
+    }
+    assert!(ido, "y el ✓ se va solo");
+}
+
+/// ADR 0146: tras un relevo del daemon, el trabajo del ANTERIOR no deja la
+/// barra en marcha ni el panel automático abierto para siempre: esas tasks
+/// no van a terminar nunca, porque ya no hay nadie que las termine.
+#[tokio::test(start_paused = true)]
+async fn un_relevo_no_deja_la_barra_ni_el_panel_colgados() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let (evtx, evrx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.eventos.lock().expect("eventos") = Some(evrx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    let _p = inyectar_task_de(&tx, 7, norte_proto::TaskKind::Copy);
+    siguientes_tasks(&mut sub).await;
+    tokio::time::advance(std::time::Duration::from_millis(
+        u64::try_from(norte_frontend::task_strip::PANEL_MS).expect("positivo") + 100,
+    ))
+    .await;
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    let mut abierto = false;
+    for _ in 0..6 {
+        if hay_procesos(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await) {
+            abierto = true;
+            break;
+        }
+    }
+    assert!(abierto, "el trabajo que dura abre el panel");
+
+    evtx.send(norte_client::ConnEvent::GoingAway { reconnect: true })
+        .expect("el host escucha");
+    evtx.send(norte_client::ConnEvent::Restored)
+        .expect("el host escucha");
+    let mut limpio = false;
+    for _ in 0..8 {
+        let foto = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
+        if !hay_procesos(&foto) && foto.status_items.iter().all(|i| i.id != "tasks") {
+            limpio = true;
+            break;
+        }
+    }
+    assert!(
+        limpio,
+        "la task del daemon anterior no mantiene ni el panel ni la barra"
     );
 }
 

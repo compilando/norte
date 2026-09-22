@@ -1063,6 +1063,8 @@ impl Estado {
     pub(super) fn cambio_de_conexion(
         &mut self,
         ev: norte_client::ConnEvent,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let (vista, clave) = match ev {
             norte_client::ConnEvent::Restored => (ConnectionView::Connected, "msg-daemon-restored"),
@@ -1100,6 +1102,9 @@ impl Estado {
         if matches!(ev, norte_client::ConnEvent::Restored) {
             self.aviso_de_daemon = None;
             self.epoca_conexion = self.epoca_conexion.saturating_add(1);
+            // La barra ligera deja de contar el trabajo del daemon anterior
+            // (ADR 0146): sin esto su ráfaga no se cerraría nunca.
+            self.anotar_tira(buzon);
             // «Ir a» (#357): lo que conteste el daemon ANTERIOR —sus conexiones,
             // su índice— ya no es de este. Una apertura nueva lo invalida.
             self.gen_ir_a = self.gen_ir_a.saturating_add(1);
@@ -1113,13 +1118,16 @@ impl Estado {
             }
         }
         self.conexion = vista.clone();
+        // Y el panel que se abrió solo por ese trabajo se cierra.
+        let mut envios = self.procesos_automaticos(backend, buzon);
         let banners = self.cambio_de_banners();
         let parche = self.parche(vec![ViewChange::Connection(vista), banners]);
         let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
             key: clave.to_owned(),
             detail: None,
         }));
-        vec![parche, aviso]
+        envios.extend([parche, aviso]);
+        envios
     }
 
     /// Una sesión de provider viaja sin cifrar (#44): se apunta y se dice.

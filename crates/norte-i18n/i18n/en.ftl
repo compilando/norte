@@ -578,6 +578,24 @@ status-item-marks-tip = What is marked in this pane
 status-item-sort-tip = Order of the listing. Click to change it
 status-item-encoding-tip = How names are read. Click to reinterpret them
 status-item-tasks-tip = { $n } tasks running. Click to see the jobs
+
+## The light progress bar (ADR 0146)
+strip-running-copy = copying
+strip-running-move = moving
+strip-running-delete = deleting
+strip-running-other = working on
+strip-done-copy = copied
+strip-done-move = moved
+strip-done-delete = deleted
+strip-done-other = done
+strip-done-many = { $n ->
+    [one] 1 done
+   *[other] { $n } done
+}
+strip-failed = { $n ->
+    [one] 1 failed
+   *[other] { $n } failed
+}
 status-item-notices-tip = { $n } unread notices. Click to open the log
 # An item contributed by a plugin (ADR 0137): whose it is and which column.
 status-item-plugin-tip = From plugin { $plugin }, column { $column }, for the entry under the cursor

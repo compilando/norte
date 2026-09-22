@@ -620,6 +620,9 @@ pub struct App {
     pub session: SessionUi,
     /// Panel de tasks vivo.
     pub board: crate::tasks::TaskBoard,
+    /// La barra de progreso ligera del item `tasks` (ADR 0146): sigue al
+    /// tablero en cada tic, con el reloj del pintado.
+    pub strip: norte_frontend::task_strip::TaskStrip,
     /// Viewer abierto (F3); None = navegando.
     pub viewer: Option<crate::viewer::Viewer>,
     /// La miniatura pedida para [`Self::viewer`], si se pidió una (fase 5
@@ -1317,6 +1320,7 @@ impl App {
             notices_unread: 0,
             session: SessionUi::default(),
             board: crate::tasks::TaskBoard::default(),
+            strip: norte_frontend::task_strip::TaskStrip::default(),
             viewer: None,
             viewer_imagen: None,
             viewer_miniatura_ajena: None,
@@ -1598,6 +1602,23 @@ impl App {
     /// distintos, y el que tardara más se leería como que el terminal va más
     /// lento que la ventana.
     pub const SPLASH_BRIEF_MS: i64 = norte_frontend::splash::BRIEF_MS;
+
+    /// Le enseña el tablero a la barra de progreso ligera (ADR 0146), con
+    /// el reloj del pintado.
+    pub fn note_strip(&mut self) {
+        let ahora = self.now_ms();
+        self.strip.update(
+            ahora,
+            self.board
+                .rows()
+                .iter()
+                .map(|r| norte_frontend::task_strip::StripTask {
+                    progress: &r.last,
+                    operand: r.operand.as_ref(),
+                    bps: r.rate.bps(),
+                }),
+        );
+    }
 
     /// El reloj del pintado.
     #[must_use]
