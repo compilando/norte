@@ -113,9 +113,9 @@ no lo consulta. Y `norte-cli` no expone búsqueda ninguna.
 
 **Resuelto hoy** (ADR 0128): sale por defecto en `file` y `sftp`.
 **Ordenar** por ella y por cualquier atributo: resuelto (ADR 0144).
-Sigue faltando **dueño/grupo** por nombre: `posix.uid` y
-`posix.gid` existen como atributos crudos, sin resolver a nombre, y no hay
-columna. Para SFTP hace falta el `longname` crudo (#114, ya abierta).
+**Dueño/grupo** por nombre en disco local: resuelto (ADR 0145, columnas
+`posix.owner` y `posix.group`). Para SFTP sigue haciendo falta el `longname`
+crudo (#114, ya abierta).
 
 ### 2.4 Lo demás de Krusader
 

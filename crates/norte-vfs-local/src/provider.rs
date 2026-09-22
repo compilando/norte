@@ -568,6 +568,11 @@ fn catalogo_local() -> &'static [norte_proto::AttrInfo] {
             mk("posix.mode", "Mode", AttrType::Uint, AttrHint::Mode),
             mk("posix.uid", "UID", AttrType::Uint, AttrHint::Identity),
             mk("posix.gid", "GID", AttrType::Uint, AttrHint::Identity),
+            // Los NOMBRES (ADR 0145): bytes, porque POSIX no obliga a que un
+            // nombre de usuario sea UTF-8. Cuestan una pregunta a NSS por id
+            // distinto, así que solo se resuelven si se piden.
+            mk("posix.owner", "Owner", AttrType::Bytes, AttrHint::Identity),
+            mk("posix.group", "Group", AttrType::Bytes, AttrHint::Identity),
             mk("posix.nlink", "Links", AttrType::Uint, AttrHint::Opaque),
             mk(
                 "posix.ctime_ms",
@@ -626,6 +631,19 @@ fn attrs_from_md(
         }
         if req.wants("posix.gid") {
             out.insert("posix.gid".to_owned(), AttrValue::Uint(u64::from(md.gid())));
+        }
+        // Sin nombre (un uid huérfano, un NSS caído) la celda queda en
+        // blanco: inventar el número en su lugar sería decir otra cosa, y
+        // para eso ya están `posix.uid` y `posix.gid`.
+        if req.wants("posix.owner")
+            && let Some(n) = crate::identidad::usuario(md.uid())
+        {
+            out.insert("posix.owner".to_owned(), AttrValue::Bytes(n));
+        }
+        if req.wants("posix.group")
+            && let Some(n) = crate::identidad::grupo(md.gid())
+        {
+            out.insert("posix.group".to_owned(), AttrValue::Bytes(n));
         }
         if req.wants("posix.nlink") {
             out.insert("posix.nlink".to_owned(), AttrValue::Uint(md.nlink()));

@@ -71,6 +71,19 @@ uno con los suyos. Mira «Ordenar» más abajo.
 
 > 💡 Una columna de plugin se rellena de forma asíncrona, con el listado ya en pantalla. Aparece un instante después en un provider lento, y si el listado cambia por debajo se descarta lo que había en vez de enseñar un valor que era del directorio anterior.
 
+# Dueño y grupo
+
+`attr:posix.owner` y `attr:posix.group` enseñan el dueño y el grupo por
+**nombre**, como `ls -l`; `attr:posix.uid` y `attr:posix.gid`, por número.
+No vienen puestas: enciéndelas en el selector. El nombre se le pregunta al
+sistema, que puede estar preguntándoselo a un servidor de directorio, así que
+solo se resuelve si la columna está a la vista, y una vez por dueño y minuto.
+Un fichero cuyo dueño ya no existe deja la celda del nombre en blanco: el
+número sigue en su columna.
+
+Por ahora solo en este disco. Por SSH llegan los números; los nombres esperan
+a que norte lea la línea larga del servidor.
+
 # Formatos
 
 El tamaño y la fecha se pueden escribir de más de una manera —bytes o unidades

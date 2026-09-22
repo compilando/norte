@@ -71,6 +71,19 @@ drawn, so `rwxr-xr-x` and `rw-r--r--` each land with their own kind. See
 
 > 💡 A plugin column is filled asynchronously, after the listing is already on screen. It appears a moment later on a slow provider, and a listing that changes underneath it drops what it had rather than showing a value that belongs to the previous directory.
 
+# Owner and group
+
+`attr:posix.owner` and `attr:posix.group` show the owner and group by
+**name**, as `ls -l` does; `attr:posix.uid` and `attr:posix.gid` by number.
+They are not on by default: turn them on in the picker. The name is asked of
+the system, which may be asking a directory server, so it is only resolved
+while the column is showing, and once per owner per minute. A file whose owner
+no longer exists leaves the name cell blank: the number is still in its
+column.
+
+Local disks only, for now. Over SSH the numbers arrive; the names wait until
+norte reads the server's long listing line.
+
 # Formats
 
 Size and time can be written more than one way — bytes or IEC units, absolute

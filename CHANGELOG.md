@@ -9,6 +9,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Owner and group by name** (ADR 0145). Two new local columns,
+  `attr:posix.owner` and `attr:posix.group`, show names as `ls -l` does,
+  resolved through the C library (so LDAP/SSSD names too) only while the
+  column is showing, and cached per id for a minute. Off by default; SFTP
+  still shows numbers only (#114).
 - **Attribute columns sort** (ADR 0144). Clicking the permissions, UID or GID
   header — or any `attr:` column — sorts by the value, not the drawn text,
   in both frontends; entries without the attribute go last in both
