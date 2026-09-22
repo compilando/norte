@@ -16,6 +16,9 @@ commands = [
     "task.cancel",
     "task.pause",
     "task.retry",
+    "task.queue",
+    "task.up",
+    "task.down",
     "task.retry",
     "dialog.overwrite",
     "dialog.skip",
@@ -126,6 +129,18 @@ again, you are asked again, as the first time.
 And in the window, while something is arriving into a pane, its bottom border
 carries a thin line that fills: it says work is landing there without taking
 a row from the listing.
+
+# The queue: one at a time
+
+Four copies to the same disk at once are slower than four in a row, and on a
+spinning disk much slower. {{cmd:task.queue}} sends the transfers you start
+from that moment to the **queue**: one at a time, in the order they entered.
+Press it again and the next ones run in parallel again; whatever was already
+queued stays in its queue.
+
+What has not started yet can be reordered: {{cmd:task.up}} moves the task
+selected in the jobs panel ahead and {{cmd:task.down}} moves it back. The one
+already running does not move — pausing is for that — and you are told so.
 
 # Repeating what failed
 

@@ -16,6 +16,9 @@ commands = [
     "task.cancel",
     "task.pause",
     "task.retry",
+    "task.queue",
+    "task.up",
+    "task.down",
     "task.retry",
     "dialog.overwrite",
     "dialog.skip",
@@ -126,6 +129,18 @@ ocupado, se te vuelve a preguntar como la primera vez.
 Y en la ventana, mientras algo está llegando a un panel, su borde inferior
 lleva una línea fina que se llena: dice que ahí está entrando trabajo sin
 robarle una fila al listado.
+
+# La cola: de una en una
+
+Cuatro copias al mismo disco a la vez son más lentas que cuatro seguidas, y en
+un disco mecánico mucho más. {{cmd:task.queue}} manda a la **cola** las
+transferencias que lances a partir de ese momento: van de una en una, en el
+orden en que entraron. Vuelve a pulsarlo y las siguientes vuelven a ir en
+paralelo; lo que ya estaba encolado sigue en su cola.
+
+Lo que aún no ha empezado se puede reordenar: {{cmd:task.up}} adelanta la
+tarea señalada en el panel de procesos y {{cmd:task.down}} la retrasa. La que
+ya está corriendo no se mueve —para eso está pausarla— y se te dice.
 
 # Repetir lo que falló
 

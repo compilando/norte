@@ -149,3 +149,4 @@ edits.
 | [0146](0146-a-light-progress-bar-in-the-status-bar.md) | A light progress bar in the status bar | accepted |
 | [0147](0147-a-task-can-be-paused.md) | A task can be paused | accepted |
 | [0148](0148-repeating-a-failed-transfer-and-the-thin-line.md) | Repeating a failed transfer, and the thin line | accepted |
+| [0149](0149-a-serial-queue-for-transfers.md) | A serial queue for transfers | accepted |

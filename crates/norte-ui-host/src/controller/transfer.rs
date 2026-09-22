@@ -625,7 +625,9 @@ impl Estado {
         let buzon = buzon.clone();
         tokio::spawn(async move {
             let mensaje = match backend
-                .move_(from, to, norte_proto::CollisionPolicy::Fail)
+                // Un renombrado no se encola: es un solo paso y no mueve
+                // bytes de un sitio a otro.
+                .move_(from, to, norte_proto::CollisionPolicy::Fail, false)
                 .await
             {
                 Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
@@ -674,18 +676,27 @@ impl Estado {
         // una colisión llega asíncrona y encima de lo que el lector esté
         // haciendo, así que leerla al llegar puede dar la de otro sitio.
         let enc = self.hueco().pane.name_encoding();
-        Self::lanzar_transferencia(paths, origen_dir, destino, mover, enc, backend, buzon);
+        Self::lanzar_transferencia(
+            paths,
+            (origen_dir, destino),
+            mover,
+            enc,
+            self.encolar,
+            backend,
+            buzon,
+        );
     }
 
     pub(super) fn lanzar_transferencia(
         paths: &[VPath],
-        origen_dir: &VPath,
-        destino: &VPath,
+        rutas: (&VPath, &VPath),
         mover: bool,
         enc: Option<norte_encoding::NameEncoding>,
+        a_la_cola: bool,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
+        let (origen_dir, destino) = rutas;
         // Los directorios que el desenlace deja desactualizados. En una copia
         // solo el destino; en un movimiento, también de donde sale — y el de
         // origen se toma del HUECO, no del padre de cada entrada: el padre lo
@@ -738,11 +749,11 @@ impl Estado {
                 };
                 let encolada = if mover {
                     backend
-                        .move_(from, to, norte_proto::CollisionPolicy::Fail)
+                        .move_(from, to, norte_proto::CollisionPolicy::Fail, a_la_cola)
                         .await
                 } else {
                     backend
-                        .copy(from, to, norte_proto::CollisionPolicy::Fail)
+                        .copy(from, to, norte_proto::CollisionPolicy::Fail, a_la_cola)
                         .await
                 };
                 let mensaje = match encolada {

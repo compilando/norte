@@ -397,6 +397,7 @@ async fn una_copia_del_host_preserva_los_symlinks_del_origen() {
             vp("mem:///casa/src"),
             vp("mem:///casa/dst"),
             CollisionPolicy::Fail,
+            false,
         )
         .await
         .expect("encola la copia");

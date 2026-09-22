@@ -105,6 +105,7 @@ async fn fs_copy_progresa_hasta_completed() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -147,6 +148,7 @@ async fn task_cancel_por_el_socket_cancela_limpio() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -190,6 +192,7 @@ async fn task_pause_y_resume_por_el_socket() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -253,6 +256,7 @@ async fn el_progreso_se_difunde_a_todos_los_clientes() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -285,6 +289,7 @@ async fn task_list_da_el_snapshot_de_tasks_vivas() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -394,6 +399,7 @@ async fn task_pause_de_agente_no_toca_task_del_humano() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -451,6 +457,7 @@ async fn task_cancel_de_agente_no_toca_task_del_humano() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -495,6 +502,7 @@ async fn task_cancel_de_agente_cancela_la_suya() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -1551,6 +1559,7 @@ async fn la_tarea_de_una_peticion_cuelga_de_su_rpc() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await

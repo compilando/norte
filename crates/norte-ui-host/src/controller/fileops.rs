@@ -556,6 +556,7 @@ impl Estado {
         // Una copia como cualquier otra, con `Fail` y su reintento: si el
         // destino ya tiene lo que va dentro, el lector decide igual que en una
         // transferencia (#274).
+        let a_la_cola = self.encolar;
         Self::lanzar_reintento(
             Reintento {
                 from: raiz,
@@ -566,6 +567,7 @@ impl Estado {
                 enc: self.hueco().pane.name_encoding(),
             },
             norte_proto::CollisionPolicy::Fail,
+            a_la_cola,
             backend,
             buzon,
         );

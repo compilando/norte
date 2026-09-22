@@ -258,6 +258,15 @@ impl TaskObserver {
         self.pauser.set_paused(paused).await
     }
 
+    /// Sube o baja la task en la cola en serie (ADR 0149), si aún no empezó.
+    ///
+    /// # Errors
+    /// `Unsupported` con el scheduler EMBEBIDO: la cola se reordena por el
+    /// daemon, que es quien la tiene.
+    pub async fn mover_en_cola(&self, up: bool) -> Result<(), Error> {
+        self.pauser.mover_en_cola(up).await
+    }
+
     /// Un asa de pausa clonable, para pedirla desde otra task sin llevarse
     /// el observador entero.
     #[must_use]
@@ -295,6 +304,18 @@ impl TaskPauser {
             }
             #[cfg(unix)]
             Self::Remote(c) => c.set_paused(paused).await,
+        }
+    }
+
+    /// Sube o baja en la cola en serie (ADR 0149).
+    ///
+    /// # Errors
+    /// `Unsupported` con el scheduler embebido.
+    pub async fn mover_en_cola(&self, up: bool) -> Result<(), Error> {
+        match self {
+            Self::Embedded(_) => Err(Error::Unsupported),
+            #[cfg(unix)]
+            Self::Remote(c) => c.mover_en_cola(up).await,
         }
     }
 }
@@ -340,12 +361,14 @@ impl From<crate::engine::TransferOptions> for norte_client::TransferOptions {
             symlinks,
             resume,
             verify,
+            queued,
         } = o;
         Self {
             on_collision,
             symlinks,
             resume,
             verify,
+            queued,
         }
     }
 }

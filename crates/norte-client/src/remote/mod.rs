@@ -1068,6 +1068,8 @@ impl RemoteBackend {
                         resume: opts.resume,
                         verify: opts.verify,
                         dest_anchor,
+                        // A la cola si se pidió (ADR 0149).
+                        queued: opts.queued,
                     },
                 )
                 .await?
@@ -1083,6 +1085,8 @@ impl RemoteBackend {
                         resume: opts.resume,
                         verify: opts.verify,
                         dest_anchor,
+                        // A la cola si se pidió (ADR 0149).
+                        queued: opts.queued,
                     },
                 )
                 .await?
@@ -1986,6 +1990,27 @@ impl RemoteBackend {
         };
         let params = methods::TaskPauseParams { task_id: id };
         let call = client.call::<_, methods::TaskPauseResult>(method, &params);
+        match tokio::time::timeout(CALL_TIMEOUT, call).await {
+            Ok(Err(ClientError::Rpc(ref rpc)))
+                if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+            {
+                Err(Error::Unsupported)
+            }
+            Ok(res) => res.map(|_| ()).map_err(to_taxonomy),
+            Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+        }
+    }
+
+    /// `task.move` (0.83.0, ADR 0149): sube o baja en la cola en serie una
+    /// task que aún no empezó.
+    ///
+    /// # Errors
+    /// `Unsupported` contra un daemon sin el método; lo que responda el
+    /// daemon en otro caso.
+    pub(crate) async fn mover_en_cola(&self, id: TaskId, up: bool) -> Result<(), Error> {
+        let client = self.client().await?;
+        let params = methods::TaskMoveParams { task_id: id, up };
+        let call = client.call::<_, methods::TaskMoveResult>(methods::TASK_MOVE, &params);
         match tokio::time::timeout(CALL_TIMEOUT, call).await {
             Ok(Err(ClientError::Rpc(ref rpc)))
                 if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>

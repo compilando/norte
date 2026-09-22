@@ -220,6 +220,10 @@ msg-pause-unsupported = this daemon cannot pause tasks: update it to be able to
 msg-pause-not-this = this task cannot be paused: only copy, move and delete can
 msg-retrying = repeating the transfer…
 msg-no-retry = there is no failed transfer to repeat
+msg-queue-on = transfers you start now go to the queue: one at a time
+msg-queue-off = transfers you start now run in parallel
+msg-queued-moved = moved in the queue
+msg-queued-not-moved = it does not move there: it is already running, or already first
 msg-no-tasks = no running tasks
 msg-task-finished = that task already finished
 msg-error = error: { $error }
@@ -1469,6 +1473,9 @@ help-cmd-pane-select-drive-right = pick a drive for the RIGHT pane
 help-cmd-task-cancel = cancel the selected task, or the most recent one
 help-cmd-task-pause = pause the selected task, or the most recent one; resume it if it is already paused
 help-cmd-task-retry = repeat the transfer that failed, with the same options
+help-cmd-task-queue = send the transfers you start from now to the queue, or stop doing it
+help-cmd-task-up = move the selected task up the queue
+help-cmd-task-down = move it down
 # G3c: GUI-only commands (no TUI equivalent — its multi-select/task strip
 # use different bindings) surfaced now that the GUI's command palette lists
 # `app.palette`/`app.extensions` and needs help text for every GUI command.

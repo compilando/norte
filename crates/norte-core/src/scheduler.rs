@@ -75,6 +75,26 @@ impl PauseGate {
     }
 }
 
+/// Por dónde entra una task: en paralelo —hasta cuatro por scheme— o a la
+/// COLA, donde van de una en una (ADR 0149).
+///
+/// La cola es UNA y global, no una por dispositivo: es la de Total Commander
+/// y la de Krusader, y es la que se puede explicar. Cuatro copias al mismo
+/// disco mecánico son más lentas que cuatro seguidas, y esa es toda la
+/// razón por la que existe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Lane {
+    /// Hasta cuatro por scheme, como siempre.
+    #[default]
+    Paralelo,
+    /// De una en una, en el orden en que entraron.
+    Cola,
+}
+
+/// La clave de la cola en serie. No es un scheme y no puede serlo: si lo
+/// fuera, un provider llamado así compartiría hueco con ella.
+const COLA: &str = "\u{0}cola";
+
 /// Contexto que recibe el cuerpo de una task: cancelación cooperativa
 /// (chequéala en el inner loop, regla dura 3), pausa y emisor de progreso.
 pub struct TaskCtx {
@@ -191,6 +211,7 @@ impl TaskHandle {
 }
 
 struct QueuedJob {
+    id: TaskId,
     priority: Priority,
     seq: u64,
     body: TaskBody,
@@ -293,8 +314,25 @@ impl Scheduler {
     /// # Panics
     /// Nunca en la práctica: solo por envenenamiento de un lock interno
     /// (otro hilo panicó con él tomado), que ya sería un bug del core.
+    #[must_use]
     pub fn submit(
         &self,
+        provider_key: &str,
+        kind: TaskKind,
+        priority: Priority,
+        actor: crate::journal::Actor,
+        body: TaskBody,
+    ) -> TaskHandle {
+        self.submit_en(Lane::Paralelo, provider_key, kind, priority, actor, body)
+    }
+
+    /// Como [`Self::submit`], eligiendo por dónde entra (ADR 0149).
+    ///
+    /// # Panics
+    /// Nunca en la práctica: solo por envenenamiento de un lock interno.
+    pub fn submit_en(
+        &self,
+        lane: Lane,
         provider_key: &str,
         kind: TaskKind,
         priority: Priority,
@@ -328,11 +366,15 @@ impl Scheduler {
             // humano, `Agent{session}` en el agéntico. Alimenta el journal.
             actor,
         };
-        let queue = self.queue_for(provider_key);
+        let queue = match lane {
+            Lane::Paralelo => self.queue_for(provider_key),
+            Lane::Cola => self.queue_for(COLA),
+        };
         {
             // Invariante: nadie panica con el lock tomado.
             let mut heap = queue.heap.lock().expect("heap lock sano");
             heap.push(QueuedJob {
+                id,
                 priority,
                 seq,
                 body,
@@ -374,11 +416,57 @@ impl Scheduler {
         }
     }
 
+    /// Sube o baja una task que AÚN NO EMPEZÓ dentro de la cola en serie
+    /// (ADR 0149). `false` si ya corría, si no está en la cola, o si ya
+    /// estaba en la punta hacia donde se la mueve.
+    ///
+    /// Reordena por la CLAVE de orden, no por el sitio en el montón: se
+    /// intercambia el `seq` con el vecino, que es lo que decide quién sale
+    /// antes a igual prioridad.
+    ///
+    /// # Panics
+    /// Nunca en la práctica: solo por envenenamiento de un lock interno.
+    #[must_use]
+    pub fn mover_en_cola(&self, id: TaskId, arriba: bool) -> bool {
+        let queue = self.queue_for(COLA);
+        let mut heap = queue.heap.lock().expect("heap lock sano");
+        let mut jobs = std::mem::take(&mut *heap).into_vec();
+        // Por orden de salida: prioridad primero, y a igual prioridad el
+        // `seq` más bajo.
+        jobs.sort_by_key(|j| (std::cmp::Reverse(j.priority), j.seq));
+        let Some(pos) = jobs.iter().position(|j| j.id == id) else {
+            *heap = jobs.into_iter().collect();
+            return false;
+        };
+        let otro = if arriba {
+            pos.checked_sub(1)
+        } else {
+            (pos + 1 < jobs.len()).then_some(pos + 1)
+        };
+        let movido = if let Some(otro) = otro {
+            let (a, b) = (jobs[pos].seq, jobs[otro].seq);
+            jobs[pos].seq = b;
+            jobs[otro].seq = a;
+            true
+        } else {
+            false
+        };
+        *heap = jobs.into_iter().collect();
+        movido
+    }
+
     fn queue_for(&self, provider_key: &str) -> Arc<ProviderQueue> {
         let mut queues = self.inner.queues.lock().expect("queues lock sano");
+        // La cola en serie tiene UN hueco (ADR 0149); lo demás, los permisos
+        // por scheme de siempre.
+        let permisos = if provider_key == COLA {
+            1
+        } else {
+            self.inner.per_provider_permits
+        };
         Arc::clone(queues.entry(provider_key.to_owned()).or_insert_with(|| {
             Arc::new(ProviderQueue {
-                sem: Arc::new(Semaphore::new(self.inner.per_provider_permits)),
+                sem: Arc::new(Semaphore::new(permisos)),
                 heap: Mutex::new(BinaryHeap::new()),
             })
         }))

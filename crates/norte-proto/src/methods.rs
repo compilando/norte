@@ -20,6 +20,7 @@
 //!     resume: Default::default(),
 //!     verify: Default::default(),
 //!     dest_anchor: None,
+//!     queued: false,
 //! };
 //! let wire = serde_json::to_string(&params).unwrap();
 //! let back: FsCopyParams = serde_json::from_str(&wire).unwrap();
@@ -1324,7 +1325,21 @@ use crate::{
 /// el SDK traduce a `Unsupported`: pausar no funciona y se DICE, no se finge.
 /// Un **cliente 0.81 contra un daemon 0.82** no pide pausas, y ve `Paused` en
 /// las tasks que otro cliente pausó — como no terminal, que es lo correcto.
-pub const PROTOCOL_VERSION: &str = "0.82.0";
+///
+/// # 0.83.0 — la cola en serie (`queued`, `task.move`)
+///
+/// [`FsCopyParams::queued`] y [`FsMoveParams::queued`], opcionales: lo
+/// encolado corre de una en una en vez de hasta cuatro a la vez, que en un
+/// disco mecánico es más rápido. Y [`TASK_MOVE`] reordena lo que aún no
+/// empezó (ADR 0149).
+///
+/// Un **cliente 0.83 contra un daemon 0.82**: el daemon ignora `queued`
+/// (ADR 0004) y la transferencia va en paralelo — más lenta en un disco
+/// mecánico, nunca incorrecta—, y `task.move` responde `METHOD_NOT_FOUND`,
+/// que el SDK dice como `Unsupported`. Un **cliente 0.82 contra un daemon
+/// 0.83** no manda `queued`, se lee `false`, y eso es exactamente lo de
+/// 0.82.
+pub const PROTOCOL_VERSION: &str = "0.83.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2161,6 +2176,11 @@ pub const TASK_PAUSE: &str = "task.pause";
 /// `task.resume` — deja seguir una task pausada (0.82.0, ADR 0147). Sobre una
 /// que no está pausada no hace nada. Mismo alcance que [`TASK_PAUSE`].
 pub const TASK_RESUME: &str = "task.resume";
+/// `task.move` — sube o baja una task que AÚN NO EMPEZÓ dentro de la cola en
+/// serie (0.83.0, ADR 0149). Sobre una que ya corre, una que no está en la
+/// cola, o una desconocida, no hace nada: el ack es el mismo. Mismo alcance
+/// por actor que [`TASK_CANCEL`].
+pub const TASK_MOVE: &str = "task.move";
 /// `connection.trust_host_key` — registra una host key SSH en el `known_hosts`
 /// tras confirmación del usuario (flujo TOFU, ADR 0015 D; 0.7.0, fase 6). Se
 /// llama tras un [`Error::HostKeyUnknown`](crate::Error::HostKeyUnknown) y
@@ -2789,6 +2809,13 @@ pub struct FsCopyParams {
     /// ADR 0071 registra para `expected_digest` y que aquí vale igual.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dest_anchor: Option<crate::entry::DirAnchor>,
+    /// A la COLA en vez de en paralelo (0.83.0, ADR 0149): las encoladas
+    /// corren de una en una, en el orden en que entraron. `#[serde(default)]`:
+    /// un cliente N-1 no lo manda y su transferencia va en paralelo, que es
+    /// lo de siempre, y una transferencia que no la pide viaja byte a byte
+    /// como en 0.82.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub queued: bool,
 }
 
 /// Params de [`FS_MOVE`].
@@ -2822,6 +2849,13 @@ pub struct FsMoveParams {
     /// exactamente igual.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dest_anchor: Option<crate::entry::DirAnchor>,
+    /// A la COLA en vez de en paralelo (0.83.0, ADR 0149): las encoladas
+    /// corren de una en una, en el orden en que entraron. `#[serde(default)]`:
+    /// un cliente N-1 no lo manda y su transferencia va en paralelo, que es
+    /// lo de siempre, y una transferencia que no la pide viaja byte a byte
+    /// como en 0.82.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub queued: bool,
 }
 
 /// Params de [`FS_DELETE`].
@@ -7721,6 +7755,28 @@ pub struct TaskPauseParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskPauseResult {}
+
+/// Params de [`TASK_MOVE`] (0.83.0).
+///
+/// ```
+/// use norte_proto::TaskId;
+/// use norte_proto::methods::TaskMoveParams;
+/// let p = TaskMoveParams { task_id: TaskId::new(3), up: true };
+/// assert_eq!(serde_json::to_string(&p).unwrap(), r#"{"task_id":3,"up":true}"#);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskMoveParams {
+    /// Qué task se mueve.
+    pub task_id: TaskId,
+    /// Hacia el principio de la cola (`true`) o hacia el final.
+    pub up: bool,
+}
+
+/// Result de [`TASK_MOVE`]: objeto vacío, reservado para extensión.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskMoveResult {}
 
 /// Params de [`CONNECTION_TRUST_HOST_KEY`] (flujo TOFU, ADR 0015 D). Lleva el
 /// fingerprint que el usuario VERIFICÓ; el core lo compara con la clave que

@@ -1052,6 +1052,21 @@ impl App {
     /// tecla llegara al panel: el `KeyOwner` se ponía y no lo leía nadie, así
     /// que las flechas movían el LISTADO de detrás y F8 abría el diálogo de
     /// borrar sobre su selección (#243).
+    /// La task señalada en el panel de procesos —o la más reciente si ese
+    /// panel no está abierto—, para moverla en la cola (ADR 0149).
+    #[must_use]
+    pub fn processes_selected(&self) -> Option<norte_core::backend::TaskObserver> {
+        let ids = self.board.task_ids();
+        let fila = self
+            .processes_slot()
+            .and_then(|id| self.panes.processes(id))
+            .and_then(|p| p.fila(&ids))
+            .unwrap_or_else(|| ids.len().saturating_sub(1));
+        self.board.task_at(fila)
+    }
+
+    /// Cancela la task señalada en el panel de procesos. `false` si no hay
+    /// panel, no hay fila señalada o esa task ya terminó.
     pub fn processes_cancel(&mut self) -> bool {
         let Some(id) = self.processes_slot() else {
             return false;

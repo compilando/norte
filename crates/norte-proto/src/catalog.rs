@@ -207,6 +207,7 @@ rpc_catalogo! {
     TASK_CANCEL, Request, Direct, methods::TaskCancelParams, methods::TaskCancelResult;
     TASK_PAUSE, Request, Direct, methods::TaskPauseParams, methods::TaskPauseResult;
     TASK_RESUME, Request, Direct, methods::TaskPauseParams, methods::TaskPauseResult;
+    TASK_MOVE, Request, Direct, methods::TaskMoveParams, methods::TaskMoveResult;
     TASK_PROGRESS, Notification, Stream, crate::TaskProgress, ();
     // NOTIFICACIÓN, no petición: va sin id y sin respuesta, y un daemon N-1
     // que no la conozca la descarta en silencio (ADR 0004). Mandarla como

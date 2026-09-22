@@ -1856,6 +1856,7 @@ async fn un_lote_que_nace_terminal_pide_su_informe() {
         progress: prx,
         cancel: Arc::new(|| {}),
         pause: None,
+        cola: None,
         foreign: false,
     })
     .expect("el host escucha");

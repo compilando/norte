@@ -16,6 +16,7 @@ async fn agente_sin_scope_ve_policy_denied_humano_copia() {
         resume: norte_proto::ResumePolicy::default(),
         verify: norte_proto::VerifyPolicy::default(),
         dest_anchor: None,
+        queued: false,
     };
 
     // Agente sin scope: denegado por policy, sin tocar el FS.
@@ -339,6 +340,7 @@ async fn scope_request_grant_abre_la_frontera_y_solo_dentro() {
         resume: norte_proto::ResumePolicy::default(),
         verify: norte_proto::VerifyPolicy::default(),
         dest_anchor: None,
+        queued: false,
     };
     let assert_out_of_scope = |err: ClientError| match err {
         ClientError::Rpc(rpc) => assert!(
@@ -557,6 +559,7 @@ pub(super) fn copy_params(from: &str, to: &str) -> FsCopyParams {
         resume: norte_proto::ResumePolicy::default(),
         verify: norte_proto::VerifyPolicy::default(),
         dest_anchor: None,
+        queued: false,
     }
 }
 
@@ -1137,6 +1140,7 @@ async fn policy_undo_session_revierte_lo_del_agente() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -1724,6 +1728,7 @@ async fn task_list_de_agente_solo_muestra_sus_tasks() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -1741,6 +1746,7 @@ async fn task_list_de_agente_solo_muestra_sus_tasks() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -1830,6 +1836,7 @@ async fn progreso_de_task_humana_no_llega_a_conexiones_agente() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -1923,6 +1930,7 @@ async fn terminales_de_agente_no_desplazan_los_del_humano() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -1942,6 +1950,7 @@ async fn terminales_de_agente_no_desplazan_los_del_humano() {
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
                     dest_anchor: None,
+                    queued: false,
                 },
             )
             .await
@@ -1987,6 +1996,7 @@ async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
                     dest_anchor: None,
+                    queued: false,
                 },
             )
             .await
@@ -2004,6 +2014,7 @@ async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -2022,6 +2033,7 @@ async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await

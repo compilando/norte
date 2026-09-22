@@ -115,6 +115,9 @@ keymap = [
     { on = ["ctrl+k"], run = "task.cancel" },
     { on = ["ctrl+alt+k"], run = "task.pause" },
     { on = ["ctrl+alt+r"], run = "task.retry" },
+    { on = ["ctrl+alt+q"], run = "task.queue" },
+    { on = ["ctrl+alt+up"], run = "task.up" },
+    { on = ["ctrl+alt+down"], run = "task.down" },
     { on = ["f3"], run = "pane.view" },
     # F4 EDITA (#133), que es lo que hace en los cuatro managers que este
     # preset recoge y lo que un lector espera de la tecla. Abrir con el

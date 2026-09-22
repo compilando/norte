@@ -53,6 +53,8 @@ pub struct TransferOptions {
     pub resume: ResumePolicy,
     /// Verificación del parcial al reanudar (solo con `resume=On`).
     pub verify: VerifyPolicy,
+    /// A la COLA en vez de en paralelo (ADR 0149): de una en una.
+    pub queued: bool,
 }
 
 /// Lo que un `sync.plan` va emitiendo.

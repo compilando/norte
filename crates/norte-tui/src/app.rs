@@ -623,6 +623,10 @@ pub struct App {
     /// La barra de progreso ligera del item `tasks` (ADR 0146): sigue al
     /// tablero en cada tic, con el reloj del pintado.
     pub strip: norte_frontend::task_strip::TaskStrip,
+    /// Las transferencias que se lancen van A LA COLA (ADR 0149): de una en
+    /// una. Es de la sesión, no de la configuración: se enciende para un rato
+    /// de mover cosas en un disco mecánico y se apaga después.
+    pub encolar: bool,
     /// Viewer abierto (F3); None = navegando.
     pub viewer: Option<crate::viewer::Viewer>,
     /// La miniatura pedida para [`Self::viewer`], si se pidió una (fase 5
@@ -1321,6 +1325,7 @@ impl App {
             session: SessionUi::default(),
             board: crate::tasks::TaskBoard::default(),
             strip: norte_frontend::task_strip::TaskStrip::default(),
+            encolar: false,
             viewer: None,
             viewer_imagen: None,
             viewer_miniatura_ajena: None,

@@ -375,6 +375,7 @@ impl Bridge {
                     // listado humano detrás. Lo que acota a un agente es su
                     // scope de policy, que es otra cosa y sigue aplicando.
                     dest_anchor: None,
+                    queued: false,
                 },
                 daemon_id,
             )
@@ -391,6 +392,7 @@ impl Bridge {
                     verify: norte_proto::VerifyPolicy::default(),
                     // Sin ancla, por lo mismo que la copia de arriba.
                     dest_anchor: None,
+                    queued: false,
                 },
                 daemon_id,
             )

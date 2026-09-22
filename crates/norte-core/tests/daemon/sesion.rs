@@ -374,6 +374,7 @@ async fn un_relevo_con_una_task_viva_se_rehusa_y_no_toca_nada() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await
@@ -441,6 +442,7 @@ async fn el_socket_se_retira_antes_de_drenar() {
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
                 dest_anchor: None,
+                queued: false,
             },
         )
         .await

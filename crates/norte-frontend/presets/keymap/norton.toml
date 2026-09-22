@@ -72,7 +72,8 @@
 # libre en los siete y lo llevan orthodox, cua y vim; aquí se llega por el
 # menú Ir (F9), donde está el primero.
 #
-# `task.pause` (ADR 0147) y `task.retry` (ADR 0148) se quedan SIN ATAR aquí,
+# `task.pause` (ADR 0147), `task.retry` (ADR 0148) y los tres de la cola
+# (`task.queue`, `task.up`, `task.down`, ADR 0149) se quedan SIN ATAR aquí,
 # igual que `task.cancel`:
 # Norton Commander no tiene operaciones en segundo plano: no hay tecla que transcribir. Los dos se alcanzan desde la paleta.
 

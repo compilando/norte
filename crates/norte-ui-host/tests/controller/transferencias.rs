@@ -104,6 +104,38 @@ async fn dos_paneles_con_destino_aparte_inner(
 /// Fallan DISTINTO, y es deliberado: el espacio se traga el fallo («no lo sé»
 /// se dice callando) y el confinamiento no, porque ahí el silencio SIGNIFICA
 /// «este destino sujeta sus escrituras» y tragárselo sería afirmarlo sin
+/// ADR 0149: el interruptor de la cola decide por dónde entra lo que se
+/// lance DESPUÉS, y eso llega hasta la petición del backend.
+#[tokio::test]
+async fn el_interruptor_de_la_cola_viaja_con_la_transferencia() {
+    let (h, mut sub, backend) = Box::pin(dos_paneles_en_disco(Vec::new(), sin_confinar())).await;
+    marca_los_ficheros(&h, &mut sub, 1).await;
+    // `ctrl+alt+q` en orthodox: el mismo camino que una tecla de verdad.
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "q".to_owned(),
+        ctrl: true,
+        alt: true,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    asentar().await;
+    assert!(
+        *backend.encoladas.lock().expect("encoladas"),
+        "la copia salió pidiendo la cola"
+    );
+}
+
 /// saberlo.
 #[tokio::test]
 async fn el_dialogo_de_copia_avisa_de_espacio_y_de_confinamiento() {

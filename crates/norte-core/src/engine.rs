@@ -38,6 +38,8 @@ pub struct TransferOptions {
     pub resume: ResumePolicy,
     /// Verificación del parcial al reanudar (solo con `resume=On`).
     pub verify: VerifyPolicy,
+    /// A la COLA en vez de en paralelo (ADR 0149): de una en una.
+    pub queued: bool,
 }
 
 /// De dónde sale el journal de un [`Engine`], que desde #177 ya no es siempre
@@ -3248,7 +3250,14 @@ impl Engine {
         let observer = Arc::clone(&self.observer);
         let (from, to) = (from.clone(), to.clone());
         let key = to.scheme().to_owned();
-        Ok(self.sched.submit(
+        // A la cola o en paralelo, según lo pidiera quien la lanzó (ADR 0149).
+        let lane = if opts.queued {
+            crate::scheduler::Lane::Cola
+        } else {
+            crate::scheduler::Lane::Paralelo
+        };
+        Ok(self.sched.submit_en(
+            lane,
             &key,
             TaskKind::Copy,
             Priority::Normal,
@@ -3259,6 +3268,15 @@ impl Engine {
                 })
             }),
         ))
+    }
+
+    /// Sube o baja en la COLA en serie una task que aún no empezó (ADR 0149).
+    ///
+    /// `false` si ya corría, si no estaba en la cola o si ya estaba en la
+    /// punta hacia la que se la mueve.
+    #[must_use]
+    pub fn mover_en_cola(&self, id: norte_proto::TaskId, arriba: bool) -> bool {
+        self.sched.mover_en_cola(id, arriba)
     }
 
     /// Move como Task con las políticas por defecto: rename si mismo
@@ -3329,7 +3347,13 @@ impl Engine {
         let observer = Arc::clone(&self.observer);
         let (from, to) = (from.clone(), to.clone());
         let key = to.scheme().to_owned();
-        Ok(self.sched.submit(
+        let lane = if opts.queued {
+            crate::scheduler::Lane::Cola
+        } else {
+            crate::scheduler::Lane::Paralelo
+        };
+        Ok(self.sched.submit_en(
+            lane,
             &key,
             TaskKind::Move,
             Priority::Normal,

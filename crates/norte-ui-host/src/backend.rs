@@ -34,6 +34,9 @@ pub struct HostTask {
     /// task no se puede pausar desde aquí. Devuelve `Unsupported` contra un
     /// daemon que no sabe pausar, para que la ventana lo diga.
     pub pause: Option<Pausa>,
+    /// Sube (`true`) o baja la task en la cola en serie (ADR 0149), o `None`
+    /// si no se puede desde aquí.
+    pub cola: Option<Pausa>,
     /// La lanzó OTRO cliente de la misma sesión. Se pinta igual y se puede
     /// cancelar igual —es la misma sesión—, pero el tablero lo dice: una
     /// operación que uno no ha pedido y no se distingue de las suyas es una
@@ -45,6 +48,13 @@ pub struct HostTask {
 pub type Pausa = Arc<dyn Fn(bool) -> BoxFuture<'static, Result<(), Error>> + Send + Sync>;
 
 /// La pausa de una task del daemon, por su asa del SDK.
+fn cola_remota(c: norte_client::RemoteTaskCanceller) -> Pausa {
+    Arc::new(move |arriba| {
+        let c = c.clone();
+        Box::pin(async move { c.mover_en_cola(arriba).await })
+    })
+}
+
 fn pausa_remota(c: norte_client::RemoteTaskCanceller) -> Pausa {
     Arc::new(move |pausar| {
         let c = c.clone();
@@ -325,6 +335,7 @@ pub trait HostBackend: Send + Sync + 'static {
         from: VPath,
         to: VPath,
         on_collision: CollisionPolicy,
+        queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
     /// Empaqueta `sources` dentro de un contenedor nuevo, como Task (#132).
@@ -590,6 +601,7 @@ pub trait HostBackend: Send + Sync + 'static {
         from: VPath,
         to: VPath,
         on_collision: CollisionPolicy,
+        queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
     /// El catálogo de plugins descubiertos, con su estado aprobado/activo.
@@ -922,7 +934,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -949,7 +962,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -976,7 +990,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -992,7 +1007,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1008,7 +1024,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1083,7 +1100,8 @@ impl HostBackend for norte_client::RemoteBackend {
                     id: t.id(),
                     progress: t.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
-                    pause: Some(pausa_remota(pausador)),
+                    pause: Some(pausa_remota(pausador.clone())),
+                    cola: Some(cola_remota(pausador)),
                     foreign: true,
                 };
                 if tx.send(task).is_err() {
@@ -1245,7 +1263,8 @@ impl HostBackend for norte_client::RemoteBackend {
                     id: task.id(),
                     progress: task.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
-                    pause: Some(pausa_remota(pausador)),
+                    pause: Some(pausa_remota(pausador.clone())),
+                    cola: Some(cola_remota(pausador)),
                     foreign: false,
                 },
                 rx,
@@ -1276,7 +1295,8 @@ impl HostBackend for norte_client::RemoteBackend {
                     id: task.id(),
                     progress: task.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
-                    pause: Some(pausa_remota(pausador)),
+                    pause: Some(pausa_remota(pausador.clone())),
+                    cola: Some(cola_remota(pausador)),
                     foreign: false,
                 },
                 rx,
@@ -1297,7 +1317,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1334,7 +1355,8 @@ impl HostBackend for norte_client::RemoteBackend {
                     id: task.id(),
                     progress: task.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
-                    pause: Some(pausa_remota(pausador)),
+                    pause: Some(pausa_remota(pausador.clone())),
+                    cola: Some(cola_remota(pausador)),
                     foreign: false,
                 },
                 rx,
@@ -1359,7 +1381,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1370,8 +1393,9 @@ impl HostBackend for norte_client::RemoteBackend {
         from: VPath,
         to: VPath,
         on_collision: CollisionPolicy,
+        queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
-        transferir(self, Verbo::Copiar, from, to, on_collision)
+        transferir(self, Verbo::Copiar, from, to, on_collision, queued)
     }
 
     fn pack(
@@ -1387,7 +1411,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1406,7 +1431,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1444,7 +1470,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1463,7 +1490,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1479,7 +1507,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1550,7 +1579,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1580,7 +1610,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1604,7 +1635,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1641,7 +1673,8 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador)),
+                pause: Some(pausa_remota(pausador.clone())),
+                cola: Some(cola_remota(pausador)),
                 foreign: false,
             })
         })
@@ -1660,8 +1693,9 @@ impl HostBackend for norte_client::RemoteBackend {
         from: VPath,
         to: VPath,
         on_collision: CollisionPolicy,
+        queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
-        transferir(self, Verbo::Mover, from, to, on_collision)
+        transferir(self, Verbo::Mover, from, to, on_collision, queued)
     }
 }
 
@@ -1691,6 +1725,7 @@ fn transferir(
     from: VPath,
     to: VPath,
     on_collision: CollisionPolicy,
+    queued: bool,
 ) -> BoxFuture<'static, Result<HostTask, Error>> {
     let backend = backend.clone();
     // El SDK sigue tomando el método como CADENA, y su cuerpo es
@@ -1711,6 +1746,7 @@ fn transferir(
                 &to,
                 norte_client::TransferOptions {
                     on_collision,
+                    queued,
                     // El resto, el default del wire: preservar symlinks y no
                     // reanudar. Reanudar es una decisión del usuario (ADR
                     // 0012) y esta ventana todavía no tiene dónde tomarla,
@@ -1726,7 +1762,8 @@ fn transferir(
             id: task.id(),
             progress: task.progress(),
             cancel: Arc::new(move || canceller.cancel()),
-            pause: Some(pausa_remota(pausador)),
+            pause: Some(pausa_remota(pausador.clone())),
+            cola: Some(cola_remota(pausador)),
             foreign: false,
         })
     })

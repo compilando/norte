@@ -677,6 +677,9 @@ async fn copy_leaf(
         // propio modo se lleva por delante, no.
         resume: ResumePolicy::Off,
         verify: VerifyPolicy::default(),
+        // Una sincronización no se encola: es UN plan, y sus pasos ya van
+        // en el orden que el plan decidió.
+        queued: false,
     };
     let before = ctx.progress.snapshot().bytes_done;
     let observer: Arc<dyn crate::observer::MutationObserver> = Arc::new(NoopObserver);

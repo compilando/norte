@@ -74,6 +74,8 @@ pub(super) struct TaskViva {
     pub(super) cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
     /// Cómo pausarla o reanudarla (ADR 0147); `None` si no se puede.
     pub(super) pause: Option<crate::backend::Pausa>,
+    /// Cómo subirla o bajarla en la cola (ADR 0149); `None` si no se puede.
+    pub(super) cola: Option<crate::backend::Pausa>,
     /// Su informe ya se pidió. Lo llevan las clases que TIENEN informe —un
     /// lote de renombrado y un undo— y evita pedirlo dos veces si el daemon
     /// repite el último progreso (una reconexión reanuncia las tasks,
@@ -235,6 +237,7 @@ impl Estado {
     pub(super) fn lanzar_reintento(
         con: Reintento,
         politica: norte_proto::CollisionPolicy,
+        a_la_cola: bool,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
@@ -253,11 +256,11 @@ impl Estado {
         tokio::spawn(async move {
             let encolada = if con.mover {
                 backend
-                    .move_(con.from.clone(), con.to.clone(), politica)
+                    .move_(con.from.clone(), con.to.clone(), politica, a_la_cola)
                     .await
             } else {
                 backend
-                    .copy(con.from.clone(), con.to.clone(), politica)
+                    .copy(con.from.clone(), con.to.clone(), politica, a_la_cola)
                     .await
             };
             let mensaje = match encolada {
@@ -448,6 +451,7 @@ impl Estado {
                 rate: norte_frontend::tasks::Rate::default(),
                 cancel: task.cancel,
                 pause: task.pause,
+                cola: task.cola,
                 afectados,
                 reintento,
                 informe_pedido,
@@ -1474,6 +1478,45 @@ impl Estado {
         (self.aplicada(), self.decir(aviso))
     }
 
+    /// Enciende o apaga la cola en serie para lo que se lance a partir de
+    /// ahora (ADR 0149). Lo ya encolado sigue en su cola.
+    pub(super) fn alternar_cola(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.encolar = !self.encolar;
+        let aviso = if self.encolar {
+            "msg-queue-on"
+        } else {
+            "msg-queue-off"
+        };
+        (self.aplicada(), self.decir(aviso))
+    }
+
+    /// Sube o baja en la cola la tarea señalada del tablero (ADR 0149).
+    ///
+    /// La petición va fuera del actor, como la pausa: lo que de verdad pasó
+    /// se ve en el orden en que salen, y un daemon que no conoce la cola lo
+    /// dice.
+    pub(super) fn mover_en_cola_por_comando(
+        &mut self,
+        arriba: bool,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let id = match self.task_a_cancelar() {
+            Objetivo::Ninguna => return (self.aplicada(), self.decir("msg-no-tasks")),
+            Objetivo::Terminada => return (self.aplicada(), self.decir("msg-task-finished")),
+            Objetivo::Viva(id) => id,
+        };
+        let Some(mando) = self.tasks.get(&id).and_then(|t| t.cola.clone()) else {
+            return (self.aplicada(), self.decir("msg-queued-not-moved"));
+        };
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            if mando(arriba).await.is_err() {
+                let _ = buzon.send(Mensaje::Decir("msg-queued-not-moved")).await;
+            }
+        });
+        (self.aplicada(), self.decir("msg-queued-moved"))
+    }
+
     /// Lo que está llegando a `hueco`, 0–100 (ADR 0148): el porcentaje de la
     /// tarea de TRABAJO viva cuyos directorios afectados incluyen el suyo.
     ///
@@ -1541,7 +1584,13 @@ impl Estado {
         };
         // Con la política que se pidió la primera vez: repetir no es decidir
         // otra cosa, y una colisión vuelve a preguntar como entonces.
-        Self::lanzar_reintento(con, norte_proto::CollisionPolicy::Fail, backend, buzon);
+        Self::lanzar_reintento(
+            con,
+            norte_proto::CollisionPolicy::Fail,
+            self.encolar,
+            backend,
+            buzon,
+        );
         (self.aplicada(), self.decir("msg-retrying"))
     }
 

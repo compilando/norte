@@ -154,6 +154,8 @@ Tres cosas distintas, en orden de valor/coste:
 
 ### 4.2 Cola en serie
 
+(Implementada en la fase C, ADR 0149: protocolo 0.83.0.)
+
 Hoy cuatro copias al mismo disco corren a la vez, y en un disco mecánico eso
 es MÁS lento que una detrás de otra. Total Commander y Krusader lo resuelven
 con un botón «a la cola» en el diálogo de copia.
@@ -167,6 +169,8 @@ con un botón «a la cola» en el diálogo de copia.
   es más lista y más difícil de explicar. Propuesta: global.
 
 ### 4.3 Reordenar
+
+(Implementado en la fase C, ADR 0149.)
 
 Solo tiene sentido en la cola en serie y solo para lo que aún no empezó.
 
