@@ -59,6 +59,11 @@ impl Estado {
                 vec![self.parche(vec![cambio])],
             );
         };
+        // Las hermanas se atienden ANTES de tomar prestado el visor: no lo
+        // mueven, abren OTRO fichero, así que necesitan el estado entero.
+        if let crate::commands::EfectoVisor::Hermana { adelante } = efecto {
+            return self.hermana_del_visor(adelante, backend, buzon);
+        }
         let alto = self.alto_del_visor();
         let Some(v) = self.visor.as_mut() else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
@@ -95,6 +100,11 @@ impl Estado {
             crate::commands::EfectoVisor::Zoom { acercar: true } => v.zoom_in(),
             crate::commands::EfectoVisor::Zoom { acercar: false } => v.zoom_out(),
             crate::commands::EfectoVisor::ZoomAjustar => v.zoom_fit(),
+            // Atendida arriba, ANTES de tomar prestado el visor: abre otro
+            // fichero en vez de mover este, así que aquí no llega. El brazo
+            // existe porque el compilador exige cubrir la variante, y no
+            // hace nada porque no hay nada que mover.
+            crate::commands::EfectoVisor::Hermana { .. } => {}
         }
         // Un PARCHE del visor. La foto entera mandaba, por cada línea de
         // scroll, las filas visibles de todos los listados que hay debajo.
@@ -176,12 +186,26 @@ impl Estado {
                 Vec::new(),
             );
         }
+        self.pedir_visor_de(entrada.path, backend, buzon)
+    }
+
+    /// Lo mismo, pero para una ruta EXPLÍCITA en vez de la fila del cursor.
+    ///
+    /// Existe por las hermanas del visor: `viewer.next` abre una fila que NO
+    /// es la señalada —bajo un filtro de búsqueda rápida, «lo señalado» ni
+    /// siquiera es la fila del cursor—, así que la ruta la trae quien la
+    /// eligió y aquí no se vuelve a resolver.
+    pub(super) fn pedir_visor_de(
+        &mut self,
+        path: VPath,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.token += 1;
         let token = RequestToken(self.token);
         self.visor_en_vuelo = Some(token);
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
-        let path = entrada.path.clone();
         tokio::spawn(async move {
             // Un byte de más que el presupuesto: es lo que delata que el
             // fichero seguía. El resto NO se lee.
@@ -210,6 +234,65 @@ impl Estado {
                 .await;
         });
         (self.aplicada(), Vec::new())
+    }
+
+    /// Abre la hermana siguiente (o anterior) de la misma clase, sin salir.
+    ///
+    /// Tres decisiones que se notan:
+    ///
+    /// - **La fila de partida se busca por RUTA, no por el cursor.** Bajo un
+    ///   filtro de búsqueda rápida «lo señalado» no es la fila del cursor, y el
+    ///   visor pudo abrirse justo desde ahí; preguntarle al cursor daría la
+    ///   hermana de otra fila.
+    /// - **La clase la decide el VISOR**, que la sabe por los bytes que ya leyó
+    ///   ([`norte_frontend::viewer::Viewer::is_image`]): una foto guardada como
+    ///   `.dat` sigue llevando a la foto siguiente.
+    /// - **El cursor se mueve a la hermana**, y por eso al cerrar el visor el
+    ///   listado está donde el lector estaba mirando, no donde entró.
+    fn hermana_del_visor(
+        &mut self,
+        adelante: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(v) = self.visor.as_ref() else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        let quiero = if v.is_image_by_bytes() {
+            norte_frontend::viewer::Clase::Imagen
+        } else {
+            norte_frontend::viewer::Clase::Otro
+        };
+        let abierta = v.path.clone();
+        let pane = &self.hueco().pane;
+        let entries = pane.entries();
+        // Solo por lo que el lector VE: con un filtro vivo, la escalera es la
+        // del filtro y no el listado entero.
+        let visibles = pane.quick_visible();
+        let destino = entries
+            .iter()
+            .position(|e| e.path == abierta)
+            .and_then(|desde| {
+                norte_frontend::viewer::hermana(entries, visibles, desde, adelante, quiero)
+            })
+            .and_then(|i| entries.get(i).map(|e| (i, e.path.clone())));
+        let Some((fila, path)) = destino else {
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "host-no-sibling",
+            )));
+            let cambio = ViewChange::Status(self.status.clone());
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-sibling".to_owned(),
+                },
+                vec![self.parche(vec![cambio])],
+            );
+        };
+        // Un «no hay más» de antes no puede sobrevivir a un salto que SÍ pasó.
+        self.status.message = None;
+        self.hueco_mut().pane.senalar(fila);
+        self.pedir_visor_de(path, backend, buzon)
     }
 
     /// Pide la vista CON ESTILO del fichero del visor a los plugins, sin
@@ -266,12 +349,16 @@ impl Estado {
         }
         let path = actual.path.clone();
         let arriba = actual.scroll;
+        // El veredicto por bytes viaja del visor viejo al nuevo: el estilo
+        // sustituye lo que se PINTA, no lo que el fichero es.
+        let por_bytes = actual.is_image_by_bytes();
         let mut nuevo = norte_frontend::viewer::Viewer::with_plugin_preview_styled(
             path,
             p.plugin_name,
             &p.lines,
             p.lossy,
         );
+        nuevo.set_image_by_bytes(por_bytes);
         // Donde el lector ya estaba: pudo bajar mientras llegaba el estilo.
         // Es la misma FILA, no siempre la misma línea del fichero: un
         // previewer que parte una línea larga en dos mueve lo de debajo.
@@ -313,7 +400,9 @@ impl Estado {
                     bytes.truncate(cap);
                 }
                 let ruta = path.clone();
-                self.visor = Some(match preview {
+                // Por BYTES, antes del previewer: ver `set_image_by_bytes`.
+                let por_bytes = norte_frontend::viewer::image_format(&bytes).is_some();
+                let mut abierto = match preview {
                     // Un previewer aplicó: se enseña LO SUYO. Los bytes ya
                     // leídos no se tiran —hicieron falta para saber que el
                     // fichero se puede leer— pero no se pintan: pintar las
@@ -325,7 +414,9 @@ impl Estado {
                         p.lossy,
                     ),
                     None => norte_frontend::viewer::Viewer::new(path, bytes, truncado),
-                });
+                };
+                abierto.set_image_by_bytes(por_bytes);
+                self.visor = Some(abierto);
                 // Una imagen que la ventana pinta SOLA no pasa por ningún
                 // plugin (ADR 0141): ni la vista con estilo —que la convertía
                 // en arte ANSI y la dejaba sin imagen propia— ni la miniatura.

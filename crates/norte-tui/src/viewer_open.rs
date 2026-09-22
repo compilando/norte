@@ -437,6 +437,102 @@ pub fn viewer_do(app: &mut App, f: impl FnOnce(&mut Viewer)) {
     }
 }
 
+/// Abre la hermana siguiente (o anterior) de la misma clase, sin salir.
+///
+/// Sirve a los DOS visores, como [`viewer_do`], y de la misma forma en los dos
+/// sitios salvo en el remate: con el ACOPLADO basta con mover el cursor —el
+/// preview sigue a la fila señalada y se relee solo en la vuelta siguiente—;
+/// a pantalla completa hay que abrir, porque ahí el visor no sigue a nadie.
+///
+/// La fila de partida se busca por RUTA y no por el cursor: bajo un filtro de
+/// búsqueda rápida «lo señalado» no es la fila del cursor, y el visor pudo
+/// abrirse justo desde ahí.
+pub async fn viewer_sibling(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut crate::console::Console<'_>,
+    adelante: bool,
+) {
+    let acoplado = app.key_owner() == crate::app::KeyOwner::Preview;
+    // Qué hay abierto y de qué clase es. La clase la dicen los BYTES que el
+    // visor ya leyó, no la extensión: una foto guardada como `.dat` sigue
+    // llevando a la foto siguiente.
+    let actual = if acoplado {
+        app.preview_slot()
+            .and_then(|id| app.panes.preview(id))
+            .and_then(|p| {
+                Some((
+                    p.shown()?.clone(),
+                    p.viewer().is_some_and(Viewer::is_image_by_bytes),
+                ))
+            })
+    } else {
+        app.viewer
+            .as_ref()
+            .map(|v| (v.path.clone(), v.is_image_by_bytes()))
+    };
+    let Some((abierta, es_imagen)) = actual else {
+        return;
+    };
+    let quiero = if es_imagen {
+        norte_frontend::viewer::Clase::Imagen
+    } else {
+        norte_frontend::viewer::Clase::Otro
+    };
+    // De qué listado sale la escalera. Con el visor ACOPLADO, del que ese
+    // hueco SIGUE —que no es siempre el del foco—; con el grande, del foco.
+    // Es la misma resolución que usa `preview::want` para decidir qué enseña
+    // el preview, y tiene que serlo: mirar otro listado movería el cursor de
+    // un panel y dejaría el preview exactamente igual que estaba.
+    let seguido = if acoplado {
+        let mut diags = Vec::new();
+        app.preview_slot().and_then(|hueco| {
+            norte_frontend::layout::resolve_follow(&app.layout, hueco, &app.roles, &mut diags)
+                .or_else(|| app.roles.get(norte_frontend::layout::RoleId::Active))
+        })
+    } else {
+        None
+    };
+    let pane = match seguido {
+        Some(id) => app.panes.browser(id),
+        None => Some(app.focused()),
+    };
+    let Some(pane) = pane else {
+        return;
+    };
+    let entries = pane.entries();
+    // Solo por lo que el lector VE: con un filtro vivo la escalera es la suya.
+    let visibles = pane.quick_visible();
+    let destino = entries
+        .iter()
+        .position(|e| e.path == abierta)
+        .and_then(|desde| {
+            norte_frontend::viewer::hermana(entries, visibles, desde, adelante, quiero)
+        })
+        .and_then(|i| entries.get(i).map(|e| (i, e.path.clone())));
+    let Some((fila, path)) = destino else {
+        app.message = Some(t("msg-viewer-no-sibling"));
+        return;
+    };
+    // Un «no hay más» de antes no puede sobrevivir a un salto que SÍ pasó.
+    app.message = None;
+    // `senalar` y no `set_cursor`: con un filtro vivo lo señalado es la
+    // selección del quick, y el acoplado sigue A ESO. Se señala SIEMPRE, que
+    // es lo que hace que el acoplado se entere y lo que deja el listado donde
+    // el lector estaba mirando cuando cierre.
+    match seguido {
+        Some(id) => {
+            if let Some(p) = app.panes.browser_mut(id) {
+                p.senalar(fila);
+            }
+        }
+        None => app.focused_mut().senalar(fila),
+    }
+    if !acoplado {
+        open_viewer(app, backend, events, path).await;
+    }
+}
+
 /// Presupuesto de lectura del viewer: cabecera de 256 KiB (el resto del
 /// archivo NO se lee — rango de ADR 0005; «cargar más» = deuda de M2).
 /// OJO si esto crece (>~1 MiB): `Viewer::recompute` y `rows()` corren en
@@ -510,7 +606,7 @@ pub async fn viewer_for_width(
     // sustituir la vista cruda entera— tenga oportunidad de esconder el
     // formato. Ver el rustdoc de arriba.
     let es_imagen = norte_frontend::viewer::image_format(&bytes).is_some();
-    let viewer = match backend.plugin_preview_styled(path, columns).await {
+    let mut viewer = match backend.plugin_preview_styled(path, columns).await {
         Ok(Some(p)) => {
             Viewer::with_plugin_preview_styled(path.clone(), p.plugin_name, &p.lines, p.lossy)
         }
@@ -525,6 +621,10 @@ pub async fn viewer_for_width(
             Err(_) => Viewer::new(path.clone(), bytes, truncated),
         },
     };
+    // El veredicto por BYTES sobrevive a que un previewer sustituya la vista:
+    // lo que el FICHERO es no cambia porque un plugin haya ganado, y de eso
+    // depende el carrete (`viewer.next`).
+    viewer.set_image_by_bytes(es_imagen);
     let miniatura = if es_imagen && modo == Modo::Kitty {
         // El lado mayor en PÍXELES que cabe en el hueco. Una celda de
         // terminal es aproximadamente 8x16 px y no hay forma portable de

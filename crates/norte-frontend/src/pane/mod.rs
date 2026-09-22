@@ -996,6 +996,47 @@ impl PaneState {
         &self.entries
     }
 
+    /// SEÑALA la entrada `entrada`, sea quien sea el que manda en la selección.
+    ///
+    /// Es la gemela de escritura de «el índice señalado», y existe porque
+    /// [`Self::set_cursor`] NO basta: con un quick search en [`Mode::Filter`]
+    /// vivo, lo señalado es la selección del filtro y el cursor real no se
+    /// mira, así que mover el cursor deja quieto todo lo que sigue a «lo
+    /// señalado» —el visor acoplado, la hoja de atributos— mientras el gesto
+    /// dice que funcionó.
+    ///
+    /// Con filtro se mueve la selección del quick, paso a paso por lo VISIBLE;
+    /// sin filtro, el cursor. Una `entrada` que el filtro no enseña no se
+    /// puede señalar: no se toca nada.
+    pub fn senalar(&mut self, entrada: usize) {
+        let Some(vis) = self.quick_visible() else {
+            self.set_cursor(entrada);
+            return;
+        };
+        let destino = vis.iter().position(|&real| real == entrada);
+        let actual = self
+            .quick()
+            .and_then(QuickSearch::selected_entry_index)
+            .and_then(|real| vis.iter().position(|&r| r == real));
+        let (Some(actual), Some(destino)) = (actual, destino) else {
+            return;
+        };
+        // Sin restas con signo: la dirección es un booleano y la distancia un
+        // conteo, que es justo lo que `quick_down`/`quick_up` consumen.
+        let (adelante, pasos) = if destino >= actual {
+            (true, destino - actual)
+        } else {
+            (false, actual - destino)
+        };
+        for _ in 0..pasos {
+            if adelante {
+                self.quick_down();
+            } else {
+                self.quick_up();
+            }
+        }
+    }
+
     /// A dónde apunta un gesto que adopta el OBJETIVO DEL CURSOR: la carpeta
     /// bajo el cursor si lo es, y si no el directorio de este pane.
     ///

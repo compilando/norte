@@ -192,6 +192,8 @@ keymap = [
     { on = ["f5"], run = "viewer.zoom-out" },
     { on = ["f6"], run = "viewer.zoom-in" },
     { on = ["f7"], run = "viewer.zoom-fit" },
+    { on = ["f8"], run = "viewer.prev" },
+    { on = ["f9"], run = "viewer.next" },
 ]
 
 [dialog]

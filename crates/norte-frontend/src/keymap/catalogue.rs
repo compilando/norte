@@ -403,6 +403,12 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("viewer.zoom-in", false, Inert),
     live("viewer.zoom-out", false, Inert),
     live("viewer.zoom-fit", false, Inert),
+    // Las HERMANAS del listado: pasar a la foto siguiente sin salir del visor.
+    // `Inert` como `pane.view`, que es lo mismo que hacen —abrir para LEER—, y
+    // sin cuenta por el mismo motivo que el zoom: el peldaño ya es la unidad y
+    // pulsar tres veces se ve mientras ocurre.
+    live("viewer.next", false, Inert),
+    live("viewer.prev", false, Inert),
     // --- dialog ---
     live("dialog.confirm", false, Inert),
     live("dialog.cancel", false, Inert),

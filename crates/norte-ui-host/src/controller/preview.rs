@@ -208,7 +208,11 @@ impl Estado {
             if truncado {
                 bytes.truncate(cap);
             }
-            est.viewer = Some(match preview {
+            // Por BYTES, y antes de que un previewer pueda esconder el
+            // formato: de esto depende la clase del carrete (`viewer.next`),
+            // y lo que el fichero ES no cambia porque un plugin haya ganado.
+            let por_bytes = norte_frontend::viewer::image_format(&bytes).is_some();
+            let mut v = match preview {
                 Some(p) => norte_frontend::viewer::Viewer::with_plugin_preview_styled(
                     path.clone(),
                     p.plugin_name,
@@ -216,7 +220,9 @@ impl Estado {
                     p.lossy,
                 ),
                 None => norte_frontend::viewer::Viewer::new(path.clone(), bytes, truncado),
-            });
+            };
+            v.set_image_by_bytes(por_bytes);
+            est.viewer = Some(v);
             est.note = None;
         } else {
             // No se pudo leer: se DICE, en el hueco, en vez de dejar el
@@ -283,6 +289,9 @@ impl Estado {
             let cambio = ViewChange::Layout(self.disposicion());
             return Some((self.aplicada(), vec![self.parche(vec![cambio])]));
         }
+        if let crate::commands::EfectoVisor::Hermana { adelante } = efecto {
+            return Some(self.hermana_del_preview(slot, adelante));
+        }
         let v = self.previews.get_mut(&slot)?.viewer.as_mut()?;
         Self::mover_visor(v, efecto, alto);
         let snap = self.snapshot();
@@ -290,6 +299,83 @@ impl Estado {
             self.aplicada(),
             vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
         ))
+    }
+
+    /// La hermana siguiente (o anterior) en el visor ACOPLADO.
+    ///
+    /// Aquí no se abre nada, y esa es toda la diferencia con el visor grande:
+    /// el acoplado sigue al CURSOR del listado activo
+    /// ([`Self::quiere_preview`]), así que mover el cursor ES pedir el
+    /// fichero siguiente, y la lectura la hace el sondeo de la vuelta
+    /// siguiente, como con cualquier otro movimiento.
+    fn hermana_del_preview(
+        &mut self,
+        slot: u32,
+        adelante: bool,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let est = self.previews.get(&slot);
+        let es_imagen = est
+            .and_then(|e| e.viewer.as_ref())
+            .is_some_and(norte_frontend::viewer::Viewer::is_image_by_bytes);
+        let Some(abierta) = est.and_then(|e| e.shown.clone()) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        let quiero = if es_imagen {
+            norte_frontend::viewer::Clase::Imagen
+        } else {
+            norte_frontend::viewer::Clase::Otro
+        };
+        // El listado del que sale la escalera es el que ESTE preview sigue
+        // ([`Self::quiere_preview`]), que con un hueco atado a un slot no es
+        // el listado activo: leer el activo movería el cursor de otro panel y
+        // dejaría este preview igual que estaba.
+        let mut diags = Vec::new();
+        let seguido = norte_frontend::layout::resolve_follow(
+            &self.arbol,
+            SlotId(slot),
+            &self.roles,
+            &mut diags,
+        )
+        .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active))
+        .map_or_else(|| self.activo(), |SlotId(s)| s);
+        let Some(pane) = self.huecos.get(&seguido).map(|h| &h.pane) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        let entries = pane.entries();
+        // Solo por lo que el lector VE, como en el visor grande.
+        let visibles = pane.quick_visible();
+        let destino = entries
+            .iter()
+            .position(|e| e.path == abierta)
+            .and_then(|desde| {
+                norte_frontend::viewer::hermana(entries, visibles, desde, adelante, quiero)
+            });
+        let Some(fila) = destino else {
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "host-no-sibling",
+            )));
+            let cambio = ViewChange::Status(self.status.clone());
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-sibling".to_owned(),
+                },
+                vec![self.parche(vec![cambio])],
+            );
+        };
+        // Un «no hay más» de antes no puede sobrevivir a un salto que SÍ pasó.
+        self.status.message = None;
+        // `senalar` y no `set_cursor`: con un filtro vivo lo que el preview
+        // sigue es la selección del quick, y mover el cursor real no la mueve
+        // —el panel se quedaría igual mientras la tecla dice que funcionó.
+        if let Some(h) = self.huecos.get_mut(&seguido) {
+            h.pane.senalar(fila);
+        }
+        let snap = self.snapshot();
+        (
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        )
     }
 
     /// Aplica un efecto de visor que NO es cerrar.
@@ -303,7 +389,12 @@ impl Estado {
         // renderer, y `i64::MIN.abs()` desborda.
         let pasos = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
         match efecto {
-            EfectoVisor::Cerrar => {}
+            // Las dos las atiende quien llama, y antes de llegar aquí: cerrar
+            // devuelve el foco al listado, y las hermanas mueven su CURSOR —el
+            // acoplado lo sigue, así que moverlo ES pedir el fichero
+            // siguiente—. En ninguno de los dos casos hay nada que mover en
+            // ESTE visor.
+            EfectoVisor::Cerrar | EfectoVisor::Hermana { .. } => {}
             EfectoVisor::Linea(n) if n < 0 => v.scroll_up(pasos(n)),
             EfectoVisor::Linea(n) => v.scroll_down(pasos(n)),
             EfectoVisor::Pagina(n) if n < 0 => v.scroll_up(pasos(n).saturating_mul(alto)),

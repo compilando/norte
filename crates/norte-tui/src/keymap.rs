@@ -238,6 +238,8 @@ commands! {
     "viewer.zoom-in" => ViewerZoomIn,
     "viewer.zoom-out" => ViewerZoomOut,
     "viewer.zoom-fit" => ViewerZoomFit,
+    "viewer.next" => ViewerNext,
+    "viewer.prev" => ViewerPrev,
     "pane.quick-search" => PaneQuickSearch,
     "pane.history" => PaneHistory,
     "pane.hotlist" => PaneHotlist,

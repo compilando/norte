@@ -239,6 +239,16 @@ keymap = [
     { on = ["f5"], run = "viewer.zoom-out" },
     { on = ["f6"], run = "viewer.zoom-in" },
     { on = ["f7"], run = "viewer.zoom-fit" },
+    # Las hermanas del listado, por lo mismo que el zoom: teclas de función
+    # porque son las que la barra del visor NOMBRA. Van igual en los siete.
+    #
+    # DIVERGENCIA consciente: `f9` es `app.menu` en global, así que dentro del
+    # visor el menú deja de abrirse con esa tecla y se abre con `alt+m`, que ya
+    # lo abre en los siete. Se acepta porque el menú es de la APLICACIÓN y el
+    # visor es una pantalla propia —sus teclas son suyas mientras dura—,
+    # mientras que pasar de foto es justo lo que se quiere hacer ahí.
+    { on = ["f8"], run = "viewer.prev" },
+    { on = ["f9"], run = "viewer.next" },
 ]
 
 [dialog]

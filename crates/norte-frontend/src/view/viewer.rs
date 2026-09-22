@@ -7,7 +7,7 @@
 //! getters de este módulo (`encoding_name`/`eol`/`had_errors`/`is_forced`).
 
 use norte_encoding::{Decoded, Detection, Eol};
-use norte_proto::VPath;
+use norte_proto::{Entry, EntryKind, VPath};
 
 /// Cuántas líneas salta una página (fijo, como en los panes).
 pub const PAGE: usize = 10;
@@ -73,6 +73,188 @@ pub fn image_format(bytes: &[u8]) -> Option<ImageFmt> {
         Some(ImageFmt::Webp)
     } else {
         None
+    }
+}
+
+/// El gemelo por EXTENSIÓN de [`image_format`], y el ÚNICO sitio de este
+/// módulo donde se mira un nombre en vez de unos bytes.
+///
+/// Existe por una razón concreta y acotada: para saber cuál es la hermana
+/// siguiente hay que clasificar candidatas que todavía no se han leído, y
+/// leerlas todas para averiguarlo costaría una lectura —y en un provider
+/// remoto, un viaje— por cada fichero que se descarta. Así que la escalera de
+/// [`hermana`] se recorre por extensión y el MODO del visor lo sigue decidiendo
+/// el contenido, como siempre: una `.jpg` que no lo es se abre igual, y se abre
+/// como lo que de verdad sea.
+///
+/// Las extensiones son exactamente las de los cinco formatos que
+/// [`image_format`] reconoce. Una que no esté aquí no es que no sea una imagen:
+/// es que este visor no sabría pintarla.
+///
+/// Opera sobre bytes crudos (regla 1): parte por el ÚLTIMO `.` a nivel de bytes
+/// y solo valida la EXTENSIÓN como UTF-8, así que un nombre con stem no-UTF8
+/// (`caf\xe9\xff.png`) se clasifica por su extensión igual que cualquier otro.
+///
+/// ```
+/// use norte_frontend::viewer::{ImageFmt, image_format_by_name};
+/// assert_eq!(image_format_by_name(b"foto.JPG"), Some(ImageFmt::Jpeg));
+/// assert_eq!(image_format_by_name(b"notas.md"), None);
+/// assert_eq!(image_format_by_name(b"sin_extension"), None);
+/// ```
+#[must_use]
+pub fn image_format_by_name(name: &[u8]) -> Option<ImageFmt> {
+    let ext = name
+        .iter()
+        .rposition(|&b| b == b'.')
+        .and_then(|dot| std::str::from_utf8(&name[dot + 1..]).ok())
+        .map(str::to_ascii_lowercase);
+    Some(match ext.as_deref()? {
+        "png" => ImageFmt::Png,
+        "jpg" | "jpeg" => ImageFmt::Jpeg,
+        "gif" => ImageFmt::Gif,
+        "bmp" => ImageFmt::Bmp,
+        "webp" => ImageFmt::Webp,
+        _ => return None,
+    })
+}
+
+/// A qué clase pertenece una hermana, que es lo que decide si «siguiente» se
+/// para en ella o la salta.
+///
+/// Dos clases y no más: pasando fotos se quieren fotos, y leyendo un fichero se
+/// quiere el siguiente fichero. Una taxonomía más fina (por mimetype, por
+/// ejemplo) sonaría mejor y se notaría peor — al lector le tocaría adivinar por
+/// qué su `.md` no lleva a su `.txt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Clase {
+    /// Una imagen de las que este visor sabe pintar.
+    Imagen,
+    /// Todo lo demás que se puede abrir: texto, binario, lo que sea.
+    Otro,
+}
+
+/// La clase de un nombre, por extensión. Ver [`image_format_by_name`] para por
+/// qué aquí manda el nombre y no el contenido.
+///
+/// ```
+/// use norte_frontend::viewer::{Clase, clase_por_nombre};
+/// assert_eq!(clase_por_nombre(b"foto.png"), Clase::Imagen);
+/// assert_eq!(clase_por_nombre(b"LEEME"), Clase::Otro);
+/// ```
+#[must_use]
+pub fn clase_por_nombre(name: &[u8]) -> Clase {
+    if image_format_by_name(name).is_some() {
+        Clase::Imagen
+    } else {
+        Clase::Otro
+    }
+}
+
+/// El índice de la hermana SIGUIENTE (o anterior) de la clase pedida, dentro
+/// del listado que el usuario está viendo.
+///
+/// Tres decisiones, y cada una tapa algo que se nota:
+///
+/// - **La clase se PIDE, no se deduce del candidato de partida.** Quien llama
+///   pasa la del visor abierto, que la sabe por sus bytes ([`Viewer::is_image`]),
+///   así que una foto guardada como `.dat` sigue llevando a la foto siguiente.
+/// - **Solo ficheros REGULARES son hermanas.** No es solo que un directorio no
+///   lo sea (que también, fila `..` incluida: entrar en una carpeta ya tiene su
+///   tecla): un enlace o algo que el provider no clasifica tampoco. El visor se
+///   niega a leer «lo que sea» —así es como un preview automático acaba
+///   abriendo un dispositivo de bloque—, así que la escalera no puede llevar a
+///   un fifo llamado `dump.png` que `pane.view` misma no abriría.
+/// - **No envuelve.** Al llegar al final se contesta `None` y quien llama lo
+///   dice; dar la vuelta en silencio deja al lector sin saber que ya las vio
+///   todas, y volviendo a la primera parece que no pasó nada.
+///
+/// - **Solo se pasa por lo que el lector VE.** `visibles` son los índices que
+///   el filtro de la búsqueda rápida deja en pantalla
+///   ([`crate::PaneState::quick_visible`]); `None` = sin filtro, y entonces la
+///   escalera es el listado entero. Sin esto, con un filtro vivo `viewer.next`
+///   abría un fichero que no estaba en la lista que el lector acababa de
+///   reducir — y la ayuda prometía justo lo contrario.
+///
+/// El orden es el del listado TAL COMO SE VE —ya ordenado por quien llama—,
+/// que es la única escalera que el lector puede predecir. `desde` es siempre
+/// un índice de `entries`, filtro o no; si con filtro esa fila no está visible,
+/// no hay escalera que recorrer y la respuesta es `None`.
+///
+/// ```
+/// use norte_frontend::viewer::{Clase, hermana};
+/// use norte_proto::{Entry, EntryKind, VPath};
+///
+/// let fila = |wire: &str, kind| Entry {
+///     attrs: std::collections::BTreeMap::new(),
+///     path: VPath::parse(wire).unwrap(),
+///     kind,
+///     size: None,
+///     mtime_ms: None,
+/// };
+/// let listado = [
+///     fila("mem:///a.jpg", EntryKind::File),
+///     fila("mem:///notas.md", EntryKind::File),
+///     fila("mem:///b.png", EntryKind::File),
+/// ];
+/// // Desde la foto, «siguiente imagen» salta el texto de en medio.
+/// assert_eq!(hermana(&listado, None, 0, true, Clase::Imagen), Some(2));
+/// // Y desde la última no hay más: no se vuelve a la primera.
+/// assert_eq!(hermana(&listado, None, 2, true, Clase::Imagen), None);
+/// // Con un filtro que solo deja la primera, no hay siguiente.
+/// assert_eq!(hermana(&listado, Some(&[0]), 0, true, Clase::Imagen), None);
+/// ```
+#[must_use]
+pub fn hermana(
+    entries: &[Entry],
+    visibles: Option<&[usize]>,
+    desde: usize,
+    adelante: bool,
+    quiero: Clase,
+) -> Option<usize> {
+    let paso = |i: usize| {
+        if adelante {
+            i.checked_add(1)
+        } else {
+            i.checked_sub(1)
+        }
+    };
+    // La misma pregunta para los dos recorridos: solo un fichero regular, y de
+    // la clase pedida. Un índice fuera del listado contesta que no.
+    let vale = |i: usize| {
+        entries.get(i).is_some_and(|e| {
+            e.kind == EntryKind::File
+                && clase_por_nombre(
+                    e.path
+                        .file_name()
+                        .map_or(&[][..], norte_proto::Segment::as_bytes),
+                ) == quiero
+        })
+    };
+    match visibles {
+        // Sin filtro: la escalera son los índices del listado.
+        None => {
+            let mut i = desde;
+            loop {
+                i = paso(i)?;
+                // El tope: sin esto, avanzar más allá del final no terminaría.
+                entries.get(i)?;
+                if vale(i) {
+                    return Some(i);
+                }
+            }
+        }
+        // Con filtro: se anda por POSICIONES dentro de lo visible, y lo que se
+        // devuelve sigue siendo el índice real del listado.
+        Some(vis) => {
+            let mut p = vis.iter().position(|&real| real == desde)?;
+            loop {
+                p = paso(p)?;
+                let &i = vis.get(p)?;
+                if vale(i) {
+                    return Some(i);
+                }
+            }
+        }
     }
 }
 
@@ -221,6 +403,14 @@ pub struct PluginPreviewView {
 }
 
 /// El viewer abierto sobre un archivo.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "hechos independientes del fichero abierto: si se truncó, si se \
+              enseña en hexadecimal, si la decodificación dio errores y si los \
+              BYTES eran de una imagen. No son estados de una máquina —pueden \
+              darse en cualquier combinación— y juntarlos en enums de dos \
+              variantes solo renombraría el mismo booleano"
+)]
 pub struct Viewer {
     /// El archivo mostrado.
     pub path: VPath,
@@ -235,6 +425,16 @@ pub struct Viewer {
     /// imagen: la GUI la pinta ([`Viewer::is_image`]); frontends sin render de
     /// imagen (TUI) caen a hexview (los bytes siguen disponibles vía `rows`).
     image: Option<ImageFmt>,
+    /// Si los BYTES leídos eran los de una imagen, INDEPENDIENTEMENTE de qué
+    /// acabe pintando este visor.
+    ///
+    /// Va aparte de `image` porque `image` contesta «qué estoy pintando» y se
+    /// apaga con un encoding forzado o cuando un previewer de plugin sustituye
+    /// la vista entera; esto contesta «qué ES el fichero», que no cambia por
+    /// ninguna de las dos cosas. Lo fija [`Viewer::new`] y lo traslada
+    /// [`Viewer::set_image_by_bytes`] en los constructores de preview, que no
+    /// reciben bytes.
+    image_bytes: bool,
     /// Encoding forzado por «recargar como…» (None = detección).
     forced: Option<&'static norte_encoding::Encoding>,
     /// Primera línea visible.
@@ -285,6 +485,7 @@ impl Viewer {
             truncated,
             hex: false,
             image: None,
+            image_bytes: false,
             forced: None,
             scroll: 0,
             hscroll: 0,
@@ -306,6 +507,10 @@ impl Viewer {
     pub fn new(path: VPath, bytes: Vec<u8>, truncated: bool) -> Self {
         let mut v = Self::base(path, bytes, truncated);
         v.recompute();
+        // Se fija UNA vez, aquí: `recompute` vuelve a correr al forzar un
+        // encoding y entonces apaga `image`, pero los bytes del fichero son
+        // los mismos y su clase también.
+        v.image_bytes = v.image.is_some();
         v
     }
 
@@ -688,6 +893,33 @@ impl Viewer {
         self.plugin_preview.is_none() && self.image.is_some()
     }
 
+    /// Si los BYTES que se leyeron son los de una imagen, gane quien gane la
+    /// cadena de preview.
+    ///
+    /// Es la pregunta distinta que [`Viewer::is_image`] no contesta: aquél
+    /// dice «este visor está PINTANDO una imagen» y se vuelve `false` en
+    /// cuanto un previewer de plugin sustituye la vista cruda. Para decidir
+    /// la clase de una hermana ([`hermana`]) hace falta saber qué es el
+    /// FICHERO, que no cambia porque un plugin haya ganado — es la misma
+    /// distinción que la TUI ya hacía a mano llamando a [`image_format`]
+    /// sobre los bytes antes de dejar actuar a los previewers.
+    #[must_use]
+    pub fn is_image_by_bytes(&self) -> bool {
+        self.image_bytes
+    }
+
+    /// Traslada el veredicto por bytes a un visor construido SIN ellos.
+    ///
+    /// Los constructores de preview de plugin reciben la salida del plugin y
+    /// nunca el fichero, así que no pueden averiguarlo por su cuenta: quien
+    /// los llama sí tiene los bytes (o el visor anterior) a mano y lo dice
+    /// aquí. Sin esto, abrir una foto con un previewer de imágenes aprobado
+    /// la dejaba clasificada como «no es una imagen», y el carrete de
+    /// [`hermana`] pasaba de largo TODAS las fotos.
+    pub fn set_image_by_bytes(&mut self, si: bool) {
+        self.image_bytes = si;
+    }
+
     /// El formato de imagen reconocido (para la barra de estado), o `None` si
     /// no está en modo imagen. Solo `Some` cuando [`Viewer::is_image`].
     #[must_use]
@@ -903,8 +1135,30 @@ fn hex_rows(bytes: &[u8], scroll: usize, height: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PIXEL_BUDGET, Viewer, image_dimensions};
-    use norte_proto::VPath;
+    use super::{
+        Clase, PIXEL_BUDGET, Viewer, clase_por_nombre, hermana, image_dimensions,
+        image_format_by_name,
+    };
+    use norte_proto::{Entry, EntryKind, VPath};
+
+    /// Una fila de listado con el nombre y la clase que se le piden.
+    fn fila(wire: &str, kind: EntryKind) -> Entry {
+        Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: VPath::parse(wire).unwrap(),
+            kind,
+            size: None,
+            mtime_ms: None,
+        }
+    }
+
+    /// Un listado de ficheros, en el orden en que se escriben.
+    fn listado(nombres: &[&str]) -> Vec<Entry> {
+        nombres
+            .iter()
+            .map(|n| fila(&format!("mem:///{n}"), EntryKind::File))
+            .collect()
+    }
 
     fn vp() -> VPath {
         VPath::parse("file:///f").unwrap()
@@ -1429,5 +1683,127 @@ mod tests {
         assert!(!v.is_forced());
         assert!(!v.had_errors());
         assert!(!v.hex);
+    }
+
+    /// **Pasar fotos pasa fotos.**
+    ///
+    /// Lo que se echaba en falta no era «abrir el siguiente fichero», era no
+    /// tener que salir del visor entre una foto y la siguiente. Un README en
+    /// medio de un carrete no puede interrumpir eso.
+    #[test]
+    fn la_hermana_siguiente_salta_lo_que_no_es_de_su_clase() {
+        let l = listado(&["a.jpg", "notas.md", "b.png", "c.webp"]);
+        assert_eq!(hermana(&l, None, 0, true, Clase::Imagen), Some(2));
+        assert_eq!(hermana(&l, None, 2, true, Clase::Imagen), Some(3));
+        // Y al revés, con la misma regla.
+        assert_eq!(hermana(&l, None, 3, false, Clase::Imagen), Some(2));
+        assert_eq!(hermana(&l, None, 2, false, Clase::Imagen), Some(0));
+        // Leyendo texto se busca texto, y entonces las fotos son lo que sobra.
+        assert_eq!(hermana(&l, None, 1, true, Clase::Otro), None);
+        assert_eq!(hermana(&l, None, 3, false, Clase::Otro), Some(1));
+    }
+
+    /// **No envuelve**: al final se dice que no hay más, en vez de volver a la
+    /// primera y parecer que la tecla no hizo nada.
+    #[test]
+    fn no_envuelve_en_ninguno_de_los_dos_extremos() {
+        let l = listado(&["a.png", "b.png"]);
+        assert_eq!(
+            hermana(&l, None, 1, true, Clase::Imagen),
+            None,
+            "no da la vuelta"
+        );
+        assert_eq!(
+            hermana(&l, None, 0, false, Clase::Imagen),
+            None,
+            "ni hacia atrás"
+        );
+        // Y un índice fuera del listado no es un panic, es «no hay».
+        assert_eq!(hermana(&l, None, 99, true, Clase::Imagen), None);
+        assert_eq!(hermana(&l, None, 99, false, Clase::Imagen), None);
+        assert_eq!(hermana(&[], None, 0, true, Clase::Imagen), None);
+    }
+
+    /// **Un directorio no es una hermana**, y eso incluye la fila `..` que el
+    /// listado lleva delante: entrar en una carpeta tiene su tecla, y no es
+    /// esta.
+    #[test]
+    fn los_directorios_no_son_hermanas_y_eso_incluye_la_fila_padre() {
+        let l = vec![
+            fila("mem:///casa", EntryKind::Dir), // la fila `..`
+            fila("mem:///casa/a.png", EntryKind::File),
+            fila("mem:///casa/fotos", EntryKind::Dir),
+            // Un enlace o un fifo con nombre de foto TAMPOCO: el visor se
+            // niega a leer «lo que sea», y una escalera que avanza sola no
+            // puede llevar a un dispositivo de bloque llamado `dump.png`.
+            fila("mem:///casa/enlace.png", EntryKind::Symlink),
+            fila("mem:///casa/tuberia.png", EntryKind::Other),
+            fila("mem:///casa/b.png", EntryKind::File),
+        ];
+        assert_eq!(
+            hermana(&l, None, 1, true, Clase::Imagen),
+            Some(5),
+            "salta la carpeta, el enlace y el fifo"
+        );
+        assert_eq!(
+            hermana(&l, None, 1, false, Clase::Imagen),
+            None,
+            "y hacia atrás solo queda la fila `..`, que no es una hermana"
+        );
+    }
+
+    /// **La clase la pide quien llama**, que es lo que hace que una foto
+    /// guardada con la extensión equivocada siga llevando a la siguiente foto:
+    /// el visor sabe por sus BYTES que lo que tiene abierto es una imagen,
+    /// aunque el nombre no lo diga.
+    #[test]
+    fn la_clase_la_pide_quien_llama_no_la_extension_de_la_de_partida() {
+        let l = listado(&["carrete.dat", "b.png"]);
+        assert_eq!(
+            hermana(&l, None, 0, true, Clase::Imagen),
+            Some(1),
+            "abierta como imagen por sus bytes, busca imágenes"
+        );
+        assert_eq!(
+            hermana(&l, None, 0, true, Clase::Otro),
+            None,
+            "y la misma fila, leída como texto, no tiene hermanas de texto"
+        );
+    }
+
+    /// La extensión se lee sin distinguir mayúsculas y sobre BYTES (regla 1):
+    /// un stem no-UTF8 con extensión ASCII se clasifica igual que cualquiera.
+    #[test]
+    fn la_extension_manda_en_cualquier_caja_y_sobre_bytes_crudos() {
+        assert_eq!(clase_por_nombre(b"FOTO.JPG"), Clase::Imagen);
+        assert_eq!(clase_por_nombre(b"foto.JpEg"), Clase::Imagen);
+        assert_eq!(clase_por_nombre(b"caf\xe9\xff.png"), Clase::Imagen);
+        assert_eq!(clase_por_nombre(b"sin_extension"), Clase::Otro);
+        assert_eq!(clase_por_nombre(b"archivo.tar.gz"), Clase::Otro);
+        assert_eq!(
+            clase_por_nombre(b".png"),
+            Clase::Imagen,
+            "oculto, pero imagen"
+        );
+        // Una extensión que no es UTF-8 no casa nada.
+        assert_eq!(image_format_by_name(b"x.p\xffg"), None);
+    }
+
+    /// Los cinco formatos que el visor sabe pintar tienen su extensión, y los
+    /// dos reconocedores —bytes y nombre— nombran exactamente el mismo
+    /// conjunto.
+    #[test]
+    fn el_gemelo_por_nombre_cubre_los_cinco_formatos() {
+        use super::ImageFmt;
+        for (nombre, fmt) in [
+            (&b"a.png"[..], ImageFmt::Png),
+            (b"a.jpg", ImageFmt::Jpeg),
+            (b"a.jpeg", ImageFmt::Jpeg),
+            (b"a.gif", ImageFmt::Gif),
+            (b"a.bmp", ImageFmt::Bmp),
+            (b"a.webp", ImageFmt::Webp),
+        ] {
+            assert_eq!(image_format_by_name(nombre), Some(fmt), "{nombre:?}");
+        }
     }
 }
