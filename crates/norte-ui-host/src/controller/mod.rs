@@ -3114,7 +3114,7 @@ impl Estado {
         let mut huecos = std::collections::BTreeMap::new();
         for SlotId(id) in arbol.slot_ids() {
             if es_listado(arbol, SlotId(id), kinds) {
-                huecos.insert(id, Hueco::vacio(dir.clone(), ocultos, orden, subir));
+                huecos.insert(id, Hueco::vacio(dir.clone(), ocultos, orden.clone(), subir));
             }
         }
         huecos

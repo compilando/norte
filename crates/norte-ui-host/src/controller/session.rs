@@ -481,7 +481,7 @@ impl Estado {
             // nadie: la ventana se acordaba de dónde estabas y olvidaba cómo
             // lo estabas mirando, así que ordenar por tamaño o apartar los
             // dotfiles duraba hasta cerrar.
-            hueco.pane.set_sort(estado.sort);
+            hueco.pane.set_sort(estado.sort.clone());
             hueco.pane.set_show_hidden(estado.show_hidden);
             // El CURSOR se guardaba y no lo leía nadie: la ventana volvía al
             // sitio y a la fila `..`. Lo aplica `aterriza_en` cuando lleguen

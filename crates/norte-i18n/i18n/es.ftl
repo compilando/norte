@@ -1371,6 +1371,7 @@ help-cmd-pane-mirror = mandar esta ubicación al otro pane
 help-cmd-pane-sync-nav = navegar los dos paneles a la vez
 msg-sync-nav-on = navegación sincronizada: los dos paneles van juntos
 msg-sync-nav-off = navegación sincronizada apagada
+msg-columns-sort-session-only = columnas guardadas; el orden por atributo vale para esta sesión (norte.toml solo guarda los órdenes con tecla)
 help-cmd-pane-mirror-target = mandar al otro pane la carpeta bajo el cursor
 help-cmd-pane-pull = ir a donde está el otro pane
 help-cmd-pane-swap = intercambiar los dos panes

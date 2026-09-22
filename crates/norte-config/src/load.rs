@@ -290,11 +290,16 @@ pub struct PersistSort<'a> {
 /// # Errors
 /// [`std::io::Error`] si el TOML existente no parsea, un nivel existente de
 /// la cadena no es una tabla (forma inesperada), o falla el I/O.
+///
+/// `sort = None` NO toca la clave `sort` que haya: es lo que se pasa cuando el
+/// orden elegido no tiene forma en este fichero —un orden por ATRIBUTO (ADR
+/// 0144) vale para la sesión, y `[ui] sort` solo nombra built-ins—. Escribir
+/// `name` en su lugar pisaría en silencio lo que el lector tenía guardado.
 pub fn persist_columns(
     dir: &std::path::Path,
     scheme: Option<&str>,
     ids: &[String],
-    sort: PersistSort<'_>,
+    sort: Option<PersistSort<'_>>,
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     // #116: lock ANTES de leer — el RMW entero es la sección crítica.
@@ -323,14 +328,16 @@ pub fn persist_columns(
         list_key,
         toml_edit::Item::Value(toml_edit::Value::Array(arr)),
     );
-    let mut sort_tbl = toml_edit::InlineTable::new();
-    sort_tbl.insert("column", sort.column.into());
-    sort_tbl.insert("dir", if sort.descending { "desc" } else { "asc" }.into());
-    sort_tbl.insert("dirs_first", sort.dirs_first.into());
-    t.insert(
-        "sort",
-        toml_edit::Item::Value(toml_edit::Value::InlineTable(sort_tbl)),
-    );
+    if let Some(sort) = sort {
+        let mut sort_tbl = toml_edit::InlineTable::new();
+        sort_tbl.insert("column", sort.column.into());
+        sort_tbl.insert("dir", if sort.descending { "desc" } else { "asc" }.into());
+        sort_tbl.insert("dirs_first", sort.dirs_first.into());
+        t.insert(
+            "sort",
+            toml_edit::Item::Value(toml_edit::Value::InlineTable(sort_tbl)),
+        );
+    }
     write_config_file(&lock, &doc)?;
     Ok(path)
 }
@@ -4464,11 +4471,11 @@ mod persist_columns_tests {
                 "mtime".to_owned(),
                 "attr:posix.mode".to_owned(),
             ],
-            PersistSort {
+            Some(PersistSort {
                 column: "mtime",
                 descending: true,
                 dirs_first: true,
-            },
+            }),
         )
         .expect("escritura");
         // La hoja se emite EXPLÍCITA (un `[ui.columns]` legible), no como
@@ -4515,11 +4522,11 @@ mod persist_columns_tests {
             dir.path(),
             None,
             &["name".to_owned(), hostil.to_owned()],
-            PersistSort {
+            Some(PersistSort {
                 column: "name",
                 descending: false,
                 dirs_first: true,
-            },
+            }),
         )
         .expect("escritura");
         let layers = Layers {
@@ -4552,11 +4559,11 @@ mod persist_columns_tests {
             dir.path(),
             Some("sftp"),
             &["name".to_owned(), "size".to_owned()],
-            PersistSort {
+            Some(PersistSort {
                 column: "size",
                 descending: false,
                 dirs_first: true,
-            },
+            }),
         )
         .expect("escritura");
         let texto = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
@@ -4587,6 +4594,50 @@ mod persist_columns_tests {
         );
     }
 
+    /// ADR 0144: sin orden que guardar (el lector ordenó por un atributo,
+    /// que el fichero no sabe nombrar) la lista se escribe y la clave `sort`
+    /// que ya había queda EXACTAMENTE como estaba.
+    #[test]
+    fn persist_columns_sin_orden_no_toca_el_sort_previo() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_columns(
+            dir.path(),
+            None,
+            &["name".to_owned()],
+            Some(PersistSort {
+                column: "mtime",
+                descending: true,
+                dirs_first: false,
+            }),
+        )
+        .expect("primera escritura");
+        persist_columns(
+            dir.path(),
+            None,
+            &["name".to_owned(), "size".to_owned()],
+            None,
+        )
+        .expect("segunda escritura");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("load");
+        assert_eq!(
+            cfg.ui_columns.default_columns.as_deref(),
+            Some(&["name".to_owned(), "size".to_owned()][..]),
+            "la lista sí se escribe"
+        );
+        assert_eq!(
+            cfg.ui_columns.sort,
+            Some(SortChoice {
+                column: SortColumnKey::Mtime,
+                descending: true,
+                dirs_first: false
+            }),
+            "el orden previo intacto"
+        );
+    }
+
     /// Par positivo del guard (pin del walk por `TableLike`): un `[ui]` en
     /// forma INLINE (`ui = { theme = "nord" }`) pasa `is_table_like` y el
     /// escritor debe ESCRIBIR A TRAVÉS de él — un walk por `as_table_mut`
@@ -4599,11 +4650,11 @@ mod persist_columns_tests {
             dir.path(),
             None,
             &["name".to_owned()],
-            PersistSort {
+            Some(PersistSort {
                 column: "name",
                 descending: false,
                 dirs_first: true,
-            },
+            }),
         )
         .expect("tabla inline: el guard no debe rechazarla");
         let layers = Layers {
@@ -4632,11 +4683,11 @@ mod persist_columns_tests {
             dir.path(),
             None,
             &["name".to_owned()],
-            PersistSort {
+            Some(PersistSort {
                 column: "name",
                 descending: false,
                 dirs_first: true,
-            },
+            }),
         )
         .expect_err("forma inesperada");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);

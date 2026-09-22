@@ -320,10 +320,13 @@ impl Estado {
             .or_else(|| {
                 // Un id que no está configurado pero que ES una columna
                 // conocida sigue pudiendo ordenar: un menú de orden ofrece
-                // más columnas de las que se pintan.
+                // más columnas de las que se pintan. Solo las FIJAS: un
+                // `attr:` tiene que estar configurado (ADR 0144), o cualquier
+                // texto del renderer acabaría en el orden y en la sesión.
                 column
                     .parse::<ColumnId>()
                     .ok()
+                    .filter(|id| matches!(id, ColumnId::Builtin(_)))
                     .as_ref()
                     .and_then(sort_column_id)
             });
@@ -482,7 +485,10 @@ impl Estado {
                     .style_for_id(&esquema, id, catalogo)
                     .compacted(f.compact);
                 let ordena = sort_column_id(id);
-                let sort = ordena.filter(|c| *c == spec.column).map(|_| {
+                // Prestada y no consumida: la misma respuesta dice además si
+                // la cabecera es clicable. Con un atributo (ADR 0144) las dos
+                // cosas salen de aquí sin código propio.
+                let sort = ordena.as_ref().filter(|c| **c == spec.column).map(|_| {
                     match spec.dir {
                         norte_frontend::SortDir::Asc => "asc",
                         norte_frontend::SortDir::Desc => "desc",

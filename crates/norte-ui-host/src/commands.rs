@@ -684,7 +684,14 @@ pub enum Efecto {
     /// La misma semántica que un click en la cabecera: la columna activa
     /// invierte, una nueva ordena ascendente. Quien lo decide es
     /// `SortSpec::after_click`, no una segunda tabla de aquí.
-    Ordenar(norte_frontend::SortColumn),
+    ///
+    /// La CLAVE de una columna de orden, no la columna: por aquí solo llegan
+    /// las teclas de orden (`pane.sort-name`, `-size`…), que son siempre
+    /// built-ins. Ordenar por un atributo entra por el clic en su cabecera
+    /// (`ordenar_por`), así que meter aquí el `SortColumn` entero —que dejó de
+    /// ser `Copy` al poder llevar un id (ADR 0144)— le quitaría `Copy` a todo
+    /// `Efecto` por un caso que por este camino no llega nunca.
+    Ordenar(norte_config::SortColumnKey),
     /// Vuelve a pedir el listado de los huecos que se ven.
     ///
     /// De TODOS, no solo del enfocado: un cambio externo raramente respeta
@@ -918,10 +925,10 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.sync-dirs" => Efecto::Sincronizar,
         // #138: la misma semántica que un click en la cabecera, y sobre el
         // hueco con el FOCO — el orden es de un listado, como el cursor.
-        "pane.sort-name" => Efecto::Ordenar(norte_frontend::SortColumn::Name),
-        "pane.sort-ext" => Efecto::Ordenar(norte_frontend::SortColumn::Extension),
-        "pane.sort-size" => Efecto::Ordenar(norte_frontend::SortColumn::Size),
-        "pane.sort-time" => Efecto::Ordenar(norte_frontend::SortColumn::Mtime),
+        "pane.sort-name" => Efecto::Ordenar(norte_config::SortColumnKey::Name),
+        "pane.sort-ext" => Efecto::Ordenar(norte_config::SortColumnKey::Extension),
+        "pane.sort-size" => Efecto::Ordenar(norte_config::SortColumnKey::Size),
+        "pane.sort-time" => Efecto::Ordenar(norte_config::SortColumnKey::Mtime),
         "pane.refresh" => Efecto::Refrescar,
         "pane.toggle-hidden" => Efecto::AlternarOcultos,
         "pane.names-encoding" => Efecto::CiclarEncoding,

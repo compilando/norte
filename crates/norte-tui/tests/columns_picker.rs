@@ -28,8 +28,11 @@ fn app() -> App {
 /// memoria (lista+sort y formatos ciclados, #108 7b) + re-sort de ambos
 /// panes.
 fn aplicar(app: &mut App, picked: &norte_frontend::columns_picker::Picked) {
-    app.columns
-        .apply_picked(picked.scheme_target.as_deref(), &picked.ids, picked.sort);
+    app.columns.apply_picked(
+        picked.scheme_target.as_deref(),
+        &picked.ids,
+        picked.sort.clone(),
+    );
     for (id, fmt) in &picked.formats {
         app.columns.apply_format(id, fmt);
     }
@@ -45,16 +48,20 @@ fn persistir(dir: &std::path::Path, picked: &norte_frontend::columns_picker::Pic
         dir,
         picked.scheme_target.as_deref(),
         &picked.ids,
-        PersistSort {
-            column: match picked.sort.column {
-                SortColumn::Name => "name",
-                SortColumn::Size => "size",
-                SortColumn::Mtime => "mtime",
-                SortColumn::Extension => "extension",
-            },
+        // Un orden por atributo no se guarda en el fichero (ADR 0144): `None`
+        // deja la clave `sort` como estaba.
+        match picked.sort.column {
+            SortColumn::Name => Some("name"),
+            SortColumn::Size => Some("size"),
+            SortColumn::Mtime => Some("mtime"),
+            SortColumn::Extension => Some("extension"),
+            SortColumn::Attr(_) => None,
+        }
+        .map(|column| PersistSort {
+            column,
             descending: picked.sort.dir == SortDir::Desc,
             dirs_first: picked.sort.dirs_first,
-        },
+        }),
     )
     .expect("persistencia");
     // #108 7b: los formatos ciclados, como en el binario — tras la lista.

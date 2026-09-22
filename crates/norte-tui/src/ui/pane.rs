@@ -191,7 +191,7 @@ pub(crate) fn column_header_line(
         u16,
         norte_frontend::columns::ColumnStyle,
     )],
-    sort: norte_frontend::SortSpec,
+    sort: &norte_frontend::SortSpec,
     catalog: Option<&norte_proto::AttrCatalog>,
     // Las celdas que la columna de iconos (ADR 0105) le quita al bloque del
     // nombre: 0 sin iconos, [`ICON_GUTTER`] con ellos. La cabecera «Nombre»
@@ -206,7 +206,7 @@ pub(crate) fn column_header_line(
         // Fluent → catálogo enmascarado → id). NO se re-enmascara aquí:
         // `header_label` ya devuelve texto seguro.
         let label = norte_frontend::columns::header_label(col, style, catalog);
-        let active = norte_frontend::columns::sort_column_id(col) == Some(sort.column);
+        let active = norte_frontend::columns::sort_column_id(col).as_ref() == Some(&sort.column);
         let w = usize::from(*w);
         let arrow = if sort.dir == SortDir::Asc {
             '▲'
@@ -620,7 +620,7 @@ pub(crate) fn draw_pane(
     frame.render_widget(
         Paragraph::new(column_header_line(
             cols,
-            pane.sort(),
+            &pane.sort(),
             catalog,
             if icons { ICON_GUTTER } else { 0 },
         ))
@@ -1586,7 +1586,7 @@ mod column_header_line_tests {
                 estilo(Builtin::Size, Align::Left, "S"),
             ),
         ];
-        let line = column_header_line(&cols, sort, None, 0);
+        let line = column_header_line(&cols, &sort, None, 0);
         assert_eq!(line.width(), 7, "exactamente la suma de anchos: {line:?}");
         assert_eq!(line, "N      ");
         let cols = [
@@ -1601,7 +1601,7 @@ mod column_header_line_tests {
                 estilo(Builtin::Size, Align::Left, "S"),
             ),
         ];
-        let line = column_header_line(&cols, sort, None, 0);
+        let line = column_header_line(&cols, &sort, None, 0);
         assert_eq!(line.width(), 8, "{line:?}");
         assert_eq!(line, "N      ▲");
     }
@@ -1628,7 +1628,7 @@ mod column_header_line_tests {
                 estilo(Builtin::Size, Align::Left, "S"),
             ),
         ];
-        let line = column_header_line(&cols, sort, None, 3);
+        let line = column_header_line(&cols, &sort, None, 3);
         assert_eq!(line.width(), 12, "{line:?}");
         assert!(line.starts_with("   Nombr"), "{line:?}");
         let cols = [
@@ -1643,7 +1643,7 @@ mod column_header_line_tests {
                 estilo(Builtin::Size, Align::Left, "S"),
             ),
         ];
-        let line = column_header_line(&cols, sort, None, 3);
+        let line = column_header_line(&cols, &sort, None, 3);
         assert_eq!(
             line.width(),
             6,

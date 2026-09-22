@@ -92,6 +92,89 @@ async fn ordenar_por_una_columna_que_no_ordena_se_dice() {
         matches!(ack, ActionAck::Unavailable { .. }),
         "se dice que esa columna no ordena: {ack:?}"
     );
+    // Un atributo que el esquema no tiene configurado tampoco (ADR 0144):
+    // el texto viene del renderer, y no debe acabar en el orden ni en la
+    // sesión sin que nadie haya pedido esa columna.
+    let ack = h
+        .dispatch(UiAction::SortBy {
+            slot_id: 1,
+            column: "attr:no-existe".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { .. }),
+        "un attr sin configurar no ordena: {ack:?}"
+    );
+}
+
+/// ADR 0144: la cabecera de un atributo ordena como las demás —es
+/// clicable, y tras pulsarla lleva la flecha— sin que el puente cambie: la
+/// columna viaja como el mismo texto `attr:<id>` que ya nombraba la cabecera.
+#[tokio::test]
+async fn un_atributo_ordena_desde_su_cabecera() {
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: arbol() as Arc<dyn norte_ui_host::HostBackend>,
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        attach: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: columnas_de(&["name", "attr:posix.mode"]),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let antes = siguiente_foto(&mut sub).await;
+    let modo = |s: &norte_ui_host::ViewSnapshot| {
+        listado(s)
+            .columns
+            .iter()
+            .find(|c| c.id == "attr:posix.mode")
+            .cloned()
+            .expect("la cabecera del modo")
+    };
+    assert!(
+        modo(&antes).sortable,
+        "la cabecera del atributo es clicable"
+    );
+    assert!(modo(&antes).sort.is_none(), "y aún no manda el orden");
+
+    let ack = h
+        .dispatch(UiAction::SortBy {
+            slot_id: 1,
+            column: "attr:posix.mode".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        !matches!(ack, ActionAck::Unavailable { .. }),
+        "un atributo ordena: {ack:?}"
+    );
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        if modo(&foto).sort.as_deref() == Some("asc") {
+            assert!(
+                listado(&foto).columns[0].sort.is_none(),
+                "el nombre deja de mandar"
+            );
+            return;
+        }
+    }
+    panic!("la cabecera del atributo tiene que llevar la flecha tras ordenar");
 }
 
 // ---------------------------------------------------------------------------

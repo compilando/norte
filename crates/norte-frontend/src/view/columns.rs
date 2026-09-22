@@ -942,6 +942,20 @@ mod settings_tests {
         assert_eq!(sort_column(Builtin::Kind), None);
     }
 
+    /// ADR 0144: un `attr:` ordena por su id; un `plugin:` sigue sin
+    /// ordenar (sus valores llegan después del listado).
+    #[test]
+    fn sort_column_id_ordena_atributos_y_no_plugins() {
+        use crate::sort::SortColumn;
+        let attr: ColumnId = "attr:posix.uid".parse().expect("id");
+        assert_eq!(
+            sort_column_id(&attr),
+            Some(SortColumn::Attr("posix.uid".to_owned()))
+        );
+        let plugin: ColumnId = "plugin:git/status".parse().expect("id");
+        assert_eq!(sort_column_id(&plugin), None);
+    }
+
     #[test]
     fn resolve_parsea_diagnostica_y_resuelve_por_scheme() {
         let cfg = norte_config::ColumnsConfig {
@@ -1995,8 +2009,8 @@ impl ColumnsSettings {
     pub fn sort_for(&self, scheme: &str) -> crate::sort::SortSpec {
         self.schemes
             .get(scheme)
-            .and_then(|(_, s)| *s)
-            .unwrap_or(self.default_sort)
+            .and_then(|(_, s)| s.clone())
+            .unwrap_or_else(|| self.default_sort.clone())
     }
 
     /// Los items de layout para un pane en `scheme`, en orden de pintado
@@ -2310,12 +2324,7 @@ fn map_sort(s: Option<&norte_config::SortChoice>) -> crate::sort::SortSpec {
         return SortSpec::default();
     };
     SortSpec {
-        column: match s.column {
-            norte_config::SortColumnKey::Name => SortColumn::Name,
-            norte_config::SortColumnKey::Size => SortColumn::Size,
-            norte_config::SortColumnKey::Mtime => SortColumn::Mtime,
-            norte_config::SortColumnKey::Extension => SortColumn::Extension,
-        },
+        column: SortColumn::from(s.column),
         dir: if s.descending {
             SortDir::Desc
         } else {
@@ -2599,14 +2608,19 @@ pub fn sort_column(b: Builtin) -> Option<crate::sort::SortColumn> {
     }
 }
 
-/// [`sort_column`] para cualquier id: attr/plugin no son ordenables (el
-/// vocabulario de sort es cerrado: name/size/mtime — spec Layer 7 nota
-/// #117).
+/// [`sort_column`] para cualquier id: los builtin ordenables y los `attr:`
+/// (ADR 0144); los `plugin:` no.
 #[must_use]
 pub fn sort_column_id(id: &ColumnId) -> Option<crate::sort::SortColumn> {
     match id {
         ColumnId::Builtin(b) => sort_column(*b),
-        ColumnId::Attr(_) | ColumnId::Plugin { .. } => None,
+        // Un atributo se ordena por su VALOR (ADR 0144): permisos, UID y GID
+        // son números, y ordenar por ellos agrupa lo que se pinta igual.
+        ColumnId::Attr(id) => Some(crate::sort::SortColumn::Attr(id.clone())),
+        // Un plugin no: sus valores no viven en la `Entry` sino en el mapa
+        // lateral del panel, y ordenar por algo que llega después del listado
+        // reordenaría las filas debajo del cursor mientras se lee.
+        ColumnId::Plugin { .. } => None,
     }
 }
 

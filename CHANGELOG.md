@@ -9,6 +9,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Attribute columns sort** (ADR 0144). Clicking the permissions, UID or GID
+  header — or any `attr:` column — sorts by the value, not the drawn text,
+  in both frontends; entries without the attribute go last in both
+  directions. The order holds for the session and is not written to
+  `norte.toml`, whose `sort` key only names the orders that have a key.
+  Plugin columns still do not sort.
 - **The window has an activity bar** (ADR 0131, bridge 84). The panel bar
   moves to a column on the left, as in VS Code: one icon per panel, the
   name in the tooltip, a border on the one with the keyboard, and a badge

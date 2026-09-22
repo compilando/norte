@@ -135,7 +135,7 @@ fn un_directorio_explicito_gana_a_la_sesion_en_el_panel_activo() {
     let activo = app.panes.slot_of(foco);
     let mut spec = app.panes[foco].sort();
     spec.dirs_first = !spec.dirs_first;
-    app.panes[foco].set_sort(spec);
+    app.panes[foco].set_sort(spec.clone());
     let body = app.session_body();
 
     let mut other = app_basica();
@@ -452,7 +452,7 @@ fn el_directorio_y_el_orden_vuelven() {
     let slot = app.panes.slot_of(0);
     let mut spec = app.panes[0].sort();
     spec.dirs_first = !spec.dirs_first;
-    app.panes[0].set_sort(spec);
+    app.panes[0].set_sort(spec.clone());
     app.panes[0].set_show_hidden(false);
     let body = app.session_body();
 

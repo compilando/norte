@@ -16,7 +16,9 @@ use norte_i18n::{Lang, t_in, ta_in};
 use crate::sort::{SortColumn, SortDir, SortSpec};
 
 /// Los hechos del momento, del pane con el teclado y del programa.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// No es `Copy` desde que el orden puede nombrar un atributo (ADR 0144).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusInput {
     /// `(cursor + 1, total)`, o `None` con un filtro activo: con el filtro
     /// la posición real no es la que se ve, y un `3/120` engañaría.
@@ -97,7 +99,7 @@ fn item(input: &StatusInput, which: StatusItem, lang: Lang) -> Option<StatusItem
             }
             (s, None, 70)
         }
-        StatusItem::Sort => (sort_text(input.sort, lang), Some("pane.sort-menu"), 30),
+        StatusItem::Sort => (sort_text(&input.sort, lang), Some("pane.sort-menu"), 30),
         StatusItem::Encoding => (
             input
                 .encoding
@@ -222,18 +224,23 @@ fn tip_count(input: &StatusInput, which: StatusItem) -> String {
 }
 
 /// `Nombre ↑`: la columna y la dirección.
-fn sort_text(s: SortSpec, lang: Lang) -> String {
-    let columna = match s.column {
-        SortColumn::Name => "status-item-sort-name",
-        SortColumn::Size => "status-item-sort-size",
-        SortColumn::Mtime => "status-item-sort-mtime",
-        SortColumn::Extension => "status-item-sort-ext",
+fn sort_text(s: &SortSpec, lang: Lang) -> String {
+    let columna = match &s.column {
+        SortColumn::Name => t_in(lang, "status-item-sort-name"),
+        SortColumn::Size => t_in(lang, "status-item-sort-size"),
+        SortColumn::Mtime => t_in(lang, "status-item-sort-mtime"),
+        SortColumn::Extension => t_in(lang, "status-item-sort-ext"),
+        // Un atributo se nombra por su id (`posix.mode`): su etiqueta legible
+        // vive en el catálogo del provider, que esta barra no tiene. Y el id
+        // lo emite un TERCERO, así que se enmascara antes de pintarlo, como
+        // cualquier otra cosa que un provider dice de sí mismo.
+        SortColumn::Attr(id) => crate::display_name(id.as_bytes()).0,
     };
     let flecha = match s.dir {
         SortDir::Asc => '↑',
         SortDir::Desc => '↓',
     };
-    format!("{} {flecha}", t_in(lang, columna))
+    format!("{columna} {flecha}")
 }
 
 /// Qué elementos caben en `width` celdas con `sep` celdas entre dos

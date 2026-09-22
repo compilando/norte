@@ -341,8 +341,11 @@ async fn apply_picked_columns(
     picked: norte_frontend::columns_picker::Picked,
 ) -> bool {
     let attrs_before = pane_attr_ids(app);
-    app.columns
-        .apply_picked(picked.scheme_target.as_deref(), &picked.ids, picked.sort);
+    app.columns.apply_picked(
+        picked.scheme_target.as_deref(),
+        &picked.ids,
+        picked.sort.clone(),
+    );
     // #108 7b: los formatos ciclados también EN SESIÓN antes del disco —
     // mismo lockstep (`apply_format` toca el spec retenido que lee
     // `style_for`).
@@ -362,7 +365,10 @@ async fn apply_picked_columns(
     };
     let ids = picked.ids.clone();
     let scheme = picked.scheme_target.clone();
-    let sort = picked.sort;
+    let sort = picked.sort.clone();
+    // Se mira AHORA: `sort` se mueve al hilo de fondo, y el desenlace tiene
+    // que saber si guardó el orden o lo dejó para la sesión.
+    let orden_de_sesion = matches!(sort.column, norte_frontend::SortColumn::Attr(_));
     let formats = picked.formats.clone();
     let res = tokio::task::spawn_blocking(move || {
         // Todas las escrituras en UNA tarea de fondo, secuenciales sobre el
@@ -372,16 +378,22 @@ async fn apply_picked_columns(
             &dir,
             scheme.as_deref(),
             &ids,
-            config::PersistSort {
-                column: match sort.column {
-                    norte_frontend::SortColumn::Name => "name",
-                    norte_frontend::SortColumn::Size => "size",
-                    norte_frontend::SortColumn::Mtime => "mtime",
-                    norte_frontend::SortColumn::Extension => "extension",
-                },
+            // Un orden por ATRIBUTO no tiene forma en `norte.toml` (`[ui] sort`
+            // solo nombra built-ins, ADR 0144): se queda en la sesión y la
+            // clave `sort` del fichero no se toca. El aviso lo da el
+            // desenlace, abajo.
+            match sort.column {
+                norte_frontend::SortColumn::Name => Some("name"),
+                norte_frontend::SortColumn::Size => Some("size"),
+                norte_frontend::SortColumn::Mtime => Some("mtime"),
+                norte_frontend::SortColumn::Extension => Some("extension"),
+                norte_frontend::SortColumn::Attr(_) => None,
+            }
+            .map(|column| config::PersistSort {
+                column,
                 descending: sort.dir == norte_frontend::SortDir::Desc,
                 dirs_first: sort.dirs_first,
-            },
+            }),
         )?;
         for (id, fmt) in &formats {
             config::persist_column_format(&dir, id, fmt)?;
@@ -390,7 +402,15 @@ async fn apply_picked_columns(
     })
     .await;
     match res {
-        Ok(Ok(())) => app.message = Some(t("msg-columns-saved")),
+        // Si el orden era por atributo, decirlo: «guardado» a secas haría
+        // creer que al volver a abrir seguirá ordenado así.
+        Ok(Ok(())) => {
+            app.message = Some(t(if orden_de_sesion {
+                "msg-columns-sort-session-only"
+            } else {
+                "msg-columns-saved"
+            }));
+        }
         Ok(Err(e)) => {
             app.message = Some(ta(
                 "msg-settings-save-failed",

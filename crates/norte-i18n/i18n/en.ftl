@@ -1421,6 +1421,7 @@ help-cmd-pane-mirror = send this location to the other pane
 help-cmd-pane-sync-nav = walk both panes together
 msg-sync-nav-on = synchronised browsing: both panes walk together
 msg-sync-nav-off = synchronised browsing off
+msg-columns-sort-session-only = columns saved; sorting by an attribute lasts for this session (norte.toml only keeps the sorts that have a key)
 help-cmd-pane-mirror-target = send the folder under the cursor to the other pane
 help-cmd-pane-pull = go where the other pane is
 help-cmd-pane-swap = swap the two panes

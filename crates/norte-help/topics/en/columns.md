@@ -65,8 +65,9 @@ It does not appear until the backend says it has POSIX permissions, so you
 will not see it in a bucket, inside a `.zip`, or on Windows: a "Mode" header
 over twelve blank cells is name width spent saying nothing.
 
-Sorting by it is not possible yet — as with any attribute column, clicking
-its header does nothing rather than inventing a ranking.
+You can sort by it, as by any attribute column: by the VALUE, not by what is
+drawn, so `rwxr-xr-x` and `rw-r--r--` each land with their own kind. See
+"Sorting" below.
 
 > 💡 A plugin column is filled asynchronously, after the listing is already on screen. It appears a moment later on a slow provider, and a listing that changes underneath it drops what it had rather than showing a value that belongs to the previous directory.
 
@@ -89,6 +90,14 @@ just did.
 the direction. The default is by name, ascending, directories first. A column
 with no order to it — the kind of an entry, say — does nothing when you press
 it, rather than inventing a ranking.
+
+An attribute column — permissions, UID, GID… — sorts by its value: numbers as
+numbers, dates as dates. Entries without the attribute go last in both
+directions. That order holds for the session but is not saved to
+`norte.toml`: the file can only name the orders that have a key, and applying
+the dialog tells you so. A plugin column does not sort: its values arrive after
+the listing, and sorting by them would move rows under the cursor while you
+read.
 
 Sorting is per pane and is remembered while the pane lives, so the two panes
 can be sorted differently — which is the point when one of them is a listing

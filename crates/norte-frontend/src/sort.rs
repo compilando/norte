@@ -5,7 +5,8 @@ use norte_proto::{Entry, EntryKind};
 /// Orden elegido para el listado (#108 L7): columna + dirección + grupo de
 /// dirs. El default reproduce EXACTAMENTE el orden histórico (name/asc/
 /// dirs-first), así que nada cambia hasta que el usuario elige otra cosa.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// No es `Copy` porque su columna ya no lo es ([`SortColumn::Attr`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SortSpec {
     /// Columna por la que se ordena.
@@ -51,9 +52,15 @@ impl SortSpec {
     }
 }
 
-/// Columna de orden (#108). Solo built-ins por ahora — `attr:`/`plugin:`
-/// llegan con los bloques 2/7 del diseño de columnas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Columna de orden (#108): los built-ins y, desde ADR 0144, cualquier
+/// ATRIBUTO de provider (`attr:<id>`). Las de plugin siguen sin ser
+/// ordenables: sus valores no viven en la `Entry`.
+///
+/// No es `Copy` desde que lleva el id de un atributo: ese id lo emite el
+/// proveedor en tiempo de ejecución, así que es un `String`. Conservar `Copy`
+/// pedía internar los ids con una fuga deliberada, y un proveedor que emita
+/// cien atributos la convierte en una fuga de verdad.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortColumn {
     /// Nombre (forma NFC como clave, bytes crudos de desempate) — el orden
@@ -70,6 +77,30 @@ pub enum SortColumn {
     /// tampoco —`.bashrc` es un nombre, no una extensión—: las dos van AL
     /// FINAL en ambas direcciones, como cualquier valor ausente.
     Extension,
+    /// Un atributo de provider por su id (`posix.mode`, `posix.uid`…), el
+    /// mismo que nombra su columna `attr:<id>` (ADR 0144).
+    ///
+    /// Se ordena por el VALOR del atributo, no por cómo se pinta: `rwxr-xr-x`
+    /// y `0o755` son el mismo número, y es el número el que agrupa. Un valor
+    /// ausente —el provider no lo sabe, o no lo emite para esa entrada— va al
+    /// FINAL en las dos direcciones, como un tamaño que no se conoce.
+    Attr(String),
+}
+
+/// Una columna de orden que un COMANDO o la configuración pueden nombrar: los
+/// built-ins, que son los únicos que tienen tecla y clave `[ui] sort`.
+///
+/// La conversión vive aquí y no en cada sitio que la necesita: estaba escrita
+/// dentro de la lectura de configuración y la ventana tenía que repetirla.
+impl From<norte_config::SortColumnKey> for SortColumn {
+    fn from(k: norte_config::SortColumnKey) -> Self {
+        match k {
+            norte_config::SortColumnKey::Name => Self::Name,
+            norte_config::SortColumnKey::Size => Self::Size,
+            norte_config::SortColumnKey::Mtime => Self::Mtime,
+            norte_config::SortColumnKey::Extension => Self::Extension,
+        }
+    }
 }
 
 /// Dirección del orden de la columna.
@@ -87,12 +118,12 @@ pub enum SortDir {
 /// por defecto — SOLO como clave de orden, los bytes jamás se mutan) con
 /// desempate por bytes crudos. Nombres no-UTF8: bytes tal cual.
 pub fn sort_entries(entries: &mut [Entry]) {
-    sort_entries_with(entries, SortSpec::default());
+    sort_entries_with(entries, &SortSpec::default());
 }
 
 /// [`sort_entries`] bajo un [`SortSpec`] explícito (#108 L7). Estable;
 /// mismo orden que `sort_with_keys_spec`/`merge_keyed_spec` con el mismo spec.
-pub fn sort_entries_with(entries: &mut [Entry], spec: SortSpec) {
+pub fn sort_entries_with(entries: &mut [Entry], spec: &SortSpec) {
     let keys: Vec<SortKey> = entries.iter().map(sort_key).collect();
     // sort_by sobre índices sería más alloc-frugal, pero este camino solo
     // lo usan tests/CLI; los panes van por `sort_with_keys` (#54).
@@ -160,7 +191,7 @@ pub(crate) fn sort_key(e: &Entry) -> SortKey {
 pub(crate) fn cmp_keyed_with(
     a: (&SortKey, &Entry),
     b: (&SortKey, &Entry),
-    spec: SortSpec,
+    spec: &SortSpec,
 ) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     debug_assert!(
@@ -177,13 +208,14 @@ pub(crate) fn cmp_keyed_with(
             return grupo;
         }
     }
-    let col = match spec.column {
+    let col = match &spec.column {
         SortColumn::Name => cmp_name(a, b),
         SortColumn::Size => cmp_missing_last(a.1.size, b.1.size, spec.dir),
         SortColumn::Mtime => cmp_missing_last(a.1.mtime_ms, b.1.mtime_ms, spec.dir),
         SortColumn::Extension => cmp_ext(a.1, b.1, spec.dir),
+        SortColumn::Attr(id) => cmp_attr(a.1.attrs.get(id), b.1.attrs.get(id), spec.dir),
     };
-    let col = match (spec.column, spec.dir) {
+    let col = match (&spec.column, spec.dir) {
         // Name lleva el desempate integrado y su inversión es del bloque
         // entero (no hay «ausente» que anclar al final).
         (SortColumn::Name, SortDir::Desc) => col.reverse(),
@@ -248,6 +280,81 @@ fn cmp_ext(izq: &Entry, der: &Entry, dir: SortDir) -> std::cmp::Ordering {
     }
 }
 
+/// El rango de una forma de valor, para que el orden de atributos sea TOTAL.
+///
+/// Dos entradas del mismo listado casi siempre traen el mismo tipo para un
+/// mismo atributo, pero nada lo garantiza —un provider de terceros puede
+/// mandar `Uint` en una y `Text` en otra—, y un comparador que no ordena
+/// tipos mezclados deja al `sort` con un orden que depende de la entrada.
+/// El rango fijo lo evita sin inventar conversiones.
+fn rango(v: &norte_proto::attrs::AttrValue) -> u8 {
+    use norte_proto::attrs::AttrValue;
+    match v {
+        AttrValue::Bool(_) => 0,
+        AttrValue::Uint(_) | AttrValue::Int(_) => 1,
+        AttrValue::TimeMs(_) => 2,
+        AttrValue::Text(_) => 3,
+        AttrValue::Bytes(_) => 4,
+        // `Unknown` no se compara: se trata como ausente (ver `cmp_attr`).
+        AttrValue::Unknown => 5,
+    }
+}
+
+/// Dos valores del MISMO rango, en su orden natural. `Uint` e `Int` comparten
+/// rango y se comparan como números con signo ancho, que es lo que son.
+fn cmp_valor(
+    uno: &norte_proto::attrs::AttrValue,
+    otro: &norte_proto::attrs::AttrValue,
+) -> std::cmp::Ordering {
+    use norte_proto::attrs::AttrValue;
+    let ancho = |v: &AttrValue| match v {
+        AttrValue::Uint(u) => i128::from(*u),
+        AttrValue::Int(i) => i128::from(*i),
+        _ => 0,
+    };
+    match (uno, otro) {
+        (AttrValue::Bool(x), AttrValue::Bool(y)) => x.cmp(y),
+        (AttrValue::Uint(_) | AttrValue::Int(_), AttrValue::Uint(_) | AttrValue::Int(_)) => {
+            ancho(uno).cmp(&ancho(otro))
+        }
+        (AttrValue::TimeMs(x), AttrValue::TimeMs(y)) => x.cmp(y),
+        (AttrValue::Text(x), AttrValue::Text(y)) => x.cmp(y),
+        (AttrValue::Bytes(x), AttrValue::Bytes(y)) => x.cmp(y),
+        _ => rango(uno).cmp(&rango(otro)),
+    }
+}
+
+/// La columna de un ATRIBUTO (ADR 0144): ausente —o `Unknown`, que para
+/// ordenar es lo mismo: no hay valor que comparar— al final en las dos
+/// direcciones, como un tamaño o una fecha que no se conocen.
+fn cmp_attr(
+    izq: Option<&norte_proto::attrs::AttrValue>,
+    der: Option<&norte_proto::attrs::AttrValue>,
+    dir: SortDir,
+) -> std::cmp::Ordering {
+    use norte_proto::attrs::AttrValue;
+    use std::cmp::Ordering;
+    // Función y no cierre: un cierre no deja escribir que el préstamo que
+    // devuelve es EL MISMO que recibe, y sin eso la vida útil no cuadra.
+    fn conocido(v: Option<&AttrValue>) -> Option<&AttrValue> {
+        v.filter(|v| !matches!(v, AttrValue::Unknown))
+    }
+    match (conocido(izq), conocido(der)) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(uno), Some(otro)) => {
+            let orden = rango(uno)
+                .cmp(&rango(otro))
+                .then_with(|| cmp_valor(uno, otro));
+            match dir {
+                SortDir::Asc => orden,
+                SortDir::Desc => orden.reverse(),
+            }
+        }
+    }
+}
+
 /// El orden de NOMBRE de siempre: clave NFC y desempate por bytes crudos.
 fn cmp_name(a: (&SortKey, &Entry), b: (&SortKey, &Entry)) -> std::cmp::Ordering {
     let nfc_a = a.0.nfc.as_deref().unwrap_or_else(|| name_bytes(a.1));
@@ -283,7 +390,7 @@ fn cmp_missing_last<T: Ord>(lhs: Option<T>, rhs: Option<T>, dir: SortDir) -> std
 /// `sort_with_keys_spec` bajo un [`SortSpec`] (#108 L7).
 pub(crate) fn sort_with_keys_spec(
     entries: Vec<Entry>,
-    spec: SortSpec,
+    spec: &SortSpec,
 ) -> (Vec<Entry>, Vec<SortKey>) {
     let mut pares: Vec<(SortKey, Entry)> = entries.into_iter().map(|e| (sort_key(&e), e)).collect();
     pares.sort_by(|a, b| cmp_keyed_with((&a.0, &a.1), (&b.0, &b.1), spec));
@@ -297,7 +404,7 @@ pub(crate) fn merge_keyed_spec(
     keys: &mut Vec<SortKey>,
     batch_entries: Vec<Entry>,
     batch_keys: Vec<SortKey>,
-    spec: SortSpec,
+    spec: &SortSpec,
 ) {
     // El zip de abajo TRUNCARÍA en silencio si los paralelos se desincronizan
     // (pérdida de entradas del listado sin ruido): que un bug futuro falle
@@ -421,14 +528,15 @@ mod tests {
             e("mem:///alfa", EntryKind::File),
         ];
 
-        let (mut entries, mut keys) = sort_with_keys_spec(izquierda.clone(), SortSpec::default());
-        let (batch_entries, batch_keys) = sort_with_keys_spec(derecha.clone(), SortSpec::default());
+        let (mut entries, mut keys) = sort_with_keys_spec(izquierda.clone(), &SortSpec::default());
+        let (batch_entries, batch_keys) =
+            sort_with_keys_spec(derecha.clone(), &SortSpec::default());
         merge_keyed_spec(
             &mut entries,
             &mut keys,
             batch_entries,
             batch_keys,
-            SortSpec::default(),
+            &SortSpec::default(),
         );
 
         let mut esperado: Vec<Entry> = izquierda.into_iter().chain(derecha).collect();
@@ -480,6 +588,7 @@ mod tests {
 #[cfg(test)]
 mod sort_spec_merge {
     use super::*;
+    use norte_proto::attrs::AttrValue;
     use norte_proto::{EntryKind, VPath};
 
     fn e(name: &str, dir: bool, size: Option<u64>, mtime: Option<i64>) -> Entry {
@@ -494,11 +603,16 @@ mod sort_spec_merge {
 
     fn all_specs() -> Vec<SortSpec> {
         let mut out = Vec::new();
-        for column in [SortColumn::Name, SortColumn::Size, SortColumn::Mtime] {
+        for column in [
+            SortColumn::Name,
+            SortColumn::Size,
+            SortColumn::Mtime,
+            SortColumn::Attr("posix.mode".to_owned()),
+        ] {
             for dir in [SortDir::Asc, SortDir::Desc] {
                 for dirs_first in [false, true] {
                     out.push(SortSpec {
-                        column,
+                        column: column.clone(),
                         dir,
                         dirs_first,
                     });
@@ -508,7 +622,7 @@ mod sort_spec_merge {
         out
     }
 
-    /// #108 L7: merge incremental ≡ sort total bajo LOS 12 specs — la
+    /// #108 L7: merge incremental ≡ sort total bajo LOS 16 specs — la
     /// propiedad #54, generalizada del default al espacio entero, sobre un
     /// corpus con ausentes, empates, dirs y pre-1970, partido en todos los
     /// puntos posibles.
@@ -523,15 +637,27 @@ mod sort_spec_merge {
             e("m", false, Some(1), Some(1_000)),
             e("a2", false, None, None),
         ];
+        // La columna de atributo (ADR 0144) con valores, empates, un tipo
+        // ajeno y un `Unknown`; los demás no lo tienen.
+        let mut corpus = corpus;
+        for (i, v) in [
+            (0, AttrValue::Uint(0o644)),
+            (1, AttrValue::Uint(0o755)),
+            (2, AttrValue::Uint(0o644)),
+            (3, AttrValue::Text("x".to_owned())),
+            (5, AttrValue::Unknown),
+        ] {
+            corpus[i].attrs.insert("posix.mode".to_owned(), v);
+        }
         for spec in all_specs() {
             for cut in 0..=corpus.len() {
                 let (izq, der) = corpus.split_at(cut);
                 let mut total = corpus.clone();
-                sort_entries_with(&mut total, spec);
+                sort_entries_with(&mut total, &spec);
 
-                let (mut entries, mut keys) = sort_with_keys_spec(izq.to_vec(), spec);
-                let (be, bk) = sort_with_keys_spec(der.to_vec(), spec);
-                merge_keyed_spec(&mut entries, &mut keys, be, bk, spec);
+                let (mut entries, mut keys) = sort_with_keys_spec(izq.to_vec(), &spec);
+                let (be, bk) = sort_with_keys_spec(der.to_vec(), &spec);
+                merge_keyed_spec(&mut entries, &mut keys, be, bk, &spec);
                 let a: Vec<_> = total.iter().map(|x| x.path.clone()).collect();
                 let b: Vec<_> = entries.iter().map(|x| x.path.clone()).collect();
                 assert_eq!(a, b, "spec {spec:?} corte {cut}");
@@ -578,7 +704,7 @@ mod sort_spec_tests {
             dir: SortDir::Asc,
             dirs_first: true,
         };
-        sort_entries_with(&mut es, spec);
+        sort_entries_with(&mut es, &spec);
         assert_eq!(
             names(&es),
             vec![
@@ -607,7 +733,7 @@ mod sort_spec_tests {
             dir: SortDir::Desc,
             dirs_first: true,
         };
-        sort_entries_with(&mut es, spec);
+        sort_entries_with(&mut es, &spec);
         assert_eq!(
             names(&es),
             vec![
@@ -635,7 +761,7 @@ mod sort_spec_tests {
             dir: SortDir::Desc,
             dirs_first: true,
         };
-        sort_entries_with(&mut es, spec);
+        sort_entries_with(&mut es, &spec);
         assert_eq!(
             names(&es),
             vec![b"nuevo".as_slice(), b"medio", b"viejo", b"sin"]
@@ -652,7 +778,7 @@ mod sort_spec_tests {
         ];
         let mut b = a.clone();
         sort_entries(&mut a);
-        sort_entries_with(&mut b, SortSpec::default());
+        sort_entries_with(&mut b, &SortSpec::default());
         assert_eq!(a, b);
     }
 
@@ -668,7 +794,7 @@ mod sort_spec_tests {
             dir: SortDir::Asc,
             dirs_first: false,
         };
-        sort_entries_with(&mut es, spec);
+        sort_entries_with(&mut es, &spec);
         assert_eq!(names(&es), vec![b"a".as_slice(), b"z-dir"]);
     }
 }
@@ -717,7 +843,7 @@ mod extension_tests {
             e("a.rs", EntryKind::File),
             e("c.txt", EntryKind::File),
         ];
-        sort_entries_with(&mut v, por_extension(SortDir::Asc));
+        sort_entries_with(&mut v, &por_extension(SortDir::Asc));
         assert_eq!(nombres(&v), ["a.rs", "b.TXT", "c.txt"]);
     }
 
@@ -734,7 +860,7 @@ mod extension_tests {
                 e("a.rs", EntryKind::File),
                 e("punto.", EntryKind::File),
             ];
-            sort_entries_with(&mut v, por_extension(dir));
+            sort_entries_with(&mut v, &por_extension(dir));
             assert_eq!(
                 nombres(&v)[0],
                 "a.rs",
@@ -750,7 +876,7 @@ mod extension_tests {
             crudo(b"raro\xff.zz", EntryKind::File),
             e("a.aa", EntryKind::File),
         ];
-        sort_entries_with(&mut v, por_extension(SortDir::Asc));
+        sort_entries_with(&mut v, &por_extension(SortDir::Asc));
         assert_eq!(nombres(&v)[0], "a.aa", "aa < zz");
         assert_eq!(
             name_bytes(&v[1]),
@@ -764,7 +890,7 @@ mod extension_tests {
     #[test]
     fn los_directorios_siguen_primero() {
         let mut v = vec![e("z.rs", EntryKind::File), e("dir", EntryKind::Dir)];
-        sort_entries_with(&mut v, por_extension(SortDir::Asc));
+        sort_entries_with(&mut v, &por_extension(SortDir::Asc));
         assert_eq!(v[0].kind, EntryKind::Dir);
     }
 
@@ -777,7 +903,112 @@ mod extension_tests {
             e("a.rs", EntryKind::File),
             e("m.rs", EntryKind::File),
         ];
-        sort_entries_with(&mut v, por_extension(SortDir::Desc));
+        sort_entries_with(&mut v, &por_extension(SortDir::Desc));
         assert_eq!(nombres(&v), ["a.rs", "m.rs", "z.rs"]);
+    }
+}
+
+#[cfg(test)]
+mod attr_tests {
+    use super::*;
+    use norte_proto::attrs::AttrValue;
+
+    fn e(nombre: &str, kind: EntryKind, modo: Option<AttrValue>) -> Entry {
+        let seg = norte_proto::Segment::new(nombre.as_bytes().to_vec()).expect("segmento");
+        let mut attrs = std::collections::BTreeMap::new();
+        if let Some(v) = modo {
+            attrs.insert("posix.mode".to_owned(), v);
+        }
+        Entry {
+            path: norte_proto::VPath::parse("file:///d")
+                .expect("vpath")
+                .join(seg),
+            kind,
+            size: None,
+            mtime_ms: None,
+            attrs,
+        }
+    }
+
+    fn nombres(v: &[Entry]) -> Vec<String> {
+        v.iter()
+            .map(|e| String::from_utf8_lossy(name_bytes(e)).into_owned())
+            .collect()
+    }
+
+    fn por_modo(dir: SortDir) -> SortSpec {
+        SortSpec {
+            column: SortColumn::Attr("posix.mode".to_owned()),
+            dir,
+            dirs_first: true,
+        }
+    }
+
+    /// Se ordena por el VALOR, no por su texto: 0o100 (64) va antes que
+    /// 0o77 (63) como cadena, y después como número.
+    #[test]
+    fn ordena_por_valor_numerico() {
+        let mut v = vec![
+            e("a", EntryKind::File, Some(AttrValue::Uint(0o100))),
+            e("b", EntryKind::File, Some(AttrValue::Uint(0o77))),
+            e("c", EntryKind::File, Some(AttrValue::Uint(0o644))),
+        ];
+        sort_entries_with(&mut v, &por_modo(SortDir::Asc));
+        assert_eq!(nombres(&v), ["b", "a", "c"]);
+        sort_entries_with(&mut v, &por_modo(SortDir::Desc));
+        assert_eq!(nombres(&v), ["c", "a", "b"]);
+    }
+
+    /// Lo que no lleva el atributo, o lo lleva como `Unknown`, va al final
+    /// en las DOS direcciones: invertir no debe subir los huecos arriba.
+    #[test]
+    fn ausente_y_unknown_al_final_en_las_dos_direcciones() {
+        for dir in [SortDir::Asc, SortDir::Desc] {
+            let mut v = vec![
+                e("sin", EntryKind::File, None),
+                e("uno", EntryKind::File, Some(AttrValue::Uint(1))),
+                e("raro", EntryKind::File, Some(AttrValue::Unknown)),
+                e("dos", EntryKind::File, Some(AttrValue::Uint(2))),
+            ];
+            sort_entries_with(&mut v, &por_modo(dir));
+            let n = nombres(&v);
+            assert_eq!(&n[2..], ["raro", "sin"], "{dir:?}: huecos por nombre");
+            let conocidos: Vec<_> = n[..2].to_vec();
+            let esperado = match dir {
+                SortDir::Asc => ["uno", "dos"],
+                SortDir::Desc => ["dos", "uno"],
+            };
+            assert_eq!(conocidos, esperado, "{dir:?}");
+        }
+    }
+
+    /// Un proveedor que emite tipos distintos bajo el mismo id no rompe el
+    /// orden total: agrupa por tipo (bool < número < fecha < texto < bytes)
+    /// y compara dentro de cada grupo; `Int` y `Uint` son el mismo grupo.
+    #[test]
+    fn tipos_mezclados_dan_un_orden_total() {
+        let mut v = vec![
+            e("t", EntryKind::File, Some(AttrValue::Text("a".to_owned()))),
+            e("u", EntryKind::File, Some(AttrValue::Uint(3))),
+            e("i", EntryKind::File, Some(AttrValue::Int(-1))),
+            e("b", EntryKind::File, Some(AttrValue::Bool(true))),
+            e("f", EntryKind::File, Some(AttrValue::TimeMs(0))),
+            e("x", EntryKind::File, Some(AttrValue::Bytes(vec![0xff]))),
+        ];
+        sort_entries_with(&mut v, &por_modo(SortDir::Asc));
+        assert_eq!(nombres(&v), ["b", "i", "u", "f", "t", "x"]);
+    }
+
+    /// Los directorios siguen primero y, a igual valor, desempata el nombre
+    /// en orden ascendente, como en las demás columnas.
+    #[test]
+    fn dirs_primero_y_empate_por_nombre() {
+        let mut v = vec![
+            e("z", EntryKind::File, Some(AttrValue::Uint(1))),
+            e("d", EntryKind::Dir, Some(AttrValue::Uint(9))),
+            e("a", EntryKind::File, Some(AttrValue::Uint(1))),
+        ];
+        sort_entries_with(&mut v, &por_modo(SortDir::Desc));
+        assert_eq!(nombres(&v), ["d", "a", "z"]);
     }
 }

@@ -65,8 +65,9 @@ No aparece hasta que el backend dice que tiene permisos POSIX, así que no la
 verás en un bucket, dentro de un `.zip` ni en un Windows: una cabecera «Modo»
 sobre doce celdas en blanco es ancho del nombre gastado en no decir nada.
 
-Ordenar por ella todavía no se puede — como en cualquier columna de atributo,
-pulsar su cabecera no hace nada en vez de inventarse un ranking.
+Se puede ordenar por ella, como por cualquier columna de atributo: por el
+VALOR, no por lo que se pinta, así que `rwxr-xr-x` y `rw-r--r--` quedan cada
+uno con los suyos. Mira «Ordenar» más abajo.
 
 > 💡 Una columna de plugin se rellena de forma asíncrona, con el listado ya en pantalla. Aparece un instante después en un provider lento, y si el listado cambia por debajo se descarta lo que había en vez de enseñar un valor que era del directorio anterior.
 
@@ -90,6 +91,14 @@ de hacer.
 la dirección. El orden por defecto es por nombre, ascendente, directorios
 primero. Una columna sin orden posible —el tipo de una entrada, por ejemplo— no
 hace nada al pulsarla, en vez de inventarse un ranking.
+
+Una columna de atributo —permisos, UID, GID…— ordena por su valor: números
+como números, fechas como fechas. Lo que no trae el atributo va al final en las
+dos direcciones. Ese orden vale para la sesión, pero no se guarda en
+`norte.toml`: el fichero solo sabe nombrar los órdenes que tienen tecla, y al
+aplicar el diálogo se te dice. Una columna de plugin no ordena: sus valores
+llegan después del listado, y ordenar por ellos movería las filas bajo el
+cursor mientras lees.
 
 El orden es por panel y se conserva mientras el panel viva, así que los dos
 pueden estar ordenados distinto: que es justo lo que quieres cuando uno es un
