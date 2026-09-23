@@ -192,7 +192,9 @@ impl Subshell {
             // Ctrl+L: la orden de `readline`/ZLE/fish que limpia la pantalla y
             // repinta el prompt. Sin esto, lo primero que el lector ve en su
             // primer Ctrl+O es la pared de fontanería que acabamos de teclear.
-            let _ = yo.escribir(b"\x0c");
+            // No baja `en_prompt` —ver `escribir_tecla`—, y eso es lo que
+            // impide que se lleve por delante el primer marcador (#360).
+            let _ = yo.escribir_tecla(b"\x0c");
         }
         Ok(yo)
     }
@@ -202,6 +204,8 @@ impl Subshell {
     /// Toda escritura —las teclas del lector y las órdenes de norte— baja
     /// `Buzon::en_prompt`: a partir de aquí hay algo en la línea, y no se le
     /// puede teclear nada más hasta que el prompt siguiente diga que se fue.
+    /// Sin excepciones: lo que sea una TECLA del lector va por
+    /// [`Self::escribir_tecla`], que es donde vive la única que hay.
     ///
     /// # Errors
     /// Lo que falle el pty.
@@ -211,6 +215,45 @@ impl Subshell {
     pub fn escribir(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         buzon_de(&self.buzon).en_prompt = false;
         escribir_crudo(&self.escritura, bytes)
+    }
+
+    /// Le escribe al shell UNA TECLA del lector.
+    ///
+    /// Es [`Self::escribir`] salvo para las teclas que el editor de línea
+    /// ejecuta sin poner nada en la línea, que no bajan `Buzon::en_prompt`.
+    /// Hoy es una: el Ctrl+L (`0x0c`), que limpia la pantalla y REPINTA el
+    /// prompt dejando el buffer como estaba.
+    ///
+    /// Bajarlo ahí lo dejaba abajo para siempre, y el motivo es que nada lo
+    /// volvería a subir: el marcador del cwd lo imprime `PROMPT_COMMAND` —o
+    /// `precmd`, o el evento de fish—, que el shell corre antes de leer una
+    /// orden NUEVA y no en un repintado. Hasta el Intro siguiente,
+    /// [`Self::ir_a`] decía no y el panel no seguía al shell: la promesa de
+    /// #142, apagada por la tecla de limpiar la pantalla. Y como el arranque
+    /// manda esa misma tecla detrás de la fontanería, bajo carga el primer
+    /// marcador caía entre los dos escritos y se perdía (#360).
+    ///
+    /// **La excepción depende de quién llama, no de los bytes**, y esa es la
+    /// diferencia que importa: un PEGADO llega con contenido cualquiera, y un
+    /// pegado que sea exactamente un `^L` —un separador de página, que en texto
+    /// plano es corriente— se llevaría la excepción sin ser una tecla. Hoy
+    /// además saldría bien por accidente, porque norte no envuelve el pegado en
+    /// `ESC[200~`/`ESC[201~` y el editor de línea lo EJECUTA; el día que lo
+    /// envuelva —que es lo que un `vim` delante pide— ese byte pasaría a ser un
+    /// carácter en la línea con el permiso todavía puesto, o sea el fallo de
+    /// #142 otra vez y sin test que lo pille. El pegado va por
+    /// [`Self::escribir`] y baja el flag siempre.
+    ///
+    /// # Errors
+    /// Lo que falle el pty.
+    ///
+    /// # Panics
+    /// Igual que [`Self::drenar`]: buzón envenenado.
+    pub fn escribir_tecla(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        if no_toca_la_linea(bytes) {
+            return escribir_crudo(&self.escritura, bytes);
+        }
+        self.escribir(bytes)
     }
 
     /// Manda al shell al directorio `dir` (bytes nativos), SI se le puede.
@@ -346,6 +389,25 @@ fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
     buzon
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// ¿Es una tecla que el editor de línea ejecuta SIN poner nada en la línea?
+///
+/// Hoy es una sola: el Ctrl+L (`0x0c`). El por qué —y por qué lo pregunta solo
+/// `Subshell::escribir_tecla`— está ahí.
+///
+/// Se compara la tecla ENTERA y no se busca el byte dentro: una escritura que
+/// lleve un `0x0c` entre otros bytes sí pone algo en la línea, y las teclas
+/// llegan de una en una ([`tecla_a_bytes`]) — un Alt+Ctrl+L, que viaja como
+/// `ESC 0x0c`, no es ésta.
+///
+/// Vale para la atadura DE FÁBRICA, y no se puede comprobar: `Subshell::arrancar`
+/// usa el `$SHELL` del lector con su configuración entera detrás, y un
+/// `bind '"\C-l": self-insert'` —o una macro de `readline`, que dejaría su texto
+/// en la línea— convierte esto en mentira. norte no puede verlo desde aquí; lo
+/// que sí puede es decirlo en vez de suponerlo.
+fn no_toca_la_linea(bytes: &[u8]) -> bool {
+    bytes == [0x0c]
 }
 
 /// Escribe al pty SIN tocar `en_prompt`.
@@ -626,17 +688,25 @@ mod tests {
         let mut sh = sh;
         let hasta = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut mandado = false;
+        // Lo drenado se GUARDA: cuando este bucle se agotó una vez bajo carga
+        // (#360) el rojo no dijo qué había escrito el shell hasta entonces, y
+        // sin eso no se podía distinguir «no llegó el prompt» de «llegó y el
+        // permiso se había perdido». Es la diferencia que costó el diagnóstico.
+        let mut visto = Vec::new();
         while std::time::Instant::now() < hasta && !mandado {
-            let _ = sh.drenar();
+            visto.extend_from_slice(&sh.drenar());
             mandado = sh.ir_a(&hostil).expect("cd");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert!(mandado, "nunca hubo un prompt al que mandarle el cd");
+        assert!(
+            mandado,
+            "nunca hubo un prompt al que mandarle el cd; el shell escribió: {}",
+            String::from_utf8_lossy(&visto)
+        );
 
         // Se comprueba por el MARCADOR, no por el eco: el shell dice dónde
         // está, y ahí es donde tiene que estar.
         let hasta = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut visto = Vec::new();
         let mut llego = false;
         while std::time::Instant::now() < hasta {
             visto.extend_from_slice(&sh.drenar());
@@ -655,6 +725,54 @@ mod tests {
             !texto.lines().any(|l| l.trim() == "pwned"),
             "algo del nombre se ejecutó: {texto}"
         );
+        sh.matar();
+    }
+
+    /// **Un Ctrl+L no apaga el seguimiento del panel** (#360).
+    ///
+    /// Ctrl+L no es una orden: `readline`/ZLE lo ejecutan como una función que
+    /// limpia la pantalla y REPINTA el prompt, dejando la línea exactamente
+    /// como estaba. No pone nada en ella, así que no puede quitarle a `ir_a` el
+    /// permiso para teclear.
+    ///
+    /// Lo quitaba. `escribir` baja `en_prompt` para TODO lo que se manda, y el
+    /// repintado de `readline` no corre `PROMPT_COMMAND` —lo corre bash antes
+    /// de leer una orden NUEVA—, así que detrás del Ctrl+L no viene ningún
+    /// marcador y el flag se quedaba abajo hasta que el lector pulsara Intro.
+    /// Entre medias el panel no seguía al shell: la promesa entera de #142,
+    /// apagada por la tecla de limpiar la pantalla.
+    ///
+    /// Y es la carrera que la suite vio una vez bajo carga: el arranque manda
+    /// la fontanería y después un Ctrl+L, y entre los dos escritos cabe el
+    /// primer marcador. Si cabe, el Ctrl+L lo tira y `ir_a` dice no para
+    /// siempre — diez segundos de espera y rojo.
+    #[test]
+    fn un_ctrl_l_no_apaga_el_seguimiento() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = dir.path().canonicalize().expect("canonicalize");
+        let otro = dir.join("otro");
+        std::fs::create_dir(&otro).expect("mkdir");
+        let mut sh = bash(&dir);
+        // Con el shell quieto hay marcador, y por tanto permiso para teclear.
+        espera_quieto(&sh);
+        sh.escribir_tecla(b"\x0c").expect("ctrl+l");
+        let _ = sh.drenar();
+
+        assert!(
+            sh.ir_a(&otro).expect("cd"),
+            "un Ctrl+L dejó al panel sin poder seguir al shell"
+        );
+        let hasta = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut llego = false;
+        while std::time::Instant::now() < hasta {
+            let _ = sh.drenar();
+            if sh.cwd().as_deref() == Some(otro.as_path()) {
+                llego = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(llego, "el `cd` de después del Ctrl+L no llegó a ejecutarse");
         sh.matar();
     }
 
@@ -679,10 +797,20 @@ mod tests {
         sh.escribir(b"echo pwned").expect("media línea");
         std::thread::sleep(std::time::Duration::from_millis(300));
         let _ = sh.drenar();
+        // Y un Ctrl+L por medio no lo arregla: la excepción de
+        // `escribir_tecla` solo puede DEJAR el permiso como esté, nunca
+        // ponerlo. Sin esta línea, un refactor que leyera «un Ctrl+L significa
+        // que volvemos a un prompt limpio» y subiera el flag pasaría la suite
+        // entera y reabriría el `rm -rf tmpdir` de #142. Va aquí y no en un
+        // test hermano porque la línea a medias es exactamente el estado que
+        // tiene que sobrevivir al repintado.
+        sh.escribir_tecla(b"\x0c").expect("ctrl+l");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let _ = sh.drenar();
 
         assert!(
             !sh.ir_a(&otro).expect("cd"),
-            "con una línea a medias no se teclea nada"
+            "con una línea a medias no se teclea nada, ni después de un Ctrl+L"
         );
         std::thread::sleep(std::time::Duration::from_millis(300));
         let texto = String::from_utf8_lossy(&sh.drenar()).into_owned();

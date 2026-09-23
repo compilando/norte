@@ -221,14 +221,20 @@ pub fn install(shell: Shell, nonce: &Nonce) -> String {
         // es lo que fish documenta para esto y no toca `fish_prompt`, que es
         // del lector. `string collect` conserva los saltos de línea de dentro
         // de un nombre, que la sustitución de comandos partiría en argumentos.
+        //
+        // `__norte_cd` se define ANTES del gancho, y el orden es la invariante
+        // de `el_gancho_se_registra_cuando_el_cd_ya_existe`: en fish el gancho
+        // se registra al definirlo, así que con el orden contrario el primer
+        // marcador podía salir —y dar permiso para teclear el `cd`— con la
+        // línea que define `__norte_cd` todavía sin consumir.
         Shell::Fish => format!(
-            " function __norte_cwd --on-event fish_prompt; \
+            " function __norte_cd; \
+             set -l d (printf \"$argv[1]\" | string collect); \
+             cd -- (string sub -s 1 -e -1 -- \"$d\"); end\n \
+             function __norte_cwd --on-event fish_prompt; \
              set -l p (string replace -a -- \\x10 \\x10\\x10 $PWD | \
              string replace -a -- \\a \\x10G | string collect); \
-             printf '{pre}{n};%s\\a' \"$p\"; end\n \
-             function __norte_cd; \
-             set -l d (printf \"$argv[1]\" | string collect); \
-             cd -- (string sub -s 1 -e -1 -- \"$d\"); end\n"
+             printf '{pre}{n};%s\\a' \"$p\"; end\n"
         ),
     }
 }
@@ -543,6 +549,37 @@ mod tests {
             assert!(
                 cd.iter().all(|b| *b == b'\n' || (0x20..0x7f).contains(b)),
                 "{shell:?}: el cd lleva un byte que el editor de línea ejecutaría"
+            );
+        }
+    }
+
+    /// **El gancho se registra cuando `__norte_cd` ya existe**, en los tres.
+    ///
+    /// El marcador es lo que autoriza a teclear el `cd`, y la fontanería entera
+    /// se manda de un tirón: en cuanto el gancho está puesto, el primer prompt
+    /// lo imprime, y eso puede pasar con las líneas de detrás todavía sin
+    /// consumir. Si `__norte_cd` fuera una de ellas, el permiso llegaría antes
+    /// que la función. Hoy no se cae —la cola del tty es FIFO, así que el `cd`
+    /// se lee después de la definición—, y lo que se perdería si algo vaciara
+    /// la cola es un `Unknown command` en la cara del lector, no una orden mal
+    /// dirigida. Aun así el orden correcto es gratis, y bash y zsh ya lo tenían
+    /// por accidente: registran en la ÚLTIMA línea.
+    #[test]
+    fn el_gancho_se_registra_cuando_el_cd_ya_existe() {
+        let n = nonce();
+        for (shell, registro) in [
+            (Shell::Bash, "PROMPT_COMMAND"),
+            (Shell::Zsh, "precmd_functions"),
+            // En fish el gancho SE REGISTRA al definirlo: `--on-event` es el
+            // registro, no hay una línea aparte que lo ate.
+            (Shell::Fish, "--on-event fish_prompt"),
+        ] {
+            let texto = install(shell, &n);
+            let cd = texto.find("__norte_cd").expect("define el cd");
+            let puesto = texto.find(registro).expect("registra el gancho");
+            assert!(
+                cd < puesto,
+                "{shell:?}: el gancho queda puesto antes de que `__norte_cd` exista"
             );
         }
     }
