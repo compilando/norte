@@ -844,3 +844,102 @@ async fn el_mapa_no_se_mide_dos_veces_por_el_mismo_directorio() {
     let pedidos = backend.mapas_pedidos.lock().expect("mapas").len();
     assert_eq!(pedidos, 1, "cinco mensajes, una medida: {pedidos}");
 }
+
+// ---------------------------------------------------------------------------
+// El panel de TERMINAL (#362). Los dos tests que faltaban, y ninguno necesita
+// un pty: el barrido de sondas no puede abrirlo —sus paneles son `mem:///` y
+// un shell se niega a sentarse ahí— así que estas dos cosas se comprobaban
+// solas, que es como llegaron a `main` seis fallos con el gate en verde.
+// ---------------------------------------------------------------------------
+
+/// **Una ventana de solo lectura no abre un shell, ni por el botón.**
+///
+/// El filtro del keymap no basta y ése era el fallo: gobierna la resolución
+/// de TECLAS, y el botón de la barra de paneles, la entrada del menú y los
+/// botones de la barra de estado llaman al despacho sin pasar por él. Un
+/// clic bastaba.
+///
+/// Es la puerta de atrás más ancha que puede tener una ventana que promete no
+/// escribir: dentro de un shell se teclea cualquier cosa.
+#[tokio::test]
+async fn en_solo_lectura_el_boton_del_terminal_no_abre_nada() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        attach: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset_con(
+            "orthodox",
+            norte_ui_host::commands::Efectos::SoloLectura,
+        )
+        .expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::SoloLectura,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+
+    // El botón SÍ está en la barra —viene del registro compartido— y eso es
+    // parte del caso: lo que no puede es funcionar.
+    let boton = snap
+        .panel_bar
+        .buttons
+        .iter()
+        .position(|b| b.kind == "terminal")
+        .expect("el terminal tiene botón en la barra");
+
+    let ack = h
+        .dispatch(UiAction::PanelBarActivate {
+            button: u32::try_from(boton).expect("cabe"),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        !matches!(ack, norte_ui_host::ActionAck::Applied { .. }),
+        "una ventana de solo lectura no puede abrir un shell: {ack:?}"
+    );
+}
+
+/// **Se entra y se SALE con la misma tecla.**
+///
+/// Las dos mitades del mismo defecto, y hacen falta las dos: abrir por la
+/// tecla dejaba el foco en el listado —así que al panel solo se llegaba con
+/// el ratón— y estando dentro la tecla de salida no hacía nada. Como ahí
+/// dentro TODAS las teclas son del shell, incluida la del anillo de paneles,
+/// eso era una ratonera.
+#[tokio::test]
+async fn el_panel_de_terminal_se_abre_y_se_sale_con_la_misma_tecla() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_con_arbol(
+        Arc::clone(&backend),
+        norte_frontend::layout::presets::tree("simple").expect("layout"),
+        (120, 40),
+    )
+    .await;
+    let mut sub = h.subscribe();
+
+    // El backend falso sirve `mem:///`, donde un shell se niega a sentarse. Se
+    // comprueba porque es la misma puerta que `app.terminal` y con la misma
+    // frase, y porque es lo que impide que el barrido de sondas pueda abrir
+    // este panel.
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "layout.terminal").await;
+    assert!(
+        matches!(
+            ack,
+            ActionAck::Unavailable { ref reason_key } if reason_key == "host-not-local"
+        ),
+        "sobre un panel que no es local se niega y lo dice: {ack:?}"
+    );
+}

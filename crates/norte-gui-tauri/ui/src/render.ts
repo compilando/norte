@@ -50,6 +50,7 @@ import * as help from "./render/help";
 import * as splash from "./render/splash";
 import * as log from "./render/log";
 import * as diskMap from "./render/diskmap";
+import * as terminal from "./render/terminal";
 import * as timeline from "./render/timeline";
 import * as panelPlugin from "./render/panel";
 import * as search from "./render/search";
@@ -895,6 +896,10 @@ export class Screen {
       this.paintTimeline(dom, slot);
       return;
     }
+    if (slot.kind === "terminal") {
+      this.paintTerminal(dom, slot);
+      return;
+    }
     if (slot.kind === "unsupported") {
       // El nombre del kind sale del fichero de disposición del usuario: si el
       // host lo enmascaró, se dice — el mismo criterio que el resto.
@@ -963,6 +968,7 @@ export class Screen {
 
   /** En `render/log.ts`. */
   readonly paintLog = log.paintLog;
+  readonly paintTerminal = terminal.paintTerminal;
 
   /** En `render/panel.ts`. */
   readonly paintPanel = panelPlugin.paintPanel;

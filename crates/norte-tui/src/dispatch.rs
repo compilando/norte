@@ -215,7 +215,7 @@ pub async fn dispatch(
                         // El tamaño de verdad lo pone el pintado en cuanto
                         // sabe qué rectángulo le tocó; éste es el de arranque
                         // y dura lo que tarda la primera vuelta.
-                        match crate::termpanel::TermPanel::abrir(&dir, (80, 24)) {
+                        match crate::termpanel::abrir(&dir, (80, 24)) {
                             Ok(t) => {
                                 // Se deja constancia, como sus dos hermanos y
                                 // con el mismo «no va al diario» escrito: un

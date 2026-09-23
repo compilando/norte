@@ -85,7 +85,19 @@ impl KeyInput {
         if self.alt {
             texto.push_str("alt+");
         }
-        if self.shift {
+        // `shift` se DESCARTA sobre un carácter suelto, y es la misma regla
+        // que la gramática de acordes tiene escrita: en un `Char` el shift ya
+        // está DENTRO del carácter —el navegador manda `A`, no `shift+a`— así
+        // que volver a nombrarlo es un acorde que `parse_chord` rechaza
+        // (`ShiftWithChar`).
+        //
+        // Sin esto, ninguna mayúscula ni ningún `| > ~ ? : " _` llegaba a
+        // ninguna parte: el acorde no se construía y la tecla moría como
+        // `host-key-unmapped`. En el panel de terminal (#362) eso significaba
+        // que `ls | grep Foo` no se podía escribir; en el resto de la ventana,
+        // que un preset que ate `V` o `P` —como la regla del repositorio
+        // manda escribirlos— estaba muerto.
+        if self.shift && nombre.chars().count() != 1 {
             texto.push_str("shift+");
         }
         if self.meta {

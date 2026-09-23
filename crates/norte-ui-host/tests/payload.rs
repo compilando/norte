@@ -250,6 +250,12 @@ fn filas_de(s: &norte_ui_host::dto::SlotView) -> usize {
         // La línea de tiempo lleva sus filas CARGADAS, acotadas por el tope de
         // filas del puente: cuentan, y una página más al llegar abajo suma.
         SlotView::Timeline(t) => t.rows.len(),
+        // El terminal manda su rejilla ENTERA en cada repintado —no se
+        // desplaza como una lista, se repinta—, así que sus filas son las que
+        // más veces cruzan de todas. Contarlas es justo el canario: un panel
+        // alto dentro de un `make` puede mandar cincuenta filas varias veces
+        // por segundo, y ese coste tiene que verse en esta cuenta.
+        SlotView::Terminal(t) => t.rows.len(),
         // El panel de procesos no lleva sus filas en el hueco: las lleva
         // `ViewSnapshot::tasks`, que es una sola lista para toda la pantalla.
         SlotView::Processes { .. } | SlotView::Unsupported { .. } => 0,

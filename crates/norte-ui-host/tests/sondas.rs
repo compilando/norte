@@ -53,16 +53,20 @@ use backend_falso::arbol_de_prueba;
 /// premisa —pulsar el botón abre un hueco— sólo vale para lo que la ventana
 /// sabe pintar; contra un kind que no tiene, el host contesta «no
 /// implementado», que es la respuesta correcta y no un fallo.
-const SIN_VENTANA: &[(&str, u32)] = &[
-    ("timeline", 359),
-    // El panel de terminal (#362): la TUI ya lo pinta y la ventana todavía no.
-    // Su kind sale en la barra porque el registro es COMPARTIDO, que es justo
-    // lo que estos tests comprueban, pero sondarlo aquí sería preguntarle a un
-    // hueco que la ventana no abre. Cuando T4 lo abra, sale de esta lista — y
-    // entonces entrará en `NO_SIGUEN`, porque un shell no sigue al cursor:
-    // tiene su propio directorio y lo cambia quien teclea dentro.
-    ("terminal", 362),
-];
+const SIN_VENTANA: &[(&str, u32)] = &[("timeline", 359)];
+
+/// Kinds que este ARNÉS no puede sondear, y por qué.
+///
+/// Distinto de [`SIN_VENTANA`] y la diferencia importa: aquéllos son trabajo
+/// que falta, con su issue. Éstos la ventana los hace perfectamente — lo que
+/// no da el arnés es la precondición.
+const SIN_SONDA: &[(&str, &str)] = &[(
+    "terminal",
+    "un shell se sienta en un directorio del sistema de ficheros, y los \
+     paneles de este arnés son `mem:///`. El panel se NIEGA a abrirse ahí, \
+     que es la conducta correcta y la misma que `app.terminal`: sondearlo \
+     pediría un backend con rutas locales de verdad",
+)];
 
 const NO_SIGUEN: &[(&str, &str)] = &[
     (
@@ -137,7 +141,8 @@ fn vista_de(snap: &ViewSnapshot, kind: &str) -> Option<SlotView> {
             | ("log", SlotView::Log(_))
             | ("viewer", SlotView::Preview(_))
             | ("disk-map", SlotView::DiskMap(_))
-            | ("timeline", SlotView::Timeline(_)) => true,
+            | ("timeline", SlotView::Timeline(_))
+            | ("terminal", SlotView::Terminal(_)) => true,
             (_, SlotView::Unsupported { kind_name, .. }) => kind_name == kind,
             _ => false,
         })
@@ -314,7 +319,7 @@ async fn cada_hueco_que_sigue_al_cursor_tiene_sonda() {
     assert!(!kinds.is_empty(), "la barra de paneles no ofrece nada");
 
     for kind in &kinds {
-        if SIN_VENTANA.iter().any(|(k, _)| k == kind) {
+        if SIN_VENTANA.iter().any(|(k, _)| k == kind) || SIN_SONDA.iter().any(|(k, _)| k == kind) {
             continue;
         }
         let o = observa(kind).await;
@@ -343,7 +348,7 @@ async fn la_lista_de_los_que_no_siguen_esta_al_dia() {
     drop(host);
 
     for kind in &kinds {
-        if SIN_VENTANA.iter().any(|(k, _)| k == kind) {
+        if SIN_VENTANA.iter().any(|(k, _)| k == kind) || SIN_SONDA.iter().any(|(k, _)| k == kind) {
             continue;
         }
         let declarado = NO_SIGUEN.iter().find(|(k, _)| k == kind);

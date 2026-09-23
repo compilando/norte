@@ -22,11 +22,14 @@ independently through `PROTOCOL_VERSION`.
   norte would never see it. If a preset binds the command to a two-key
   sequence instead of a single chord, the panel opens but does not take the
   keyboard, on purpose: leaving would mean stealing the shell's first key
-  where you are typing it. The shell dies with the panel: closing the slot
+  where you are typing it. **It is in both frontends** (bridge 95): the
+  window paints the same grid the terminal does, because the emulator and
+  the pty are one shared crate rather than two that could drift. Over a
+  remote pane it refuses to open and says why — a shell sits in a directory
+  of the filesystem. The shell dies with the panel: closing the slot
   ends it, and so does leaving norte. It is spawned with `TERM=vt100`,
   which is what the grid honestly implements — so a `ls` inside is
   monochrome for now; #366 implements the missing sequences and raises it.
-  The window does not paint it yet.
 - **RSA client keys as a per-connection opt-in** (ADR 0150). An SFTP
   connection with `auth = "key"` accepts an RSA key file when its entry says
   `allow_rsa = true`. Signatures are rsa-sha2 only: a server that accepts

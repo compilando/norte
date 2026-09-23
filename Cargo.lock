@@ -5435,6 +5435,7 @@ name = "norte-term"
 version = "0.3.0-alpha.4"
 dependencies = [
  "norte-testkit",
+ "portable-pty",
  "proptest",
  "unicode-width",
  "vte",
@@ -5529,6 +5530,7 @@ dependencies = [
  "norte-help",
  "norte-i18n",
  "norte-proto",
+ "norte-term",
  "norte-testkit",
  "norte-theme",
  "norte-tui",

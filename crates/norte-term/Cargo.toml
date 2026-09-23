@@ -38,6 +38,19 @@ vte = "0.15"
 # `norte-frontend` y `norte-tui` ya usan para medir texto.
 unicode-width = "0.2"
 
+# Un shell vivo detrás de la rejilla, para quien quiera un panel de terminal
+# (feature `pty`, APAGADA de fábrica: quien solo parsea bytes no compila nada
+# de esto y el crate sigue siendo lo que dice su portada).
+#
+# Ya estaba en el árbol por ADR 0084 —el subshell de la terminal— así que no
+# entra ninguna arista nueva. Vive aquí y no en cada frontend porque lo
+# necesitan los dos con el mismo pty, el mismo hilo lector y el mismo trozo
+# delicado: contestar las consultas de terminal antes de nada.
+portable-pty = { version = "0.9", optional = true }
+
+[features]
+pty = ["dep:portable-pty"]
+
 [dev-dependencies]
 # El corpus hostil CANÓNICO, que es lo que el plan pedía para esta fase y lo
 # que una lista escrita a mano aquí no da: un fixture nuevo entra en el corpus

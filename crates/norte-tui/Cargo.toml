@@ -36,7 +36,7 @@ norte-i18n.workspace = true
 norte-proto.workspace = true
 # La rejilla del panel de terminal (#362). Es de casa y no arrastra nada
 # nuevo: su única dependencia externa es `vte`, justificada en su Cargo.toml.
-norte-term.workspace = true
+norte-term = { workspace = true, features = ["pty"] }
 norte-theme.workspace = true
 norte-vfs-local.workspace = true
 schemars = { workspace = true, features = ["derive"], optional = true }

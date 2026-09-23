@@ -375,6 +375,13 @@ impl Estado {
         // `suppaftp`, que es lo único que impide que ahí dentro aparezca una
         // contraseña de FTP— con la interfaz diciendo «info» y sin ningún panel
         // donde verlo. Es lo que ya hace la TUI al cerrar el suyo.
+        // Cerrar el panel de terminal MATA su shell (#362), y es lo único que
+        // lo mata: la tecla que lo abre no cierra, justamente para que acabar
+        // con un proceso del lector sea algo que se pide por su nombre. El
+        // `Drop` del shell se encarga; aquí se suelta y se para su tic.
+        if kind == super::termpanel::KIND {
+            self.soltar_terminal();
+        }
         if kind == super::logpanel::KIND {
             if let Some(anillo) = &self.log_ring {
                 anillo.set_level(self.log_panel.level());
