@@ -18,6 +18,10 @@
     "conflict": "case_collision",
     "kind": "conflict"
   },
+  "conflict_destination_gone": {
+    "conflict": "destination_gone",
+    "kind": "conflict"
+  },
   "conflict_exists": {
     "conflict": "exists",
     "kind": "conflict"

@@ -1339,7 +1339,35 @@ use crate::{
 /// que el SDK dice como `Unsupported`. Un **cliente 0.82 contra un daemon
 /// 0.83** no manda `queued`, se lee `false`, y eso es exactamente lo de
 /// 0.82.
-pub const PROTOCOL_VERSION: &str = "0.83.0";
+/// # 0.84.0 — el destino que desaparece (`ConflictKind::DestinationGone`)
+///
+/// Un subtipo de conflicto nuevo para cuando el directorio de destino deja de
+/// estar donde se pidió con la tarea ya en marcha: lo borraron, lo movieron o
+/// lo sustituyeron mientras se copiaba (ADR 0151).
+///
+/// Existe porque el caso llegaba como `Error::NotFound` a secas, que en mitad
+/// de una copia de miles de ficheros el lector lee como «no encuentra algo del
+/// origen». No es [`ConflictKind::EscapesRoot`](crate::ConflictKind::EscapesRoot):
+/// aquella dice que la ruta lleva a otro sitio por un enlace —una respuesta
+/// sobre la forma de la ruta, que se lee como seguridad—, y ésta dice que la
+/// carpeta se fue. El remedio también es distinto: volver a crearla y
+/// reintentar.
+///
+/// Un **cliente 0.83 contra un daemon 0.84** degrada el subtipo a
+/// [`ConflictKind::Unknown`](crate::ConflictKind::Unknown) y enseña
+/// «conflicto» a secas (ADR 0005). **Lo que pierde es la frase, no la
+/// protección**: quien comprueba es el daemon, así que la tarea falla en vez
+/// de decir que copió. Lo ya escrito sí se queda en la carpeta que se borró,
+/// para los dos por igual (#369).
+///
+/// Un **cliente 0.84 contra un daemon 0.83** no llega a negociar:
+/// [`version_compatible`] acepta al cliente con el minor IGUAL o uno por
+/// detrás, nunca por delante, y el daemon contesta `VERSION_MISMATCH`. Y
+/// conviene decir qué hacía ese daemon, porque no era contestar mal: daba la
+/// copia por **`Completed`** con los ficheros en la papelera (ADR 0151). Esto
+/// no mejora un mensaje, cambia un «hecho» que era mentira por un fallo — y
+/// no hay nada que un cliente pueda compensar por su cuenta.
+pub const PROTOCOL_VERSION: &str = "0.84.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver

@@ -47,6 +47,11 @@ pub fn error_key(e: &Error) -> &'static str {
             ConflictKind::CaseCollision => "err-conflict-case",
             ConflictKind::Normalization => "err-conflict-normalization",
             ConflictKind::TypeMismatch => "err-conflict-type",
+            // 0.84.0 (ADR 0151). Con la clave genérica el lector leería
+            // «conflicto» a secas, que es exactamente lo que este subtipo
+            // existe para no decir: lo que ha pasado es que su carpeta de
+            // destino ya no está, y de ahí se deduce qué hacer.
+            ConflictKind::DestinationGone => "err-conflict-destination-gone",
             _ => "err-conflict",
         },
         Error::ProviderUnavailable { .. } => "err-provider-unavailable",

@@ -236,6 +236,10 @@ err-conflict-exists = el destino ya existe
 err-conflict-case = el nombre colisiona por caja con una entrada existente
 err-conflict-normalization = el nombre colisiona tras normalización Unicode
 err-conflict-type = el destino es de otro tipo
+# Dice QUÉ pasó y, de ahí, qué hacer: volver a crear la carpeta y reintentar.
+# Antes esto salía como «no encontrado», que en mitad de una copia se lee como
+# si faltara algo del origen.
+err-conflict-destination-gone = la carpeta de destino ya no está: se borró o se movió mientras se copiaba
 err-conflict = conflicto en el destino
 err-provider-unavailable = la ubicación no está disponible (reintentable)
 err-no-space = sin espacio en el destino

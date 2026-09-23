@@ -570,6 +570,32 @@ fn escapes_root_round_trips_and_a_future_subtype_still_degrades() {
     );
 }
 
+/// El token de 0.84.0, clavado por su nombre como sus dos hermanas.
+///
+/// Lo cubren además la fixture y el cruce schema↔golden, pero un test con
+/// nombre es lo que hace que renombrarlo salga en el sitio donde se lee. Y
+/// aquí importa más que de costumbre: `destination_gone` y `escapes_root` se
+/// parecen lo bastante como para que alguien los dé por lo mismo, y no lo son
+/// — uno dice que la ruta lleva fuera de su raíz (la FORMA de la ruta), el
+/// otro que la carpeta se fue.
+#[test]
+fn destination_gone_round_trips_as_a_conflict() {
+    let e = Error::Conflict {
+        conflict: ConflictKind::DestinationGone,
+    };
+    let json = serde_json::to_value(&e).expect("serializa");
+    assert_eq!(json["conflict"], "destination_gone");
+    assert_eq!(roundtrip(&e), e);
+    assert_ne!(
+        json["conflict"],
+        serde_json::to_value(Error::Conflict {
+            conflict: ConflictKind::EscapesRoot
+        })
+        .expect("serializa")["conflict"],
+        "dos subtipos distintos no pueden compartir token"
+    );
+}
+
 #[test]
 fn stale_revision_round_trips_as_a_conflict() {
     // L2: la sesión de UI que se escribe contra una revisión que ya no es la
@@ -1362,10 +1388,17 @@ fn version_ventana_actual() {
     // ve `Paused`, que ya sabía leer como no terminal.
     // 0.83.0: `queued` en copiar y mover, y `task.move`. Un daemon 0.82
     // ignora `queued` —paralelo, lo de siempre— y no conoce `task.move`.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.83.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.82.0"), "N-1");
+    // 0.84.0: `ConflictKind::DestinationGone`. Un cliente 0.83 lo degrada a
+    // `Unknown` y enseña «conflicto» a secas: pierde la frase, no la
+    // protección — la comprobación la hace el daemon, así que la tarea falla
+    // igual y los ficheros no acaban en una carpeta que ya nadie ve. Y aun
+    // siendo aditivo, la ventana se DESPLAZA: un cliente 0.83 no puede
+    // ofrecer «vuelve a crear la carpeta y reintenta», porque no sabe que eso
+    // es lo que pasó.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.84.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.83.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.81.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.82.9"),
         "N-2 fuera de la ventana"
     );
 }
