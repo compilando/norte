@@ -103,12 +103,12 @@ function pintaSpan(
   if (fg !== undefined) {
     el.style.color = css(fg);
   } else if (span.reverse) {
-    el.style.color = "var(--term-bg)";
+    el.style.color = "var(--bg)";
   }
   if (bg !== undefined) {
     el.style.background = css(bg);
   } else if (span.reverse) {
-    el.style.background = "var(--term-fg)";
+    el.style.background = "var(--fg)";
   }
   if (span.bold) el.style.fontWeight = "bold";
   if (span.dim) el.style.opacity = "0.65";

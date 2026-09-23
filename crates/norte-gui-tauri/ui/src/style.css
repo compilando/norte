@@ -43,9 +43,15 @@
      Los 240 restantes del 256 no están: un tema no los elige uno a uno, y lo
      que hace un navegador con una `var()` que no existe es heredar el color
      de arriba, que para un fragmento de terminal es exactamente lo razonable
-     —se ve el texto— en vez de desaparecer. */
-  --term-bg: #101216;
-  --term-fg: #d8dee9;
+     —se ve el texto— en vez de desaparecer.
+
+     El fondo y el primer plano por defecto NO están aquí: son `--bg` y `--fg`,
+     los del tema. Tenerlos aparte era tener dos nombres para el mismo color
+     con los mismos dígitos escritos dos veces, y además un par de perillas que
+     ningún tema alimenta — que es lo que el guardián de variables detectó. Un
+     terminal sin colores puestos se ve como el resto de la ventana, y eso es
+     lo correcto: el `ColorTerm::PorDefecto` del host significa exactamente
+     «el que toque aquí». */
   --term-0: #3b4252;
   --term-1: #bf616a;
   --term-2: #a3be8c;
@@ -4157,8 +4163,8 @@ button.status-item:hover {
   font-family: var(--font-mono);
   line-height: var(--cell-h);
   white-space: pre;
-  background: var(--term-bg);
-  color: var(--term-fg);
+  background: var(--bg);
+  color: var(--fg);
 }
 
 .terminal-row {
@@ -4168,8 +4174,8 @@ button.status-item:hover {
 /* El cursor es una celda invertida, no un borde: un borde se sale de la
    celda y desalinea la fila. */
 .terminal-cursor {
-  background: var(--term-fg);
-  color: var(--term-bg);
+  background: var(--fg);
+  color: var(--bg);
 }
 
 .log {
