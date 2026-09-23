@@ -645,6 +645,49 @@ impl Effective {
             .collect()
     }
 
+    /// El acorde SUELTO que corre `command`, si hay uno.
+    ///
+    /// Existe para los dos sitios que le entregan el teclado ENTERO a otro
+    /// programa: el subshell (`app.toggle-panels`, ADR 0084) y el panel de
+    /// terminal (`layout.terminal`, #362). Los dos tienen el mismo problema y
+    /// por eso la regla vive aquí una vez: mientras el shell tiene las teclas,
+    /// norte reconoce UN acorde y le pasa todo lo demás, así que ese acorde no
+    /// puede ser una secuencia de dos — reconocerla pediría meter el resolutor
+    /// entero dentro del bucle y, sobre todo, robarle al shell la primera
+    /// tecla justo donde el lector la está escribiendo.
+    ///
+    /// Devuelve `None` si el preset lo ata a una secuencia o no lo ata: quien
+    /// llama entonces NO cede el teclado, en vez de cederlo sin salida.
+    ///
+    /// Si hay dos acordes sueltos, manda el ÚLTIMO, que es el que gana en el
+    /// keymap efectivo y por tanto el que sale en la hoja de referencia.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{Effective, Screen, parse_keymap};
+    ///
+    /// let src = r#"
+    /// [global]
+    /// keymap = [
+    ///     { on = ["ctrl+alt+s"], run = "layout.terminal" },
+    ///     { on = ["g", "t"], run = "layout.timeline" },
+    /// ]
+    /// "#;
+    /// let preset = parse_keymap(src).unwrap();
+    /// let cmds = ["layout.terminal", "layout.timeline"];
+    /// let eff = Effective::build_for(&preset, &[], &cmds, Screen::Browse).unwrap();
+    /// assert!(eff.lone_chord("layout.terminal").is_some());
+    /// // Atado a una SECUENCIA: no sirve para salir de un terminal.
+    /// assert!(eff.lone_chord("layout.timeline").is_none());
+    /// ```
+    #[must_use]
+    pub fn lone_chord(&self, command: &str) -> Option<Chord> {
+        self.bindings
+            .iter()
+            .filter(|b| b.seq.len() == 1 && b.run == command)
+            .map(|b| b.seq[0])
+            .next_back()
+    }
+
     /// Is `chord`, pressed ALONE, bound to `command` and runnable here?
     ///
     /// The question a frontend asks on EVERY key event — "did this press mean

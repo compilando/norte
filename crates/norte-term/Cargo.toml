@@ -1,0 +1,42 @@
+[package]
+name = "norte-term"
+description = "Rejilla de terminal PURA: los bytes de un pty parseados a celdas, cursor y atributos. Sin pty, sin toolkit y sin tema"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# La MÁQUINA DE ESTADOS de los escapes, y SOLO ella (regla 8).
+#
+# **Beneficio**: reconocer CSI, OSC, DCS y las fronteras de UTF-8 es la parte
+# con los casos raros de verdad, y la que no se debe escribir a mano. La
+# REJILLA sí es nuestra: es donde va el enmascarado del contenido ajeno y los
+# tests del corpus hostil, así que conviene no heredarla.
+#
+# **Tamaño**: añade UN crate al árbol. `vte` arrastra `arrayvec` y `memchr`, y
+# los dos estaban ya en el lock. Con las features de fábrica (solo `std`): el
+# handler ANSI de alto nivel (`ansi`) queda fuera y con él `log`, `bitflags` y
+# `cursor-icon`; aquí se implementa `Perform` a mano.
+#
+# **Mantenimiento**: es de alacritty, y es el parser que alacritty mismo
+# embarca. Licencia `Apache-2.0 OR MIT`, la nuestra.
+#
+# **Alternativas**: `vt100` (0.16.2, MIT) es ESTE `vte` más una rejilla, o sea
+# tres crates para regalarnos justo lo que T1 entrega — y su upstream está
+# quieto: hay cuatro forks publicados (`panoptes-vt100`, `term-wm-vt100`,
+# `atuin-vt100`, un `-patch4`), así que un fallo ahí sería mantener una
+# rejilla ajena. `alacritty_terminal` son 28 crates y trae selección, búsqueda
+# y damage tracking que no se piden, con licencia Apache a secas. `termwiz`
+# (de wezterm, el mismo proyecto que `portable-pty`) son 98 crates: lo
+# compartido con lo que ya hay es el pty, no sus dependencias.
+vte = "0.15"
+# Un carácter ancho ocupa DOS celdas, y la rejilla tiene que saberlo o el resto
+# de la línea sale desplazado. Es la misma herramienta y la misma versión que
+# `norte-frontend` y `norte-tui` ya usan para medir texto.
+unicode-width = "0.2"
+
+[lints]
+workspace = true

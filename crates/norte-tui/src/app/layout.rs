@@ -116,6 +116,10 @@ impl App {
             KeyOwner::DiskMap => self.slot_of_kind_visible(crate::diskmap::KIND).is_some(),
             KeyOwner::Timeline => self.slot_of_kind_visible(crate::timeline::KIND).is_some(),
             KeyOwner::Log => self.slot_of_kind_visible(crate::logview::KIND).is_some(),
+            // El terminal, igual que los demás: si su hueco se va detrás de
+            // una pestaña, las teclas vuelven a los listados. El shell sigue
+            // vivo detrás — lo que se pierde es el teclado, no el proceso.
+            KeyOwner::Terminal => self.slot_of_kind_visible(crate::termpanel::KIND).is_some(),
             // Un panel de plugin sigue teniendo el teclado mientras se VEA.
             // Si el plugin se desactiva, o su hueco se va detrás de una
             // pestaña, las teclas vuelven a los listados como con cualquier
@@ -946,6 +950,71 @@ impl App {
         self.slot_of_kind(crate::logview::KIND)
     }
 
+    /// Devuelve el teclado a los listados.
+    ///
+    /// Existe porque el campo es privado fuera de este módulo y hay dos sitios
+    /// fuera que lo necesitan: el brazo de teclas del terminal y el barrido de
+    /// antes del frame, cuando el shell se va con el teclado dentro.
+    pub fn soltar_teclado(&mut self) {
+        self.key_owner = KeyOwner::Panes;
+    }
+
+    /// El hueco del panel de terminal, si existe.
+    #[must_use]
+    pub fn terminal_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::termpanel::KIND)
+    }
+
+    /// Abre el panel de terminal, o le da o le quita el teclado.
+    ///
+    /// **No lo cierra nunca, y ahí diverge de sus vecinos a propósito.**
+    /// `toggle_log` y los demás cierran el panel al segundo toque; aquí el
+    /// segundo toque devuelve el teclado a los listados y deja el shell VIVO,
+    /// que es lo que `app.toggle-panels` hace con el subshell. Cerrarlo mata
+    /// un proceso del lector —con lo que tuviera a medias dentro— y eso no
+    /// puede ser lo que hace la misma tecla con la que se entra. Para cerrarlo
+    /// está `layout.close-slot`, que se llama como lo que hace.
+    ///
+    /// El shell arranca en el directorio del listado con foco, igual que
+    /// `app.terminal`.
+    pub fn toggle_terminal(&mut self) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        // Sin acorde suelto que saque el teclado, el panel se abre pero NO lo
+        // toma: dentro, cada tecla sería del shell y ninguna volvería. Es la
+        // misma regla que el subshell aplica antes de ceder la terminal, y el
+        // mismo criterio: mejor una capacidad a medias que una trampa.
+        let puede_tomar_teclas = self.terminal_chord.is_some();
+        match self.terminal_slot() {
+            // Ya lo tenía: se devuelve el teclado y el shell se queda.
+            Some(id) if self.key_owner == KeyOwner::Terminal && self.se_ve(id) => {
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(id) => {
+                self.revelar(id);
+                if puede_tomar_teclas {
+                    self.key_owner = KeyOwner::Terminal;
+                }
+            }
+            None => {
+                let id = self.mint_slot();
+                self.layout = self.layout.dock_grouped(
+                    self.focused_slot(),
+                    Edge::Bottom,
+                    // Doce filas: diez de shell más el marco. Con menos, cada
+                    // orden que responda algo borra la anterior y lo que queda
+                    // no es un terminal, es una ventanita que parpadea — el
+                    // mismo motivo por el que el registro pide diez.
+                    Size::Fixed(12),
+                    &Node::slot(id, KindId::new(crate::termpanel::KIND)),
+                );
+                self.panes.refresh_visible(&self.layout);
+                if puede_tomar_teclas {
+                    self.key_owner = KeyOwner::Terminal;
+                }
+            }
+        }
+    }
+
     /// El hueco del panel de registro **si de verdad está en pantalla**.
     ///
     /// Distinto de [`Self::log_slot`], que dice si EXISTE: un hueco detrás de
@@ -1326,6 +1395,9 @@ impl App {
             KeyOwner::Log => self.log_slot(),
             KeyOwner::DiskMap => self.disk_map_slot(),
             KeyOwner::Timeline => self.timeline_slot(),
+            // El terminal se agranda como cualquier otro: doce filas es el
+            // arranque, y un `make` dentro pide más.
+            KeyOwner::Terminal => self.terminal_slot(),
             // Un panel de plugin se agranda como cualquier otro lateral: la
             // tecla es la misma y el hueco lo dice el reparto.
             KeyOwner::Panel => self.panel_slot(),

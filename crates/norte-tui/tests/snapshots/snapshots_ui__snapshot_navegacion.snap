@@ -3,7 +3,7 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render(&app_base())
 ---
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
-" Sitios  Visor  Procesos  Detalles  Árbol  Registro  Mapa  Historial            "
+" Sitios  Visor  Procesos  Detalles  Árbol  Registro  Mapa  Historial  Terminal  "
 "┌/casa─────────────────────────────────┐┌/otro─────────────────────────────────┐"
 "│Nombre▲             Tamaño       Fecha││Nombre▲             Tamaño       Fecha│"
 "│  /docs                               ││   cosa                1 B            │"

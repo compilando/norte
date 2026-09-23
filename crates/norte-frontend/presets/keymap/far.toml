@@ -157,6 +157,11 @@ keymap = [
     # acorde alguno, así que esto no es una transcripción: `alt+z` es la única
     # letra libre en los siete presets. Ver orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # El panel de terminal (#362). FAR no tiene un panel así —su consola es la
+    # de debajo de los paneles, que se enseña con `ctrl+o` y ocupa la pantalla
+    # entera, que es lo que en norte hace `app.toggle-panels`—, así que esto no
+    # es una transcripción: va el acorde común de norte. Ver orthodox.toml.
+    { on = ["ctrl+alt+s"], run = "layout.terminal" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },

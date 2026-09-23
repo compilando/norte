@@ -462,6 +462,11 @@ mod tests {
                 // razón — el último en registrarse va el último, y los de
                 // siempre no se mueven.
                 "timeline",
+                // #362: el panel de terminal, el último en registrarse y por
+                // tanto el último botón. Es el único que no se cierra con su
+                // propio botón: el segundo toque le devuelve el foco y deja el
+                // shell vivo.
+                "terminal",
             ],
             "cambió el orden de los botones de serie"
         );

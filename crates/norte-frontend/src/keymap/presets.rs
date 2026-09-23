@@ -478,6 +478,12 @@ mod k2b_gate_tests {
             // tanto otro que no se puede dejar sin tecla en ninguno. `alt+z`
             // en los siete — la única letra que quedaba libre en todos.
             "layout.disk-map",
+            // El terminal (#362), y es el caso EXTREMO de esta lista: los
+            // demás paneles consumen comandos del catálogo, y éste consume
+            // bytes, o sea que se queda también los acordes que serían de
+            // norte. Sin tecla no se entra y, lo que importa, no se sale.
+            // `ctrl+alt+s` en los siete.
+            "layout.terminal",
         ];
         let mut faltan: Vec<String> = Vec::new();
         for nombre in NAMES {

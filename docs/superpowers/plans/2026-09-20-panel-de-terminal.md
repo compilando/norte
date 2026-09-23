@@ -54,8 +54,22 @@ secuencia (ADR 0084).
 
 Crate nuevo `norte-term` (MIT OR Apache-2.0) o módulo en `norte-frontend`:
 rejilla de celdas, cursor, atributos, `resize`, y `alimentar(&[u8])`. Una
-dependencia de parseo VT con su justificación de regla 8 (`vt100` es la
-candidata: pura, sin E/S, sin toolkit). Sin pty, sin ratatui, sin DOM.
+dependencia de parseo VT con su justificación de regla 8. Sin pty, sin ratatui,
+sin DOM.
+
+Las tres candidatas, mirado el 2026-09-23 (la elección se cierra en T1, con
+`cargo tree` delante, que es el dato que decide y el único que no se puede
+mirar sin añadirla):
+
+| crate | versión | licencia | señal |
+| --- | --- | --- | --- |
+| `vt100` | 0.16.2 | MIT | pura y pequeña, la que el plan proponía. **Pero tiene al menos cuatro forks publicados** (`panoptes-vt100`, `term-wm-vt100`, `atuin-vt100`, `patch4`), y eso se lee como upstream quieto: quien la quería la bifurcó |
+| `alacritty_terminal` | 0.26.0 | Apache-2.0 | el emulador de un terminal que se usa de verdad, mantenido. Más superficie, y `rust-version` 1.85 |
+| `termwiz` | 0.23.3 | MIT | de wezterm, **el mismo proyecto que `portable-pty` que ya está en el árbol** por ADR 0084: sin ecosistema nuevo. A cambio es la más gorda de las tres |
+
+La licencia de la dependencia no cambia la nuestra (MIT OR Apache-2.0), pero
+`just release-check` audita licencias, así que la elegida pasa por ahí antes de
+darla por buena.
 
 Tests: secuencias reales contra la rejilla esperada, incluidas las del corpus
 hostil — un programa dentro del panel es contenido AJENO, así que lo que pinte
@@ -77,17 +91,45 @@ Un pty por panel, con el reparto de `subshell.rs`. El bucle de eventos
 alimenta la rejilla y repinta. Cierre: el panel muere con su shell y el shell
 con el panel.
 
-**La decisión que hay que tomar aquí**: la tecla de salida. Propuesta —
-la MISMA que el `detach_chord` del subshell, que ya sale del keymap y que los
-presets `norton`/`far` ya divergen a `Ctrl+O`. Reutilizarla es una cosa menos
-que aprender y una cosa menos que atar.
+**La decisión, tomada el 2026-09-23: un acorde PROPIO**, comando nuevo
+(`layout.terminal-escape`) atado en los siete presets, y no el `detach_chord`
+del subshell que este plan proponía.
+
+Reutilizarlo sale gratis y es lo que se descarta: ese acorde ya significa
+«cédeme la terminal ENTERA para el subshell», así que dentro del panel
+significaría una segunda cosa distinta y el lector no puede predecir cuál le
+toca — depende de dónde esté el foco. Un acorde con dos sentidos es peor que un
+acorde más que aprender.
+
+Lo que SÍ se copia de `detach_chord` es la parte que importa, y es una regla,
+no una comodidad: **solo sirve un acorde SUELTO**. Una secuencia de dos pide
+robarle al shell la primera tecla justo donde el lector la está tecleando. Si
+un preset ata la salida a una secuencia, o no la ata, **el panel no toma las
+teclas** —se queda mirando, con el shell vivo detrás— en vez de tomarlas sin
+salida. El acorde concreto se elige en T2, mirando el catálogo y los siete
+presets para que no choque con nada de `browse` y para que el terminal pueda
+entregarlo (`shift+<carácter>` es una tecla muerta; la familia que este
+repositorio ya usa para lo nuevo es `ctrl+alt+…`).
 
 ### T4 — El panel en la ventana
 
 Segunda implementación, y no es opcional: la regla del proyecto es que una
-función extensible está en los dos frontends. La rejilla de T1 cruza el
-puente como filas de spans —la forma que el puente ya sabe mover— o el
-renderer monta un `xterm.js`, que es otra arista y otra revisión.
+función extensible está en los dos frontends.
+
+**Decidido el 2026-09-23: la rejilla de T1 cruza el puente como filas de
+spans**, la forma que el puente ya mueve para los listados y el visor. Una sola
+emulación sirve a los dos frontends y la paridad sale por construcción.
+
+Se descarta `xterm.js` en el renderer, y el motivo no es la arista de npm: son
+DOS emuladores que pueden pintar distinto el mismo byte, y entonces la paridad
+deja de ser una propiedad y pasa a ser una cosa que hay que comprobar a mano
+para siempre. Además el enmascarado de T1 no protege lo que pinte el otro, así
+que pediría su propia revisión de seguridad.
+
+El precio que sí se acepta: cada repintado del shell es tráfico por el puente.
+Se acota mandando lo que CAMBIA —la disciplina que ADR 0142 ya dejó escrita
+para las capas de la ventana— y se mide con algo que repinte sin parar (un
+`htop` dentro del panel) antes de dar T4 por hecha.
 
 ### T5 — Revisión de seguridad
 

@@ -207,6 +207,7 @@ commands! {
     "app.palette" => AppPalette,
     "app.goto" => AppGoto,
     "layout.timeline" => LayoutTimeline,
+    "layout.terminal" => LayoutTerminal,
     "app.menu" => AppMenu,
     "app.settings" => AppSettings,
     "app.pick-accept" => AppPickAccept,

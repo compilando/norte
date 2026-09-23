@@ -146,6 +146,32 @@ impl KindRegistry {
                 // desde la que se DESHACE, así que una fila que no identifica
                 // lo que va a revertir es peor que no tenerla.
                 decl("timeline", (34, 4), true, true, false, SIN_ROLES),
+                // El panel de terminal: se enfoca, toma teclas y hay UNO. No
+                // opta a ningún rol: nadie copia DENTRO de un terminal, y el
+                // destino de una copia es un directorio, no un shell.
+                //
+                // `multi: false` y el plan decía lo contrario («dos terminales
+                // son dos terminales»). Lo que lo cambió: `KeyOwner` se compara
+                // por igualdad en ochenta y seis sitios y NINGUNA variante
+                // lleva carga, cosa que solo se sostiene porque los paneles con
+                // teclado son de uno en uno. Un terminal de varios obligaría a
+                // llevar dentro CUÁL tiene las teclas, y eso es un cambio en
+                // los ochenta y seis para una capacidad que la referencia
+                // —Krusader— tampoco da. El árbol, el registro, procesos, el
+                // mapa y la línea de tiempo son todos uno; éste también.
+                //
+                // «Toma teclas» significa aquí más que en cualquier otro kind
+                // y por eso hay una tecla de salida (`layout.terminal-escape`):
+                // los demás consumen comandos del catálogo, y un terminal
+                // consume BYTES, o sea también los acordes que serían de
+                // norte.
+                //
+                // 20x4 es el mínimo con el que sigue siendo un shell: a lo
+                // ancho, un prompt corto y una orden con un argumento; a lo
+                // alto, el prompt, lo que se teclea y dos líneas de respuesta.
+                // Por debajo de eso cada orden borra la anterior y lo que
+                // queda no es un terminal, es una ventanita que parpadea.
+                decl("terminal", (20, 4), true, true, false, SIN_ROLES),
             ],
         }
     }
@@ -304,9 +330,13 @@ mod tests {
     #[test]
     fn un_kind_fuera_del_registro_no_es_un_error() {
         let reg = KindRegistry::builtin();
-        assert!(reg.get(&KindId::new("terminal")).is_none());
-        assert_eq!(reg.min_of(&KindId::new("terminal")), (1, 1));
-        assert!(!reg.holds_role(&KindId::new("terminal"), RoleId::Target));
+        // El nombre dice lo que hace falta que sea: uno que NUNCA se registre.
+        // Aquí ponía `terminal`, y cuando el panel de terminal se registró
+        // este test dejó de probar lo que su nombre dice sin ponerse rojo.
+        let ninguno = KindId::new("un-kind-que-no-existe");
+        assert!(reg.get(&ninguno).is_none());
+        assert_eq!(reg.min_of(&ninguno), (1, 1));
+        assert!(!reg.holds_role(&ninguno, RoleId::Target));
     }
 
     /// Un panel APORTADO no sale en la barra, aunque se enfoque.

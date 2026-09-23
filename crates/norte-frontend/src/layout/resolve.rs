@@ -872,7 +872,10 @@ mod tests {
     /// entra en el orden de foco: no se tabula a algo que nadie sabe pintar.
     #[test]
     fn un_kind_desconocido_se_coloca_pero_no_toma_foco() {
-        let arbol = Node::slot(SlotId(9), KindId::new("terminal"));
+        // Un nombre que NUNCA se registre: aquí ponía `terminal`, y el día que
+        // el panel de terminal entró en el registro este test habría dejado de
+        // probar un kind desconocido sin decirlo.
+        let arbol = Node::slot(SlotId(9), KindId::new("un-kind-que-no-existe"));
         let out = resolve(r(0, 0, 100, 30), &arbol, &reg());
         assert_eq!(out.placements.len(), 1);
         assert!(out.focus_order.is_empty());

@@ -9,6 +9,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A terminal inside a panel** (#362, terminal only for now). `Ctrl+Alt+S`
+  opens a shell below the listings, in the focused pane's directory, visible
+  at the same time as the files — the embedded terminal Krusader has and
+  norte did not. It is the one panel that takes the keyboard for real: every
+  key goes to the shell, because inside a shell `tab`, the arrows and
+  `Ctrl+C` mean whatever the shell says. The one key it never receives is the
+  one you came in with, and pressing it again hands the keyboard back and
+  **leaves the shell running** — closing the panel (`layout.close-slot`) is
+  what kills it. `Ctrl+Alt+S` and not the obvious `Ctrl+Alt+T`, which is free
+  in all seven presets but which GNOME and KDE bind to "open a terminal", so
+  norte would never see it. If a preset binds the command to a two-key
+  sequence instead of a single chord, the panel opens but does not take the
+  keyboard, on purpose: leaving would mean stealing the shell's first key
+  where you are typing it. The window does not paint it yet.
 - **RSA client keys as a per-connection opt-in** (ADR 0150). An SFTP
   connection with `auth = "key"` accepts an RSA key file when its entry says
   `allow_rsa = true`. Signatures are rsa-sha2 only: a server that accepts

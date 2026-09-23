@@ -82,6 +82,14 @@ const APLAZADOS: &[(&str, u32)] = &[
     // «Ir a cualquier sitio» (fase 6, ADR 0120) estuvo aquí hasta #357, y la
     // línea de tiempo del journal (fase 7, ADR 0121) hasta #359: ya las pinta
     // la ventana, con los modelos compartidos de `norte_frontend`.
+    //
+    // El panel de terminal (#362) vuelve a llenar la lista, y a propósito: la
+    // rejilla ya es compartida —`norte-term`, sin pty ni toolkit, la misma que
+    // pinta la TUI—, así que lo que le falta a la ventana no es el emulador
+    // sino llevar las filas por el puente y devolver las teclas. Es T4 de su
+    // plan, y hasta entonces la tecla resuelve `NotHere` y lo DICE, que es
+    // mejor que atarla a un muñón.
+    ("layout.terminal", 362),
 ];
 
 /// Todo comando vivo o lo implementa la ventana, o está clasificado.

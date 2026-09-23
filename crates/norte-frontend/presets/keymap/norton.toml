@@ -116,6 +116,11 @@ keymap = [
     # nada que transcribir, y `alt+z` es la única letra libre en los siete
     # presets. Ver orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # El panel de terminal (#362). Norton Commander no tenía un panel así: lo
+    # suyo era quitar los paneles y dejar el DOS debajo (`ctrl+o`), que en
+    # norte es `app.toggle-panels`. No es una transcripción, y va el acorde
+    # común de norte. Ver orthodox.toml.
+    { on = ["ctrl+alt+s"], run = "layout.terminal" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },

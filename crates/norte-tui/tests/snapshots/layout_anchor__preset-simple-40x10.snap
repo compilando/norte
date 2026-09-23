@@ -3,7 +3,7 @@ source: crates/norte-tui/tests/layout_anchor.rs
 expression: "lines.join(\"\\n\")"
 ---
  Archivo Operar Marcar Ir Paneles       
- S  V  P  D  Á  R  M  H                 
+ S  V  P  D  Á  R  M  H  T              
 ┌/casa─────────────────────────────────┐
 │Nombre▲             Tamaño       Fecha│
 │   f00                 1 B            │

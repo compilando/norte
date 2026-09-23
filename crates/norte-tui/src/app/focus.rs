@@ -271,6 +271,12 @@ impl App {
             crate::logview::KIND => Some(FocusStop::Side(KeyOwner::Log)),
             crate::diskmap::KIND => Some(FocusStop::Side(KeyOwner::DiskMap)),
             crate::timeline::KIND => Some(FocusStop::Side(KeyOwner::Timeline)),
+            // El terminal sólo es parada del anillo si HAY por dónde salir.
+            // Sin acorde suelto que lo saque, entrar sería quedarse dentro: el
+            // panel se ve y se mira, y el teclado sigue en los listados.
+            crate::termpanel::KIND => self
+                .terminal_chord
+                .map(|_| FocusStop::Side(KeyOwner::Terminal)),
             _ => None,
         }
     }

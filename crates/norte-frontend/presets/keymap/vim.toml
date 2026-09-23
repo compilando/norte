@@ -45,6 +45,14 @@ keymap = [
     # El mapa de disco (fase 4), `alt+z`: la única letra libre en los siete.
     # Ver la nota en orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # El panel de terminal (#362), con el acorde común de norte. Ver
+    # orthodox.toml para por qué `ctrl+alt+s` y no `ctrl+alt+t`.
+    #
+    # No se ata a `:terminal` ni a una secuencia al estilo de vim, y es la
+    # misma regla que el subshell: la tecla que SALE de un terminal tiene que
+    # ser un acorde SUELTO. Una secuencia obligaría a robarle su primera tecla
+    # al shell justo donde el lector está tecleando.
+    { on = ["ctrl+alt+s"], run = "layout.terminal" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`. Aquí valen
     # además porque no son dígitos sueltos: este preset SÍ tiene contadores.

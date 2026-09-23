@@ -39,6 +39,7 @@ commands = [
     "layout.log",
     "layout.disk-map",
     "layout.timeline",
+    "layout.terminal",
     "layout.pick",
 
     "pane.tree",]
@@ -281,6 +282,27 @@ quedan siempre en avisos y errores, que es lo que explica un fallo, y ninguna
 tecla de este panel puede subirlos. El fichero al que apunta `norte paths` lleva
 las de todos a ese nivel, y la misma cota vale al otro lado: el anillo del
 daemon la aplica en el proceso que lo tiene, que es donde tiene que estar.
+
+{{cmd:layout.terminal}} abre un terminal en un panel, debajo de los listados,
+con un shell en el directorio del panel que tuviera el foco. Es el único panel
+que se queda las teclas **de verdad**: los demás entienden las teclas de norte,
+y éste se las pasa todas al shell, porque dentro de un shell `tab`, las flechas
+y `ctrl+c` significan lo que el shell diga.
+
+Por eso hay una tecla que no le llega nunca: la misma con la que has entrado.
+Pulsarla otra vez devuelve el teclado a los listados y **deja el shell vivo**,
+con lo que tuvieras a medias. No lo cierra: cerrar el panel es
+{{cmd:layout.close-slot}}, y eso sí mata el shell.
+
+Si tu preset ata este comando a una secuencia de dos teclas en vez de a una
+sola, el panel se abre pero no toma el teclado, y no es un fallo: para salir
+haría falta reconocer esa secuencia dentro del shell, y eso obliga a robarle su
+primera tecla justo donde la estás escribiendo. Antes un panel del que se puede
+salir que uno del que no.
+
+Es un panel, no el shell de {{cmd:app.toggle-panels}}: aquel se queda la
+pantalla entera y sigue al panel; éste se ve **a la vez** que los listados y,
+de momento, no los sigue.
 
 {{cmd:layout.timeline}} abre la línea de tiempo: qué se ha hecho en esta
 máquina, de lo más reciente hacia atrás, con la hora, quién lo hizo —tú, un

@@ -67,6 +67,38 @@ pub fn before_frame(app: &mut App, area: Rect) {
     app.panes.set_visible(&order);
     app.history.set_order(&order);
     let cols = pane_cols(&res, &app.layout);
+    // El panel de terminal (#362): se le dice al pty el tamaño que de verdad
+    // le tocó, y se vuelca lo que el shell haya escrito.
+    //
+    // Va AQUÍ por la misma razón que todo lo demás de esta función: es antes
+    // del draw y con `&mut`, así que el frame que se pinta ya lleva lo último
+    // que llegó. Hacerlo después costaría un frame de retraso en cada tecla,
+    // que en un shell se nota como un eco lento.
+    //
+    // El pty se entera del tamaño o un programa de pantalla completa sigue
+    // pintando para el de antes, y lo que se ve es basura. `redimensionar` no
+    // hace nada si no cambió.
+    if let Some((_, rect)) = placed_of_kind(&res, &app.layout, crate::termpanel::KIND)
+        && let Some(t) = app.terminal.as_mut()
+    {
+        // El marco se descuenta: el shell pinta DENTRO.
+        t.redimensionar((rect.width.saturating_sub(2), rect.height.saturating_sub(2)));
+        t.bombear();
+    }
+    // Y si el shell se fue, el panel deja de tener shell: se suelta para que
+    // el hueco lo diga en vez de enseñar la última pantalla de un proceso que
+    // ya no existe. El hueco se queda — cerrarlo por su cuenta movería la
+    // disposición del lector sin que él lo pidiera.
+    if app
+        .terminal
+        .as_mut()
+        .is_some_and(crate::termpanel::TermPanel::muerto)
+    {
+        app.terminal = None;
+        if app.key_owner() == crate::app::KeyOwner::Terminal {
+            app.soltar_teclado();
+        }
+    }
     // El foco no puede quedarse en un pane que este frame no pinta: sería un
     // teclado que mueve un cursor que nadie ve. Con dos lados esto es
     // `position`; cuando haya N huecos lo hará `layout::focus_next`.
