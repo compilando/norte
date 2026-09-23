@@ -275,7 +275,7 @@ pub fn attach_subshell(
                         if k.kind == crossterm::event::KeyEventKind::Press
                             && let Some(bytes) = crate::subshell::tecla_a_bytes(&k)
                         {
-                            let _ = sub.escribir(&bytes);
+                            let _ = sub.escribir_tecla(&bytes);
                         }
                     }
                     // El shell tiene que saber el tamaño nuevo o pinta sobre

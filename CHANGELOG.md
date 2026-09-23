@@ -185,6 +185,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Clearing the screen no longer stops the panel from following the
+  subshell** (#360). `Ctrl+L` is a line-editor command that repaints the
+  prompt and leaves the line untouched, but every write lowered the flag
+  that says "the shell is idle at an empty prompt" — and a repaint does not
+  run `PROMPT_COMMAND`, so the cwd marker that raises it again never came.
+  Until the reader pressed Enter, the panel did not follow the shell. The
+  same write happens at startup, right after the plumbing, so under load the
+  first marker could land between the two and be thrown away: that is the
+  subshell test that timed out once in a full suite.
 - **The window no longer rebuilds open dialogs on every update.** Each
   change from the host repainted the whole screen, and the viewer, help,
   settings, search and every other overlay rebuilt their contents each
