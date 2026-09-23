@@ -494,12 +494,11 @@ pub fn cd_command(shell: Shell, dir: &[u8]) -> Option<Vec<u8>> {
 /// ```
 #[must_use]
 pub fn detach_chord(browse: &crate::keymap::Effective) -> Option<crate::keymap::Chord> {
-    browse
-        .bindings_all_seq()
-        .into_iter()
-        .filter(|(seq, cmd, _)| seq.len() == 1 && *cmd == TOGGLE_COMMAND)
-        .map(|(seq, _, _)| seq[0])
-        .next_back()
+    // La regla —un acorde SUELTO o no se cede el teclado— vive en
+    // `Effective::lone_chord`, porque el panel de terminal (#362) la necesita
+    // igual: los dos le entregan el teclado entero a otro programa y los dos
+    // se quedan con un solo acorde para volver.
+    browse.lone_chord(TOGGLE_COMMAND)
 }
 
 #[cfg(test)]

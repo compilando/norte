@@ -540,7 +540,12 @@ fn cada_boton_de_la_barra_cae_en_su_sitio() {
         Some("layout.timeline"),
         "y la línea de tiempo (fase 7) detrás del mapa, por orden de registro"
     );
-    assert_eq!(pulsa(&mut app, 24), None, "pasado el último no hay botón");
+    assert_eq!(
+        pulsa(&mut app, 25).as_deref(),
+        Some("layout.terminal"),
+        "y el terminal (#362) detrás de la línea de tiempo, por orden de registro"
+    );
+    assert_eq!(pulsa(&mut app, 27), None, "pasado el último no hay botón");
 }
 
 /// Con `[ui] panel_bar_position = "left"` la barra es una COLUMNA de tres

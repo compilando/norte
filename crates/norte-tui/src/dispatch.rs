@@ -192,6 +192,41 @@ pub async fn dispatch(
                 cargar_timeline(app, backend, None).await;
             }
         }
+        // #362: el panel de terminal. La tecla abre, da el teclado y lo
+        // devuelve; NO cierra, porque cerrar mata el shell del lector.
+        //
+        // El shell se arranca aquí y no en `toggle_terminal` porque arrancarlo
+        // es I/O —un pty y un proceso— y el estado de la disposición no la
+        // hace. Si falla, se dice y el hueco se queda: un panel vacío que
+        // explica por qué es mejor que una tecla que no responde.
+        Command::LayoutTerminal => {
+            if app.terminal.is_some() {
+                // Ya hay shell: esto es sólo el teclado yendo y viniendo, y no
+                // pide directorio ninguno. Pedirlo aquí dejaría al lector sin
+                // poder volver a SU terminal por estar mirando un panel remoto.
+                app.toggle_terminal();
+            } else {
+                // Arrancarlo sí pide un directorio local, y `shell_cwd` es
+                // quien ya sabe decir por qué no lo hay — es la misma puerta
+                // que `app.terminal`, y contesta que no sobre un panel remoto.
+                match shell_cwd(app) {
+                    Ok(dir) => {
+                        app.toggle_terminal();
+                        // El tamaño de verdad lo pone el pintado en cuanto
+                        // sabe qué rectángulo le tocó; éste es el de arranque
+                        // y dura lo que tarda la primera vuelta.
+                        match crate::termpanel::TermPanel::abrir(&dir, (80, 24)) {
+                            Ok(t) => app.terminal = Some(t),
+                            // El hueco se queda abierto aunque el shell no
+                            // arranque: un panel vacío con el motivo escrito se
+                            // lee mejor que una tecla que no hace nada.
+                            Err(e) => app.message = Some(e.to_string()),
+                        }
+                    }
+                    Err(msg) => app.message = Some(msg),
+                }
+            }
+        }
         // #136: el árbol se abre, se enfoca y se cierra como el sidebar. Su
         // contenido lo pide el run loop, una rama por vuelta.
         Command::PaneTree => app.toggle_tree(),

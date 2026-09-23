@@ -1129,6 +1129,55 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
 use norte_frontend::format::hora_utc;
 
 /// El panel de registro (#323): lo que está pasando, sin salir de la TUI.
+/// El panel de terminal (#362): la rejilla del shell dentro de su marco.
+///
+/// El contenido es AJENO —lo pinta otro programa— y por eso no lleva nada del
+/// tema encima: los colores son los que el shell pidió, y un índice lo resuelve
+/// la paleta del emulador del lector, como si el programa corriera fuera de
+/// norte. Lo único nuestro es el marco.
+///
+/// Que no haya que enmascarar nada aquí no es un descuido: lo garantiza la
+/// rejilla, donde un byte de control no puede llegar a una celda.
+pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado: bool) {
+    let theme = &app.theme;
+    let border = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("panelbar-terminal")))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(border));
+    // El pie dice cómo se SALE, y sólo cuando el teclado está dentro: es la
+    // única tecla que el panel no le pasa al shell, así que es la única que
+    // hay que anunciar — y sin anunciarla, un lector que entra con todas las
+    // teclas tomadas no tiene de dónde deducirla.
+    if con_teclado && let Some(c) = app.terminal_chord {
+        block = block.title_bottom(Line::styled(
+            format!(" {c} · {} ", t("terminal-leave")),
+            theme.role(Role::Muted),
+        ));
+    }
+    let dentro = block.inner(area);
+    frame.render_widget(block, area);
+    let Some(term) = app.terminal.as_ref() else {
+        // Sin shell el hueco sigue siendo útil: dice que no lo hay. Un panel
+        // vacío sin explicación es lo que hace desconfiar de un panel.
+        frame.render_widget(
+            Paragraph::new(Line::styled(t("terminal-none"), theme.role(Role::Muted))),
+            dentro,
+        );
+        return;
+    };
+    let p = term.pantalla();
+    frame.render_widget(Paragraph::new(crate::termpanel::filas(p)), dentro);
+    if let Some((x, y)) = crate::termpanel::cursor_en(p, dentro, con_teclado) {
+        frame.set_cursor_position((x, y));
+    }
+}
+
 pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado: bool) {
     use std::fmt::Write as _;
     let theme = &app.theme;

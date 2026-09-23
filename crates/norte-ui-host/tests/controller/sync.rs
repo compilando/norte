@@ -3731,6 +3731,12 @@ async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
             // compartido, así que su botón sale aquí desde que se declara
             // aunque la ventana todavía no la pinte (#359).
             "timeline",
+            // #362: el panel de terminal, igual que sus dos vecinos — el kind
+            // es del registro compartido, así que su botón sale aquí desde que
+            // se declara aunque la ventana todavía no lo pinte. Y en la
+            // ventana el kind hará falta de verdad: la rejilla la construye
+            // `norte-term` una sola vez para los dos frontends (T4).
+            "terminal",
         ],
         "los mismos botones y el mismo orden que `panelbar::buttons`"
     );

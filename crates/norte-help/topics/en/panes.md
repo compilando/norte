@@ -39,6 +39,7 @@ commands = [
     "layout.log",
     "layout.disk-map",
     "layout.timeline",
+    "layout.terminal",
     "layout.pick",
 
     "pane.tree",]
@@ -283,6 +284,27 @@ which is what explains a failure, and no key in this panel can raise them. The
 file `norte paths` points at holds everyone's at that level, and the same cap
 holds on the far side: the daemon's ring applies it in the process that owns it,
 which is where it has to be.
+
+{{cmd:layout.terminal}} opens a terminal in a panel, below the listings, with a
+shell in the directory of whichever pane had the focus. It is the only panel
+that takes the keyboard **for real**: the others understand norte's keys, and
+this one hands every key to the shell, because inside a shell `tab`, the arrows
+and `ctrl+c` mean whatever the shell says they mean.
+
+So there is one key it never receives: the one you came in with. Pressing it
+again hands the keyboard back to the listings and **leaves the shell running**,
+with whatever you had half-typed. It does not close it: closing the panel is
+{{cmd:layout.close-slot}}, and that does kill the shell.
+
+If your preset binds this command to a two-key sequence rather than a single
+chord, the panel opens but does not take the keyboard, and that is not a bug:
+leaving would mean recognising that sequence inside the shell, which means
+stealing its first key exactly where you are typing it. Better a panel you can
+leave than one you cannot.
+
+It is a panel, not the shell behind {{cmd:app.toggle-panels}}: that one takes
+the whole screen and follows the pane; this one is visible **alongside** the
+listings and, for now, does not follow them.
 
 {{cmd:layout.timeline}} opens the timeline: what has been done on this machine,
 newest first, with the time, who did it — you, an agent or an extension, and the

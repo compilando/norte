@@ -309,6 +309,7 @@ async fn main() -> Result<()> {
     // mismo momento que lo de arriba. Si un rebind no llegara aquí, la tecla
     // que abre el subshell y la que lo cierra serían distintas.
     app.subshell_chord = norte_frontend::subshell::detach_chord(&browse_eff);
+    app.terminal_chord = browse_eff.lone_chord(norte_tui::termpanel::COMANDO);
     // Openers declarativos (#28): fuente de `pane.open` (F4).
     app.openers = cfg.openers.clone();
     // `[ui] editor` (#133): el editor de norte, si la configuración nombra

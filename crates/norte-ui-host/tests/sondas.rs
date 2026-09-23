@@ -53,7 +53,16 @@ use backend_falso::arbol_de_prueba;
 /// premisa —pulsar el botón abre un hueco— sólo vale para lo que la ventana
 /// sabe pintar; contra un kind que no tiene, el host contesta «no
 /// implementado», que es la respuesta correcta y no un fallo.
-const SIN_VENTANA: &[(&str, u32)] = &[("timeline", 359)];
+const SIN_VENTANA: &[(&str, u32)] = &[
+    ("timeline", 359),
+    // El panel de terminal (#362): la TUI ya lo pinta y la ventana todavía no.
+    // Su kind sale en la barra porque el registro es COMPARTIDO, que es justo
+    // lo que estos tests comprueban, pero sondarlo aquí sería preguntarle a un
+    // hueco que la ventana no abre. Cuando T4 lo abra, sale de esta lista — y
+    // entonces entrará en `NO_SIGUEN`, porque un shell no sigue al cursor:
+    // tiene su propio directorio y lo cambia quien teclea dentro.
+    ("terminal", 362),
+];
 
 const NO_SIGUEN: &[(&str, &str)] = &[
     (

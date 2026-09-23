@@ -326,6 +326,12 @@ pub const MENUS: &[Menu] = &[
                     "layout.log",
                     "layout.disk-map",
                     "layout.timeline",
+                    // #362: el terminal empotrado. Va con los paneles del lado
+                    // y no con `app.terminal` en el menú de órdenes, porque lo
+                    // que abre es un PANEL: lo que se administra en este menú
+                    // es qué se ve al lado del listado, y esto es una cosa más
+                    // que se ve al lado.
+                    "layout.terminal",
                 ],
             ),
             sec(None, &["layout.pick", "app.theme"]),

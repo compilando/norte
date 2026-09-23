@@ -1168,6 +1168,13 @@ panelbar-metadata = Details
 panelbar-log = Log
 panelbar-disk-map = Map
 panelbar-timeline = History
+# «Shell» y no «Terminal»: la letra del botón es la inicial, y `Tree` ya se
+# queda la T. En español no hay choque y sí dice «Terminal».
+panelbar-terminal = Shell
+# The terminal panel's footer: the ONLY key the panel does not pass on to the
+# shell, so the only one worth announcing.
+terminal-leave = leave
+terminal-none = No shell in this panel.
 # The journal timeline (phase 7).
 timeline-title = Timeline
 timeline-empty = nothing has been done yet
@@ -1211,6 +1218,7 @@ menu-item-layout-processes = Processes panel
 menu-item-layout-log = Log
 menu-item-layout-disk-map = Disk map
 menu-item-layout-timeline = Timeline
+menu-item-layout-terminal = Terminal panel
 menu-item-layout-metadata = Details panel
 menu-item-layout-pick = Layout...
 menu-item-profile-pick = Profile...
@@ -1333,6 +1341,9 @@ help-cmd-layout-processes = show or hide the processes panel
 help-cmd-layout-log = show or hide this session's log
 help-cmd-layout-disk-map = show or hide the disk map
 help-cmd-layout-timeline = show or hide the timeline
+# Not "show or hide" like its neighbours, and deliberately: the second press
+# hands the keyboard back and leaves the shell running, it does not close it.
+help-cmd-layout-terminal = open a terminal in a panel, or give it the keyboard
 help-cmd-layout-metadata = show or hide the details panel
 help-cmd-layout-pick = choose a layout
 help-cmd-profile-pick = choose a profile

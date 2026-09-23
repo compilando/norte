@@ -258,6 +258,28 @@ pub const CATALOGUE: &[CommandDef] = &[
     // Se llega por la barra de paneles, que se genera del registro de kinds y
     // por tanto la tiene en LOS SIETE, y por el menú Ver.
     live("layout.timeline", false, Inert),
+    // El panel de terminal (#362). `Launches` y no `Inert`: lo que abre es un
+    // SHELL, con el entorno y el directorio de quien lo abre, y eso es lo
+    // primero de lo que hay que avisar al lector — el mismo efecto que
+    // `app.terminal` y `app.toggle-panels`, que hacen lo mismo en otra forma.
+    //
+    // Lleva acorde en los siete, y aquí no es discutible: es el panel que MÁS
+    // se queda el teclado de todos: los demás consumen comandos del catálogo
+    // y éste consume bytes, o sea también los acordes que serían de norte. Sin
+    // tecla no se entra y, sobre todo, no se sale.
+    //
+    // `ctrl+alt+s`, de «shell». La letra obvia sería la `t`, y está libre en
+    // los siete, pero `ctrl+alt+t` lo SECUESTRA el escritorio —GNOME y KDE lo
+    // atan de fábrica a «abrir un terminal»—, así que norte no lo vería nunca:
+    // es la misma clase de fallo que `ctrl+<MAYÚSCULA>`, un binding que
+    // existe, que la ayuda imprime y que no hace nada. `alt+<letra>` no era
+    // opción: ese espacio se agotó con el mapa de disco.
+    //
+    // Y a diferencia de sus vecinos, el segundo toque NO cierra el panel:
+    // devuelve el foco y deja el shell vivo, que es lo que `app.toggle-panels`
+    // hace con el subshell. Cerrarlo mata un proceso del lector, y para eso
+    // está `layout.close-slot`, que lo dice.
+    live("layout.terminal", false, Launches),
     // El selector de disposición. Sin acorde por el mismo #228, y además
     // porque el nombre de una disposición NO es el de un preset de teclas
     // aunque coincida: el diálogo lo dice en su pie.
@@ -690,6 +712,9 @@ mod tests {
                 ("app.handoff", Launches),
                 ("app.terminal", Launches),
                 ("app.toggle-panels", Launches),
+                // Abre un shell dentro de un panel: lo mismo que `app.terminal`
+                // en otra forma, y por tanto el mismo efecto.
+                ("layout.terminal", Launches),
                 ("pane.ai-rename", SendsOut),
                 ("pane.checksum", ReadsContent),
                 ("pane.checksum-verify", ReadsContent),

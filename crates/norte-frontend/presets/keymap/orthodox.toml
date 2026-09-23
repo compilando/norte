@@ -47,6 +47,18 @@ keymap = [
     # mnemónico es malo y se asume — una tecla rara se aprende, una que hace
     # dos cosas distintas según el preset, no.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # El panel de terminal (#362). `ctrl+alt+s`, de «shell», y NO `ctrl+alt+t`,
+    # que es la letra obvia y está libre en los siete: lo secuestra el
+    # escritorio —GNOME y KDE lo atan de fábrica a «abrir un terminal»—, así
+    # que norte no lo vería nunca. Un binding que existe, que la hoja de
+    # referencia imprime y que no hace nada es justo lo que #250 arregló.
+    # `alt+<letra>` tampoco era opción: ese espacio lo agotó el mapa de disco.
+    #
+    # Es el panel que más se queda el teclado —los demás consumen comandos, y
+    # éste consume bytes—, así que sin tecla no se entra y sobre todo no se
+    # sale. El segundo toque devuelve el foco y deja el shell VIVO; cerrarlo es
+    # `layout.close-slot`.
+    { on = ["ctrl+alt+s"], run = "layout.terminal" },
     # El resto de la familia `layout.*`, que estaba SIN TECLA en los siete
     # presets: cerrar un hueco, cambiarle el ancho, igualarlos y designar el
     # destino. Se llegaba solo por el menú o la paleta, y el menú los pintaba

@@ -242,6 +242,15 @@ pub enum KeyOwner {
     /// La línea de tiempo del journal (fase 7). Sin carga, por lo mismo que
     /// el mapa: se declara `multi: false`, así que hay como mucho una.
     Timeline,
+    /// El panel de terminal (#362). Sin carga, y esa es la razón por la que el
+    /// kind se declara `multi: false`: con varios habría que llevar dentro
+    /// CUÁL tiene las teclas, y este tipo se compara por igualdad en ochenta y
+    /// seis sitios.
+    ///
+    /// Es el único dueño que se queda los BYTES y no los comandos: mientras lo
+    /// es, todo lo que se teclea va al shell salvo el acorde suelto que lo
+    /// abrió (ver [`crate::termpanel`]).
+    Terminal,
     /// Un panel aportado por un PLUGIN (fase 3, ADR 0115/0116).
     ///
     /// SIN decir cuál, a propósito. `KeyOwner` se compara por igualdad en
@@ -806,6 +815,12 @@ pub struct App {
     pub places_wants_drives: bool,
     /// El selector de conexiones (#140), si está abierto.
     pub connections_picker: Option<norte_frontend::connections_picker::ConnectionsPicker>,
+    /// El shell del panel de terminal (#362), si hay uno vivo.
+    ///
+    /// Vive AQUÍ y no en el hueco porque el kind es `multi: false`: hay uno, y
+    /// sobrevive a que el panel se oculte y se vuelva a abrir. Lo que lo mata
+    /// es cerrar el hueco (`layout.close-slot`) o salir de norte.
+    pub terminal: Option<crate::termpanel::TermPanel>,
     /// El estado del panel de registro: qué nivel se enseña y qué se filtra.
     pub log_panel: norte_frontend::logpanel::LogPanel,
     /// El filtro de texto del registro MIENTRAS se teclea.
@@ -1114,6 +1129,14 @@ pub struct App {
     /// entonces no se cede la terminal: ver
     /// [`norte_frontend::subshell::detach_chord`].
     pub subshell_chord: Option<norte_frontend::keymap::Chord>,
+    /// El acorde que SACA el teclado del panel de terminal (#362),
+    /// precomputado igual que [`Self::subshell_chord`] y por lo mismo.
+    ///
+    /// Es el mismo `layout.terminal` que lo abrió, y es el ÚNICO que el panel
+    /// no le pasa al shell. `None` = el preset no lo ata a un acorde suelto, y
+    /// entonces el panel no toma las teclas en absoluto: un panel del que no
+    /// se puede salir es peor que uno que sólo se mira.
+    pub terminal_chord: Option<norte_frontend::keymap::Chord>,
     /// Bytes que hay que escribirle al EMULADOR de terminal, si los hay.
     ///
     /// Mismo reparto que [`Self::pending_shell`]: `dispatch` decide QUÉ y el
@@ -1297,6 +1320,10 @@ impl App {
             roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
             key_owner: KeyOwner::Panes,
             sync_nav: false,
+            // Perezoso, como el subshell: un shell por sesión que nadie va a
+            // usar es un proceso, un pty y el `.bashrc` de alguien corriendo
+            // por si acaso.
+            terminal: None,
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_filter_input: None,
             log_ring: None,
@@ -1402,6 +1429,7 @@ impl App {
             pending_shell: None,
             pending_subshell: false,
             subshell_chord: None,
+            terminal_chord: None,
             pending_osc52: None,
             dialog_hints: crate::hints::DialogHints::default(),
             key_bars: KeyBars::default(),

@@ -1115,6 +1115,11 @@ panelbar-metadata = Detalles
 panelbar-log = Registro
 panelbar-disk-map = Mapa
 panelbar-timeline = Historial
+panelbar-terminal = Terminal
+# El pie del panel de terminal: la ÚNICA tecla que el panel no le pasa al
+# shell, así que es la única que hay que anunciar.
+terminal-leave = salir
+terminal-none = No hay ningún shell en este panel.
 # La línea de tiempo del journal (fase 7).
 timeline-title = Línea de tiempo
 timeline-empty = todavía no se ha hecho nada
@@ -1159,6 +1164,7 @@ menu-item-layout-processes = Panel de procesos
 menu-item-layout-log = Registro
 menu-item-layout-disk-map = Mapa de disco
 menu-item-layout-timeline = Línea de tiempo
+menu-item-layout-terminal = Panel de terminal
 menu-item-layout-metadata = Panel de detalles
 menu-item-layout-pick = Disposición...
 menu-item-profile-pick = Perfil...
@@ -1281,6 +1287,9 @@ help-cmd-layout-processes = muestra u oculta el panel de procesos
 help-cmd-layout-log = muestra u oculta el registro de esta sesión
 help-cmd-layout-disk-map = muestra u oculta el mapa de disco
 help-cmd-layout-timeline = muestra u oculta la línea de tiempo
+# No dice «muestra u oculta» como sus vecinos, y es a propósito: el segundo
+# toque devuelve el foco y deja el shell vivo, no lo cierra.
+help-cmd-layout-terminal = abre un terminal en un panel, o le devuelve el foco
 help-cmd-layout-metadata = muestra u oculta el panel de detalles
 help-cmd-layout-pick = elige una disposición
 help-cmd-profile-pick = elige un perfil

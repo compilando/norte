@@ -76,7 +76,7 @@ use overlays::{
 use pane::draw_pane;
 use panels::{
     draw_disk_map, draw_log, draw_metadata, draw_places, draw_plugin_panel, draw_preview,
-    draw_processes, draw_tasks, draw_timeline, draw_tree, draw_viewer,
+    draw_processes, draw_tasks, draw_terminal, draw_timeline, draw_tree, draw_viewer,
 };
 use pickers::{
     draw_columns_picker, draw_connections_picker, draw_layout_picker, draw_profile_picker,
@@ -310,6 +310,16 @@ fn draw_laterales(
             rect,
             app,
             app.key_owner() == crate::app::KeyOwner::Log,
+        );
+    }
+    // El terminal (#362): hay uno y su estado es de la sesión, así que basta
+    // el rectángulo donde cayó, igual que el registro.
+    if let Some((_, rect)) = placed_of_kind(res, &app.layout, crate::termpanel::KIND) {
+        draw_terminal(
+            frame,
+            rect,
+            app,
+            app.key_owner() == crate::app::KeyOwner::Terminal,
         );
     }
     if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::diskmap::KIND)

@@ -279,6 +279,33 @@ pub async fn on_key(
         // Es asíncrona porque llegar abajo pide la página siguiente y porque
         // Intro abre la pregunta del undo, que necesita el backend.
         on_timeline_key(app, backend, dialog_resolver, key.modifiers, key.code).await;
+    } else if app.key_owner() == crate::app::KeyOwner::Terminal && !modal_wins(app) {
+        // El panel de terminal (#362), y este brazo NO se parece a sus
+        // vecinos: los demás traducen teclas a comandos, y aquí se le pasan
+        // los BYTES a un shell. Todo lo que se teclee es suyo —flechas, `tab`,
+        // F5, `ctrl+c`— porque dentro de un shell eso es lo que significan.
+        //
+        // Con UNA excepción, que es la puerta: el acorde suelto que abrió el
+        // panel lo saca. Se compara CANÓNICO (`Chord`) y no como evento crudo,
+        // por lo mismo que el subshell: dos eventos de crossterm distintos
+        // —`KeyEventKind`, el shift que un `Char` ya lleva dentro— son el
+        // mismo acorde, y comparando eventos la tecla de salir dependía de si
+        // el terminal manda repeticiones.
+        //
+        // Sin acorde (`None`) el panel no llega a tener el teclado, así que
+        // aquí ya no se entra: lo impide `puede_tomar_teclas`.
+        let acorde = crate::keymap::chord_from_crossterm(key.modifiers, key.code);
+        if acorde.is_some() && acorde == app.terminal_chord {
+            // El MISMO `toggle_terminal` que lo abrió: la tecla es una, así
+            // que el camino de vuelta tiene que ser el mismo código, o algún
+            // día uno de los dos aprende algo que el otro no.
+            app.toggle_terminal();
+        } else if let Some(t) = app.terminal.as_mut()
+            && key.kind == crossterm::event::KeyEventKind::Press
+            && let Some(bytes) = crate::subshell::tecla_a_bytes(&key)
+        {
+            t.escribir(&bytes);
+        }
     } else if app.key_owner() == crate::app::KeyOwner::Panel && !modal_wins(app) {
         // Panel de plugin (fase 3), por el mismo motivo que los dos de
         // arriba: sin este brazo las teclas caían al listado de detrás

@@ -40,6 +40,9 @@ keymap = [
     # El mapa de disco (fase 4), `alt+z`: la única letra libre en los siete.
     # Ver la nota en orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # El panel de terminal (#362), con el acorde común de norte. Ver
+    # orthodox.toml para por qué `ctrl+alt+s` y no `ctrl+alt+t`.
+    { on = ["ctrl+alt+s"], run = "layout.terminal" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },

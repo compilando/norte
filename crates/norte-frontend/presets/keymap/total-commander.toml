@@ -114,6 +114,10 @@ keymap = [
     # —su equivalente más cercano es un diálogo, no un panel—, así que no se
     # transcribe: `alt+z`, la única letra libre en los siete. Ver orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # El panel de terminal (#362). Total Commander no acopla un terminal: abre
+    # uno aparte, que en norte es `app.terminal`. No es una transcripción, y va
+    # el acorde común de norte. Ver orthodox.toml.
+    { on = ["ctrl+alt+s"], run = "layout.terminal" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },

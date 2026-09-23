@@ -145,6 +145,18 @@ keymap = [
     # —no tiene un panel así—, así que no se transcribe nada: se ata `alt+z`,
     # que es la única letra libre en los siete presets. Ver orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # El panel de terminal (#362). **Krusader SÍ tiene este panel** —es el
+    # emulador de terminal acoplado, y buena parte de por qué norte lo añade—,
+    # así que aquí tocaría transcribir su acorde y no inventarlo.
+    #
+    # No se transcribe, y el motivo se escribe en vez de callarlo: el acorde
+    # que Krusader atestigua no se ha podido comprobar contra su documentación
+    # desde donde se hizo este cambio, y transcribir de memoria es exactamente
+    # cómo se cuela un acorde que el gestor de referencia nunca tuvo. Va el
+    # acorde común de norte (`ctrl+alt+s`, ver orthodox.toml) y queda anotado:
+    # si la documentación de Krusader dice otro, este binding cambia y el
+    # cambio es una línea.
+    { on = ["ctrl+alt+s"], run = "layout.terminal" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`. Krusader tiene
     # lo suyo para el reparto (`Ctrl+Alt+R` orientación, `Ctrl+Alt+=` igualar),

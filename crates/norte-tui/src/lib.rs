@@ -53,6 +53,7 @@ pub mod splash;
 pub mod subshell;
 pub mod suspend;
 pub mod tasks;
+pub mod termpanel;
 pub mod theme;
 pub mod timeline;
 pub mod trail;
