@@ -15,11 +15,13 @@
 //!    tienen dentro es la copia buena;
 //! 5. deshacer aquel lote fallido borra la copia buena.
 //!
-//! O sea: un borrado provocado por una operación que no ocurrió. La regla 4
-//! del proyecto ya dice qué hacer con esto — una mutación tiene su reversa, o
-//! se clasifica `Irreversible` CON SU MOTIVO— y aquí el motivo se escribe
-//! solo: lo que se escribió se fue a un directorio que ya no está en esa ruta,
-//! así que en esas rutas no hay nada que deshacer.
+//! O sea: un borrado provocado por una operación que no ocurrió.
+//!
+//! La respuesta es ADR 0152: una entrada `created` anota la IDENTIDAD de lo
+//! que creó, y su deshacer se niega cuando lo que hay en esa ruta no es eso.
+//! La identidad se pregunta por el DESCRIPTOR de la raíz de destino, no por
+//! ruta, porque en este caso concreto la ruta ya no lleva ahí — preguntar por
+//! ruta deja sin identidad justo a las entradas que la necesitan.
 //!
 //! Va contra el sistema de ficheros REAL, como `engine_destino_que_desaparece`
 //! y por lo mismo: lo que hace posible el caso es un descriptor que sobrevive
@@ -30,7 +32,7 @@
 use std::sync::Arc;
 
 use norte_core::{Engine, Journal, SqliteJournal};
-use norte_proto::{CollisionPolicy, TaskState, VPath};
+use norte_proto::{CollisionPolicy, ConflictKind, TaskState, VPath};
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
@@ -118,11 +120,102 @@ async fn copia_con_el_destino_borrado(
     (engine, journal, estado)
 }
 
-/// **Lo que el diario anotó no está donde dice.**
+/// **Y una copia que fue BIEN se sigue deshaciendo entera.**
 ///
-/// Este test no es el daño, es la premisa: enseña que después del fallo
-/// quedan entradas `created` apuntando a rutas vacías. El de abajo enseña lo
-/// que eso cuesta.
+/// La comprobación de identidad tiene dos lectores distintos: la copia anota
+/// lo que ve por el DESCRIPTOR de la raíz (`fstatat`) y el deshacer lee por
+/// RUTA (`symlink_metadata`). Si esos dos dejaran de coincidir, todo deshacer
+/// de una copia local se bloquearía, y el síntoma sería un undo que dice que
+/// ahí hay otra cosa — con la suite verde, porque los demás tests de undo van
+/// contra `mem://`, donde los dos lados llaman a la MISMA función y la
+/// asimetría no existe.
+///
+/// O sea que este test no prueba una funcionalidad, prueba que dos maneras de
+/// mirar el mismo inodo siguen de acuerdo. Va contra el disco por eso.
+#[tokio::test]
+async fn una_copia_que_fue_bien_se_deshace_entera() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let origen = dir.path().join("origen");
+    std::fs::create_dir(&origen).expect("origen");
+    for i in 0..3 {
+        std::fs::write(origen.join(format!("f{i}")), b"x").expect("fichero");
+    }
+
+    let journal = Arc::new(SqliteJournal::new(
+        Journal::open_in_memory().await.expect("journal open"),
+    ));
+    let engine = Engine::with_journal(Arc::clone(&journal));
+    engine.register_provider(
+        Arc::new(norte_vfs_local::LocalProvider::rooted(dir.path())) as Arc<dyn Provider>
+    );
+
+    engine
+        .mkdir(&vp("file:///marca"))
+        .await
+        .expect("marca")
+        .join()
+        .await;
+    let estado = engine
+        .copy_with_as(
+            &vp("file:///origen"),
+            &vp("file:///destino"),
+            norte_core::TransferOptions::default(),
+            norte_core::Actor::User,
+        )
+        .await
+        .expect("encola")
+        .join()
+        .await;
+    assert!(
+        matches!(estado, TaskState::Completed),
+        "la copia tenía que ir bien, fue {estado:?}"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("destino"))
+            .expect("destino")
+            .count(),
+        3
+    );
+
+    let corte = journal
+        .journal()
+        .entries()
+        .await
+        .expect("entries")
+        .first()
+        .expect("la marca está")
+        .seq;
+    let (handle, informe) = engine.undo_after(corte, None).await.expect("undo");
+    let _ = tokio::time::timeout(std::time::Duration::from_mins(1), handle.join())
+        .await
+        .expect("el undo se quedó colgado");
+    let r = informe.lock().expect("lock").clone();
+
+    assert!(
+        r.blocked.is_none(),
+        "nadie tocó nada: el deshacer no tenía por qué pararse. {r:?}"
+    );
+    assert!(
+        r.undone >= 4,
+        "los tres ficheros y su carpeta tenían que volverse: {r:?}"
+    );
+    assert!(
+        !dir.path().join("destino").exists(),
+        "y el destino tenía que quedar deshecho: {r:?}"
+    );
+}
+
+/// **Lo que el diario anotó no está donde dice — pero dice QUÉ era.**
+///
+/// Este test no es el daño, es la premisa: después del fallo quedan entradas
+/// `created` apuntando a rutas vacías, y lo que las salva de ser una trampa es
+/// que cada una anota la identidad de lo que creó. El de abajo enseña para qué
+/// sirve eso.
+///
+/// La identidad tiene que estar en TODAS, y ahí es donde este test muerde: la
+/// implementación evidente —preguntar `Provider::node_id(ruta)` justo después
+/// de publicar— deja sin identidad a las que se escribieron después del
+/// borrado, que son la mayoría y son justo las que importan.
 #[tokio::test]
 async fn una_copia_fallida_deja_entradas_que_apuntan_a_rutas_vacias() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -149,13 +242,18 @@ async fn una_copia_fallida_deja_entradas_que_apuntan_a_rutas_vacias() {
         None,
         "la carpeta de destino no existe, y el diario dice que creó ficheros dentro"
     );
-    // Lo honesto sería que esas entradas dijeran que no tienen vuelta.
-    let con_reversa = creados.iter().filter(|e| e.reversal == "delete").count();
+    // Y cada una dice QUÉ creó, o su `delete` es un borrado a ciegas.
+    let sin_identidad = creados
+        .iter()
+        .filter(|e| e.reversal == "delete" && e.reversal_ref.is_none())
+        .count();
     assert_eq!(
-        con_reversa, 0,
-        "{con_reversa} entradas prometen un `delete` que borraría lo que haya \
-         en esas rutas, y lo que la copia escribió no está ahí: tienen que \
-         quedar clasificadas irreversibles, con su motivo (regla 4)"
+        sin_identidad,
+        0,
+        "{sin_identidad} de {} entradas prometen un `delete` sin decir QUÉ \
+         crearon: ese deshacer borra lo que haya en esa ruta, que es el daño \
+         de #369",
+        creados.len()
     );
 }
 
@@ -213,14 +311,37 @@ async fn deshacer_la_copia_fallida_no_borra_lo_que_se_puso_despues() {
         "el deshacer de una copia que FALLÓ se ha llevado un fichero que esa \
          copia nunca escribió: lo puso el lector al repetirla. Informe: {r:?}"
     );
-    // Y dicho al derecho: esas entradas no tienen vuelta, así que el deshacer
-    // tiene que SALTARLAS diciéndolo, no ejecutarlas.
+    // Y dicho al derecho: el deshacer se PARA y lo cuenta. Nada revertido, y
+    // un bloqueo que nombra la primera entrada que no cuadró — que es lo que
+    // el modo estricto pide de un drift y lo que hace que el lector se entere.
     assert_eq!(
         r.undone, 0,
         "no había nada que deshacer en esas rutas: {r:?}"
     );
+    // Y por el MOTIVO que toca, que es el que el lector puede accionar. Con
+    // las rutas recreadas, el `stat` del undo las encuentra todas: si esto
+    // parase por `NotFound` estaría parando por el accidente que ADR 0152 dice
+    // que no es protección, y si parase por `Exists` diría una perogrullada
+    // —claro que existe, es lo que iba a borrar— en vez de «eso no es tuyo».
     assert!(
-        r.skipped_irreversible > 0,
-        "y el lector tiene que enterarse de que se saltaron: {r:?}"
+        matches!(
+            r.blocked,
+            Some((
+                _,
+                norte_proto::Error::Conflict {
+                    conflict: ConflictKind::NotTheSameNode
+                }
+            ))
+        ),
+        "tenía que parar diciendo que lo que hay ahí no es lo que creó: {r:?}"
     );
+    // Ni uno, no «casi ninguno»: el deshacer para en el primero, así que si
+    // llegara a borrar el segundo es que la comprobación no está mirando.
+    for p in &creados {
+        let nombre = std::str::from_utf8(&p[b"file:///destino/".len()..]).expect("utf8");
+        assert!(
+            destino.join(nombre).exists(),
+            "el deshacer se llevó {nombre}, que lo puso el lector: {r:?}"
+        );
+    }
 }

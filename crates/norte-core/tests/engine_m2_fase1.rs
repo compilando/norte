@@ -79,7 +79,7 @@ impl MutationObserver for RecordingObserver {
         _actor: &norte_core::journal::Actor,
     ) -> Result<(), norte_proto::Error> {
         let repr = match mutation {
-            Mutation::Created(p) => format!("created:{}", p.display_lossy()),
+            Mutation::Created { path, .. } => format!("created:{}", path.display_lossy()),
             Mutation::Removed(p) => format!("removed:{}", p.display_lossy()),
             Mutation::Trashed { path, .. } => format!("trashed:{}", path.display_lossy()),
             Mutation::Renamed { from, to, .. } => {

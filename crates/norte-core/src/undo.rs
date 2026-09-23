@@ -4,12 +4,13 @@
 //!
 //! **No-clobber (estricto).** `RenameBack`/`RestoreTrash` exigen destino LIBRE
 //! antes de actuar (nunca sobrescriben). El undo de un `Created` es el caso
-//! sutil: el journal no guarda identidad del nodo, así que se deshace SOLO vía
-//! PAPELERA (recuperable) — sin capability `TRASH` la entrada se salta con
-//! contador propio en el [`UndoReport`], jamás un `remove` permanente (#65):
-//! lo que hoy vive en ese path puede ser un fichero que el usuario editó tras
-//! la creación. Deuda: identidad (`node_id`/hash) en el `Created` para un undo
-//! con verificación real.
+//! sutil, y tiene dos mitades. La entrada anota la IDENTIDAD de lo que creó
+//! (ADR 0152), así que un nodo SUSTITUIDO se detecta y el undo se niega —lo
+//! que hay ahí no es lo suyo—. Lo que la identidad no ve es una EDICIÓN: el
+//! fichero es el mismo inodo con otro contenido, y eso no genera un `Created`
+//! nuevo. Por eso además se deshace SOLO vía PAPELERA (recuperable), y sin
+//! capability `TRASH` la entrada se salta con contador propio en el
+//! [`UndoReport`], jamás un `remove` permanente (#65).
 //!
 //! **Tres unidades, tres contratos.** [`undo_units`] agrupa por `batch_id` para
 //! los tres, y [`revert_unit`] reparte:
@@ -179,6 +180,16 @@ pub(crate) async fn is_free(provider: &dyn Provider, p: &VPath) -> Result<bool, 
 
 const OCCUPIED: Error = Error::Conflict {
     conflict: ConflictKind::Exists,
+};
+
+/// «Ahí hay algo, pero no es lo que esta entrada creó» (#369, ADR 0152).
+///
+/// Tiene subtipo propio y no [`OCCUPIED`] porque es lo único que el lector
+/// puede accionar: sobre un deshacer, «ya existe» es una perogrullada —claro
+/// que existe, es lo que iba a borrar— mientras que «no es tuyo» le dice que
+/// vaya a mirar ese fichero, que probablemente lo puso él.
+const NO_ES_EL_SUYO: Error = Error::Conflict {
+    conflict: ConflictKind::NotTheSameNode,
 };
 
 /// ¿`a` y `b` son el MISMO nodo? (#274)
@@ -399,18 +410,18 @@ pub(crate) async fn revert_entry(
     match entry.reversal.as_str() {
         "irreversible" => Ok(Reverted::SkippedIrreversible),
 
-        // Undo de un Created: quitar el nodo creado (si sigue existiendo).
+        // Undo de un Created: quitar el nodo creado (si sigue existiendo, y si
+        // es el MISMO — ver abajo).
         //
-        // OJO (seguridad): el journal NO guarda identidad del nodo creado
-        // (node_id/hash), así que no podemos distinguir «el fichero que el
-        // agente creó» de «ese fichero con contenido que el usuario editó
-        // DESPUÉS» (una edición de contenido no genera un nuevo `Created`).
-        // Por eso el undo va SIEMPRE por PAPELERA (recuperable): si el usuario
-        // había modificado el nodo, su trabajo queda en la papelera en vez de
-        // destruido. Sin capability `TRASH` (sftp/object con `logical_trash`
-        // OFF — el caso común remoto) NO se cae a `remove` permanente: la
-        // entrada se SALTA y el nodo se queda (#65). Deuda: identidad en el
-        // `Created` para un undo con verificación real.
+        // El undo va SIEMPRE por PAPELERA (recuperable), y eso no lo cambia la
+        // identidad: una EDICIÓN de contenido no genera un `Created` nuevo ni
+        // cambia el inodo, así que el fichero que el agente creó y el usuario
+        // editó después sigue siendo indistinguible por identidad del que
+        // nadie tocó. Lo que la papelera compra es que el trabajo del usuario
+        // quede recuperable en vez de destruido. Sin capability `TRASH`
+        // (sftp/object con `logical_trash` OFF — el caso común remoto) NO se
+        // cae a `remove` permanente: la entrada se SALTA y el nodo se queda
+        // (#65).
         "delete" => {
             // El stat va PRIMERO: un drift (el nodo ya no está) bloquea
             // SIEMPRE — clasificarlo como skip-por-no-trash tragaría la
@@ -420,6 +431,36 @@ pub(crate) async fn revert_entry(
                 // Ya no está: estado inesperado → bloquea (no finge éxito).
                 Err(e) => return Ok(Reverted::blocked(entry.seq, e)),
             };
+            // ¿Y es lo que esta entrada creó? (#369, ADR 0152)
+            //
+            // Sustituir el nodo SÍ cambia el inodo, y ahí es donde esto muerde:
+            // una copia que falló porque le borraron la carpeta de destino deja
+            // entradas nombrando rutas que hoy tienen OTRA cosa dentro —la
+            // copia buena, la que el usuario repitió al leer el fallo—. Sin
+            // esta comprobación, deshacer aquel lote se la lleva a la papelera:
+            // un borrado provocado por una operación que no ocurrió.
+            //
+            // Solo puede hacer que el undo se niegue MÁS: sin huella guardada
+            // (entradas viejas, providers sin identidad), sin huella que
+            // parsee, o sin identidad que comparar ahora, se sigue como
+            // siempre.
+            if let Some(esperada) = entry
+                .reversal_ref
+                .as_deref()
+                .and_then(crate::journal::huella_a_nodo)
+            {
+                match provider.node_id(&path, norte_vfs::FollowLinks::No).await {
+                    Ok(Some(ahora)) if ahora != esperada => {
+                        tracing::info!(
+                            seq = entry.seq,
+                            "lo que hay en esa ruta no es lo que esta entrada creó: se deja",
+                        );
+                        return Ok(Reverted::blocked(entry.seq, NO_ES_EL_SUYO));
+                    }
+                    Ok(_) => {}
+                    Err(e) => return Ok(Reverted::blocked(entry.seq, e)),
+                }
+            }
             // Un DIRECTORIO creado solo se deshace VACÍO. La papelera se lleva
             // el subárbol entero, así que un directorio con contenido que el
             // journal no explica —un fichero que el usuario metió dentro
@@ -1318,10 +1359,22 @@ pub(crate) async fn revert_unit(
 ///
 /// `Err` es siempre un [`Reverted::Blocked`] con el `seq` culpable, nunca un
 /// error que mate la sesión: mismo criterio que [`inverse_chain`].
+///
+/// **`reversal_ref` no siempre es una ruta**, y por eso se mira el `reversal`
+/// antes de leerlo: en un `delete` lleva la identidad del nodo creado (ADR
+/// 0152, `<volumen>:<índice>`), que no parsea como `VPath` y haría bloquear la
+/// unidad entera con `InvalidPath`. Hoy no puede llegar aquí —un `created` del
+/// observador no lleva `batch_id`, y estas unidades lo exigen— pero el día que
+/// un lote traiga uno, esto ya no se lo come. Mismo cuidado que
+/// [`revert_mode_batch`] tuvo que tener con `set_mode_back`.
 fn one_provider(unit: &[JournalEntry], first: &JournalEntry) -> Result<(), Reverted> {
     let origin = wire(&first.path).map_err(|e| Reverted::blocked(first.seq, e))?;
     for e in unit {
-        let refs = [Some(e.path.as_slice()), e.reversal_ref.as_deref()];
+        let ref_es_ruta = e.reversal != "delete";
+        let refs = [
+            Some(e.path.as_slice()),
+            e.reversal_ref.as_deref().filter(|_| ref_es_ruta),
+        ];
         for bytes in refs.into_iter().flatten() {
             let path = wire(bytes).map_err(|err| Reverted::blocked(e.seq, err))?;
             if path.scheme() != origin.scheme() || path.authority() != origin.authority() {
@@ -1426,9 +1479,9 @@ fn note_unreverted(report: &Mutex<UndoReport>, path: &[u8]) {
 ///   había ya no está en ningún sitio. Se cuenta en
 ///   [`UndoReport::skipped_irreversible`].
 /// - Un `created` en un provider SIN papelera se salta también (#65): su
-///   reversa es un borrado, el journal no guarda identidad del nodo, y borrar
-///   permanente «lo que hoy viva en esa ruta» puede destruir trabajo posterior
-///   del humano. O sea: **en un destino sin papelera, una `Copy` tampoco se
+///   reversa es un borrado, y borrar permanente «lo que hoy viva en esa ruta»
+///   puede destruir trabajo posterior del humano — la identidad de ADR 0152
+///   descarta que sea OTRO nodo, no que sea el mismo con otro contenido. O sea: **en un destino sin papelera, una `Copy` tampoco se
 ///   deshace**, aunque el plan la enseñe con reversa `Delete`. Se cuenta en
 ///   [`UndoReport::skipped_created_no_trash`].
 /// - Una sobrescritura cuya papelera no da destino recuperable: la pareja se

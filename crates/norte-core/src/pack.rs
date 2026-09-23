@@ -487,9 +487,10 @@ pub(crate) async fn pack(
     }
     sink.commit().await?;
     // Después del commit: antes, el journal apuntaría a un nodo que todavía no
-    // existe (regla 4).
+    // existe (regla 4), y la identidad sería la del staging.
+    let node = crate::ops::identidad_de(&*provider_destino, &dest, &observer).await;
     observer
-        .on_mutation(&Mutation::Created(&dest), &ctx.actor)
+        .on_mutation(&Mutation::Created { path: &dest, node }, &ctx.actor)
         .await?;
     Ok(())
 }
@@ -801,6 +802,7 @@ pub(crate) async fn split(
             resto = luego;
             if en_curso == part_bytes {
                 let cerrado = cierra_trozo(
+                    &*provider_destino,
                     &mut sink,
                     destino_actual.take(),
                     &observer,
@@ -821,6 +823,7 @@ pub(crate) async fn split(
     // El último, que casi nunca está lleno. Si la división fue exacta no queda
     // ninguno abierto, y por eso NO se escribe un trozo vacío al final.
     let cerrado = cierra_trozo(
+        &*provider_destino,
         &mut sink,
         destino_actual.take(),
         &observer,
@@ -926,6 +929,7 @@ async fn sitio_libre(
 ///
 /// El `Created` va DESPUÉS del commit, que es cuando el nodo existe (regla 4).
 async fn cierra_trozo(
+    provider: &dyn norte_vfs::Provider,
     sink: &mut Option<Box<dyn norte_vfs::ByteSink>>,
     destino: Option<VPath>,
     observer: &Arc<dyn MutationObserver>,
@@ -937,8 +941,15 @@ async fn cierra_trozo(
         return Ok(None);
     };
     s.commit().await?;
+    let node = crate::ops::identidad_de(provider, &destino, observer).await;
     observer
-        .on_mutation(&Mutation::Created(&destino), &ctx.actor)
+        .on_mutation(
+            &Mutation::Created {
+                path: &destino,
+                node,
+            },
+            &ctx.actor,
+        )
         .await?;
     *hechos += 1;
     let n = *hechos;
@@ -1031,8 +1042,9 @@ pub(crate) async fn combine(
         });
     }
     escribe_juntos(&*src, trozos, &*provider_destino, &dest, ctx).await?;
+    let node = crate::ops::identidad_de(&*provider_destino, &dest, &observer).await;
     observer
-        .on_mutation(&Mutation::Created(&dest), &ctx.actor)
+        .on_mutation(&Mutation::Created { path: &dest, node }, &ctx.actor)
         .await?;
     Ok(())
 }

@@ -26,6 +26,10 @@
     "conflict": "exists",
     "kind": "conflict"
   },
+  "conflict_not_the_same_node": {
+    "conflict": "not_the_same_node",
+    "kind": "conflict"
+  },
   "conflict_normalization": {
     "conflict": "normalization",
     "kind": "conflict"
