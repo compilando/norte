@@ -131,6 +131,7 @@ impl Estado {
             | Efecto::Partir { .. }
             | Efecto::CerrarHueco
             | Efecto::AlternarHueco { .. }
+            | Efecto::AbrirTerminal
             | Efecto::PestanaNueva
             | Efecto::CerrarPestana
             | Efecto::CiclarPestana { .. }

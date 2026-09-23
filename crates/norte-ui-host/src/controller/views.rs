@@ -96,6 +96,9 @@ impl Estado {
                 Some(super::timeline::KIND) => {
                     slots.push(SlotView::Timeline(Box::new(self.vista_de_linea(id))));
                 }
+                Some(super::termpanel::KIND) => {
+                    slots.push(SlotView::Terminal(Box::new(self.panel_de_terminal(id))));
+                }
                 Some("processes") => slots.push(SlotView::Processes {
                     slot_id: id,
                     // Índice sobre las filas PINTADAS, que es lo que el

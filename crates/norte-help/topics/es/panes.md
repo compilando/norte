@@ -304,6 +304,11 @@ Es un panel, no el shell de {{cmd:app.toggle-panels}}: aquel se queda la
 pantalla entera y sigue al panel; éste se ve **a la vez** que los listados y,
 de momento, no los sigue.
 
+Está en los dos sitios, la terminal y la ventana, con el mismo shell y la misma
+rejilla por dentro. Sobre un panel remoto se niega a abrirse y lo dice: un shell
+se sienta en un directorio del sistema de ficheros, y en un `sftp://` no hay
+dónde sentarlo.
+
 {{cmd:layout.timeline}} abre la línea de tiempo: qué se ha hecho en esta
 máquina, de lo más reciente hacia atrás, con la hora, quién lo hizo —tú, un
 agente o una extensión, y lo dice el color del punto—, el verbo y sobre qué. Un

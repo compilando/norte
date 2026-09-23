@@ -20,7 +20,7 @@ norte-frontend.workspace = true
 # lo que hace que los dos frontends enseñen lo mismo por construcción en vez de
 # por comparar dos emuladores. Es de casa y su única dependencia externa es
 # `vte`, justificada en su Cargo.toml.
-norte-term.workspace = true
+norte-term = { workspace = true, features = ["pty"] }
 # La configuración YA cargada entra en el host para la vista de ajustes en
 # solo lectura (tarea 4.5). El host no la LEE de disco —quien lo arranca se la
 # pasa—, pero sí necesita nombrar su tipo. Ya estaba en el grafo vía

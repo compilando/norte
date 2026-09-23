@@ -102,6 +102,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.log",
     "layout.disk-map",
     "layout.timeline",
+    "layout.terminal",
     "layout.metadata",
     "layout.preview",
     "pane.tree",
@@ -483,6 +484,14 @@ pub enum Efecto {
     },
     /// Cierra el hueco enfocado.
     CerrarHueco,
+    /// Abre el panel de TERMINAL, o lo pone delante y le da el foco (#362).
+    ///
+    /// **No lo cierra nunca**, y ahí diverge de [`Self::AlternarHueco`] a
+    /// propósito: dentro hay un shell del lector, con lo que tuviera a medias.
+    /// Cerrarlo lo mata, y eso no puede ser lo que hace la misma tecla con la
+    /// que se entra. Para cerrarlo está `layout.close-slot`, que se llama como
+    /// lo que hace.
+    AbrirTerminal,
     /// Abre —o cierra— el hueco auxiliar de este kind.
     AlternarHueco {
         /// `places`, `processes`, `metadata` o `tree`: los que esta ventana sabe
@@ -857,6 +866,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.places" => Efecto::AlternarHueco { kind: "places" },
         "layout.processes" => Efecto::AlternarHueco { kind: "processes" },
         "layout.log" => Efecto::AlternarHueco { kind: "log" },
+        "layout.terminal" => Efecto::AbrirTerminal,
         "layout.disk-map" => Efecto::AlternarHueco { kind: "disk-map" },
         "layout.timeline" => Efecto::AlternarHueco { kind: "timeline" },
         // El último de los siete de la ADR 0058 (#291): el visor acoplado.
@@ -1061,6 +1071,11 @@ mod tests {
             [
                 "app.handoff",
                 "app.terminal",
+                // #362: abre un SHELL, así que en solo lectura se va como sus
+                // dos vecinos de arriba. Un panel de terminal en una ventana
+                // que promete no escribir sería la puerta de atrás más ancha
+                // posible: dentro se puede teclear cualquier cosa.
+                "layout.terminal",
                 "pane.ai-rename",
                 "pane.checksum",
                 "pane.checksum-verify",

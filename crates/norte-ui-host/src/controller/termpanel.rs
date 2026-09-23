@@ -1,12 +1,12 @@
 //! El panel de terminal en la ventana (#362, puente 95).
 //!
-//! Aquí sólo está la TRADUCCIÓN: la rejilla que `norte-term` mantiene, pasada
-//! a la vista que cruza el puente. La emulación es la misma que usa la
-//! terminal —el mismo crate, el mismo código—, y eso es lo que hace que los
-//! dos frontends enseñen lo mismo por construcción, no porque alguien compare
-//! dos emuladores que pueden divergir.
+//! Dos mitades. El SHELL y la rejilla son de `norte-term`, los mismos que usa
+//! la terminal: el mismo pty, el mismo hilo lector y la misma emulación, así
+//! que los dos frontends enseñan lo mismo por construcción y no porque alguien
+//! compare dos emuladores. Y la TRADUCCIÓN de esa rejilla a lo que cruza el
+//! puente, que es lo único propio de aquí.
 //!
-//! # Lo que NO se hace aquí, y es la decisión
+//! # Lo que NO se hace en la traducción, y es la decisión
 //!
 //! **Un color indexado no se resuelve.** El shell dice «color 4»; qué azul es
 //! eso lo decide la paleta de quien pinta. Si se resolviera aquí a un
@@ -19,16 +19,239 @@
 //! el cursor. El enmascarado de nombres hostiles existe porque un nombre llega
 //! crudo; esto no llega crudo, llega parseado.
 
-use norte_term::{ColorTerm, Estilo, Pantalla};
+use std::sync::Arc;
 
-use crate::dto::{TerminalColorView, TerminalSlotView, TerminalSpanView};
+use norte_term::{ColorTerm, Estilo, Pantalla};
+use tokio::sync::mpsc;
+
+use crate::backend::HostBackend;
+use crate::bridge::BridgeEnvelope;
+use crate::dto::{TerminalColorView, TerminalSlotView, TerminalSpanView, UiUpdate};
+
+use super::{ActionAck, Estado, Mensaje};
+
+/// El kind del panel, que es también el sufijo de su comando.
+pub(super) const KIND: &str = "terminal";
+
+/// El comando que abre el panel y el que lo saca: es el MISMO.
+pub(super) const COMANDO: &str = "layout.terminal";
+
+impl Estado {
+    /// Abre el panel de terminal, o lo pone delante.
+    ///
+    /// **Nunca lo cierra**, al revés que `alternar_hueco`: dentro hay un shell
+    /// del lector con lo que tuviera a medias, y cerrarlo lo mata. Cerrar es
+    /// `layout.close-slot`, que se llama como lo que hace.
+    pub(super) fn abrir_panel_de_terminal(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if let Some(id) = self.hueco_de_kind(KIND) {
+            // Detrás de otra pestaña: se pone delante. Ya delante: no hay nada
+            // que hacer — y desde luego no cerrarlo.
+            let detras = self
+                .arbol
+                .tabs_of(id)
+                .is_some_and(|(t, a)| t.get(a) != Some(&id));
+            if detras {
+                return self.elegir_pestana(id.0, backend, buzon);
+            }
+            return (self.aplicada(), Vec::new());
+        }
+        // Un shell se sienta en un directorio del sistema de ficheros: sobre
+        // un `sftp://` no hay dónde sentarlo, y abrirlo en el `$HOME` sin
+        // decir nada sería abrirlo en otro sitio. Es la misma puerta que
+        // `app.terminal`, con el mismo motivo y la misma frase.
+        let dir = self.hueco().pane.dir().clone();
+        if !norte_frontend::shell::is_local(&dir) {
+            let fuera = self.decir("host-not-local");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-not-local".to_owned(),
+                },
+                fuera,
+            );
+        }
+        let (ack, mut updates) = self.abrir_hueco_de_kind(KIND, backend, buzon);
+        // El shell se arranca DESPUÉS de que el hueco exista: si falla, el
+        // hueco se queda y lo dice, que se lee mejor que una tecla muda.
+        if self.terminal.is_none() {
+            match arrancar(&dir) {
+                Ok(shell) => {
+                    self.terminal = Some(shell);
+                    self.sondear_terminal(buzon);
+                }
+                Err(e) => {
+                    // Se DICE, y el hueco se queda: un panel que explica por
+                    // qué está vacío se lee mejor que una tecla muda.
+                    tracing::warn!(error = %e, "no se pudo abrir el shell del panel");
+                }
+            }
+            updates.extend(self.republicar_terminal());
+        }
+        (ack, updates)
+    }
+
+    /// Programa el siguiente tic del panel, si sigue habiendo panel.
+    ///
+    /// Se rearma solo mientras el hueco siga en el árbol y se apaga al
+    /// cerrarlo — mismo mecanismo que el sondeo del registro, y por el mismo
+    /// motivo: un temporizador de 30 Hz que sobreviviera al panel estaría
+    /// despertando al actor para no pintar nada.
+    fn sondear_terminal(&self, buzon: &mpsc::Sender<Mensaje>) {
+        if self.hueco_de_kind(KIND).is_none() {
+            return;
+        }
+        let (buzon, epoca) = (buzon.clone(), self.terminal_epoca);
+        tokio::spawn(async move {
+            tokio::time::sleep(super::TERMINAL_TIC).await;
+            let _ = buzon.send(Mensaje::TerminalTic(epoca)).await;
+        });
+    }
+
+    /// Vuelca lo que el shell escribió y republica si cambió algo.
+    ///
+    /// Un tic sin bytes no produce parche: un shell quieto no despierta al
+    /// renderer treinta veces por segundo.
+    pub(super) fn terminal_tic(
+        &mut self,
+        epoca: u64,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if epoca != self.terminal_epoca {
+            // De una apertura anterior: se deja morir sin rearmar.
+            return Vec::new();
+        }
+        // Si el hueco ya no está, el shell se va con él y el tic no se rearma.
+        if self.hueco_de_kind(KIND).is_none() {
+            self.soltar_terminal();
+            return Vec::new();
+        }
+        self.sondear_terminal(buzon);
+        let Some(t) = self.terminal.as_mut() else {
+            return Vec::new();
+        };
+        let cambio = t.bombear();
+        // Si el shell se fue, el hueco lo DICE en vez de enseñar la última
+        // pantalla de un proceso que ya no existe. El hueco se queda: cerrarlo
+        // por su cuenta movería la disposición de alguien sin que la tocara.
+        if t.muerto() {
+            self.terminal = None;
+            return self.republicar_terminal();
+        }
+        if cambio {
+            return self.republicar_terminal();
+        }
+        Vec::new()
+    }
+
+    /// Suelta el shell y para su bomba. Lo llama el cierre del hueco.
+    pub(super) fn soltar_terminal(&mut self) {
+        // El `Drop` de `Shell` mata el shell y lo espera.
+        self.terminal = None;
+        // Y la época sube: el tic en vuelo se deja morir sin rearmarse.
+        self.terminal_epoca += 1;
+    }
+
+    /// Las teclas cuando el panel de terminal tiene el foco: TODAS al shell,
+    /// menos la que saca.
+    ///
+    /// `None` = este panel no las quiere, y la tecla sigue su camino normal.
+    ///
+    /// No se parece a `tecla_en_preview` y no debería: aquél resuelve contra
+    /// un keymap, y aquí no hay keymap que valga — dentro de un shell `tab`,
+    /// las flechas y `ctrl+c` significan lo que el shell diga. Lo único que
+    /// norte se queda es el acorde suelto que abrió el panel; si el preset lo
+    /// ata a una secuencia no hay puerta, y entonces el panel NO toma las
+    /// teclas, que es mejor que un panel del que no se puede salir.
+    pub(super) fn tecla_en_terminal(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        let salida = self.acorde_de_salida()?;
+        let foco = self.roles.get(norte_frontend::layout::RoleId::Active)?;
+        if super::kind_de(&self.arbol, foco).is_none_or(|k| k.as_str() != KIND) {
+            return None;
+        }
+        let chord = k.to_chord().ok()?;
+        if chord == salida {
+            // El MISMO camino que lo abrió: la tecla es una, así que el
+            // regreso tiene que ser el mismo código.
+            return Some(self.abrir_panel_de_terminal(backend, buzon));
+        }
+        let bytes = norte_frontend::subshell::chord_a_bytes(chord)?;
+        self.terminal_escribir(&bytes);
+        Some((self.aplicada(), Vec::new()))
+    }
+
+    /// El acorde SUELTO que corre `layout.terminal`, si el preset da uno.
+    ///
+    /// La regla de que tenga que ser suelto vive en `Effective::lone_chord` y
+    /// la comparten los dos sitios que ceden el teclado entero a otro
+    /// programa: el subshell de la terminal y este panel. Una secuencia de dos
+    /// obligaría a robarle al shell su primera tecla justo donde el lector la
+    /// está escribiendo.
+    fn acorde_de_salida(&self) -> Option<norte_frontend::keymap::Chord> {
+        self.efectivo.lone_chord(COMANDO)
+    }
+
+    /// Le manda bytes al shell, si lo hay.
+    pub(super) fn terminal_escribir(&mut self, bytes: &[u8]) {
+        if let Some(t) = self.terminal.as_mut() {
+            t.escribir(bytes);
+        }
+    }
+
+    /// La foto entera, que es como republica cualquier hueco de esta ventana.
+    fn republicar_terminal(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let snap = self.snapshot();
+        vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
+    }
+
+    /// La vista del panel para la foto, si el hueco existe.
+    pub(super) fn panel_de_terminal(&self, slot: u32) -> TerminalSlotView {
+        vista(
+            slot,
+            self.terminal.as_ref().map(norte_term::pty::Shell::pantalla),
+        )
+    }
+}
+
+/// Arranca el shell con lo que decide norte: el programa y el entorno.
+///
+/// Van aquí y no en `norte-term` porque resolver el shell del lector y el
+/// contrato de `NORTE_LEVEL` son reglas de norte, no de un emulador.
+fn arrancar(dir: &norte_proto::VPath) -> std::io::Result<norte_term::pty::Shell> {
+    let nativo = norte_vfs::native::vpath_to_native(dir)
+        .map_err(|_| std::io::Error::other("el directorio no es una ruta nativa"))?;
+    norte_term::pty::Shell::abrir(
+        &norte_term::pty::Arranque {
+            // `login_shell` se niega a devolver un `$SHELL` relativo y cae a
+            // `/bin/sh` (#302): sin eso se buscaría por el `cwd`, que aquí es
+            // el directorio que el lector está mirando.
+            programa: &norte_frontend::shell::login_shell(),
+            dir: &nativo,
+            // El tamaño de verdad lo pone el renderer cuando dice qué hueco le
+            // tocó; éste es el de arranque.
+            tam: (80, 24),
+            env: &[(
+                norte_frontend::shell::LEVEL_VAR.into(),
+                norte_frontend::shell::next_norte_level().into(),
+            )],
+        },
+        norte_frontend::subshell::terminal_reply,
+    )
+}
 
 /// La rejilla de un shell, pasada a la vista del puente.
 ///
-/// `con_teclado` decide si viaja el cursor: uno parpadeando en un panel que no
-/// tiene el teclado dice que el teclado está ahí, y no lo está.
+/// Sin rejilla —no hay shell— la vista lo DICE: un panel en blanco y un panel
+/// sin shell se ven igual y no son lo mismo.
 #[must_use]
-pub fn vista(slot_id: u32, pantalla: Option<&Pantalla>, con_teclado: bool) -> TerminalSlotView {
+fn vista(slot_id: u32, pantalla: Option<&Pantalla>) -> TerminalSlotView {
     let Some(p) = pantalla else {
         return TerminalSlotView {
             slot_id,
@@ -48,14 +271,17 @@ pub fn vista(slot_id: u32, pantalla: Option<&Pantalla>, con_teclado: bool) -> Te
                     .collect()
             })
             .collect(),
-        cursor: cursor(p, con_teclado),
+        cursor: cursor(p),
         no_shell: false,
     }
 }
 
-/// Dónde va el cursor, o `None` si no se pinta.
-fn cursor(p: &Pantalla, con_teclado: bool) -> Option<(u16, u16)> {
-    if !con_teclado || !p.cursor_visible() {
+/// Dónde va el cursor, o `None` si el shell lo escondió.
+///
+/// Lo esconde cualquier programa de pantalla completa mientras pinta, y
+/// entonces pintarlo sería inventarse dónde está.
+fn cursor(p: &Pantalla) -> Option<(u16, u16)> {
+    if !p.cursor_visible() {
         return None;
     }
     let (fila, col) = p.cursor();
@@ -103,7 +329,7 @@ mod tests {
     fn un_indice_sigue_siendo_un_indice_y_un_rgb_es_hex() {
         let mut p = Pantalla::nueva(12, 1);
         p.alimentar(b"\x1b[31ma\x1b[38;2;1;2;3mb");
-        let v = vista(7, Some(&p), false);
+        let v = vista(7, Some(&p));
         let fila = &v.rows[0];
         assert_eq!(
             fila[0].fg,
@@ -118,36 +344,33 @@ mod tests {
         );
     }
 
-    /// Sin shell, la vista lo DICE en vez de mandar una rejilla vacía: un
-    /// panel en blanco y uno sin shell se ven igual y no son lo mismo.
+    /// Sin shell, la vista lo DICE en vez de mandar una rejilla vacía.
     #[test]
     fn sin_shell_se_dice() {
-        let v = vista(3, None, true);
+        let v = vista(3, None);
         assert!(v.no_shell);
         assert!(v.rows.is_empty());
         assert_eq!(v.cursor, None);
     }
 
-    /// El cursor sólo viaja con el teclado dentro, y nunca si el shell lo
-    /// escondió — que es lo que hace cualquier programa de pantalla completa.
+    /// El cursor no viaja si el shell lo escondió.
     #[test]
-    fn el_cursor_viaja_solo_cuando_se_pinta() {
+    fn un_cursor_escondido_no_viaja() {
         let mut p = Pantalla::nueva(10, 3);
         p.alimentar(b"hola");
-        assert_eq!(vista(1, Some(&p), false).cursor, None, "sin teclado");
-        assert_eq!(vista(1, Some(&p), true).cursor, Some((0, 4)));
+        assert_eq!(vista(1, Some(&p)).cursor, Some((0, 4)));
         p.alimentar(b"\x1b[?25l");
-        assert_eq!(vista(1, Some(&p), true).cursor, None, "escondido");
+        assert_eq!(vista(1, Some(&p)).cursor, None);
     }
 
     /// Las filas van TODAS las que tiene la rejilla, incluidas las vacías: un
     /// terminal no se desplaza como una lista, se repinta, y un renderer que
-    /// recibiera sólo las escritas tendría que adivinar el alto.
+    /// recibiera solo las escritas tendría que adivinar el alto.
     #[test]
     fn van_todas_las_filas() {
         let mut p = Pantalla::nueva(6, 4);
         p.alimentar(b"una");
-        let v = vista(1, Some(&p), true);
+        let v = vista(1, Some(&p));
         assert_eq!(v.rows.len(), 4);
     }
 }
