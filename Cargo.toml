@@ -25,6 +25,7 @@ members = [
     "crates/norte-frontend",
     "crates/norte-help",
     "crates/norte-encoding",
+    "crates/norte-term",
     "crates/norte-theme",
     "crates/norte-i18n",
     "crates/norte-plugin-host",
@@ -128,6 +129,7 @@ norte-frontend = { path = "crates/norte-frontend", version = "0.3.0-alpha.4" }
 norte-help = { path = "crates/norte-help", version = "0.3.0-alpha.4" }
 norte-encoding = { path = "crates/norte-encoding", version = "0.3.0-alpha.4" }
 norte-i18n = { path = "crates/norte-i18n", version = "0.3.0-alpha.4" }
+norte-term = { path = "crates/norte-term", version = "0.3.0-alpha.4" }
 norte-theme = { path = "crates/norte-theme", version = "0.3.0-alpha.4" }
 norte-plugin-host = { path = "crates/norte-plugin-host", version = "0.3.0-alpha.4" }
 norte-mcp = { path = "crates/norte-mcp", version = "0.3.0-alpha.4" }

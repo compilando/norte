@@ -42,6 +42,7 @@ the protocol, a frontend cannot provide it.
 | `norte-help` | Help corpus and markdown-lite model, consumed by every frontend and the CLI (ADR 0040). | MIT OR Apache-2.0 |
 | `norte-encoding` | Text encoding detection and decoding. | MIT OR Apache-2.0 |
 | `norte-i18n` | Fluent localization resources shared by the frontends. | MIT OR Apache-2.0 |
+| `norte-term` | A terminal grid: pty bytes parsed into cells, cursor and attributes. No pty, no toolkit, no theme — indexed colours travel unresolved so the theme still decides them. | MIT OR Apache-2.0 |
 | `norte-theme` | Semantic theme roles, true-colour values, terminal fallbacks, and bundled presets. | MIT OR Apache-2.0 |
 
 Other subsystems include `norte-index` and `norte-mcp`.
