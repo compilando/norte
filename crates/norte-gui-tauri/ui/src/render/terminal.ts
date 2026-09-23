@@ -80,7 +80,11 @@ function pintaFila(
   return linea;
 }
 
-function pintaSpan(span: TerminalSpanView, texto: string, esCursor: boolean): HTMLElement {
+function pintaSpan(
+  span: TerminalSpanView,
+  texto: string,
+  esCursor: boolean,
+): HTMLElement {
   const el = document.createElement("span");
   // `textContent` y nunca `innerHTML`: esto lo escribió otro programa.
   el.textContent = texto;

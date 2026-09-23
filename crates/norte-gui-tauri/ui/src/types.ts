@@ -535,8 +535,7 @@ export type SlotView =
  *  quitado al tema del lector la decisión, y no habría forma de arreglarlo
  *  desde el tema. */
 export type TerminalColorView =
-  | { kind: "indexed"; index: number }
-  | { kind: "rgb"; hex: string };
+  { kind: "indexed"; index: number } | { kind: "rgb"; hex: string };
 
 /** Un fragmento de fila del terminal: texto con lo que el shell pidió. */
 export interface TerminalSpanView {
