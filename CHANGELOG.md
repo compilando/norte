@@ -218,8 +218,18 @@ independently through `PROTOCOL_VERSION`.
   invalidate the open directory descriptor a copy addresses through: the
   directory kept existing under another name and the copy kept filling it.
   The identity check that catches this already existed but ran only once,
-  when the root was opened; it now runs during the copy and always before
-  a copy can report success. The same gap on the single-file path is #367.
+  when the root was opened; it now runs during the copy — every 32 entries
+  or every 5 seconds, whichever comes first, so a plan of a few huge files
+  is covered too — and always before a copy can report success. The failure
+  says which thing went missing: `ConflictKind::DestinationGone` (protocol
+  0.84.0, ADR 0151). It is a new subtype rather than a reused one because
+  "not found" does not say *what* was not found — mid-copy that reads as
+  something missing in the source — and "escapes its confined root" is
+  about the shape of the path and reads as a security problem.
+  **Copying a folder is the only operation covered.** The same gap is open
+  on the single-file path (#367) and in `sync.apply` (#368), and a copy
+  that fails this way still leaves journal entries pointing at paths it did
+  not write (#369).
 - **Clearing the screen no longer stops the panel from following the
   subshell** (#360). `Ctrl+L` is a line-editor command that repaints the
   prompt and leaves the line untouched, but every write lowered the flag

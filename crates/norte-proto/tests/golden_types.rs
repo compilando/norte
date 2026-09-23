@@ -327,6 +327,16 @@ fn golden_error() {
                     conflict: ConflictKind::EscapesRoot,
                 },
             ),
+            // 0.84.0 (ADR 0151). Fixture PROPIA y no compartida con
+            // `escapes_root`: un vocabulario cerrado lleva una por valor
+            // justamente para que renombrar uno no pase desapercibido, y estos
+            // dos se parecen lo bastante como para que alguien los junte.
+            (
+                "conflict_destination_gone",
+                Error::Conflict {
+                    conflict: ConflictKind::DestinationGone,
+                },
+            ),
             (
                 "conflict_stale_revision",
                 Error::Conflict {
@@ -4899,7 +4909,10 @@ fn method_names_frozen() {
     assert_eq!(methods::TASK_RESUME, "task.resume");
     // 0.83.0: la cola en serie (ADR 0149).
     assert_eq!(methods::TASK_MOVE, "task.move");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.83.0");
+    // 0.84.0: ningún método nuevo — un subtipo de conflicto,
+    // `ConflictKind::DestinationGone` (ADR 0151), para cuando el directorio de
+    // destino deja de estar donde se pidió con la tarea ya en marcha.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.84.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

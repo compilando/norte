@@ -235,6 +235,10 @@ err-conflict-exists = destination already exists
 err-conflict-case = name collides by case with an existing entry
 err-conflict-normalization = name collides after Unicode normalization
 err-conflict-type = destination is a different type
+# Says what happened and, from that, what to do: recreate the folder and retry.
+# This used to surface as "not found", which mid-copy reads as something
+# missing in the source.
+err-conflict-destination-gone = the destination folder is gone: it was deleted or moved while copying
 err-conflict = conflict at the destination
 err-provider-unavailable = the location is unavailable (retryable)
 err-no-space = no space left on destination
