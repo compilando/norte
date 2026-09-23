@@ -34,6 +34,34 @@
   );
   --bg: #101216;
   --fg: #d8dee9;
+  /* La paleta del panel de TERMINAL (#362). Son los dieciséis de siempre, y
+     existen como variables porque el host manda los colores del shell SIN
+     resolver: dice «color 4» y qué azul sea eso se decide aquí, que es donde
+     vive el tema. Un tema que las redefina cambia el panel; uno que no, se
+     queda con éstas.
+
+     Los 240 restantes del 256 no están: un tema no los elige uno a uno, y lo
+     que hace un navegador con una `var()` que no existe es heredar el color
+     de arriba, que para un fragmento de terminal es exactamente lo razonable
+     —se ve el texto— en vez de desaparecer. */
+  --term-bg: #101216;
+  --term-fg: #d8dee9;
+  --term-0: #3b4252;
+  --term-1: #bf616a;
+  --term-2: #a3be8c;
+  --term-3: #ebcb8b;
+  --term-4: #81a1c1;
+  --term-5: #b48ead;
+  --term-6: #88c0d0;
+  --term-7: #e5e9f0;
+  --term-8: #4c566a;
+  --term-9: #d08770;
+  --term-10: #b9d18b;
+  --term-11: #f0d399;
+  --term-12: #8fbcbb;
+  --term-13: #c5a3bf;
+  --term-14: #9fd6e0;
+  --term-15: #eceff4;
   --panel-bg: #14171c;
   --panel-focus-bg: #171b22;
   --border: #2b323c;
@@ -4115,6 +4143,33 @@ button.status-item:hover {
 .panel-hit:focus-visible {
   outline: 1px solid var(--selection-bg);
   outline-offset: -1px;
+}
+
+/* El panel de terminal (#362, puente 95).
+
+   Monoespaciada y con `white-space: pre`: lo que llega es una REJILLA, ya
+   repartida en celdas por el host. Si el navegador colapsara los espacios o
+   partiera las líneas, el reparto que el host calculó dejaría de coincidir con
+   lo que se ve — y entonces el cursor, que viene en fila y columna, señalaría
+   otra cosa. */
+.terminal {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  line-height: var(--cell-h);
+  white-space: pre;
+  background: var(--term-bg);
+  color: var(--term-fg);
+}
+
+.terminal-row {
+  height: var(--cell-h);
+}
+
+/* El cursor es una celda invertida, no un borde: un borde se sale de la
+   celda y desalinea la fila. */
+.terminal-cursor {
+  background: var(--term-fg);
+  color: var(--term-bg);
 }
 
 .log {

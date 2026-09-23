@@ -512,65 +512,27 @@ type LectorDelPty = Box<dyn std::io::Read + Send>;
 /// ```
 #[must_use]
 pub fn tecla_a_bytes(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
-    use crossterm::event::{KeyCode, KeyModifiers};
-    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = k.modifiers.contains(KeyModifiers::ALT);
-    let cuerpo: Vec<u8> = match k.code {
-        // Ctrl+letra es el byte de control de toda la vida: `a`→1, `c`→3.
-        // Sin esto, un Ctrl+C dentro del subshell no interrumpe nada.
-        KeyCode::Char(c) if ctrl && c.is_ascii_alphabetic() => {
-            vec![(c.to_ascii_lowercase() as u8) - b'a' + 1]
-        }
-        // Los OTROS acordes de control, que también son bytes y no letras:
-        // Ctrl+\ es SIGQUIT, Ctrl+espacio es el NUL con el que `readline` pone
-        // la marca, Ctrl+[ es Escape. Sin esta rama viajaba el carácter tal
-        // cual, así que Ctrl+\ mandaba una barra invertida.
-        KeyCode::Char(c) if ctrl && matches!(c, '@' | ' ' | '[' | '\\' | ']' | '^' | '_' | '?') => {
-            vec![match c {
-                '@' | ' ' => 0,
-                '?' => 0x7f,
-                otro => (otro as u8) & 0x1f,
-            }]
-        }
-        KeyCode::Char(c) => c.to_string().into_bytes(),
-        // Las teclas de función, que un `htop` o un editor dentro del subshell
-        // sí usan: sin esto, F10 no salía de nada. Códigos xterm, que son los
-        // que `terminfo` da para `xterm`/`screen`/`tmux`.
-        KeyCode::F(1) => b"\x1bOP".to_vec(),
-        KeyCode::F(2) => b"\x1bOQ".to_vec(),
-        KeyCode::F(3) => b"\x1bOR".to_vec(),
-        KeyCode::F(4) => b"\x1bOS".to_vec(),
-        // El salto 16, 22 no es un error: xterm nunca los asignó.
-        KeyCode::F(n @ 5..=12) => {
-            let num = [15, 17, 18, 19, 20, 21, 23, 24][usize::from(n) - 5];
-            format!("\x1b[{num}~").into_bytes()
-        }
-        KeyCode::Enter => b"\r".to_vec(),
-        KeyCode::Tab => b"\t".to_vec(),
-        KeyCode::BackTab => b"\x1b[Z".to_vec(),
-        // DEL (127) y no BS (8): es lo que manda un terminal moderno, y lo que
-        // `readline` espera para borrar hacia atrás.
-        KeyCode::Backspace => vec![0x7f],
-        KeyCode::Esc => vec![0x1b],
-        KeyCode::Up => b"\x1b[A".to_vec(),
-        KeyCode::Down => b"\x1b[B".to_vec(),
-        KeyCode::Right => b"\x1b[C".to_vec(),
-        KeyCode::Left => b"\x1b[D".to_vec(),
-        KeyCode::Home => b"\x1b[H".to_vec(),
-        KeyCode::End => b"\x1b[F".to_vec(),
-        KeyCode::PageUp => b"\x1b[5~".to_vec(),
-        KeyCode::PageDown => b"\x1b[6~".to_vec(),
-        KeyCode::Delete => b"\x1b[3~".to_vec(),
-        KeyCode::Insert => b"\x1b[2~".to_vec(),
-        _ => return None,
+    use norte_frontend::keymap::{Chord, KeyCode, Mods};
+    // **La TABLA es compartida** (`norte_frontend::subshell::chord_a_bytes`), y
+    // aquí solo queda traducir el evento de crossterm al acorde canónico que
+    // ella entiende. Estuvo escrita dos veces desde que el panel de terminal
+    // (#362) la necesitó también en la ventana, y dos tablas son dos sitios
+    // donde `F10` deja de salir de un `htop`.
+    //
+    // `BackTab` es lo único que el acorde canónico no nombra: para el keymap
+    // es shift+tab, que es exactamente lo que se construye aquí.
+    let (mods, code) = if k.code == crossterm::event::KeyCode::BackTab {
+        (
+            Mods {
+                shift: true,
+                ..Mods::default()
+            },
+            KeyCode::Tab,
+        )
+    } else {
+        crate::keymap::chord_from_crossterm(k.modifiers, k.code)?.parts()
     };
-    // Alt es ESC delante, que es lo que hace que `alt+f` mueva una palabra.
-    if alt {
-        let mut con_esc = vec![0x1b];
-        con_esc.extend_from_slice(&cuerpo);
-        return Some(con_esc);
-    }
-    Some(cuerpo)
+    norte_frontend::subshell::chord_a_bytes(Chord::new(mods, code))
 }
 
 #[cfg(test)]

@@ -35,6 +35,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+#[cfg(feature = "pty")]
+pub mod pty;
+
 use unicode_width::UnicodeWidthChar as _;
 
 /// Un color tal como lo DICE el terminal, sin resolver.

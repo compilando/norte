@@ -535,7 +535,14 @@ use serde::{Deserialize, Serialize};
 ///   `BrowserSlotView.progress` y el cambio `slot_progress { slot_id,
 ///   progress }`: lo que está llegando A ESE directorio, para pintar dos
 ///   píxeles en su borde sin reenviar el listado.
-pub const BRIDGE_VERSION: u32 = 94;
+/// - **95**: el panel de terminal (#362). `SlotView::Terminal`
+///   (`TerminalSlotView`: filas de `TerminalSpanView`, cursor y `no_shell`).
+///   Lo que cruza son FILAS YA PINTADAS y no los bytes del pty: la emulación
+///   la hace `norte-term` del lado del host, la misma que usa la terminal, así
+///   que los dos frontends enseñan lo mismo por construcción. Sus colores
+///   viajan SIN resolver —`indexed` sigue siendo un índice— porque qué azul es
+///   el «color 4» lo decide la paleta de quien pinta, no el host.
+pub const BRIDGE_VERSION: u32 = 95;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

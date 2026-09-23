@@ -72,6 +72,7 @@ mod sums;
 mod sync;
 mod tabs;
 mod tasks;
+mod termpanel;
 mod timeline;
 mod transfer;
 mod tree;
@@ -276,6 +277,16 @@ const TTL_TASK_TERMINAL: std::time::Duration = std::time::Duration::from_secs(10
 /// barato: comparar el cuerpo con lo último mandado es lo único que hace un
 /// tic sin cambios.
 const SESION_TIC: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Cada cuánto se vuelca lo que el shell del panel de terminal haya escrito.
+///
+/// Treinta veces por segundo: es lo que hace que teclear ahí dentro se sienta
+/// como teclear en un terminal y no como mandar un telegrama. Un tic que no
+/// encuentra bytes no produce parche ni despierta al renderer, así que un
+/// shell quieto no cuesta más que comprobar un buzón vacío.
+///
+/// Y la bomba solo corre mientras el panel existe: ver `Mensaje::TerminalTic`.
+const TERMINAL_TIC: std::time::Duration = std::time::Duration::from_millis(33);
 
 /// Plazo de una petición de plan a un modelo.
 ///
@@ -701,6 +712,19 @@ enum Mensaje {
     /// El tic de la sesión: cada segundo, como el terminal. Si la pantalla
     /// cambió desde lo último escrito, se escribe; si no, nada.
     SesionTic,
+    /// El tic del panel de TERMINAL (#362): vuelca lo que el shell haya
+    /// escrito y, si cambió algo, republica su hueco.
+    ///
+    /// Tic propio y mucho más rápido que el de la sesión porque un shell se
+    /// mira mientras responde: a un segundo, teclear ahí dentro se siente
+    /// roto.
+    ///
+    /// **No es una bomba perpetua**: lleva su ÉPOCA y se rearma en el
+    /// manejador, solo si el panel sigue en pantalla — el mismo mecanismo que
+    /// el sondeo del registro, y por el mismo motivo. Un temporizador de 30 Hz
+    /// que sobreviviera al panel estaría despertando al actor para no pintar
+    /// nada, que es el «gira en reposo» que la terminal ya pagó una vez.
+    TerminalTic(u64),
     /// Un `session.put` contestó: qué dijo el daemon y el cuerpo que se
     /// mandó, para darlo por escrito solo si de verdad entró.
     SesionPuesta(
@@ -1518,6 +1542,11 @@ async fn actor(
                     for u in estado.decir(clave) {
                         let _ = updates.send(u);
                     }
+                }
+            }
+            Mensaje::TerminalTic(epoca) => {
+                for u in estado.terminal_tic(epoca, &buzon) {
+                    let _ = updates.send(u);
                 }
             }
             Mensaje::SesionTic => {
@@ -2856,6 +2885,15 @@ struct Estado {
     /// Cuántos tics de un segundo lleva `status.message` en la barra (spec
     /// 2026-09-10): en TICS para que un test lo haga avanzar sin dormir.
     mensaje_ticks: u32,
+    /// El shell del panel de terminal (#362), si hay uno vivo.
+    ///
+    /// Aquí y no en el hueco porque el kind es `multi: false`: hay uno, y
+    /// sobrevive a que el panel se esconda tras una pestaña. Lo que lo mata es
+    /// cerrar el hueco, y lo hace su `Drop`.
+    terminal: Option<norte_term::pty::Shell>,
+    /// La época del panel de terminal: sube al cerrarlo, y el temporizador en
+    /// vuelo se deja morir sin rearmarse.
+    terminal_epoca: u64,
     /// El texto que se estaba contando: si cambia, la cuenta vuelve a cero.
     mensaje_contado: Option<String>,
     /// El reparto del ÚLTIMO tamaño conocido: quién se pinta, quién no, y en
@@ -3308,6 +3346,11 @@ impl Estado {
             ultima_linea: std::collections::HashMap::new(),
             ultimo_ajuste: std::collections::HashMap::new(),
             mensaje_ticks: 0,
+            // Perezoso, como en la terminal: un shell por sesión que nadie va
+            // a usar es un proceso, un pty y el `.bashrc` de alguien
+            // corriendo por si acaso.
+            terminal: None,
+            terminal_epoca: 0,
             mensaje_contado: None,
             reparto,
             viewport,

@@ -7,11 +7,12 @@
 //!
 //! # El reparto
 //!
-//! La emulación —los bytes a una rejilla de celdas— vive en `norte-term`, sin
-//! pty y sin toolkit. Aquí está lo que no se puede probar sin sistema
-//! operativo: el pty, el hilo lector y el pintado. Es el mismo reparto que
-//! [`crate::subshell`] tiene con `norte_frontend::subshell`, y se copia el
-//! reparto, no el código.
+//! La emulación —los bytes a una rejilla de celdas— y el pty viven en
+//! `norte-term`: la primera siempre, el segundo tras su feature. Aquí queda
+//! solo el PINTADO con `ratatui`, que es lo único que no comparte con la
+//! ventana. El día que la ventana pinte su panel usará el mismo shell y la
+//! misma rejilla, así que los dos frontends enseñan lo mismo por construcción
+//! y no porque alguien compare dos emuladores.
 //!
 //! # Quién manda en el teclado
 //!
@@ -31,10 +32,10 @@
 //! —y los tendría en un sitio donde el lector ve lo que pasa—, así que eso
 //! espera a que ese agujero esté cerrado.
 
-use std::io::{Read as _, Write as _};
-use std::sync::{Arc, Mutex};
-
 use norte_term::{ColorTerm, Estilo, Pantalla};
+
+/// El shell del panel, con su rejilla. Es el de `norte-term`.
+pub use norte_term::pty::Shell as TermPanel;
 
 /// El id del kind, que es también el sufijo de su comando.
 pub const KIND: &str = "terminal";
@@ -46,313 +47,58 @@ pub const KIND: &str = "terminal";
 /// el panel no le pasa al shell.
 pub const COMANDO: &str = "layout.terminal";
 
-/// Cuánto se guarda de lo que el shell escribió y aún no se ha volcado a la
-/// rejilla.
+/// Cómo se arranca el shell de un panel, con lo que norte decide.
 ///
-/// Un `find /` escribiendo sin parar mientras nadie repinta no puede comerse
-/// la memoria. Se conserva la COLA: lo de más atrás ya no se vería de todas
-/// formas, porque la rejilla tiene el alto que tiene.
-const BUFFER_MAX: usize = 256 * 1024;
-
-/// Lo que el hilo lector deja para el bucle de eventos.
-#[derive(Default)]
-struct Buzon {
-    /// Bytes leídos del pty y todavía sin alimentar a la rejilla.
-    pendiente: Vec<u8>,
-    /// El pty se cerró: el shell se fue.
-    cerrado: bool,
-}
-
-/// Un shell vivo pintado en un hueco.
-pub struct TermPanel {
-    /// La emulación: lo que se ve.
-    pantalla: Pantalla,
-    /// Por dónde se le escribe. Compartida con el hilo lector, que contesta
-    /// las consultas de terminal del shell.
-    escritura: Escritor,
-    /// El pty, que además es quien redimensiona.
-    maestro: Box<dyn portable_pty::MasterPty + Send>,
-    /// El hijo, para poder matarlo y para saber si sigue vivo.
-    hijo: Box<dyn portable_pty::Child + Send + Sync>,
-    /// Lo que el lector ha dejado.
-    buzon: Arc<Mutex<Buzon>>,
-    /// El tamaño que el pty cree tener, para no anunciarlo si no ha cambiado.
-    tam: (u16, u16),
-}
-
-/// La entrada del pty, compartida entre el bucle y el hilo lector.
+/// El programa y el entorno los pone AQUÍ y no `norte-term`: resolver el shell
+/// del lector y el contrato de `NORTE_LEVEL` son reglas de norte, no de un
+/// emulador.
 ///
-/// Dos escritores y los dos legítimos, igual que en [`crate::subshell`]: las
-/// teclas del lector, y las RESPUESTAS a las consultas de terminal que el
-/// shell manda y por las que se PARA hasta que le contesten.
-type Escritor = Arc<Mutex<Box<dyn std::io::Write + Send>>>;
-
-impl TermPanel {
-    /// Arranca un shell en `dir`, con una rejilla de `tam` (columnas, filas).
-    ///
-    /// # Errors
-    /// Lo que falle al abrir el pty o al lanzar el shell.
-    pub fn abrir(dir: &std::path::Path, tam: (u16, u16)) -> std::io::Result<Self> {
-        let sistema = portable_pty::native_pty_system();
-        let par = sistema
-            .openpty(portable_pty::PtySize {
-                rows: tam.1,
-                cols: tam.0,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(std::io::Error::other)?;
-        let shell = norte_frontend::shell::login_shell();
-        let mut cmd = portable_pty::CommandBuilder::new(&shell);
-        cmd.cwd(dir);
-        // El hijo sabe que está DENTRO de norte, igual que el subshell y que
-        // una suspensión: es el mismo contrato de `NORTE_LEVEL`, y el prompt
-        // del lector lo lee para decirlo.
-        cmd.env(
-            norte_frontend::shell::LEVEL_VAR,
-            norte_frontend::shell::next_norte_level(),
-        );
-        // **`TERM` se pone a mano, y es lo único del entorno que se toca.**
-        //
-        // Heredar el resto es correcto: es el entorno que el shell del lector
-        // le dio a norte, y quitárselo dejaría un shell sin `PATH` ni `HOME`
-        // que nadie pidió. `TERM` es distinto en especie. Para el subshell y
-        // para `app.terminal` el hijo habla con la terminal DE VERDAD, así que
-        // el `TERM` heredado es la verdad. Aquí el otro extremo es esta
-        // rejilla, que hace SGR, CUP, los cuatro movimientos, ED, EL y esconder
-        // el cursor — y nada más. Ni pantalla alterna, ni regiones de scroll,
-        // ni `ESC 7`/`ESC 8`, ni insertar o borrar líneas.
-        //
-        // Con `xterm-256color` heredado se le dice a cada programa de dentro
-        // que puede usar todo eso. Un `less` o un `vim` pintan entonces una
-        // pantalla coherente que no se corresponde con su estado, y al salir
-        // dejan su último fotograma puesto porque el cambio de pantalla
-        // alterna no hace nada. Es una superficie en la que alguien LEE algo y
-        // después teclea una orden, así que mentir aquí es peor que quedarse
-        // corto: «prometer capacidades que luego no se cumplen es peor que no
-        // prometerlas» ya está escrito en el subshell, sobre esto mismo.
-        //
-        // `vt100` es lo que esta rejilla es de verdad. Cuesta el color de un
-        // `ls` —vt100 no declara ninguno— y lo recupera #366, que implementa
-        // lo que falta y sube el `TERM` de una vez.
-        cmd.env("TERM", "vt100");
-        // Y el tamaño heredado es el de la terminal de FUERA, que no tiene
-        // nada que ver con el hueco: quien pregunte por ahí se llevaría el
-        // ancho equivocado. El pty ya dice el bueno por `TIOCGWINSZ`.
-        cmd.env_remove("COLUMNS");
-        cmd.env_remove("LINES");
-        let hijo = par
-            .slave
-            .spawn_command(cmd)
-            .map_err(std::io::Error::other)?;
-        // El esclavo se SUELTA: mientras norte lo tenga abierto, cerrar el
-        // shell no cierra el pty y el lector nunca vería EOF.
-        drop(par.slave);
-        let escritura: Escritor = Arc::new(Mutex::new(
-            par.master.take_writer().map_err(std::io::Error::other)?,
-        ));
-        let lector = par
-            .master
-            .try_clone_reader()
-            .map_err(std::io::Error::other)?;
-        let buzon = Arc::new(Mutex::new(Buzon::default()));
-        lanzar_lector(lector, Arc::clone(&buzon), Arc::clone(&escritura));
-        Ok(Self {
-            pantalla: Pantalla::nueva(tam.0, tam.1),
-            escritura,
-            maestro: par.master,
-            hijo,
-            buzon,
+/// # Errors
+/// Lo que falle al abrir el pty o al lanzar el shell.
+pub fn abrir(dir: &std::path::Path, tam: (u16, u16)) -> std::io::Result<TermPanel> {
+    norte_term::pty::Shell::abrir(
+        &norte_term::pty::Arranque {
+            // `login_shell` se niega a devolver un `$SHELL` relativo y cae a
+            // `/bin/sh` (#302): sin eso, `portable_pty` lo buscaría por el
+            // `cwd`, que aquí es el directorio que el lector está mirando.
+            programa: &norte_frontend::shell::login_shell(),
+            dir,
             tam,
-        })
-    }
-
-    /// Vuelca a la rejilla lo que el shell haya escrito, y dice si cambió algo.
-    ///
-    /// Lo llama el bucle de eventos en cada vuelta. Devolver si hubo bytes es
-    /// lo que evita repintar la pantalla entera cuando el shell está quieto,
-    /// que es casi siempre.
-    pub fn bombear(&mut self) -> bool {
-        let pendiente = {
-            let mut b = buzon_de(&self.buzon);
-            std::mem::take(&mut b.pendiente)
-        };
-        if pendiente.is_empty() {
-            return false;
-        }
-        self.pantalla.alimentar(&pendiente);
-        true
-    }
-
-    /// Le manda bytes al shell.
-    pub fn escribir(&mut self, bytes: &[u8]) {
-        let mut e = self
-            .escritura
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _ = e.write_all(bytes);
-        let _ = e.flush();
-    }
-
-    /// Ajusta la rejilla Y el pty al tamaño del hueco.
-    ///
-    /// Los dos, y en ese orden importa poco pero que sean los dos importa
-    /// mucho: sin avisar al pty, un programa de pantalla completa sigue
-    /// pintando para el tamaño viejo y lo que se ve es basura.
-    pub fn redimensionar(&mut self, tam: (u16, u16)) {
-        let tam = (tam.0.max(1), tam.1.max(1));
-        if tam == self.tam {
-            return;
-        }
-        self.tam = tam;
-        self.pantalla.redimensionar(tam.0, tam.1);
-        let _ = self.maestro.resize(portable_pty::PtySize {
-            rows: tam.1,
-            cols: tam.0,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
-    }
-
-    /// ¿Se fue el shell?
-    pub fn muerto(&mut self) -> bool {
-        buzon_de(&self.buzon).cerrado || matches!(self.hijo.try_wait(), Ok(Some(_)))
-    }
-
-    /// La rejilla, para pintarla.
-    #[must_use]
-    pub fn pantalla(&self) -> &Pantalla {
-        &self.pantalla
-    }
-
-    /// Mata el shell y lo espera.
-    ///
-    /// Lo llaman el cierre del hueco y el [`Drop`]. Esperar detrás del `kill`
-    /// no es cortesía: sin recoger al hijo queda un zombi hasta que norte
-    /// salga.
-    pub fn matar(&mut self) {
-        let _ = self.hijo.kill();
-        let _ = self.hijo.wait();
-    }
+            // El hijo sabe que está DENTRO de norte, igual que el subshell y
+            // que una suspensión: mismo contrato de `NORTE_LEVEL`, y el prompt
+            // del lector lo lee para decirlo.
+            env: &[(
+                norte_frontend::shell::LEVEL_VAR.into(),
+                norte_frontend::shell::next_norte_level().into(),
+            )],
+        },
+        // La misma tabla que contesta el subshell: una consulta de terminal se
+        // contesta igual venga de donde venga.
+        norte_frontend::subshell::terminal_reply,
+    )
 }
 
-/// **El shell muere CON el panel, salga norte por donde salga.**
+/// Las filas de la rejilla como spans de `ratatui`.
 ///
-/// Sin esto, `matar` no lo llamaba nadie —estaba escrito y sin un solo
-/// llamante— y la documentación de `App::terminal` prometía que cerrar el
-/// hueco o salir de norte lo mataban. Ninguna de las dos era cierta: cerrar
-/// el hueco quitaba el nodo y dejaba el shell vivo con su hilo lector, su pty
-/// y su directorio abierto —un montaje ocupado seguía ocupado—, invisible y
-/// sin forma de volver a él. Al salir moría por accidente, porque el maestro
-/// se cierra y el núcleo manda `SIGHUP`, y lo que ignore esa señal sobrevivía
-/// a norte entero.
+/// El troceado —dónde se corta una fila— lo hace `norte-term`, porque es la
+/// misma decisión para los dos frontends y se toma una vez. Aquí solo se
+/// traduce cada tramo al estilo de este toolkit.
 ///
-/// Es exactamente el razonamiento que [`crate::subshell::Subshell`] ya había
-/// escrito para su propio `Drop`, y que aquí se olvidó.
-impl Drop for TermPanel {
-    fn drop(&mut self) {
-        self.matar();
-    }
-}
-
-fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
-    buzon
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-fn lanzar_lector(
-    mut lector: Box<dyn std::io::Read + Send>,
-    buzon: Arc<Mutex<Buzon>>,
-    escritura: Escritor,
-) {
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        loop {
-            match lector.read(&mut buf) {
-                Ok(0) | Err(_) => {
-                    buzon_de(&buzon).cerrado = true;
-                    return;
-                }
-                Ok(n) => {
-                    // Contestar va ANTES de nada: el shell está PARADO
-                    // esperándolo —fish 4 pregunta antes de su primer prompt—
-                    // y la respuesta no puede esperar a que alguien repinte.
-                    // Es la misma función que usa el subshell: una consulta de
-                    // terminal se contesta igual venga de donde venga.
-                    //
-                    // Lo que hay que saber de esto: el disparador es el
-                    // CONTENIDO, no el shell. `terminal_reply` busca la
-                    // secuencia como subcadena, así que un fichero con
-                    // `\x1b[c` dentro hace que norte teclee la respuesta
-                    // donde esté el cursor del editor de línea. No es
-                    // peligroso —las dos respuestas son constantes fijas sin
-                    // CR, así que no ejecutan nada, y cualquier terminal de
-                    // verdad contesta igual sin mirar quién preguntó—, pero
-                    // es una escritura no pedida en un editor de línea, que es
-                    // la forma estructural de #363 con una carga que no daña.
-                    // Lo correcto sería que la decidiera el parser de la
-                    // rejilla (un `csi_dispatch` para `c`), que es quien sabe
-                    // si está dentro de una cadena OSC o DCS.
-                    if let Some(r) = norte_frontend::subshell::terminal_reply(&buf[..n]) {
-                        let mut e = escritura
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        let _ = e.write_all(&r);
-                        let _ = e.flush();
-                    }
-                    let mut b = buzon_de(&buzon);
-                    b.pendiente.extend_from_slice(&buf[..n]);
-                    // El corte cae en un byte CUALQUIERA, y eso se acepta: un
-                    // escape partido por ahí pierde su `ESC [` y su cola se
-                    // pinta como texto (`31m` en pantalla). Es feo y no es
-                    // peligroso —la garantía de la rejilla aguanta igual, un
-                    // byte de control no llega a una celda—, y solo pasa si
-                    // un programa escribió 256 KiB mientras nadie repintaba.
-                    // Buscar una frontera de secuencia aquí obligaría a meter
-                    // el parser en el hilo lector para tirar bytes.
-                    if b.pendiente.len() > BUFFER_MAX {
-                        let sobra = b.pendiente.len() - BUFFER_MAX;
-                        b.pendiente.drain(..sobra);
-                    }
-                }
-            }
-        }
-    });
-}
-
-/// Las filas de la rejilla como spans, agrupando las celdas que comparten
-/// estilo.
-///
-/// Se agrupa porque una fila de ochenta celdas son ochenta spans si no, y eso
-/// se pinta ochenta veces por fila y por vuelta. Y porque el contenido es
-/// AJENO: lo que sale de aquí ya no lleva ningún byte de control —lo garantiza
-/// la rejilla, no este código—, así que no hay que enmascarar nada encima.
+/// El contenido es AJENO y aun así no se enmascara nada: lo que sale de la
+/// rejilla ya no lleva ningún byte de control, y eso lo garantiza la rejilla,
+/// no este código.
 #[must_use]
 pub fn filas<'a>(p: &Pantalla) -> Vec<ratatui::text::Line<'a>> {
     use ratatui::text::{Line, Span};
-    let (ancho, alto) = p.tamano();
+    let (_, alto) = p.tamano();
     (0..alto)
         .map(|f| {
-            let mut spans: Vec<Span<'a>> = Vec::new();
-            let mut texto = String::new();
-            let mut estilo: Option<Estilo> = None;
-            for c in (0..ancho).filter_map(|c| p.celda(f, c)) {
-                if c.estela {
-                    continue;
-                }
-                if estilo != Some(c.estilo) {
-                    if let Some(e) = estilo.take() {
-                        spans.push(Span::styled(std::mem::take(&mut texto), estilo_de(e)));
-                    }
-                    estilo = Some(c.estilo);
-                }
-                texto.push(c.c);
-            }
-            if let Some(e) = estilo {
-                spans.push(Span::styled(texto, estilo_de(e)));
-            }
-            Line::from(spans)
+            Line::from(
+                p.fila_tramos(f)
+                    .into_iter()
+                    .map(|(texto, estilo)| Span::styled(texto, estilo_de(estilo)))
+                    .collect::<Vec<Span<'a>>>(),
+            )
         })
         .collect()
 }

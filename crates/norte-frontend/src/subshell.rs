@@ -458,6 +458,102 @@ pub fn cd_command(shell: Shell, dir: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Los bytes que un acorde le manda a un shell, o `None` si ahí no significa
+/// nada.
+///
+/// **Vive aquí porque la necesitan los DOS frontends**, y sobre
+/// [`Chord`](crate::keymap::Chord) y no sobre el evento de ningún toolkit por
+/// lo mismo: la terminal lo construye desde `crossterm` y la ventana desde lo
+/// que manda el renderer, pero la tabla es una — qué byte es `Ctrl+C` no
+/// depende de quién lo vio. Escribirla dos veces es tener dos sitios donde
+/// `F10` deja de salir de un `htop`.
+///
+/// Lo que NO está aquí, y se nota: ratón y pegado con corchetes. Un shell no
+/// los pide, y la alternativa en la terminal era robarle una tecla al lector.
+///
+/// ```
+/// use norte_frontend::keymap::{Chord, KeyCode, Mods};
+/// use norte_frontend::subshell::chord_a_bytes;
+///
+/// let ctrl_c = Chord::new(Mods { ctrl: true, ..Mods::default() }, KeyCode::Char('c'));
+/// // Ctrl+C viaja como el byte 3, que es lo que hace que interrumpa.
+/// assert_eq!(chord_a_bytes(ctrl_c), Some(vec![3]));
+/// // Enter es CR y no LF: es lo que manda un terminal.
+/// assert_eq!(chord_a_bytes(Chord::new(Mods::default(), KeyCode::Enter)), Some(b"\r".to_vec()));
+/// ```
+#[must_use]
+pub fn chord_a_bytes(chord: crate::keymap::Chord) -> Option<Vec<u8>> {
+    use crate::keymap::KeyCode;
+    let (mods, code) = chord.parts();
+    // Un acorde con Cmd/Super NO se le manda a un shell: no hay codificación
+    // de terminal para ese modificador, así que lo que salía era la letra
+    // pelada — en macOS, `cmd+w` escribía una `w` en vez de cerrar la ventana.
+    // Devolviendo `None` la tecla sigue su camino y la resuelve el keymap.
+    if mods.cmd {
+        return None;
+    }
+    let cuerpo: Vec<u8> = match code {
+        // Ctrl+letra es el byte de control de toda la vida: `a`→1, `c`→3.
+        // Sin esto, un Ctrl+C dentro del panel no interrumpe nada.
+        KeyCode::Char(c) if mods.ctrl && c.is_ascii_alphabetic() => {
+            vec![(c.to_ascii_lowercase() as u8) - b'a' + 1]
+        }
+        // Los OTROS acordes de control, que también son bytes y no letras:
+        // Ctrl+\ es SIGQUIT, Ctrl+espacio es el NUL con el que `readline` pone
+        // la marca, Ctrl+[ es Escape. Sin esta rama viajaba el carácter tal
+        // cual, así que Ctrl+\ mandaba una barra invertida.
+        KeyCode::Char(c)
+            if mods.ctrl && matches!(c, '@' | ' ' | '[' | '\\' | ']' | '^' | '_' | '?') =>
+        {
+            vec![match c {
+                '@' | ' ' => 0,
+                '?' => 0x7f,
+                otro => (otro as u8) & 0x1f,
+            }]
+        }
+        KeyCode::Char(c) => c.to_string().into_bytes(),
+        // Las teclas de función, que un `htop` o un editor dentro del panel sí
+        // usan: sin esto, F10 no salía de nada. Códigos xterm, que son los que
+        // `terminfo` da para `xterm`/`screen`/`tmux`.
+        KeyCode::F(1) => b"\x1bOP".to_vec(),
+        KeyCode::F(2) => b"\x1bOQ".to_vec(),
+        KeyCode::F(3) => b"\x1bOR".to_vec(),
+        KeyCode::F(4) => b"\x1bOS".to_vec(),
+        // El salto 16, 22 no es un error: xterm nunca los asignó.
+        KeyCode::F(n @ 5..=12) => {
+            let num = [15, 17, 18, 19, 20, 21, 23, 24][usize::from(n) - 5];
+            format!("\x1b[{num}~").into_bytes()
+        }
+        KeyCode::F(_) => return None,
+        KeyCode::Enter => b"\r".to_vec(),
+        // Shift+Tab es `CSI Z`, que es lo que un shell espera para ir hacia
+        // atrás en un completado.
+        KeyCode::Tab if mods.shift => b"\x1b[Z".to_vec(),
+        KeyCode::Tab => b"\t".to_vec(),
+        // DEL (127) y no BS (8): es lo que manda un terminal moderno, y lo que
+        // `readline` espera para borrar hacia atrás.
+        KeyCode::Backspace => vec![0x7f],
+        KeyCode::Esc => vec![0x1b],
+        KeyCode::Up => b"\x1b[A".to_vec(),
+        KeyCode::Down => b"\x1b[B".to_vec(),
+        KeyCode::Right => b"\x1b[C".to_vec(),
+        KeyCode::Left => b"\x1b[D".to_vec(),
+        KeyCode::Home => b"\x1b[H".to_vec(),
+        KeyCode::End => b"\x1b[F".to_vec(),
+        KeyCode::PageUp => b"\x1b[5~".to_vec(),
+        KeyCode::PageDown => b"\x1b[6~".to_vec(),
+        KeyCode::Delete => b"\x1b[3~".to_vec(),
+        KeyCode::Insert => b"\x1b[2~".to_vec(),
+    };
+    // Alt es ESC delante, que es lo que hace que `alt+f` mueva una palabra.
+    if mods.alt {
+        let mut con_esc = vec![0x1b];
+        con_esc.extend_from_slice(&cuerpo);
+        return Some(con_esc);
+    }
+    Some(cuerpo)
+}
+
 /// El acorde con el que el lector RECUPERA los paneles.
 ///
 /// Es el mismo que se los quitó, y por eso sale del keymap y no de una

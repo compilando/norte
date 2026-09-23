@@ -400,6 +400,16 @@ impl Estado {
         if let Some(salida) = self.tecla_en_preview(k) {
             return salida;
         }
+        // El panel de TERMINAL con el foco se queda los BYTES (#362), y este
+        // brazo no se parece a los de arriba: los demás traducen teclas a
+        // comandos, y aquí se le pasa todo a un shell —flechas, `tab`, F5,
+        // `ctrl+c`— porque dentro de un shell eso es lo que significan.
+        //
+        // Con UNA excepción, que es la puerta: el acorde suelto que abrió el
+        // panel lo saca. La tabla de bytes es la COMPARTIDA con la terminal.
+        if let Some(salida) = self.tecla_en_terminal(k, backend, buzon) {
+            return salida;
+        }
         let Ok(chord) = k.to_chord() else {
             // Una tecla que el adaptador no entiende no se adivina.
             return (

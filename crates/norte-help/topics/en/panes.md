@@ -306,6 +306,10 @@ It is a panel, not the shell behind {{cmd:app.toggle-panels}}: that one takes
 the whole screen and follows the pane; this one is visible **alongside** the
 listings and, for now, does not follow them.
 
+It is in both places, the terminal and the window, with the same shell and the
+same grid inside. Over a remote pane it refuses to open and says so: a shell
+sits in a directory of the filesystem, and an `sftp://` has nowhere to sit it.
+
 {{cmd:layout.timeline}} opens the timeline: what has been done on this machine,
 newest first, with the time, who did it — you, an agent or an extension, and the
 dot's colour says which — the verb and what it was done to. A batch shows as
