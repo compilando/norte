@@ -83,14 +83,41 @@ fn instala_y_aprueba(cfg: &Path, wasm: &Path) -> PluginRegistry {
 /// Un repositorio con un commit: `limpio.txt` y `sucio.txt` rastreados,
 /// `nuevo.txt` sin rastrear, `basura.tmp` ignorada. `None` si no hay `git`.
 fn repo_fixture(dir: &Path) -> Option<()> {
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .current_dir(dir)
-            .args(args)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-    };
+    repo_fixture_heredando(dir, &[])
+}
+
+/// Las variables con las que git decide sobre QUÉ repositorio opera, por
+/// encima del directorio de trabajo. Git las exporta a sus hooks (#364).
+const GIT_REPO_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+];
+
+/// `git <args>` en `dir` y SOLO en `dir`: sin las [`GIT_REPO_ENV`], que
+/// llevarían la orden a otro repositorio (#364). `heredado` simula el entorno
+/// de un hook; se quita DESPUÉS de ponerlo, que es el orden en que lo
+/// encuentra un test que corre bajo uno. `true` si git terminó bien.
+fn git_en(dir: &Path, heredado: &[(&str, &Path)], args: &[&str]) -> bool {
+    let mut cmd = Command::new("git");
+    cmd.envs(heredado.iter().copied());
+    for var in GIT_REPO_ENV {
+        cmd.env_remove(var);
+    }
+    cmd.current_dir(dir)
+        .args(args)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// [`repo_fixture`] con variables de entorno HEREDADAS, como las que exporta
+/// git a sus hooks: es lo que el test del señuelo necesita simular (#364).
+fn repo_fixture_heredando(dir: &Path, heredado: &[(&str, &Path)]) -> Option<()> {
+    let git = |args: &[&str]| git_en(dir, heredado, args).then_some(());
     git(&["init", "-q"])?;
     git(&["config", "user.email", "t@t"])?;
     git(&["config", "user.name", "t"])?;
@@ -104,6 +131,45 @@ fn repo_fixture(dir: &Path) -> Option<()> {
     std::fs::write(dir.join("nuevo.txt"), b"nuevo\n").ok()?;
     std::fs::write(dir.join("basura.tmp"), b"basura\n").ok()?;
     Some(())
+}
+
+/// #364: git exporta `GIT_DIR` a sus hooks, y el pre-push corre el gate. Un
+/// fixture que la heredaba hacía `init`, `config` y `commit` sobre el
+/// repositorio que se estaba empujando: un commit «uno» que borraba todo, y
+/// `user.name = t` en su `.git/config`. El fixture solo toca SU directorio.
+#[test]
+fn el_fixture_no_escribe_en_el_repo_de_un_git_dir_heredado() {
+    let senuelo = tempfile::tempdir().expect("tempdir");
+    if repo_fixture(senuelo.path()).is_none() {
+        eprintln!("SKIP: sin `git` instalado no hay repositorio que mirar");
+        return;
+    }
+    // Lo que el incidente tocó: la config (identidad), el índice (`add -A`) y
+    // la rama (`commit`). Un solo byte distinto en cualquiera es la regresión.
+    let git_dir = senuelo.path().join(".git");
+    let foto = || {
+        let head = std::fs::read_to_string(git_dir.join("HEAD")).expect("HEAD");
+        let rama = head.trim().strip_prefix("ref: ").expect("HEAD simbólico");
+        (
+            std::fs::read(git_dir.join("config")).expect("config"),
+            std::fs::read(git_dir.join("index")).expect("index"),
+            std::fs::read(git_dir.join(rama)).expect("ref de la rama"),
+        )
+    };
+    let antes = foto();
+
+    let repo = tempfile::tempdir().expect("tempdir");
+    let hecho = repo_fixture_heredando(repo.path(), &[("GIT_DIR", &git_dir)]);
+
+    assert!(
+        antes == foto(),
+        "el fixture escribió en el repositorio del GIT_DIR heredado"
+    );
+    assert!(hecho.is_some(), "el fixture no pudo montar SU repo");
+    assert!(
+        repo.path().join(".git").is_dir(),
+        "el fixture no creó SU repo"
+    );
 }
 
 fn vpath_de(path: &Path) -> VPath {
@@ -234,16 +300,8 @@ fn una_pagina_sobre_un_indice_grande_cuesta_lo_que_debe_wasm_real() {
     for i in 0..2_000 {
         std::fs::write(muchos.join(format!("f{i:05}.txt")), b"x\n").expect("write");
     }
-    let ok = Command::new("git")
-        .current_dir(repo.path())
-        .args(["add", "-A"])
-        .output()
-        .is_ok_and(|o| o.status.success())
-        && Command::new("git")
-            .current_dir(repo.path())
-            .args(["commit", "-qm", "muchos"])
-            .output()
-            .is_ok_and(|o| o.status.success());
+    let ok = git_en(repo.path(), &[], &["add", "-A"])
+        && git_en(repo.path(), &[], &["commit", "-qm", "muchos"]);
     assert!(ok, "el commit de la fixture");
 
     let reg = instala_y_aprueba(cfg.path(), &wasm);

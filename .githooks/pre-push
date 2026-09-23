@@ -28,6 +28,14 @@ done
 RAIZ="$(git rev-parse --show-toplevel)"
 cd "$RAIZ" || exit 1
 
+# Git exporta a sus hooks las variables que fijan EL repositorio (#364). El
+# gate hereda el entorno, y un test que lanzaba `git init/config/commit` en su
+# tempdir operaba sobre ESTE repo: dejó en `main` un commit «uno» que borraba
+# todo y `user.name = t` en `.git/config`, y el test fallaba solo aquí. Desde
+# `cd "$RAIZ"` el repositorio se deduce del directorio, así que no hacen falta.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE GIT_PREFIX
+
 # SELLO: el árbol que ya pasó el gate.
 #
 # Un suelo que cuesta veinte minutos se convierte en un `--no-verify` de
