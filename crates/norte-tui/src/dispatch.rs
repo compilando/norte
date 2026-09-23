@@ -216,7 +216,22 @@ pub async fn dispatch(
                         // sabe qué rectángulo le tocó; éste es el de arranque
                         // y dura lo que tarda la primera vuelta.
                         match crate::termpanel::TermPanel::abrir(&dir, (80, 24)) {
-                            Ok(t) => app.terminal = Some(t),
+                            Ok(t) => {
+                                // Se deja constancia, como sus dos hermanos y
+                                // con el mismo «no va al diario» escrito: un
+                                // shell que abre el lector es el lector
+                                // actuando con sus permisos, no una mutación
+                                // de norte —no hay actor que atribuir ni
+                                // reversa que grabar—. Pero arrancar un shell
+                                // es lo de más privilegio que hace un
+                                // frontend, y el panel de registro es ahora
+                                // una superficie que se mira.
+                                tracing::info!(
+                                    "TUI opened a shell in a terminal panel \
+                                     (not journalled: no actor, no reversal)"
+                                );
+                                app.terminal = Some(t);
+                            }
                             // El hueco se queda abierto aunque el shell no
                             // arranque: un panel vacío con el motivo escrito se
                             // lee mejor que una tecla que no hace nada.

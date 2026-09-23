@@ -176,7 +176,12 @@ impl Rejilla {
         if ancho_c == 0 {
             return;
         }
-        if self.col + ancho_c > self.ancho {
+        // Saturante como los movimientos de cursor, y por el mismo motivo: la
+        // columna sale de un parámetro ajeno. Aquí haría falta una rejilla de
+        // 65528 columnas para desbordar —o sea, nunca—, pero la clase entera
+        // se cierra de una vez en vez de dejar cuatro sitios que hay que
+        // volver a razonar cada vez que alguien los lee.
+        if self.col.saturating_add(ancho_c) > self.ancho {
             self.col = 0;
             self.bajar();
         }
@@ -306,7 +311,7 @@ impl vte::Perform for Rejilla {
             b'\n' | 0x0b | 0x0c => self.bajar(),
             b'\r' => self.col = 0,
             0x08 => self.col = self.col.saturating_sub(1),
-            b'\t' => self.col = ((self.col / 8) + 1) * 8,
+            b'\t' => self.col = (self.col / 8).saturating_add(1).saturating_mul(8),
             _ => return,
         }
         self.col = self.col.min(self.ancho);
@@ -337,9 +342,16 @@ impl vte::Perform for Rejilla {
                 self.fila = (uno(0) - 1).min(self.alto - 1);
                 self.col = (uno(1) - 1).min(self.ancho - 1);
             }
+            // Los cuatro SATURAN, y los cuatro tienen que hacerlo: `uno` viene
+            // de un parámetro que lo escribió otro programa y puede valer
+            // 65535. Sumarlo desbordaba el `u16` y, con comprobaciones puestas
+            // —el perfil con el que corre la suite y el binario de desarrollo—,
+            // eso es un pánico que dispara cualquier fichero con `ESC [ 6 5 5
+            // 3 5 C` dentro. Que `A` y `D` fueran saturantes y `B` y `C` no era
+            // el síntoma a la vista.
             'A' => self.fila = self.fila.saturating_sub(uno(0)),
-            'B' => self.fila = (self.fila + uno(0)).min(self.alto - 1),
-            'C' => self.col = (self.col + uno(0)).min(self.ancho - 1),
+            'B' => self.fila = self.fila.saturating_add(uno(0)).min(self.alto - 1),
+            'C' => self.col = self.col.saturating_add(uno(0)).min(self.ancho - 1),
             'D' => self.col = self.col.saturating_sub(uno(0)),
             'J' if !privado => {
                 let (fila, col, alto, ancho) = (self.fila, self.col, self.alto, self.ancho);
@@ -354,7 +366,7 @@ impl vte::Perform for Rejilla {
                         for f in 0..fila {
                             self.borrar_fila(f, 0, ancho);
                         }
-                        self.borrar_fila(fila, 0, col + 1);
+                        self.borrar_fila(fila, 0, col.saturating_add(1));
                     }
                     _ => {
                         for f in 0..alto {
@@ -367,7 +379,7 @@ impl vte::Perform for Rejilla {
                 let (fila, col, ancho) = (self.fila, self.col, self.ancho);
                 match cero(0) {
                     0 => self.borrar_fila(fila, col, ancho),
-                    1 => self.borrar_fila(fila, 0, col + 1),
+                    1 => self.borrar_fila(fila, 0, col.saturating_add(1)),
                     _ => self.borrar_fila(fila, 0, ancho),
                 }
             }
@@ -430,10 +442,52 @@ impl Pantalla {
             .and_then(|i| self.rejilla.celdas.get(i))
     }
 
+    /// Una fila partida en TRAMOS: texto seguido que comparte estilo.
+    ///
+    /// Es lo que cualquiera que pinte necesita, y por eso vive aquí y no en
+    /// cada frontend: la terminal hace un span de `ratatui` por tramo y la
+    /// ventana un `TerminalSpanView`, pero *dónde* se corta es la misma
+    /// decisión y se toma una vez.
+    ///
+    /// Agrupar no es cosmético. Una fila de ochenta celdas son ochenta
+    /// fragmentos si no se agrupa, y eso se paga en cada repintado — por el
+    /// puente, además, donde son ochenta objetos JSON.
+    ///
+    /// Las estelas de un carácter ancho no salen: ya están dentro del tramo de
+    /// su carácter.
+    ///
+    /// ```
+    /// use norte_term::Pantalla;
+    ///
+    /// let mut p = Pantalla::nueva(8, 1);
+    /// p.alimentar(b"ab\x1b[31mcd");
+    /// let tramos = p.fila_tramos(0);
+    /// // Tres: lo normal, lo rojo, y el relleno del final —que NO es rojo, y
+    /// // meterlo en el tramo de antes pintaría de rojo el resto de la línea.
+    /// assert_eq!(tramos.len(), 3);
+    /// assert_eq!(tramos[0].0, "ab");
+    /// assert_eq!(tramos[1].0, "cd");
+    /// assert_eq!(tramos[2].0, "    ");
+    /// ```
+    #[must_use]
+    pub fn fila_tramos(&self, fila: u16) -> Vec<(String, Estilo)> {
+        let mut tramos: Vec<(String, Estilo)> = Vec::new();
+        for c in (0..self.rejilla.ancho).filter_map(|c| self.celda(fila, c)) {
+            if c.estela {
+                continue;
+            }
+            match tramos.last_mut() {
+                Some((texto, estilo)) if *estilo == c.estilo => texto.push(c.c),
+                _ => tramos.push((c.c.to_string(), c.estilo)),
+            }
+        }
+        tramos
+    }
+
     /// El texto de una fila, con las estelas quitadas.
     ///
     /// Existe para los tests y para quien quiera una línea de un tirón; lo que
-    /// pinta con estilos itera [`Self::celda`].
+    /// pinta con estilos itera [`Self::celda`] o [`Self::fila_tramos`].
     #[must_use]
     pub fn fila_texto(&self, fila: u16) -> String {
         (0..self.rejilla.ancho)
@@ -620,6 +674,89 @@ mod tests {
             (1, 3),
             "el cursor no se sale de la rejilla nueva"
         );
+    }
+
+    /// **Un movimiento de cursor enorme no tumba nada.**
+    ///
+    /// `CSI 65535 C` es un parámetro que `vte` entrega tal cual, y sumarlo a la
+    /// columna desbordaba el `u16`: en un perfil con comprobaciones —o sea el
+    /// `dev` con el que corre toda la suite y el binario que `just link` deja—
+    /// eso es un pánico, y lo dispara CUALQUIER fichero que lleve esos ocho
+    /// bytes. Un `cat` de algo descargado, un mensaje de commit, un nombre de
+    /// fichero impreso por `find`.
+    ///
+    /// Lo que delataba el fallo estaba a la vista: `A` y `D` eran saturantes y
+    /// `B` y `C` no.
+    #[test]
+    fn un_movimiento_enorme_no_desborda() {
+        let mut p = Pantalla::nueva(10, 4);
+        p.alimentar(b"a\x1b[65535C\x1b[65535B\x1b[65535A\x1b[65535D");
+        let (fila, col) = p.cursor();
+        assert!(
+            fila < 4 && col < 10,
+            "el cursor se quedó fuera: {fila},{col}"
+        );
+    }
+
+    /// **Ninguna secuencia tumba la rejilla, la escriba quien la escriba.**
+    ///
+    /// Es el test que el plan pedía para esta fase y que una lista de bytes
+    /// escrita a mano no da: un emulador se alimenta de lo que otro programa
+    /// escupa, así que lo que hay que probar no son los quince casos que se
+    /// nos ocurran, sino que no hay un decimosexto.
+    ///
+    /// Se parte además en trozos arbitrarios, porque así es como llega de un
+    /// pty y porque el estado que sobrevive entre dos lecturas es justo donde
+    /// un parser se rompe.
+    #[test]
+    fn ninguna_secuencia_tumba_la_rejilla() {
+        use proptest::prelude::*;
+        proptest!(|(trozos in prop::collection::vec(
+            prop::collection::vec(any::<u8>(), 0..64),
+            1..8,
+        ), ancho in 1u16..40, alto in 1u16..12)| {
+            let mut p = Pantalla::nueva(ancho, alto);
+            for t in &trozos {
+                p.alimentar(t);
+            }
+            let (fila, col) = p.cursor();
+            prop_assert!(fila < alto, "fila {fila} fuera de {alto}");
+            prop_assert!(col <= ancho, "columna {col} fuera de {ancho}");
+            // Y la invariante del crate aguanta pase lo que pase.
+            for f in 0..alto {
+                for c in 0..ancho {
+                    let celda = p.celda(f, c).expect("dentro de la rejilla");
+                    prop_assert!(!celda.c.is_control(), "control en {f},{c}");
+                }
+            }
+        });
+    }
+
+    /// El corpus hostil CANÓNICO, dado de comer a la rejilla.
+    ///
+    /// Los nombres del corpus son lo que un `ls` o un `find` imprimen dentro
+    /// del panel, así que son entrada de este crate tanto como de un listado.
+    /// Va contra el corpus y no contra una lista local por lo que dice
+    /// `norte-frontend`: una lista local deja el fallo fuera del sitio donde
+    /// el resto de norte lo busca, y un fixture nuevo no llegaría aquí nunca.
+    #[test]
+    fn el_corpus_hostil_no_ensucia_ninguna_celda() {
+        let mut p = Pantalla::nueva(20, 4);
+        for n in norte_testkit::corpus::hostile_names() {
+            p.alimentar(&n.bytes);
+            p.alimentar(b"\r\n");
+            for f in 0..4 {
+                for c in 0..20 {
+                    let celda = p.celda(f, c).expect("dentro");
+                    assert!(
+                        !celda.c.is_control(),
+                        "«{}» ({}) dejó un control en {f},{c}",
+                        n.id,
+                        n.why
+                    );
+                }
+            }
+        }
     }
 
     /// Alimentar en trozos tiene que dar lo MISMO que de una vez: un escape

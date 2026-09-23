@@ -907,6 +907,19 @@ impl App {
     pub(crate) fn podar_por_arbol(&mut self) {
         self.history.retain_tree(&self.layout);
         self.paneles.retain_tree(&self.layout);
+        // Y el shell del panel de terminal se va con su hueco (#362).
+        //
+        // Sin esto, cerrar el hueco quitaba el nodo y dejaba el shell VIVO con
+        // su hilo lector, su pty y su directorio abierto —un montaje ocupado
+        // seguía ocupado—, sin panel donde verlo y sin forma de volver a él.
+        // La documentación de `App::terminal` ya prometía lo contrario.
+        //
+        // Se mira si EXISTE el hueco, no si se ve: detrás de una pestaña el
+        // panel sigue ahí y su shell tiene que seguir corriendo, que es medio
+        // sentido de tener un shell dentro del gestor.
+        if self.terminal.is_some() && self.terminal_slot().is_none() {
+            self.terminal = None;
+        }
     }
 
     /// El hueco del panel de PLUGIN que el lector ve, si hay alguno.

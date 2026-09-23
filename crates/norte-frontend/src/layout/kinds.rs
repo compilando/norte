@@ -160,11 +160,14 @@ impl KindRegistry {
                 // —Krusader— tampoco da. El árbol, el registro, procesos, el
                 // mapa y la línea de tiempo son todos uno; éste también.
                 //
-                // «Toma teclas» significa aquí más que en cualquier otro kind
-                // y por eso hay una tecla de salida (`layout.terminal-escape`):
+                // «Toma teclas» significa aquí más que en cualquier otro kind:
                 // los demás consumen comandos del catálogo, y un terminal
                 // consume BYTES, o sea también los acordes que serían de
-                // norte.
+                // norte. La salida es el MISMO `layout.terminal` que lo abrió
+                // —un acorde suelto, el único que el panel no le pasa al
+                // shell—, y no un comando aparte: uno que se llamara
+                // `layout.terminal-escape` habría sido un segundo binding en
+                // los siete presets para lo que la tecla de entrada ya dice.
                 //
                 // 20x4 es el mínimo con el que sigue siendo un shell: a lo
                 // ancho, un prompt corto y una orden con un argumento; a lo
