@@ -1962,6 +1962,13 @@ pub enum SlotView {
     },
     /// El panel de registro: lo que este proceso está registrando (#326).
     Log(Box<LogSlotView>),
+    /// El panel de TERMINAL (#362, puente 95): la rejilla de un shell.
+    ///
+    /// Lo que cruza son FILAS YA PINTADAS, no los bytes del pty. La emulación
+    /// —bytes a celdas— la hace `norte-term` una sola vez, del mismo lado que
+    /// la hace la terminal, así que los dos frontends enseñan lo mismo por
+    /// construcción y no porque alguien compare dos emuladores.
+    Terminal(Box<TerminalSlotView>),
     /// El visor ACOPLADO (#291, puente 51): el fichero bajo el cursor del
     /// listado al que este hueco sigue, leído solo. Kind `viewer` en la
     /// disposición; `preview` en el wire, que es lo que es.
@@ -2128,6 +2135,108 @@ pub struct HitView {
     pub col: u16,
     /// Cuántas celdas ocupa a lo ancho.
     pub width: u16,
+}
+
+/// El panel de terminal (#362, puente 95): lo que el shell tiene pintado.
+///
+/// **Es contenido AJENO**, y por eso no se parece a los demás paneles: no
+/// lleva ni un rol del tema. Lo que un programa pinta dentro es suyo, y un
+/// tema que le cambiara los colores a un `ls --color` estaría mintiendo sobre
+/// lo que ese programa dijo. Lo nuestro es el marco, que lo pone el renderer.
+///
+/// Lo que sí garantiza quien lo manda es lo mismo que garantiza la rejilla: en
+/// una celda no puede haber acabado un byte de control, porque el parser se
+/// come los escapes y tira los C0 que no mueven el cursor. Por eso estas
+/// cadenas no vuelven a pasar por el enmascarado: ya no hay nada que
+/// enmascarar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalSlotView {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// Las filas, de arriba abajo, cada una con sus fragmentos.
+    ///
+    /// Van SIEMPRE todas las que tiene la rejilla: un terminal no se desplaza
+    /// como una lista, se repinta, y mandar «desde la fila N» obligaría al
+    /// renderer a llevar una copia que puede desincronizarse.
+    pub rows: Vec<Vec<TerminalSpanView>>,
+    /// Dónde está el cursor: fila y columna, desde cero.
+    ///
+    /// `None` = no se pinta, y son dos casos que al renderer le dan igual: el
+    /// shell lo escondió (`CSI ?25l`, lo que hace cualquier programa de
+    /// pantalla completa mientras pinta) o el teclado no está en este panel.
+    pub cursor: Option<(u16, u16)>,
+    /// No hay shell: se fue, o no se pudo arrancar.
+    ///
+    /// El hueco se queda igual, y el renderer lo dice. Cerrarlo por su cuenta
+    /// movería la disposición de alguien sin que la hubiera tocado.
+    #[serde(default)]
+    pub no_shell: bool,
+}
+
+/// Un fragmento de una fila del terminal: texto con lo que el shell pidió.
+///
+/// Tipo propio y no [`SpanView`], y la razón es un campo: un terminal dice
+/// «color 4», y qué azul sea eso lo decide la paleta de quien pinta.
+/// `SpanView` solo sabe de roles del tema y de colores hex, así que meterlo
+/// ahí obligaría a resolver el índice AQUÍ — y entonces el panel dejaría de
+/// obedecer al tema del lector y no habría forma de arreglarlo desde el tema.
+/// Además lleva atributos (negrita, subrayado…) que `SpanView` no tiene.
+// Los seis son banderas SGR independientes: el shell las pone y las quita una
+// a una (`SGR 1` / `SGR 22`), así que un struct de bools ES esa
+// representación. Mismo criterio que `norte_theme::Style` y que
+// `norte_term::Estilo`, de donde éste se traduce campo a campo.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "seis atributos SGR independientes, como los manda el shell"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalSpanView {
+    /// El texto del fragmento.
+    pub text: String,
+    /// Color del texto. Ausente = el normal de quien pinta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg: Option<TerminalColorView>,
+    /// Color del fondo. Ausente = el normal de quien pinta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<TerminalColorView>,
+    /// `SGR 1`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    /// `SGR 2`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dim: bool,
+    /// `SGR 3`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    /// `SGR 4`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
+    /// `SGR 7`: los colores se cambian AL PINTAR, no aquí. Resolverlo antes
+    /// perdería cuál era cuál, y `SGR 27` tiene que poder deshacerlo.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reverse: bool,
+    /// `SGR 9`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strike: bool,
+}
+
+/// Un color tal como lo DIJO el shell, sin resolver.
+///
+/// Los dos casos son los dos que existen en el wire de un terminal, y se
+/// conservan distintos a propósito: ver [`TerminalSpanView`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum TerminalColorView {
+    /// Uno de los 256 de la paleta; del 0 al 15 son los «de siempre».
+    Indexed {
+        /// El índice.
+        index: u8,
+    },
+    /// Uno exacto, que el programa eligió (`CSI 38;2;r;g;b m`), en `#rrggbb`.
+    Rgb {
+        /// El color, en hex con almohadilla.
+        hex: String,
+    },
 }
 
 /// El panel de registro (#326): la ventana visible del anillo en memoria.

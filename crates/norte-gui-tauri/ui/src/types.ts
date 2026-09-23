@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 94;
+export const BRIDGE_VERSION = 95;
 
 /** Dónde se suelta un panel arrastrado sobre otro (ADR 0138): a un lado, o
  *  en el centro para unirse a él como pestaña. */
@@ -525,7 +525,49 @@ export type SlotView =
   | PanelSlotView
   | DiskMapSlotView
   | TimelineSlotView
+  | TerminalSlotView
   | UnsupportedSlotView;
+
+/** Un color tal como lo DIJO el shell, sin resolver (puente 95).
+ *
+ *  `indexed` sigue siendo un índice a propósito: qué azul es el «color 4» lo
+ *  decide la paleta de quien pinta, no el host. Resolverlo allí le habría
+ *  quitado al tema del lector la decisión, y no habría forma de arreglarlo
+ *  desde el tema. */
+export type TerminalColorView =
+  | { kind: "indexed"; index: number }
+  | { kind: "rgb"; hex: string };
+
+/** Un fragmento de fila del terminal: texto con lo que el shell pidió. */
+export interface TerminalSpanView {
+  text: string;
+  fg?: TerminalColorView;
+  bg?: TerminalColorView;
+  bold?: boolean;
+  dim?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  /** Se invierte AL PINTAR: resolverlo antes perdería cuál color era cuál. */
+  reverse?: boolean;
+  strike?: boolean;
+}
+
+/** El panel de terminal (#362, puente 95): lo que el shell tiene pintado.
+ *
+ *  Es contenido AJENO, y por eso no lleva ni un rol del tema: lo que un
+ *  programa pinta dentro es suyo. Lo nuestro es el marco. */
+export interface TerminalSlotView {
+  kind: "terminal";
+  slot_id: number;
+  /** SIEMPRE todas las de la rejilla: un terminal no se desplaza como una
+   *  lista, se repinta. */
+  rows: TerminalSpanView[][];
+  /** Fila y columna, desde cero. Null = no se pinta, y da igual si es porque
+   *  el shell lo escondió o porque el teclado no está aquí. */
+  cursor: [number, number] | null;
+  /** No hay shell: se fue, o no se pudo arrancar. El hueco se queda. */
+  no_shell?: boolean;
+}
 
 export interface PendingView {
   chords: string;

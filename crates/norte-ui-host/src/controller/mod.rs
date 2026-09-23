@@ -72,6 +72,7 @@ mod sums;
 mod sync;
 mod tabs;
 mod tasks;
+mod termpanel;
 mod timeline;
 mod transfer;
 mod tree;
