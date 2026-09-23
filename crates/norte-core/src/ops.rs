@@ -1677,6 +1677,17 @@ async fn hydrate_plan(
     Ok(())
 }
 
+/// Cada cuántas entradas se vuelve a comprobar que la raíz de destino abierta
+/// siga estando donde el lector la puso.
+///
+/// No se comprueba en CADA una porque son dos syscalls (el `stat` del
+/// descriptor y la resolución de la ruta) y hay árboles de cien mil ficheros
+/// pequeños, donde eso sí se nota. Cada 32 acota el daño a un puñado de
+/// ficheros escritos donde no tocaba, que es lo que importa: lo que no puede
+/// pasar es copiar un árbol ENTERO a una carpeta que ya no existe y llamarlo
+/// completado.
+const COMPROBAR_RAIZ_CADA: usize = 32;
+
 /// Copia el árbol `from` → `to` según un plan YA walkeado (el walk es del
 /// caller: el move lo reusa para el delete — issue #9). La copia ignora la
 /// provenance (un dir sintético de un link expandido se crea como dir
@@ -1727,10 +1738,26 @@ async fn copy_tree(
     let into = Destination::new(&**dst, root.as_deref(), to);
 
     let mut skipped: Vec<VPath> = Vec::new();
-    for pe in plan {
+    for (i, pe) in plan.iter().enumerate() {
         // Entre entrada y entrada se puede PAUSAR (ADR 0147): es el único
         // sitio donde se para una copia sin chunks (servidor-a-servidor).
         ctx.checkpoint().await?;
+        // Y se vuelve a mirar que la raíz abierta SIGA siendo la ruta a la que
+        // se pidió copiar.
+        //
+        // Comprobarlo solo al abrirla no basta, y esto es un fallo que un
+        // lector encontró: puso a copiar una carpeta grande y, con la barra
+        // corriendo, borró la de destino. Norte borra a la papelera, o sea un
+        // `rename`, y un `rename` NO invalida el descriptor: el directorio
+        // sigue vivo con su mismo inodo en otro sitio, así que la copia siguió
+        // llenándolo tan tranquila y la tarea acabó diciendo «completada».
+        // Los ficheros estaban en la papelera. Decir «hecho» ahí es peor que
+        // fallar, porque nadie lo va a comprobar.
+        if let Some(root) = root.as_deref()
+            && i % COMPROBAR_RAIZ_CADA == 0
+        {
+            same_root_or_fail(&**dst, root, to, &ctx.cancel).await?;
+        }
         let entry = &pe.entry;
         let target = rebase(&entry.path, from, to)?;
         ctx.progress
@@ -1762,6 +1789,14 @@ async fn copy_tree(
             EntryKind::Other => return Err(Error::Unsupported),
         }
         ctx.progress.update(|p| p.entries_done += 1);
+    }
+    // Y una última vez ANTES de decir que se completó, cueste lo que cueste el
+    // stat: que el destino desapareciera con el último fichero en vuelo es
+    // exactamente el caso que la comprobación periódica se salta, y es también
+    // el único momento en el que mentir tiene consecuencias — un «completada»
+    // lo cierra todo y nadie vuelve a mirar.
+    if let Some(root) = root.as_deref() {
+        same_root_or_fail(&**dst, root, to, &ctx.cancel).await?;
     }
     Ok(skipped)
 }

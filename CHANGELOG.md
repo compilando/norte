@@ -210,6 +210,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A copy whose destination is deleted mid-flight now fails instead of
+  reporting success.** Copying a large folder and then deleting the
+  destination while the progress bar ran ended with the task saying
+  `Completed` and the files sitting in the trash. Deleting in norte means
+  moving to the trash, which is a `rename`, and a `rename` does not
+  invalidate the open directory descriptor a copy addresses through: the
+  directory kept existing under another name and the copy kept filling it.
+  The identity check that catches this already existed but ran only once,
+  when the root was opened; it now runs during the copy and always before
+  a copy can report success. The same gap on the single-file path is #367.
 - **Clearing the screen no longer stops the panel from following the
   subshell** (#360). `Ctrl+L` is a line-editor command that repaints the
   prompt and leaves the line untouched, but every write lowered the flag
