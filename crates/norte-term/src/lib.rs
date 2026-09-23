@@ -205,7 +205,17 @@ impl Rejilla {
                 };
             }
         }
-        self.col += ancho_c;
+        // Acotado a `ancho`, y no un `+=` suelto: un carácter ANCHO en una
+        // rejilla de UNA columna no cabe ni después de envolver —el salto de
+        // arriba deja `col` en 0 y sigue sin caber— así que sumarle 2 dejaba
+        // el cursor en la columna 2 de una rejilla que llega hasta la 1. Lo
+        // encontró la proptest, que es para lo que está: una rejilla de una
+        // columna no se le ocurre a nadie y un pty la produce en cuanto la
+        // ventana se estrecha.
+        //
+        // `ancho` y no `ancho - 1` porque ésa es la posición de envoltura
+        // pendiente, que es un estado legítimo del cursor aquí.
+        self.col = self.col.saturating_add(ancho_c).min(self.ancho);
     }
 
     /// Deja `rango` de celdas de la fila `fila` como recién puestas.
@@ -699,6 +709,25 @@ mod tests {
             fila < 4 && col < 10,
             "el cursor se quedó fuera: {fila},{col}"
         );
+    }
+
+    /// Un carácter ANCHO en una rejilla de UNA columna no cabe ni envolviendo.
+    ///
+    /// El caso mínimo que encontró la proptest. No es rebuscado: una rejilla
+    /// de una columna sale de estrechar la ventana, y una `ä` ancha sale de
+    /// cualquier `ls`. El cursor acababa en la columna 2 de una rejilla que
+    /// llega hasta la 1, que es la invariante que todo lo demás da por buena.
+    #[test]
+    fn un_caracter_ancho_en_una_rejilla_de_una_columna_no_saca_el_cursor() {
+        let mut p = Pantalla::nueva(1, 2);
+        p.alimentar("世".as_bytes());
+        let (fila, col) = p.cursor();
+        assert!(fila < 2, "fila {fila} fuera de 2");
+        assert!(col <= 1, "columna {col} fuera de 1");
+        // Y repetirlo tampoco lo saca: el estado sobrevive entre lecturas.
+        p.alimentar("界".as_bytes());
+        let (_, col) = p.cursor();
+        assert!(col <= 1, "columna {col} fuera de 1 tras el segundo");
     }
 
     /// **Ninguna secuencia tumba la rejilla, la escriba quien la escriba.**
