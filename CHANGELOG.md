@@ -250,19 +250,38 @@ independently through `PROTOCOL_VERSION`.
   invalidate the open directory descriptor a copy addresses through: the
   directory kept existing under another name and the copy kept filling it.
   The identity check that catches this already existed but ran only once,
-  when the root was opened; it now runs during the copy — every 32 entries
-  or every 5 seconds, whichever comes first, so a plan of a few huge files
-  is covered too — and always before a copy can report success. The failure
+  when the root was opened; it now runs during the copy — every 32 entries,
+  or on the first entry that starts more than 5 seconds after the last check,
+  so a plan of a few huge files gets checked *between* them — and always
+  before a copy can report success. That second trigger is not a five-second
+  ceiling: it is read once per entry, so a fifty-gigabyte file is copied in
+  full before anyone looks again. The failure
   says which thing went missing: `ConflictKind::DestinationGone` (protocol
   0.84.0, ADR 0151). It is a new subtype rather than a reused one because
   "not found" does not say *what* was not found — mid-copy that reads as
   something missing in the source — and "escapes its confined root" is
   about the shape of the path and reads as a security problem.
-  **Copying a folder is the only operation covered.** The same gap is open
-  on the single-file path (#367) and in `sync.apply` (#368). A copy that
-  fails this way still leaves journal entries pointing at paths it did not
-  write; undoing them is now safe (#369, below), but the timeline still shows
-  them.
+  A copy that fails this way still leaves journal entries pointing at paths it
+  did not write; undoing them is now safe (#369, below), but the timeline still
+  shows them.
+- **The same hole, closed in three more places: one file (#367), `sync.apply`
+  (#368), and moving one file.** All had it for the identical reason — a root
+  opened once and a descriptor that outlives a `rename`. Copying one file now
+  checks its destination directory before saying it copied; a sync checks its
+  destination root when it opens it, on the same cadence while it runs, and
+  once before reporting success.
+  **The move is the one that could lose data**, and it was found reviewing the
+  other two: a cross-filesystem move copies the file and then deletes the
+  source. Trash the destination folder mid-move and you got the bytes in the
+  trash, the source deleted, and "completed". The check now runs before that
+  deletion, which is the one place where it has to come *before* the effect
+  rather than before the sentence.
+  A sync is the operation people leave running against a destination nobody is
+  watching, so it is the one where "completed" over a trashed folder was worst.
+  A destination directory that is a **symlink** is checked *through* the link,
+  so a `~/copias -> /mnt/disco/copias` passes untouched, while a link left
+  dangling or repointed is caught — both are "the place you named is not that
+  place any more".
 - **Clearing the screen no longer stops the panel from following the
   subshell** (#360). `Ctrl+L` is a line-editor command that repaints the
   prompt and leaves the line untouched, but every write lowered the flag

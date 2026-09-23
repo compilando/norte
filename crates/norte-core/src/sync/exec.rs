@@ -169,6 +169,29 @@ impl SyncTargets {
         Ok(self)
     }
 
+    /// ¿Sigue la raíz de destino siendo la ruta a la que se pidió sincronizar?
+    /// (#368)
+    ///
+    /// El mismo agujero que ADR 0151 cerró en la copia de un árbol, y aquí
+    /// importa MÁS: una sincronización es justamente la operación que se deja
+    /// corriendo contra un destino que nadie está mirando. La raíz se abre una
+    /// vez por Task y el descriptor sobrevive a un `rename`, así que borrar la
+    /// carpeta de destino a media sincronización dejaba los ficheros en la
+    /// papelera y el informe diciendo que fue bien.
+    ///
+    /// Sin raíz confinada no hay nada que comprobar y se contesta que sí: es
+    /// el mismo trato que en `copy_tree`, y negarse aquí rompería todo destino
+    /// que no sabe confinarse.
+    async fn destino_en_pie(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<(), Error> {
+        let Some(root) = self.dest_confined.as_deref() else {
+            return Ok(());
+        };
+        crate::ops::dest_sigue_ahi_o_falla(self.dest.as_ref(), root, &self.dest_root, cancel).await
+    }
+
     /// El destino de un paso: la ruta real, más el relativo bajo la raíz
     /// confinada si la hay.
     ///
@@ -1341,14 +1364,59 @@ where
         .with_dest_confined(ctx.progress.snapshot().task_id.get())
         .await
         .map_err(ApplyError::Stopped)?;
+    // Y que la raíz abierta sea la ruta que se pidió, antes de tocar nada
+    // (#368): entre resolverla y abrirla hay la ventana de siempre.
+    targets
+        .destino_en_pie(&ctx.cancel)
+        .await
+        .map_err(ApplyError::Stopped)?;
     let mut steps = std::pin::pin!(steps);
+    let mut hechos: usize = 0;
+    let mut ultima_comprobacion = std::time::Instant::now();
     loop {
         if ctx.cancel.is_cancelled() {
             return Err(ApplyError::Stopped(Error::Cancelled));
         }
         let Some(next) = steps.next().await else {
-            return Ok(());
+            // Y una última vez ANTES de decir que fue bien, cueste lo que
+            // cueste el stat: que el destino se fuera con el último paso en
+            // vuelo es justo lo que la comprobación periódica se salta, y es
+            // el único momento en el que mentir lo cierra todo.
+            //
+            // Salvo que no se haya ejecutado ningún paso, y entonces la de
+            // arriba acaba de correr con nada en medio. Es el mismo `i > 0`
+            // que `copy_tree` tuvo que ponerse: un plan vacío pagaba la
+            // comprobación dos veces y se exponía una vez más a un falso
+            // positivo, sin haber escrito nada que proteger.
+            if hechos == 0 {
+                return Ok(());
+            }
+            return targets
+                .destino_en_pie(&ctx.cancel)
+                .await
+                .map_err(ApplyError::Stopped);
         };
+        // Misma cadencia que la copia, y por lo mismo: cada 32 pasos, o en el
+        // primer paso que empiece habiendo pasado 5 segundos. El segundo
+        // disparador es el que hace que un plan de cuatro ficheros enormes se
+        // compruebe ENTRE ellos y no solo al principio y al final.
+        //
+        // Que no es un techo de cinco segundos: esto se mira una vez por PASO,
+        // así que un fichero de cincuenta gigas se copia entero antes de que
+        // nadie vuelva a mirar. Lo que ninguna de las dos formas permite es
+        // decir que fue bien, para lo que está la comprobación del final.
+        if hechos > 0
+            && (hechos.is_multiple_of(crate::ops::COMPROBAR_RAIZ_CADA)
+                || ultima_comprobacion.elapsed().as_secs()
+                    >= crate::ops::COMPROBAR_RAIZ_CADA_SEGUNDOS)
+        {
+            targets
+                .destino_en_pie(&ctx.cancel)
+                .await
+                .map_err(ApplyError::Stopped)?;
+            ultima_comprobacion = std::time::Instant::now();
+        }
+        hechos = hechos.saturating_add(1);
         let record = match next {
             Ok(record) => record,
             Err(e) => {

@@ -60,11 +60,17 @@ pub enum ConflictKind {
     /// mitad de una copia de miles de ficheros se lee como «no encuentra un
     /// fichero del origen», que es lo contrario de lo que ha pasado.
     ///
-    /// **Qué lo emite, hoy**: la copia de un ÁRBOL. La de un fichero suelto y
-    /// `sync.apply` todavía no (#367, #368), así que un cliente que espere
-    /// este subtipo de ellas esperará en vano. Antes de 0.84.0 el caso no
-    /// tenía respuesta: la copia daba `Completed` con los ficheros en la
-    /// carpeta borrada.
+    /// **Qué lo emite**: la copia de un ÁRBOL, la de un fichero suelto (#367)
+    /// y `sync.apply` (#368). Antes de 0.84.0 el caso no tenía respuesta: las
+    /// tres daban `Completed` con los ficheros en la carpeta borrada.
+    ///
+    /// Un directorio de destino que sea un ENLACE no está exento: se comprueba
+    /// A TRAVÉS del enlace. Así un `~/copias -> /mnt/disco/copias` intacto
+    /// —o un `/tmp` de macOS— pasa sin ruido, y los dos casos que sí importan
+    /// se detectan: si lo que había al otro lado se fue a la papelera, el
+    /// enlace queda roto; si alguien lo reapunta, lleva a otro sitio. Los dos
+    /// son este subtipo, porque en los dos el sitio que nombraste ya no es
+    /// ése.
     ///
     /// Un cliente N-1 lo degrada a [`Self::Unknown`] y enseña «conflicto» a
     /// secas. Lo que pierde es la frase, no la protección: quien comprueba es

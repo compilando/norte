@@ -90,12 +90,45 @@ check is skipped entirely for providers that cannot confine (SFTP, object,
 Windows), where `open_dest_root` returns `None` and this class of protection
 never existed.
 
-**What this does NOT cover, and it is deliberate that it is written down**:
+**What this did not cover when it was written, and what happened to it**:
 copying a single file (#367), `sync.apply` (#368), and the journal entries a
-failed copy leaves pointing at paths it did not write (#369). Each is the same
-mechanism in another operation, and each needs its own failing test first —
+failed copy leaves pointing at paths it did not write (#369). Each was the same
+mechanism in another operation, and each needed its own failing test first —
 the test for this one passed while measuring nothing in three successive
-versions, which is the reason none of the three is being fixed blind.
+versions, which is why none of the three was fixed blind.
+
+All three are done now. #367 and #368 apply this same decision unchanged: one
+file checks its destination directory before reporting success, and a sync
+checks its root on open, on the same cadence while it runs, and once before
+returning. #369 went further and needed its own decision: ADR 0152.
+
+A fourth case turned up while reviewing those two, and it is the worst of the
+family: **a cross-filesystem move**, which copies the leaf and then deletes the
+source. Trash the destination mid-move and the outcome was bytes in the trash,
+source destroyed, task `Completed`. It gets the same check, but placed
+*before the deletion* rather than before the success message — the only spot in
+this family where the check gates an irreversible effect instead of the wording
+of an outcome.
+
+**And one correction to this ADR's own reasoning.** The first attempt at #367
+copied `open_leaf_root`'s symlink exemption: skip the check when the
+destination directory is a link, because the open root's identity is the node
+the link points to while the path's is the link, so they never match. That is
+true of the question `same_root_or_fail` asks — "was a link planted where a
+directory was" — and false of the question *this* check asks, which is about
+the target. The exemption also would have left #367 live in the case where it
+is most likely (a leaf's destination directory is one the human chose and may
+well be a link) and, applied to `sync.apply`, would have rejected every
+symlinked destination root outright. The fix is to resolve **following links**:
+an intact `~/copias -> /mnt/disco/copias` matches, a link left dangling reports
+that nothing is there, and a repointed link reports a different node. Three
+correct answers instead of one correct-by-accident and two lost.
+
+Getting the single-file test to fail first needed a source that could be
+paused, since a tree gets its window free from having four thousand entries and
+one file would have bought it with either a race or a huge fixture. The test
+provider serves the first chunk, says so, and waits for the test's permission —
+a fact and an order, not a timeout.
 
 ## Alternatives considered
 

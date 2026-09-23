@@ -35,6 +35,9 @@ use norte_core::{Actor, Engine};
 use norte_proto::{CollisionPolicy, ConflictKind, Error, TaskState, VPath};
 use norte_vfs::Provider;
 
+mod origen_a_peticion;
+use origen_a_peticion::{Mando, OrigenAPeticion};
+
 fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido")
 }
@@ -230,5 +233,138 @@ async fn si_en_el_sitio_del_destino_aparece_otra_carpeta_la_copia_para() {
         std::fs::read_dir(&destino).expect("la nueva").count(),
         0,
         "no se escribió ni un fichero en la carpeta nueva"
+    );
+}
+
+/// El montaje del fichero suelto: un origen que se puede parar, un destino
+/// local de verdad, y el motor que los une.
+async fn un_fichero_parado(
+    dir: &std::path::Path,
+) -> (Engine, Arc<norte_testkit::MemProvider>, Mando) {
+    let mem = Arc::new(norte_testkit::MemProvider::new());
+    // Varios trozos por parecerse a un fichero de verdad; la parada no
+    // depende de que haya más de uno (ver `OrigenAPeticion::read`).
+    {
+        let mut sink = mem.write(&vp("lento:///grande")).await.expect("write");
+        for _ in 0..8 {
+            sink.write(bytes::Bytes::from(vec![b'x'; 64 * 1024]))
+                .await
+                .expect("chunk");
+        }
+        sink.commit().await.expect("commit");
+    }
+    let (origen, mando) = OrigenAPeticion::nuevo(Arc::clone(&mem));
+    let engine = Engine::new();
+    engine.register_provider(
+        Arc::new(norte_vfs_local::LocalProvider::rooted(dir)) as Arc<dyn Provider>
+    );
+    engine.register_provider(origen);
+    (engine, mem, mando)
+}
+
+/// **Y MOVER un fichero es el caso que pierde datos.**
+///
+/// Lo encontró la revisión de #367 mirando el arreglo, y es peor que lo que
+/// #367 cerraba: un movimiento entre providers copia la hoja y después BORRA
+/// el origen. Con la carpeta de destino borrada a media copia, el resultado
+/// era los bytes en la papelera, el origen destruido y la tarea diciendo
+/// «completada». Aquí la comprobación tiene que ir antes del borrado, y no
+/// antes de la frase final: lo que hay detrás es un efecto irreversible.
+#[tokio::test]
+async fn mover_un_fichero_a_un_destino_que_desaparece_no_borra_el_origen() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let destino = dir.path().join("destino");
+    std::fs::create_dir(&destino).expect("destino");
+    let (engine, mem, mut mando) = un_fichero_parado(dir.path()).await;
+
+    let handle = engine
+        .move_with_as(
+            &vp("lento:///grande"),
+            &vp("file:///destino/grande"),
+            norte_core::TransferOptions {
+                on_collision: CollisionPolicy::Fail,
+                ..norte_core::TransferOptions::default()
+            },
+            Actor::User,
+        )
+        .await
+        .expect("encola");
+
+    assert!(
+        mando.empezo().await,
+        "el movimiento no llegó a empezar: este test no ha probado nada"
+    );
+    std::fs::rename(&destino, dir.path().join("papelera")).expect("a la papelera");
+    mando.sigue();
+
+    let estado = desenlace(handle).await;
+    assert!(
+        matches!(
+            estado,
+            TaskState::Failed {
+                error: Error::Conflict {
+                    conflict: ConflictKind::DestinationGone
+                }
+            }
+        ),
+        "un movimiento cuyo destino se fue no puede acabar «completada». Fue {estado:?}"
+    );
+    // Y esto es el daño de verdad, no la frase: el origen sigue ahí.
+    assert!(
+        mem.stat(&vp("lento:///grande")).await.is_ok(),
+        "el movimiento borró el origen después de copiarlo a una carpeta que \
+         ya no estaba: los bytes en la papelera y el fichero destruido"
+    );
+}
+
+/// **#367 — copiar UN fichero tiene el mismo agujero.**
+///
+/// `open_leaf_root` comprueba la raíz UNA vez, al abrirla, que es la forma que
+/// tenía el árbol antes de ADR 0151. A partir de ahí la hoja se escribe y se
+/// publica por ese descriptor, así que borrar la carpeta de destino con la
+/// copia en marcha dejaba el fichero en la papelera y la tarea diciendo que
+/// fue bien.
+#[tokio::test]
+async fn copiar_un_fichero_a_un_destino_que_desaparece_falla() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let destino = dir.path().join("destino");
+    std::fs::create_dir(&destino).expect("destino");
+
+    let (engine, _mem, mut mando) = un_fichero_parado(dir.path()).await;
+
+    let handle = engine
+        .copy_with_as(
+            &vp("lento:///grande"),
+            &vp("file:///destino/grande"),
+            norte_core::TransferOptions {
+                on_collision: CollisionPolicy::Fail,
+                ..norte_core::TransferOptions::default()
+            },
+            Actor::User,
+        )
+        .await
+        .expect("encola");
+
+    // El hecho, no un plazo: la copia ya entregó su primer trozo.
+    assert!(
+        mando.empezo().await,
+        "la copia no llegó a empezar: este test no ha probado nada"
+    );
+    // Con la copia PARADA a mitad, el lector borra la carpeta de destino.
+    std::fs::rename(&destino, dir.path().join("papelera")).expect("a la papelera");
+    mando.sigue();
+
+    let estado = desenlace(handle).await;
+    assert!(
+        matches!(
+            estado,
+            TaskState::Failed {
+                error: Error::Conflict {
+                    conflict: ConflictKind::DestinationGone
+                }
+            }
+        ),
+        "un fichero suelto cuyo destino se fue no puede acabar «completada»: \
+         los bytes están en la papelera. Fue {estado:?}"
     );
 }

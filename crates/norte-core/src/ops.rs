@@ -508,6 +508,7 @@ fn destino_de_hoja<'a>(
 /// resolución es por ruta por definición, y el ancla nombra el directorio
 /// final, no los de encima. Es el mismo residuo que una copia recursiva acepta
 /// para su propio destino.
+///
 async fn open_leaf_root(
     dst: &dyn Provider,
     to: &VPath,
@@ -1709,6 +1710,7 @@ pub(crate) async fn copy_task(
                 open_leaf_root(&*dst, &to, dest_anchor.as_ref(), tarea, &ctx.cancel).await?;
             let into = destino_de_hoja(&*dst, dir.as_ref(), raiz.as_deref(), &to);
             copy_file_leaf(&*src, &into, &src_entry, &to, opts, &observer, ctx).await?;
+            hoja_con_su_destino_en_pie(&*dst, dir.as_ref(), raiz.as_deref(), &ctx.cancel).await?;
             ctx.progress.update(|p| p.entries_done = 1);
             Ok(())
         }
@@ -1733,6 +1735,7 @@ pub(crate) async fn copy_task(
                 open_leaf_root(&*dst, &to, dest_anchor.as_ref(), tarea, &ctx.cancel).await?;
             let into = destino_de_hoja(&*dst, dir.as_ref(), raiz.as_deref(), &to);
             copy_symlink_leaf(&*src, &into, &src_entry, &to, opts, &observer, ctx).await?;
+            hoja_con_su_destino_en_pie(&*dst, dir.as_ref(), raiz.as_deref(), &ctx.cancel).await?;
             ctx.progress.update(|p| p.entries_done = 1);
             Ok(())
         }
@@ -1808,14 +1811,31 @@ async fn hydrate_plan(
 /// Que el destino desaparezca NO es un caso rebuscado y no hace falta que sea
 /// desde norte: basta un `rm` en otra terminal, otro gestor de ficheros, u
 /// otra máquina sobre el mismo montaje.
-async fn dest_sigue_ahi_o_falla(
+pub(crate) async fn dest_sigue_ahi_o_falla(
     dst: &dyn Provider,
     root: &dyn norte_vfs::ConfinedRoot,
     path: &VPath,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
     let abierta = root.root_id().await?;
-    let en_ruta = match with_retry(cancel, || dst.node_id(path, FollowLinks::No).boxed()).await {
+    // Se resuelve SIGUIENDO enlaces, y ahí está la diferencia con
+    // `same_root_or_fail`, que no los sigue. Son dos preguntas distintas:
+    //
+    // - aquélla pregunta si donde había un directorio hay ahora un ENLACE
+    //   plantado, y para eso hay que mirar el enlace mismo;
+    // - ésta pregunta si la carpeta que tengo abierta sigue llegándose por la
+    //   ruta que me dieron, que es una pregunta sobre el DESTINO.
+    //
+    // La raíz se abre con `O_PATH|O_DIRECTORY` sin `O_NOFOLLOW`, así que
+    // `root_id` ya es el nodo al que el enlace apunta. Mirando el enlace, un
+    // `~/copias -> /mnt/disco/copias` —o un `/tmp` de macOS— no casaba NUNCA y
+    // cada comprobación contestaba «el destino se fue» sobre un destino que
+    // estaba perfectamente. Siguiéndolo, los cuatro casos salen bien: un
+    // directorio de verdad igual que antes; un enlace intacto casa; un enlace
+    // cuyo destino se fue a la papelera queda roto y contesta `NotFound`, que
+    // es la respuesta correcta; y un enlace reapuntado a otro sitio da otro
+    // nodo, que también lo es — el sitio que nombraste ya no es ése.
+    let en_ruta = match with_retry(cancel, || dst.node_id(path, FollowLinks::Yes).boxed()).await {
         Ok(id) => id,
         // La ruta ya no resuelve: eso ES el caso, y decirlo `NotFound` sería
         // dejar que el lector lo confunda con un fichero del origen.
@@ -1845,24 +1865,70 @@ async fn dest_sigue_ahi_o_falla(
     })
 }
 
+/// Lo mismo que hace un ÁRBOL antes de decir que se completó, para una hoja
+/// suelta (#367).
+///
+/// `open_leaf_root` comprueba la raíz una sola vez, al abrirla — que es la
+/// forma exacta que tenía `copy_tree` antes de ADR 0151. Desde ahí la hoja se
+/// escribe y se publica por ese descriptor, así que borrar la carpeta de
+/// destino con la copia en vuelo dejaba el fichero en la papelera y la tarea
+/// diciendo «completada».
+///
+/// Va DESPUÉS de copiar y no antes de publicar, a propósito: un árbol también
+/// publica en la carpeta que se fue todo lo que copió entre dos comprobaciones,
+/// y ser más estricto con un fichero suelto que con un árbol sería una
+/// diferencia sin motivo que alguien tendría que explicar. Lo que ninguno de
+/// los dos hace es decir que fue bien.
+///
+/// Sin raíz confinada —un backend que no sabe— no hay nada que comprobar y no
+/// se inventa: es el mismo trato que en `copy_tree`.
+///
+/// Un directorio de destino que sea un ENLACE **no** está exento, y eso fue un
+/// error del primer intento: se copió la excepción que `open_leaf_root` tiene
+/// al abrir, sin ver que allí existe porque la pregunta de allí es otra. Aquí
+/// se sigue el enlace, y entonces un `~/copias` intacto casa, uno cuyo destino
+/// fue a la papelera contesta que no está, y uno reapuntado dice que ya no es
+/// el mismo sitio. Las tres respuestas correctas; exento, la primera era
+/// correcta por casualidad y las otras dos se perdían.
+async fn hoja_con_su_destino_en_pie(
+    dst: &dyn Provider,
+    dir: Option<&VPath>,
+    raiz: Option<&dyn norte_vfs::ConfinedRoot>,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let (Some(dir), Some(raiz)) = (dir, raiz) else {
+        return Ok(());
+    };
+    dest_sigue_ahi_o_falla(dst, raiz, dir, cancel).await
+}
+
 /// Cada cuántas ENTRADAS se vuelve a comprobar que el destino siga ahí.
 ///
 /// No en cada una porque son dos saltos a `spawn_blocking` (el `fstat` del
 /// descriptor y la resolución de la ruta) y hay árboles de cien mil ficheros
 /// pequeños. Repartido entre 32 es tiempo despreciable al lado de abrir,
 /// escribir y cerrar cada fichero.
-const COMPROBAR_RAIZ_CADA: usize = 32;
+pub(crate) const COMPROBAR_RAIZ_CADA: usize = 32;
 
 /// …y cada cuánto TIEMPO, que es el otro disparador y hace falta.
 ///
 /// Contar solo entradas acota el daño en ficheros y no en bytes ni en reloj:
 /// un plan de diez ficheros de cincuenta gigas se comprueba en el primero y al
 /// final, así que podría pasarse cinco horas llenando una carpeta que ya no
-/// existe. Con el plazo, lo que se acota es lo que de verdad le duele a
-/// alguien — cuánto tiempo se sigue escribiendo a ciegas—, y las dos
-/// condiciones juntas cubren los dos extremos: muchos ficheros diminutos y
+/// existe. Con el plazo, entre dos ficheros enormes se comprueba igual, y las
+/// dos condiciones juntas cubren los dos extremos: muchos ficheros diminutos y
 /// pocos enormes.
-const COMPROBAR_RAIZ_CADA_SEGUNDOS: u64 = 5;
+///
+/// **No acota a cinco segundos, y conviene no leerlo así.** La condición se
+/// mira una vez por ENTRADA, arriba del bucle, así que lo que garantiza es «en
+/// cuanto acabe la entrada en curso, si ya han pasado cinco segundos». Un
+/// fichero de cincuenta gigas se copia entero antes de que nadie vuelva a
+/// mirar. Lo que el plazo compra de verdad es que un plan de pocos ficheros
+/// enormes se compruebe ENTRE ellos en vez de solo al principio y al final —
+/// que era el agujero— y no un techo de cinco segundos sobre la escritura a
+/// ciegas. Ponerlo dentro de la copia de un fichero sería otra decisión, con
+/// otro coste, y ADR 0151 no la tomó.
+pub(crate) const COMPROBAR_RAIZ_CADA_SEGUNDOS: u64 = 5;
 
 /// Copia el árbol `from` → `to` según un plan YA walkeado (el walk es del
 /// caller: el move lo reusa para el delete — issue #9). La copia ignora la
@@ -2646,6 +2712,16 @@ async fn move_by_copy(
                 ctx.progress.update(|p| p.entries_done = 2);
                 return Ok(());
             }
+            // El destino sigue donde se pidió, ANTES de borrar el origen
+            // (#367). Aquí el razonamiento de `hoja_con_su_destino_en_pie` se
+            // invierte: en una copia, comprobar después de publicar solo
+            // cambia lo que se dice al final; aquí lo que sigue es un borrado
+            // IRREVERSIBLE del origen. Sin esto, borrar la carpeta de destino
+            // a media copia dejaba los bytes en la papelera, el origen
+            // destruido y la tarea diciendo «completada» — peor que el caso
+            // que abrió #367, y por el mismo mecanismo.
+            hoja_con_su_destino_en_pie(&*dst, dir_destino.as_ref(), raiz.as_deref(), &ctx.cancel)
+                .await?;
             if ctx.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
