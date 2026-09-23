@@ -79,12 +79,30 @@ struct Buzon {
     cerrado: bool,
 }
 
-/// La entrada del pty, compartida entre quien teclea y el hilo lector.
+/// Por dónde se le manda algo al pty.
 ///
-/// Dos escritores y los dos legítimos: las teclas, y las RESPUESTAS a las
-/// consultas de terminal que el shell manda y por las que se PARA hasta que
-/// le contesten (fish 4 lo hace antes de su primer prompt).
-type Escritor = Arc<Mutex<Box<dyn std::io::Write + Send>>>;
+/// Un CANAL, y no el escritor compartido tras un mutex que esto era antes.
+/// Hay dos emisores legítimos —las teclas, y las RESPUESTAS a las consultas
+/// de terminal por las que el shell se para hasta que le contesten— y
+/// compartir el escritor entre los dos era un bloqueo esperando a pasar:
+/// escribir en un pty se BLOQUEA cuando la cola de entrada del hijo se llena
+/// (unos 4 KiB) y el hijo no lee. Con el mutex, el hilo lector se quedaba
+/// dentro de `write_all` sujetándolo, y la siguiente tecla bloqueaba a quien
+/// la mandara — en la ventana, la task que sirve TODO lo demás. La ventana se
+/// quedaba muerta del todo y con aspecto de viva.
+///
+/// Repro que lo enseñaba: `printf '\e[c%.0s' {1..1000000} > f; cat f`.
+///
+/// Con el canal, el único que escribe en el pty es su propio hilo, así que no
+/// hay nada que compartir y nadie puede sujetar a nadie.
+type Entrada = std::sync::mpsc::SyncSender<Vec<u8>>;
+
+/// Cuántos envíos caben antes de tirar.
+///
+/// Llenarlo pide que el hijo haya dejado de leer su entrada, y entonces lo que
+/// se está tirando son teclas que ese hijo tampoco iba a leer. Tirarlas es
+/// peor que entregarlas y mucho mejor que bloquear a quien las manda.
+const COLA_MAX: usize = 1024;
 
 /// Cómo se contesta una consulta de terminal del shell.
 ///
@@ -103,7 +121,7 @@ pub type Responder = fn(&[u8]) -> Option<Vec<u8>>;
 /// Un shell vivo con su rejilla.
 pub struct Shell {
     pantalla: Pantalla,
-    escritura: Escritor,
+    entrada: Entrada,
     maestro: Box<dyn portable_pty::MasterPty + Send>,
     hijo: Box<dyn portable_pty::Child + Send + Sync>,
     buzon: Arc<Mutex<Buzon>>,
@@ -144,23 +162,17 @@ impl Shell {
         // El esclavo se SUELTA: mientras se tenga abierto, cerrar el shell no
         // cierra el pty y el lector nunca vería EOF.
         drop(par.slave);
-        let escritura: Escritor = Arc::new(Mutex::new(
-            par.master.take_writer().map_err(std::io::Error::other)?,
-        ));
+        let escritor = par.master.take_writer().map_err(std::io::Error::other)?;
         let lector = par
             .master
             .try_clone_reader()
             .map_err(std::io::Error::other)?;
+        let entrada = lanzar_escritor(escritor);
         let buzon = Arc::new(Mutex::new(Buzon::default()));
-        lanzar_lector(
-            lector,
-            Arc::clone(&buzon),
-            Arc::clone(&escritura),
-            responder,
-        );
+        lanzar_lector(lector, Arc::clone(&buzon), entrada.clone(), responder);
         Ok(Self {
             pantalla: Pantalla::nueva(tam.0, tam.1),
-            escritura,
+            entrada,
             maestro: par.master,
             hijo,
             buzon,
@@ -184,14 +196,17 @@ impl Shell {
         true
     }
 
-    /// Le manda bytes al shell.
+    /// Le manda bytes al shell, sin bloquear NUNCA a quien llama.
+    ///
+    /// Es la diferencia que importa: escribir en un pty se bloquea si el hijo
+    /// dejó de leer, y quien llama aquí es la task que sirve el resto de la
+    /// ventana. Se encola y se vuelve; escribe el hilo del pty.
+    ///
+    /// Con la cola llena se TIRA, y eso es lo correcto: para llenarla hace
+    /// falta que el hijo lleve mil envíos sin leer su entrada, así que lo que
+    /// se tira son teclas que ese hijo tampoco iba a leer.
     pub fn escribir(&mut self, bytes: &[u8]) {
-        let mut e = self
-            .escritura
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _ = e.write_all(bytes);
-        let _ = e.flush();
+        let _ = self.entrada.try_send(bytes.to_vec());
     }
 
     /// Ajusta la rejilla Y el pty al tamaño del hueco.
@@ -254,10 +269,29 @@ fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// El ÚNICO que escribe en el pty, en su propio hilo.
+///
+/// Que sea uno solo es lo que quita el bloqueo de en medio: el `write_all`
+/// bloqueante ocurre aquí y no en la task de quien teclea, y no hay mutex
+/// compartido que nadie pueda sujetar mientras espera.
+///
+/// Muere cuando se suelta el último emisor, o sea con el `Shell`.
+fn lanzar_escritor(mut escritor: Box<dyn std::io::Write + Send>) -> Entrada {
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(COLA_MAX);
+    std::thread::spawn(move || {
+        while let Ok(bytes) = rx.recv() {
+            if escritor.write_all(&bytes).is_err() || escritor.flush().is_err() {
+                return;
+            }
+        }
+    });
+    tx
+}
+
 fn lanzar_lector(
     mut lector: Box<dyn std::io::Read + Send>,
     buzon: Arc<Mutex<Buzon>>,
-    escritura: Escritor,
+    entrada: Entrada,
     responder: Responder,
 ) {
     std::thread::spawn(move || {
@@ -272,12 +306,12 @@ fn lanzar_lector(
                     // Contestar va ANTES de nada: el shell está PARADO
                     // esperándolo y la respuesta no puede esperar a que
                     // alguien repinte. Ver [`Responder`] para lo que esto es.
+                    // Se ENCOLA, no se escribe: este hilo es el que alimenta
+                    // la rejilla, y bloquearlo dentro de un `write_all` con un
+                    // hijo que no lee era la mitad del atasco que el canal
+                    // existe para impedir.
                     if let Some(r) = responder(&buf[..n]) {
-                        let mut e = escritura
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        let _ = e.write_all(&r);
-                        let _ = e.flush();
+                        let _ = entrada.try_send(r);
                     }
                     let mut b = buzon_de(&buzon);
                     b.pendiente.extend_from_slice(&buf[..n]);

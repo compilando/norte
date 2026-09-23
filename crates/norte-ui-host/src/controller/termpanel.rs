@@ -48,8 +48,7 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if let Some(id) = self.hueco_de_kind(KIND) {
-            // Detrás de otra pestaña: se pone delante. Ya delante: no hay nada
-            // que hacer — y desde luego no cerrarlo.
+            // Detrás de otra pestaña: se pone delante.
             let detras = self
                 .arbol
                 .tabs_of(id)
@@ -57,7 +56,41 @@ impl Estado {
             if detras {
                 return self.elegir_pestana(id.0, backend, buzon);
             }
-            return (self.aplicada(), Vec::new());
+            // Ya delante, y aquí está la PUERTA, en las dos direcciones. La
+            // tecla es una sola, así que tiene que llevar y traer:
+            //
+            // - con el foco fuera, se lo damos (y sin esto abrir por la tecla
+            //   nunca enfocaba el panel: `abrir_hueco_de_kind` deja el foco en
+            //   el listado recordado, así que solo se entraba con el ratón o
+            //   con el anillo);
+            // - con el foco DENTRO, se devuelve al listado. Sin esto la salida
+            //   documentada no hacía nada y el panel era una ratonera: ahí
+            //   dentro todas las teclas son del shell, incluida la del anillo.
+            //
+            // Lo que NO hace, y es la diferencia con `alternar_hueco`: cerrar.
+            // Dentro hay un shell del lector.
+            let dentro = self
+                .roles
+                .get(norte_frontend::layout::RoleId::Active)
+                .is_some_and(|a| a == id);
+            let destino = if dentro {
+                norte_frontend::layout::SlotId(self.activo())
+            } else {
+                id
+            };
+            self.roles
+                .set(norte_frontend::layout::RoleId::Active, destino);
+            self.reconcilia_roles();
+            // Y si el hueco existe SIN shell, se arranca aquí. Es el caso de
+            // la sesión restaurada —el árbol se guarda, el shell no— y el del
+            // arranque que falló: sin esto el panel quedaba muerto para toda
+            // la vida de la ventana, porque esta rama volvía antes de mirar.
+            if !dentro && self.terminal.is_none() {
+                self.arrancar_si_falta(buzon);
+            }
+            let snap = self.snapshot();
+            let sobre = self.sobre(UiUpdate::Snapshot(Box::new(snap)));
+            return (self.aplicada(), vec![sobre]);
         }
         // Un shell se sienta en un directorio del sistema de ficheros: sobre
         // un `sftp://` no hay dónde sentarlo, y abrirlo en el `$HOME` sin
@@ -74,23 +107,53 @@ impl Estado {
             );
         }
         let (ack, mut updates) = self.abrir_hueco_de_kind(KIND, backend, buzon);
-        // El shell se arranca DESPUÉS de que el hueco exista: si falla, el
-        // hueco se queda y lo dice, que se lee mejor que una tecla muda.
-        if self.terminal.is_none() {
-            match arrancar(&dir) {
-                Ok(shell) => {
-                    self.terminal = Some(shell);
-                    self.sondear_terminal(buzon);
-                }
-                Err(e) => {
-                    // Se DICE, y el hueco se queda: un panel que explica por
-                    // qué está vacío se lee mejor que una tecla muda.
-                    tracing::warn!(error = %e, "no se pudo abrir el shell del panel");
-                }
-            }
-            updates.extend(self.republicar_terminal());
+        // El foco va al panel: abrirlo y no poder teclear dentro sin buscar el
+        // ratón no es abrirlo. `abrir_hueco_de_kind` lo deja en el listado
+        // recordado, así que se pone aquí.
+        if let Some(id) = self.hueco_de_kind(KIND) {
+            self.roles.set(norte_frontend::layout::RoleId::Active, id);
+            self.reconcilia_roles();
         }
+        updates.extend(self.arrancar_si_falta(buzon));
         (ack, updates)
+    }
+
+    /// Arranca el shell si el hueco existe y no lo tiene, y republica.
+    ///
+    /// Lo llaman los dos caminos —abrir el hueco y volver a él— porque el
+    /// segundo es el de la sesión restaurada: el árbol se guarda y el shell
+    /// no, así que al arrancar la ventana hay hueco sin shell.
+    fn arrancar_si_falta(
+        &mut self,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if self.terminal.is_some() || self.hueco_de_kind(KIND).is_none() {
+            return Vec::new();
+        }
+        let dir = self.hueco().pane.dir().clone();
+        match arrancar(&dir) {
+            Ok(shell) => {
+                // Se deja constancia, como hace la terminal y con el mismo «no
+                // va al diario» escrito: un shell que abre el lector es el
+                // lector actuando con sus permisos, no una mutación de norte.
+                // Pero arrancar un shell es lo de más privilegio que hace un
+                // frontend, y el panel de registro es ahora una superficie que
+                // se mira también aquí.
+                tracing::info!(
+                    "la ventana abrió un shell en un panel de terminal \
+                     (no va al diario: sin actor y sin reversa)"
+                );
+                self.terminal = Some(shell);
+                self.sondear_terminal(buzon);
+            }
+            Err(e) => {
+                // Y se DICE, no solo al log: el hueco se queda, así que sin
+                // una frase el lector ve un panel vacío sin saber por qué.
+                tracing::warn!(error = %e, "no se pudo abrir el shell del panel");
+                return self.decir("host-shell-failed");
+            }
+        }
+        self.republicar_terminal()
     }
 
     /// Programa el siguiente tic del panel, si sigue habiendo panel.
@@ -129,15 +192,30 @@ impl Estado {
             return Vec::new();
         }
         self.sondear_terminal(buzon);
+        // El tamaño del hueco, ANTES de bombear: el pty tiene que saberlo o un
+        // programa de pantalla completa pinta para un ancho que no es el suyo
+        // y el ajuste de línea sale mal. Se arrancó en 80x24 y nadie lo movía.
+        //
+        // Del REPARTO, igual que el visor acoplado saca su alto: menos el
+        // marco, que lo pinta el renderer. `redimensionar` no hace nada si no
+        // cambió, así que preguntarlo en cada tic es gratis.
+        let tam = self.tamano_del_terminal();
         let Some(t) = self.terminal.as_mut() else {
             return Vec::new();
         };
+        if let Some(tam) = tam {
+            t.redimensionar(tam);
+        }
         let cambio = t.bombear();
         // Si el shell se fue, el hueco lo DICE en vez de enseñar la última
         // pantalla de un proceso que ya no existe. El hueco se queda: cerrarlo
         // por su cuenta movería la disposición de alguien sin que la tocara.
         if t.muerto() {
-            self.terminal = None;
+            // `soltar_terminal` y no `self.terminal = None`: sube la época, y
+            // sin eso el tic que ya se rearmó arriba seguiría girando a 30 Hz
+            // para siempre sobre un panel sin shell — el «gira en reposo» otra
+            // vez, esta vez disparado por que el shell se fue.
+            self.soltar_terminal();
             return self.republicar_terminal();
         }
         if cambio {
@@ -185,6 +263,17 @@ impl Estado {
         let bytes = norte_frontend::subshell::chord_a_bytes(chord)?;
         self.terminal_escribir(&bytes);
         Some((self.aplicada(), Vec::new()))
+    }
+
+    /// El tamaño del hueco del terminal en celdas, sin el marco.
+    ///
+    /// `None` si el hueco no está colocado —detrás de una pestaña, o no cabe—:
+    /// entonces no se toca el pty, porque el último tamaño bueno es mejor que
+    /// uno inventado.
+    fn tamano_del_terminal(&self) -> Option<(u16, u16)> {
+        let id = self.hueco_de_kind(KIND)?;
+        let (_, r) = self.reparto.placements.iter().find(|(s, _)| *s == id)?;
+        Some((r.width.saturating_sub(2), r.height.saturating_sub(2)))
     }
 
     /// El acorde SUELTO que corre `layout.terminal`, si el preset da uno.

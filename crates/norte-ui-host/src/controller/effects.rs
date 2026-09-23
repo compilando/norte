@@ -131,7 +131,6 @@ impl Estado {
             | Efecto::Partir { .. }
             | Efecto::CerrarHueco
             | Efecto::AlternarHueco { .. }
-            | Efecto::AbrirTerminal
             | Efecto::PestanaNueva
             | Efecto::CerrarPestana
             | Efecto::CiclarPestana { .. }
@@ -176,6 +175,17 @@ impl Estado {
             | Efecto::EditarExterno
             | Efecto::CompararFicheros
             | Efecto::Terminal
+            // El PANEL de terminal (#362), y con más motivo que `Terminal`:
+            // aquél lanza un emulador de fuera, y éste corre un shell DENTRO
+            // de la ventana. En una que promete no escribir sería la puerta de
+            // atrás más ancha posible — ahí dentro se teclea cualquier cosa.
+            //
+            // Va en ESTE brazo y no en el de disposición, que es donde estaba:
+            // aquél corre sin condiciones, así que la guarda no se alcanzaba.
+            // Y el filtro del keymap no basta, porque el botón de la barra de
+            // paneles, la entrada del menú y los botones de la barra de estado
+            // llaman a `efecto_de` sin pasar por él.
+            | Efecto::AbrirTerminal
             // Fase 9: el relevo escribe la sesión, la suelta y cierra la
             // ventana. Ninguna de las tres las hace una de solo mirar.
             | Efecto::Relevo
@@ -183,6 +193,9 @@ impl Estado {
             {
                 Self::no_muta()
             }
+            // Y fuera de solo lectura, el panel se abre. Va aquí y no con la
+            // disposición porque desde allí la guarda de arriba no se alcanza.
+            Efecto::AbrirTerminal => self.abrir_panel_de_terminal(backend, buzon),
             // Copiar la ruta no toca nada y va en los dos modos: poner texto
             // en el portapapeles es tan de solo mirar como leer un nombre.
             Efecto::CopiarRuta => self.copiar_rutas(),

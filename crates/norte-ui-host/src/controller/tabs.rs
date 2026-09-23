@@ -29,7 +29,6 @@ impl Estado {
             Efecto::Partir { vertical } => self.partir(vertical, backend, buzon),
             Efecto::CerrarHueco => self.cerrar_hueco(backend, buzon),
             Efecto::AlternarHueco { kind } => self.alternar_hueco(kind, backend, buzon),
-            Efecto::AbrirTerminal => self.abrir_panel_de_terminal(backend, buzon),
             Efecto::PestanaNueva => self.pestana_nueva(backend, buzon),
             Efecto::CerrarPestana => self.cerrar_pestana(backend, buzon),
             Efecto::CiclarPestana { atras } => self.ciclar_pestana(atras, backend, buzon),

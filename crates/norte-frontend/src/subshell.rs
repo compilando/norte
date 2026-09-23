@@ -485,6 +485,13 @@ pub fn cd_command(shell: Shell, dir: &[u8]) -> Option<Vec<u8>> {
 pub fn chord_a_bytes(chord: crate::keymap::Chord) -> Option<Vec<u8>> {
     use crate::keymap::KeyCode;
     let (mods, code) = chord.parts();
+    // Un acorde con Cmd/Super NO se le manda a un shell: no hay codificación
+    // de terminal para ese modificador, así que lo que salía era la letra
+    // pelada — en macOS, `cmd+w` escribía una `w` en vez de cerrar la ventana.
+    // Devolviendo `None` la tecla sigue su camino y la resuelve el keymap.
+    if mods.cmd {
+        return None;
+    }
     let cuerpo: Vec<u8> = match code {
         // Ctrl+letra es el byte de control de toda la vida: `a`→1, `c`→3.
         // Sin esto, un Ctrl+C dentro del panel no interrumpe nada.
