@@ -72,6 +72,32 @@ pub enum ConflictKind {
     /// escrito se queda en la carpeta que se borró, para los dos por igual
     /// (#369).
     DestinationGone,
+    /// Lo que hay en esa ruta NO es lo que la operación creó (0.84.0, #369,
+    /// ADR 0152).
+    ///
+    /// Solo lo emite el deshacer de un `created`. La entrada anota la
+    /// identidad del nodo que creó; si al deshacer la ruta tiene otro nodo
+    /// —otro inodo—, el borrado se niega: sería destruir algo que esa
+    /// operación no puso ahí.
+    ///
+    /// **No es [`Self::Exists`], y la diferencia es lo único que el lector
+    /// puede accionar.** `Exists` dice «ahí ya hay algo», que sobre un
+    /// deshacer es una perogrullada: pues claro que hay algo, es lo que iba a
+    /// borrar. Esto dice «ahí hay algo que no es tuyo», y el remedio se sigue
+    /// de ello — mirar ese fichero y decidir, porque probablemente lo pusiste
+    /// tú. Los dos salían indistinguibles antes de 0.84.0, junto con el
+    /// «el directorio creado tiene hijos que no puse yo».
+    ///
+    /// **Lo que hace saltar esto en la práctica**, y no es solo el caso de
+    /// #369: cualquier editor que guarde de forma atómica —escribir a un
+    /// temporal y renombrar encima— cambia el inodo. vim, VS Code, `sed -i`.
+    /// O sea que editar un fichero copiado y luego deshacer la copia para el
+    /// deshacer ahí. Es la dirección segura, pero conviene saberla.
+    ///
+    /// Un cliente N-1 lo degrada a [`Self::Unknown`] y enseña «conflicto» a
+    /// secas. No pierde protección —quien se niega es el daemon—, pierde la
+    /// frase.
+    NotTheSameNode,
     /// La `revision` que traía el escritor no es la vigente (0.48.0, L2): otro
     /// cliente escribió la sesión de UI entre su lectura y su escritura.
     ///
@@ -99,6 +125,7 @@ impl fmt::Display for ConflictKind {
             // en el `message` de un `RpcError` y `norte-mcp` se la entrega
             // tal cual a un agente.
             Self::DestinationGone => "destination directory is gone",
+            Self::NotTheSameNode => "what is there is not what was created",
             Self::StaleRevision => "stale revision",
             Self::Unknown => "unknown conflict kind (newer protocol)",
         })

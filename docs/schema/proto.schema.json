@@ -968,6 +968,11 @@
           "type": "string"
         },
         {
+          "const": "not_the_same_node",
+          "description": "Lo que hay en esa ruta NO es lo que la operación creó (0.84.0, #369,\nADR 0152).\n\nSolo lo emite el deshacer de un `created`. La entrada anota la\nidentidad del nodo que creó; si al deshacer la ruta tiene otro nodo\n—otro inodo—, el borrado se niega: sería destruir algo que esa\noperación no puso ahí.\n\n**No es [`Self::Exists`], y la diferencia es lo único que el lector\npuede accionar.** `Exists` dice «ahí ya hay algo», que sobre un\ndeshacer es una perogrullada: pues claro que hay algo, es lo que iba a\nborrar. Esto dice «ahí hay algo que no es tuyo», y el remedio se sigue\nde ello — mirar ese fichero y decidir, porque probablemente lo pusiste\ntú. Los dos salían indistinguibles antes de 0.84.0, junto con el\n«el directorio creado tiene hijos que no puse yo».\n\n**Lo que hace saltar esto en la práctica**, y no es solo el caso de\n#369: cualquier editor que guarde de forma atómica —escribir a un\ntemporal y renombrar encima— cambia el inodo. vim, VS Code, `sed -i`.\nO sea que editar un fichero copiado y luego deshacer la copia para el\ndeshacer ahí. Es la dirección segura, pero conviene saberla.\n\nUn cliente N-1 lo degrada a [`Self::Unknown`] y enseña «conflicto» a\nsecas. No pierde protección —quien se niega es el daemon—, pierde la\nfrase.",
+          "type": "string"
+        },
+        {
           "const": "stale_revision",
           "description": "La `revision` que traía el escritor no es la vigente (0.48.0, L2): otro\ncliente escribió la sesión de UI entre su lectura y su escritura.\n\nEs un conflicto y no un error de parámetros porque cumple lo que esta\ncategoría promete: NADA se escribió, y el caller arregla releyendo. Un\ncliente N-1 lo degrada a [`Self::Unknown`] y enseña «conflicto» a\nsecas, que sigue siendo la conducta correcta: volver a leer.",
           "type": "string"

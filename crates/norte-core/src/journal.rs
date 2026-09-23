@@ -2054,6 +2054,39 @@ impl SqliteJournal {
     }
 }
 
+/// Cómo se escribe la identidad de un nodo en `reversal_ref` (ADR 0152).
+///
+/// Texto y no bytes crudos porque el volcado de una fila con `sqlite3` durante
+/// una investigación enseña `12:34567` y no cuatro bytes opacos. No sale por
+/// el wire ni por la exportación de auditoría, así que nadie más lo lee.
+///
+/// Vive aquí, en pareja con [`huella_a_nodo`], para que quien escribe y quien
+/// compara no puedan divergir: el día que esto cambie de forma, cambia en un
+/// sitio y el parser de al lado lo acompaña.
+pub(crate) fn huella_de_nodo(n: &norte_vfs::NodeId) -> String {
+    format!("{}:{}", n.volume, n.index)
+}
+
+/// La inversa de [`huella_de_nodo`]. `None` = esos bytes no son una huella.
+///
+/// La comparación del deshacer va por [`norte_vfs::NodeId`] y no por bytes
+/// justamente por este `None`. Hoy nada puede dejar otra cosa en el
+/// `reversal_ref` de un `delete` —los otros escritores ponen `None`, y el
+/// `restore_trash`, que sí guarda una ruta ahí, se atiende en otro brazo—,
+/// pero comparar cadenas hace que el día que algo la deje, esa entrada no
+/// coincida NUNCA y se bloquee para siempre. Parseando, un valor que no es
+/// una huella cae en «no hay nada que comparar» y el deshacer se comporta
+/// como antes de ADR 0152, que es la dirección en la que esto tiene que
+/// fallar.
+pub(crate) fn huella_a_nodo(bytes: &[u8]) -> Option<norte_vfs::NodeId> {
+    let texto = std::str::from_utf8(bytes).ok()?;
+    let (vol, idx) = texto.split_once(':')?;
+    Some(norte_vfs::NodeId {
+        volume: vol.parse().ok()?,
+        index: idx.parse().ok()?,
+    })
+}
+
 #[async_trait::async_trait]
 impl crate::observer::MutationObserver for SqliteJournal {
     async fn on_mutation(
@@ -2070,12 +2103,16 @@ impl crate::observer::MutationObserver for SqliteJournal {
             Option<Vec<u8>>,
             Option<i64>,
         ) = match mutation {
-            Mutation::Created(p) => (
+            // `reversal_ref` lleva aquí la IDENTIDAD de lo creado, no una ruta
+            // (#369, ADR 0152). La columna es libre y cada reversa le da su
+            // sentido: `restore_trash` guarda el destino recuperable, y
+            // `delete` guarda qué nodo era el suyo para no borrar otro.
+            Mutation::Created { path, node } => (
                 "created",
-                p.to_wire().into_bytes(),
+                path.to_wire().into_bytes(),
                 None,
                 Reversal::Delete,
-                None,
+                node.map(|n| huella_de_nodo(&n).into_bytes()),
                 None,
             ),
             Mutation::Removed(p) => (
@@ -2446,7 +2483,7 @@ mod tests {
             let obs = Arc::clone(&obs);
             let p = p.clone();
             handles.push(tokio::spawn(async move {
-                obs.on_mutation(&Mutation::Created(&p), &Actor::User).await
+                obs.on_mutation(&Mutation::creado(&p), &Actor::User).await
             }));
         }
         for h in handles {
@@ -2476,7 +2513,7 @@ mod tests {
             .await
             .expect("open crea el padre");
         let victim = VPath::parse("file:///a").expect("vpath");
-        j.on_mutation(&Mutation::Created(&victim), &Actor::User)
+        j.on_mutation(&Mutation::creado(&victim), &Actor::User)
             .await
             .expect("on_mutation");
         assert_eq!(j.journal().count().await.expect("count"), 1);

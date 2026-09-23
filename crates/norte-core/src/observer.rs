@@ -13,7 +13,21 @@ use crate::journal::Actor;
 #[derive(Debug)]
 pub enum Mutation<'a> {
     /// Nodo creado (archivo commiteado o dir).
-    Created(&'a VPath),
+    Created {
+        /// Dónde se creó.
+        path: &'a VPath,
+        /// QUÉ se creó: la identidad del nodo, si el backend la sabe dar
+        /// (#369, ADR 0152).
+        ///
+        /// La reversa de un `created` es un borrado, y sin esto borra lo que
+        /// haya en esa ruta AHORA — que no tiene por qué ser lo que se creó.
+        /// Con ella, el undo compara y se niega cuando no cuadra.
+        ///
+        /// `None` = no se pudo saber (un provider sin identidad estable, o un
+        /// `stat` que falló). Entonces el undo hace lo de siempre: esto solo
+        /// puede hacerle negarse MÁS, nunca menos.
+        node: Option<norte_vfs::NodeId>,
+    },
     /// Nodo eliminado PERMANENTEMENTE (irreversible).
     Removed(&'a VPath),
     /// Nodo movido a la papelera (RECUPERABLE — el undo de M3 lo restaura;
@@ -79,6 +93,19 @@ pub enum Mutation<'a> {
     },
 }
 
+impl<'a> Mutation<'a> {
+    /// Un `created` del que no se sabe la identidad del nodo (ADR 0152).
+    ///
+    /// Es lo correcto para quien crea algo y no tiene barato preguntar QUÉ
+    /// creó —y lo honesto: el undo hará lo de siempre—. Quien sí puede
+    /// preguntarlo construye la variante con su `node`, que es lo que hace la
+    /// copia.
+    #[must_use]
+    pub fn creado(path: &'a VPath) -> Self {
+        Self::Created { path, node: None }
+    }
+}
+
 /// Receptor de mutaciones. M3 lo implementa el journal (con undo); hasta
 /// entonces, un observador no-op interno.
 #[async_trait]
@@ -90,6 +117,21 @@ pub trait MutationObserver: Send + Sync {
     /// # Errors
     /// El error del sink (p. ej. fallo de escritura del journal).
     async fn on_mutation(&self, mutation: &Mutation<'_>, actor: &Actor) -> Result<(), Error>;
+
+    /// ¿Merece la pena averiguar la identidad de lo que se crea (ADR 0152)?
+    ///
+    /// Saberla cuesta un `stat` por nodo creado, y contra un destino remoto
+    /// eso es un viaje de red. Quien no va a guardar la mutación tampoco va a
+    /// usar la identidad, así que puede decir que no y ahorrárselo entero.
+    ///
+    /// Es una PISTA de coste, no una garantía: contestar `true` no obliga al
+    /// llamante a traerla —puede fallar y llegar `None` igualmente—, y
+    /// contestar `false` solo promete que no la va a echar de menos. Por eso
+    /// el default es `true`: un observer que guarde y no la conteste pierde la
+    /// protección en silencio, que es la dirección cara del error.
+    fn quiere_identidad(&self) -> bool {
+        true
+    }
 
     /// El observer que UNA Task va a usar para TODAS sus mutaciones, decidido
     /// **una sola vez, antes del primer efecto**.
@@ -166,5 +208,9 @@ pub(crate) struct NoopObserver;
 impl MutationObserver for NoopObserver {
     async fn on_mutation(&self, _mutation: &Mutation<'_>, _actor: &Actor) -> Result<(), Error> {
         Ok(())
+    }
+
+    fn quiere_identidad(&self) -> bool {
+        false
     }
 }

@@ -658,6 +658,31 @@ pub trait ConfinedRoot: Send + Sync {
         Ok(None)
     }
 
+    /// La identidad del nodo que hay en `rel`, POR EL DESCRIPTOR de la raíz.
+    ///
+    /// Mismo contrato que [`Provider::node_id`] con
+    /// [`FollowLinks::No`] —describe el LINK, jamás su destino, igual que
+    /// [`Self::stat`]—, y existe por lo mismo que existe el resto de esta
+    /// interfaz: la ruta lógica puede haber dejado de llevar aquí.
+    ///
+    /// Ese caso no es teórico, es #369. Una copia escribe por el descriptor de
+    /// la raíz de destino; si esa carpeta se renombra a la papelera con la
+    /// copia en marcha, el descriptor sigue valiendo y los bytes siguen
+    /// cayendo donde tienen que caer, pero `node_id(/destino/f0001)` contesta
+    /// [`Error::NotFound`] — la ruta ya no lleva ahí. Preguntar por ruta deja
+    /// sin identidad exactamente a las entradas que más la necesitan.
+    ///
+    /// `Ok(None)` = este backend no tiene identidad estable, igual que
+    /// [`Provider::node_id`] y [`Self::root_id`]. Es el default, y quien lo
+    /// recibe decide con lo que tenga.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si no hay nada en `rel`; los de mirar el nodo si no.
+    async fn node_id(&self, rel: &[Segment]) -> Result<Option<NodeId>, Error> {
+        let _ = rel;
+        Ok(None)
+    }
+
     /// Crea un symlink en `rel` apuntando a `target`. Mismo contrato que
     /// [`Provider::symlink`], `kind` incluido.
     ///

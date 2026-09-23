@@ -338,6 +338,12 @@ fn golden_error() {
                 },
             ),
             (
+                "conflict_not_the_same_node",
+                Error::Conflict {
+                    conflict: ConflictKind::NotTheSameNode,
+                },
+            ),
+            (
                 "conflict_stale_revision",
                 Error::Conflict {
                     conflict: ConflictKind::StaleRevision,
@@ -4909,9 +4915,11 @@ fn method_names_frozen() {
     assert_eq!(methods::TASK_RESUME, "task.resume");
     // 0.83.0: la cola en serie (ADR 0149).
     assert_eq!(methods::TASK_MOVE, "task.move");
-    // 0.84.0: ningún método nuevo — un subtipo de conflicto,
+    // 0.84.0: ningún método nuevo — dos subtipos de conflicto.
     // `ConflictKind::DestinationGone` (ADR 0151), para cuando el directorio de
-    // destino deja de estar donde se pidió con la tarea ya en marcha.
+    // destino deja de estar donde se pidió con la tarea ya en marcha; y
+    // `ConflictKind::NotTheSameNode` (ADR 0152), para cuando el deshacer de una
+    // creación se encuentra en esa ruta un nodo que no es el que creó.
     assert_eq!(norte_proto::PROTOCOL_VERSION, "0.84.0");
 }
 

@@ -533,6 +533,46 @@ impl LocalRoot {
         Ok(entry_from_stat(path, &st))
     }
 
+    /// `(dev, ino)` de `rel` bajo la raíz, sin seguir symlinks — la identidad
+    /// del LINK, coherente con [`Self::stat`].
+    ///
+    /// Es el mismo `fstatat` que `stat`, y no lo reusa a propósito: `stat`
+    /// devuelve un [`Entry`], que necesita el `VPath` para nombrarlo, y aquí no
+    /// hay nada que nombrar. Lo que se quiere es el par de números.
+    ///
+    /// El inodo entra por [`u128::from`] y no por un `try_from` con relleno:
+    /// esto se PERSISTE como identidad y se compara días después, así que un
+    /// valor de relleno haría que dos nodos distintos compararan iguales y
+    /// autorizaran un borrado. La conversión es infalible para cualquier
+    /// `ino_t` de unix, de modo que no hay caso degradado que inventar — que
+    /// es mejor que tener uno y elegirle un centinela.
+    #[allow(unsafe_code)]
+    pub(crate) fn node_id(&self, rel: &[Segment]) -> Result<norte_vfs::NodeId, Error> {
+        let (dir, name) = self.parent_of(rel)?;
+        let c = cstring(name)?;
+        let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: `dir` y `c` viven durante la llamada; `st` es un `stat`
+        // propio y alineado que se rellena entero. Solo se lee tras el 0.
+        let rc = unsafe {
+            libc::fstatat(
+                dir.as_raw_fd(),
+                c.as_ptr(),
+                st.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if rc != 0 {
+            return Err(map_errno(&std::io::Error::last_os_error()));
+        }
+        // SAFETY: `fstatat` devolvió 0, así que dejó `st` inicializado.
+        let st = unsafe { st.assume_init() };
+        #[allow(clippy::useless_conversion)] // `dev_t`/`ino_t` cambian por plataforma
+        Ok(norte_vfs::NodeId {
+            volume: u64::from(st.st_dev),
+            index: u128::from(st.st_ino),
+        })
+    }
+
     /// `unlinkat` de la HOJA que hay en `rel`, bajo la raíz (#218).
     ///
     /// SIN `AT_REMOVEDIR`: lo que esto borra es una hoja que va a ser
@@ -1218,6 +1258,12 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
         let path = self.vpath_of(rel);
         let rel = rel.to_vec();
         crate::provider::blocking(move || root.stat(&rel, path)).await
+    }
+
+    async fn node_id(&self, rel: &[Segment]) -> Result<Option<norte_vfs::NodeId>, Error> {
+        let root = std::sync::Arc::clone(&self.root);
+        let rel = rel.to_vec();
+        crate::provider::blocking(move || root.node_id(&rel).map(Some)).await
     }
 
     async fn remove(&self, rel: &[Segment]) -> Result<(), Error> {

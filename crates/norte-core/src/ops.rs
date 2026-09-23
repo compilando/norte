@@ -20,6 +20,27 @@ use crate::engine::TransferOptions;
 use crate::observer::{Mutation, MutationObserver};
 use crate::scheduler::TaskCtx;
 
+/// La identidad de lo que se acaba de crear en `path` (#369, ADR 0152).
+///
+/// Para los sitios que crean por RUTA y no tienen raíz confinada: `fs.mkdir`,
+/// `fs.create`, `fs.write` y el empaquetado. Ahí la ruta resuelve —acabamos de
+/// publicar en ella— así que la vuelta corta de [`Dest::plain`] basta y hereda
+/// su degradación: un fallo se traza y se anota sin identidad.
+///
+/// Que estos sitios la tengan NO es un lujo. El caso es el mismo de siempre
+/// con otro disfraz: un agente escribe un fichero, el humano lo reemplaza, el
+/// humano deshace la sesión del agente. Sin identidad, su reemplazo se va a la
+/// papelera.
+pub(crate) async fn identidad_de(
+    provider: &dyn Provider,
+    path: &VPath,
+    observer: &Arc<dyn MutationObserver>,
+) -> Option<norte_vfs::NodeId> {
+    Dest::plain(provider, path.clone())
+        .node_id_para(observer)
+        .await
+}
+
 /// Reintentos máximos ante errores transitorios (ADR 0005).
 const MAX_RETRIES: u32 = 3;
 /// Base del backoff exponencial: 100 ms · 2^n, determinista (sin jitter).
@@ -145,6 +166,88 @@ impl<'a> Dest<'a> {
         match &self.confined {
             Some((root, rel)) => root.stat(rel).await,
             None => self.provider.stat(&self.path).await,
+        }
+    }
+
+    /// La identidad de lo que hay en el destino, por el descriptor cuando lo
+    /// hay (#369).
+    ///
+    /// Se pregunta justo después de publicar, para que el journal apunte QUÉ
+    /// creó y no solo dónde dijo que lo creaba. Por el descriptor y no por
+    /// ruta porque el caso que esto existe para cubrir es precisamente aquel
+    /// en el que la ruta ya no lleva aquí: con la carpeta de destino renombrada
+    /// a la papelera, `provider.node_id(/destino/f0001)` contesta `NotFound` y
+    /// la entrada se queda sin identidad justo cuando más falta le hace.
+    ///
+    /// Un fallo NO se propaga: la identidad es una mejora de la reversa, no un
+    /// requisito de la copia, y tumbar una copia entera porque un `lstat`
+    /// extra no salió sería cambiar un undo más listo por una copia más frágil.
+    /// Sin identidad, el undo se comporta como se comportaba (ADR 0152).
+    ///
+    /// Pero se DICE. Degradar en silencio es cómo la primera versión de esto
+    /// se pasó una tarde contestando `None` sin que nada chirriara, y hay un
+    /// error concreto que merece grito y no susurro: un `EscapesRoot` aquí
+    /// significa que lo que acabamos de publicar no está bajo la raíz que
+    /// creemos — el mismo peligro que el camino de reintento de `copy_file`
+    /// trata como problema de seguridad dos pantallas más abajo.
+    /// [`Self::node_id`], pero sin preguntar si quien va a anotar la mutación
+    /// no la va a usar.
+    ///
+    /// Es la diferencia entre una sincronización de diez mil ficheros y la
+    /// misma con diez mil `stat` de más: `sync.apply` copia con un observador
+    /// no-op y anota por su cuenta, así que cada identidad que esta ruta
+    /// averiguara se tiraría. Contra un destino remoto, además, cada una es un
+    /// viaje de red.
+    async fn node_id_para(
+        &self,
+        observer: &Arc<dyn MutationObserver>,
+    ) -> Option<norte_vfs::NodeId> {
+        if !observer.quiere_identidad() {
+            return None;
+        }
+        self.node_id().await
+    }
+
+    async fn node_id(&self) -> Option<norte_vfs::NodeId> {
+        let r = match &self.confined {
+            // Una raíz que no sabe dar identidad no es el final del camino: la
+            // ruta puede resolver perfectamente. Hoy no pasa —la raíz local es
+            // la única que hay y sí la da— pero así la siguiente no pierde la
+            // guarda en silencio.
+            Some((root, rel)) => match root.node_id(rel).await {
+                Ok(None) => {
+                    self.provider
+                        .node_id(&self.path, norte_vfs::FollowLinks::No)
+                        .await
+                }
+                otro => otro,
+            },
+            None => {
+                self.provider
+                    .node_id(&self.path, norte_vfs::FollowLinks::No)
+                    .await
+            }
+        };
+        match r {
+            Ok(id) => id,
+            Err(
+                e @ Error::Conflict {
+                    conflict: ConflictKind::EscapesRoot,
+                },
+            ) => {
+                tracing::warn!(
+                    error = %e,
+                    "lo que se acaba de publicar no resuelve bajo la raíz: se anota sin identidad",
+                );
+                None
+            }
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "sin identidad para el `created`: su deshacer se comportará como antes de ADR 0152",
+                );
+                None
+            }
         }
     }
 
@@ -1419,8 +1522,9 @@ async fn ensure_dir(
     }
     match mkdir_retrying(dest, &ctx.cancel).await {
         Ok(()) => {
+            let node = dest.node_id_para(observer).await;
             observer
-                .on_mutation(&Mutation::Created(to), &ctx.actor)
+                .on_mutation(&Mutation::Created { path: to, node }, &ctx.actor)
                 .await?;
             Ok(())
         }
@@ -1497,8 +1601,15 @@ async fn copy_symlink_leaf(
             // best-effort contra su propio árbol; unix lo ignora gratis.
             let dest = into.at(target.clone());
             symlink_retrying(&dest, &target_bytes, SymlinkKind::Unknown, &ctx.cancel).await?;
+            let node = dest.node_id_para(observer).await;
             observer
-                .on_mutation(&Mutation::Created(&target), &ctx.actor)
+                .on_mutation(
+                    &Mutation::Created {
+                        path: &target,
+                        node,
+                    },
+                    &ctx.actor,
+                )
                 .await?;
             Ok(Placed::Done)
         }
@@ -2052,8 +2163,9 @@ async fn copy_file(
             // El tamaño ya lo dio el stat del origen: cero round-trips extra.
             let size = known_size.unwrap_or(0);
             ctx.progress.update(|p| p.bytes_done = base + size);
+            let node = dest.node_id_para(observer).await;
             observer
-                .on_mutation(&Mutation::Created(to), &ctx.actor)
+                .on_mutation(&Mutation::Created { path: to, node }, &ctx.actor)
                 .await?;
             return Ok(());
         }
@@ -2181,8 +2293,13 @@ async fn copy_file(
         }
         Err(e) => return Err(e),
     }
+    // La identidad de lo que acaba de publicarse, para que el undo pueda
+    // comprobar que borra lo suyo (#369, ADR 0152). Va por el descriptor de la
+    // raíz cuando la hay: este es EL sitio donde preguntar por ruta fallaría
+    // justo en el caso interesante.
+    let node = dest.node_id_para(observer).await;
     observer
-        .on_mutation(&Mutation::Created(to), &ctx.actor)
+        .on_mutation(&Mutation::Created { path: to, node }, &ctx.actor)
         .await?;
     Ok(())
 }
@@ -2742,8 +2859,9 @@ pub(crate) async fn mkdir_task(
         Err(e) => return Err(e),
     }
     mkdir_retrying(&Dest::plain(&*provider, path.clone()), &ctx.cancel).await?;
+    let node = identidad_de(&*provider, &path, &observer).await;
     observer
-        .on_mutation(&Mutation::Created(&path), &ctx.actor)
+        .on_mutation(&Mutation::Created { path: &path, node }, &ctx.actor)
         .await?;
     ctx.progress.update(|p| p.entries_done = 1);
     Ok(())
@@ -2801,8 +2919,9 @@ pub(crate) async fn create_task(
     // fichero de cero bytes en el destino. Sin `write` ninguno de por medio.
     let sink = provider.write(&path).await?;
     sink.commit().await?;
+    let node = identidad_de(&*provider, &path, &observer).await;
     observer
-        .on_mutation(&Mutation::Created(&path), &ctx.actor)
+        .on_mutation(&Mutation::Created { path: &path, node }, &ctx.actor)
         .await?;
     ctx.progress.update(|p| p.entries_done = 1);
     Ok(())
@@ -2895,8 +3014,9 @@ pub(crate) async fn write_task(
         if let Some(Some(en)) = &buried {
             match provider.restore_from(en, &path).await {
                 Ok(()) => {
+                    let node = identidad_de(&*provider, &path, &observer).await;
                     let _ = observer
-                        .on_mutation(&Mutation::Created(&path), &ctx.actor)
+                        .on_mutation(&Mutation::Created { path: &path, node }, &ctx.actor)
                         .await;
                 }
                 Err(r) => tracing::error!(
@@ -2907,8 +3027,9 @@ pub(crate) async fn write_task(
         }
         return Err(e);
     }
+    let node = identidad_de(&*provider, &path, &observer).await;
     observer
-        .on_mutation(&Mutation::Created(&path), &ctx.actor)
+        .on_mutation(&Mutation::Created { path: &path, node }, &ctx.actor)
         .await?;
     ctx.progress.update(|p| p.entries_done = 1);
     Ok(())

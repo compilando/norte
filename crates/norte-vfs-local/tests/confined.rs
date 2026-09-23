@@ -923,3 +923,84 @@ async fn el_digest_no_cruza_un_symlink_intermedio() {
         "el parcial de fuera no se verifica como si fuera el nuestro: {d:?}"
     );
 }
+
+/// **La identidad por el descriptor dice lo mismo que la identidad por ruta**
+/// (#369, ADR 0152).
+///
+/// Son dos lecturas distintas del mismo nodo —`fstatat` sobre el fd de la raíz
+/// aquí, `symlink_metadata` allí— y el deshacer compara una contra la otra: la
+/// copia anota por el descriptor, el undo lee por ruta. Si alguna vez dejaran
+/// de coincidir, TODO deshacer de una copia local se bloquearía, y el único
+/// síntoma sería un undo que dice que ahí hay otra cosa.
+///
+/// Que describa el LINK y no su destino va en el mismo test porque es la otra
+/// mitad de la misma promesa: `stat` de esta interfaz tampoco lo sigue.
+#[tokio::test]
+async fn la_identidad_por_el_descriptor_es_la_misma_que_por_ruta() {
+    use norte_vfs::FollowLinks;
+
+    let (p, raiz, dentro, _fuera) = escenario();
+    std::fs::write(dentro.join("f"), b"contenido").expect("f");
+    std::os::unix::fs::symlink("f", dentro.join("enlace")).expect("enlace");
+
+    let root = p.open_root(&raiz).await.expect("raíz");
+
+    for nombre in [&b"f"[..], b"enlace"] {
+        let por_fd = root.node_id(&[seg(nombre)]).await.expect("node_id por fd");
+        let por_ruta = p
+            .node_id(&child(&raiz, nombre), FollowLinks::No)
+            .await
+            .expect("node_id por ruta");
+        assert_eq!(
+            por_fd,
+            por_ruta,
+            "las dos lecturas de {} tienen que dar el mismo nodo",
+            String::from_utf8_lossy(nombre)
+        );
+        assert!(por_fd.is_some(), "el provider local SÍ tiene identidad");
+    }
+
+    // Y el enlace no es su destino: seguirlo daría la identidad de `f`.
+    assert_ne!(
+        root.node_id(&[seg(b"enlace")]).await.expect("enlace"),
+        root.node_id(&[seg(b"f")]).await.expect("f"),
+        "describe el LINK, jamás su destino"
+    );
+}
+
+/// **Y sigue contestando cuando la raíz ya no está donde estaba** (#369).
+///
+/// Ésta es la razón entera de que el método exista. Un descriptor sobrevive a
+/// un `rename` —por eso una copia seguía llenando una carpeta ya borrada— así
+/// que preguntar por él sigue funcionando cuando preguntar por la ruta ya no.
+/// Sin esto, las entradas de journal que más necesitan identidad son
+/// justamente las que se quedan sin ella.
+#[tokio::test]
+async fn la_identidad_por_el_descriptor_sobrevive_a_que_muevan_la_raiz() {
+    use norte_vfs::FollowLinks;
+
+    let (p, raiz, dentro, _fuera) = escenario();
+    let root = p.open_root(&raiz).await.expect("raíz");
+    escribe(&*root, &[seg(b"f")], b"escrito por el descriptor")
+        .await
+        .expect("escribe");
+    let antes = root.node_id(&[seg(b"f")]).await.expect("antes");
+
+    // Lo que hace el borrado de norte: mover la carpeta a otro sitio.
+    std::fs::rename(&dentro, dentro.with_file_name("papelera")).expect("a la papelera");
+
+    // Por ruta ya no hay nada…
+    assert!(
+        matches!(
+            p.node_id(&child(&raiz, b"f"), FollowLinks::No).await,
+            Err(Error::NotFound)
+        ),
+        "la ruta ya no lleva ahí, que es la premisa"
+    );
+    // …y por el descriptor sigue estando, con la misma identidad.
+    assert_eq!(
+        root.node_id(&[seg(b"f")]).await.expect("después"),
+        antes,
+        "el descriptor sigue viendo su nodo aunque la carpeta se llame otra cosa"
+    );
+}

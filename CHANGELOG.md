@@ -213,6 +213,35 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Undoing a creation no longer deletes a file the creation did not make**
+  (#369, ADR 0152). A `created` entry now records the identity of the node it
+  created, and its undo refuses when what is at that path is a different node.
+  Where that mattered: a copy whose destination folder was deleted mid-flight
+  fails (above) and leaves entries naming paths its bytes never reached. The
+  natural next move is to recreate the folder and repeat the copy — and then
+  undoing the *failed* batch trashed the good copy. A delete caused by an
+  operation that did not happen. Now the undo stops at the first entry that
+  does not match and says the path is occupied by something else. The same
+  protection covers the older, unreported case: replace a file by hand after a
+  successful copy, undo the copy, and your replacement stays.
+  The identity is read through the same descriptor the bytes went through, not
+  by path, because in this exact case the path no longer leads there — asking
+  by path leaves the entries that most need identity without any.
+  The refusal has its own subtype, `ConflictKind::NotTheSameNode` (protocol
+  0.84.0), and not the generic "already exists": on an undo, "it already
+  exists" is a tautology, while "that is not yours" is the one thing you can
+  act on.
+  **Expect it after an ordinary edit.** Editors that save atomically — vim,
+  VS Code, Emacs, `sed -i` — write a temp file and rename it over the target,
+  which is a new node. So editing a copied file and then undoing the copy now
+  stops the undo at that file and leaves everything older undone. An edit
+  written *in place* keeps the node and is invisible to the check, which is why
+  the undo still goes through the trash and still refuses to fall back to a
+  permanent delete where there is none (#65).
+  Covered: copies, `fs.mkdir`, `fs.create`, `fs.write`, packing, splitting and
+  combining. Not covered: `sync.apply`, which journals its own way (#368).
+  Entries written before this change carry no identity and undo as they did;
+  the check can only ever refuse more, never less.
 - **A copy whose destination is deleted mid-flight now fails instead of
   reporting success.** Copying a large folder and then deleting the
   destination while the progress bar ran ended with the task saying
@@ -230,9 +259,10 @@ independently through `PROTOCOL_VERSION`.
   something missing in the source — and "escapes its confined root" is
   about the shape of the path and reads as a security problem.
   **Copying a folder is the only operation covered.** The same gap is open
-  on the single-file path (#367) and in `sync.apply` (#368), and a copy
-  that fails this way still leaves journal entries pointing at paths it did
-  not write (#369).
+  on the single-file path (#367) and in `sync.apply` (#368). A copy that
+  fails this way still leaves journal entries pointing at paths it did not
+  write; undoing them is now safe (#369, below), but the timeline still shows
+  them.
 - **Clearing the screen no longer stops the panel from following the
   subshell** (#360). `Ctrl+L` is a line-editor command that repaints the
   prompt and leaves the line untouched, but every write lowered the flag
