@@ -2109,6 +2109,8 @@ cli-doctor-detail-conn-secret-env-not-utf8 = { $detail } is set to bytes that ar
 cli-doctor-detail-conn-secret-env-absent = { $detail } is not set; the keyring or secrets.age may still supply the secret — this is only a warning because it cannot be checked from here
 cli-doctor-detail-conn-secret-prompt = { $detail } is not set, and the entry says secret = "prompt": norte will ask for it when the connection opens
 cli-doctor-detail-conn-secret-prompt-inert = { $detail } says secret = "prompt", which does nothing with this auth method — it only applies to password and access-key
+cli-doctor-detail-conn-rsa-allowed = { $detail } accepts an RSA key (allow_rsa): it signs through the RUSTSEC-2023-0071 path, an accepted risk (ADR 0150) — move to ed25519 as soon as the server allows it
+cli-doctor-detail-conn-rsa-allowed-inert = { $detail } says allow_rsa = true, which does nothing here — it only applies to sftp with auth = "key"
 cli-doctor-detail-connection-scheme-unserved = { $detail }: nothing serves that scheme — not the core, and no installed provider plugin declares it (a typo, or a plugin still to install)
 cli-doctor-detail-plugin-digest-stale = { $id }: manifest capabilities changed since approval; re-approval required
 cli-doctor-detail-plugin-wit-mismatch = { $detail }: built against a WIT package this norte does not serve — rebuild the plugin against the current WIT, then approve it again

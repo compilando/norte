@@ -76,6 +76,10 @@ prepopulate the file.
 Reject RSA client keys and recommend Ed25519, avoiding the
 RUSTSEC-2023-0071 signing path. ECDSA may be added later.
 
+> **Amended by [ADR 0150](0150-rsa-client-keys-as-a-per-connection-opt-in.md):**
+> a connection may accept an RSA key file with an explicit `allow_rsa = true`
+> (rsa-sha2 only, warned on every use). Without it, RSA is still rejected.
+
 ### FTP and object-storage channels
 
 For FTP, `tls=require` enforces explicit FTPS, `plain` is a warned opt-in, and

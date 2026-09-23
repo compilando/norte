@@ -138,7 +138,8 @@ pub enum ConnectError {
         host: String,
     },
     /// Clave de cliente de un algoritmo no admitido. Solo ed25519 (ADR 0015 E,
-    /// cierra #36/RUSTSEC-2023-0071): RSA se rechaza SIEMPRE.
+    /// cierra #36/RUSTSEC-2023-0071): RSA se rechaza salvo que la conexión
+    /// lleve `allow_rsa = true` (ADR 0150).
     #[error(
         "clave {} de tipo {algo}: solo se admite ed25519 (genera una con `ssh-keygen -t ed25519`)",
         path.display()
@@ -148,6 +149,15 @@ pub enum ConnectError {
         path: PathBuf,
         /// Algoritmo detectado (p. ej. `ssh-rsa`).
         algo: String,
+    },
+    /// Clave RSA permitida (`allow_rsa`), pero el servidor solo acepta firmas
+    /// `ssh-rsa` con SHA-1. El opt-in de la ADR 0150 abre RSA, nunca SHA-1.
+    #[error(
+        "{host} solo acepta firmas RSA con SHA-1 (`ssh-rsa`), que norte no usa; hace falta rsa-sha2 o una clave ed25519"
+    )]
+    RsaSha1Only {
+        /// Host de destino.
+        host: String,
     },
     /// La clave de cliente no se pudo cargar (formato, passphrase incorrecta…).
     /// La causa viene de russh y no contiene la passphrase.
@@ -262,6 +272,7 @@ impl ConnectError {
             | Self::Io(_)
             | Self::KeyLoad { .. }
             | Self::KeyUnsupported { .. }
+            | Self::RsaSha1Only { .. }
             | Self::Ssh(_)
             | Self::KnownHosts(_)
             | Self::Ftp(_)
@@ -310,6 +321,7 @@ impl From<ConnectError> for norte_proto::Error {
             | ConnectError::SecretEmpty { .. }
             | ConnectError::SecretNotUtf8 { .. }
             | ConnectError::KeyUnsupported { .. }
+            | ConnectError::RsaSha1Only { .. }
             | ConnectError::KeyLoad { .. } => Self::PermissionDenied,
             // NOTA (#325): `Error::SecretNeeded` no se produce aquí. Es una
             // PREGUNTA, no un fallo, y necesita el ENDPOINT además del nombre

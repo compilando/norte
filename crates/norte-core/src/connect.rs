@@ -792,6 +792,9 @@ fn resolve_spec(
         access_key_id: None,
         addressing: None,
         logical_trash: false,
+        // Ad-hoc = `auth = "agent"`: `allow_rsa` no aplicaría, y RSA por agente
+        // sigue fuera de la ADR 0150.
+        allow_rsa: false,
         // Una conexión AD-HOC —navegar a una URL que no está en el fichero— no
         // pregunta: no hay entrada que declare `secret = "prompt"`, y
         // preguntarle una contraseña a alguien por teclear una URL sería
@@ -939,6 +942,7 @@ fn razon_de(e: &norte_connect::ConnectError) -> Option<ConnectionFailureReason> 
         | C::Io(_)
         | C::KeyLoad { .. }
         | C::KeyUnsupported { .. }
+        | C::RsaSha1Only { .. }
         | C::Ssh(_)
         | C::KnownHosts(_)
         | C::Ftp(_)
@@ -1319,6 +1323,7 @@ mod tests {
             access_key_id: None,
             addressing: None,
             logical_trash: false,
+            allow_rsa: false,
             secret: norte_connect::SecretSource::Stored,
         }
     }

@@ -1,6 +1,7 @@
 //! Establecimiento de conexión SSH/SFTP (ADR 0015 A/D/E): verificación de
 //! host key TOFU contra el [`KnownHostsStore`], auth por password / clave
-//! ed25519 / agente, y apertura del subsistema sftp. Devuelve la
+//! ed25519 (RSA con `allow_rsa`, ADR 0150) / agente, y apertura del
+//! subsistema sftp. Devuelve la
 //! [`SftpSession`] que `SftpProvider::new` acepta (inyección de sesión,
 //! ADR 0013): el provider jamás ve un secreto.
 //!
@@ -14,7 +15,7 @@ use std::sync::mpsc;
 
 use russh::client::AuthResult;
 use russh::keys::agent::AgentIdentity;
-use russh::keys::{Algorithm, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
+use russh::keys::{Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use russh_sftp::client::SftpSession;
 use zeroize::Zeroizing;
 
@@ -120,7 +121,9 @@ impl SshConnector {
                         ep.host
                     ))
                 })?;
-                PreparedAuth::Key(Box::new(load_client_key(path, secret).await?))
+                PreparedAuth::Key(Box::new(
+                    load_client_key(path, secret, spec.allow_rsa).await?,
+                ))
             }
         };
 
@@ -145,11 +148,23 @@ impl SshConnector {
                     .await?
             }
             PreparedAuth::Key(key) => {
-                // hash_alg None: irrelevante fuera de RSA, que aquí no existe.
+                // Fuera de RSA el hash no aplica (None). Con RSA —que solo
+                // llega aquí con `allow_rsa`, ADR 0150— se negocia rsa-sha2.
+                let hash_alg = if key.algorithm().is_rsa() {
+                    let hash = rsa_hash(&handle, &ep.host).await?;
+                    tracing::warn!(
+                        host = %ep.host,
+                        "autenticando con clave RSA (allow_rsa, ADR 0150): \
+                         firma por el camino de RUSTSEC-2023-0071"
+                    );
+                    Some(hash)
+                } else {
+                    None
+                };
                 handle
                     .authenticate_publickey(
                         user.clone(),
-                        PrivateKeyWithHashAlg::new(Arc::new(*key), None),
+                        PrivateKeyWithHashAlg::new(Arc::new(*key), hash_alg),
                     )
                     .await?
             }
@@ -356,12 +371,43 @@ impl russh::client::Handler for CaptureHandler {
     }
 }
 
+/// El hash de firma RSA, de lo que el servidor anuncia en `server-sig-algs`.
+///
+/// rsa-sha2-512 o -256 si los anuncia. Si solo anuncia `ssh-rsa` (SHA-1), es
+/// un error: el opt-in de la ADR 0150 abre RSA, nunca SHA-1.
+///
+/// El `None` de russh junta tres casos: el servidor no manda la extensión
+/// (RFC 8308 es opcional), la manda sin ningún algoritmo RSA, o llega después
+/// del segundo que russh espera. En los tres se intenta rsa-sha2-256 —lo que
+/// acepta cualquier servidor de la última década— y, si no lo acepta, falla
+/// cerrado como `AuthFailed`. Nunca cae a SHA-1: con `Some(hash)` russh firma
+/// y anuncia exactamente ese hash.
+async fn rsa_hash(
+    handle: &russh::client::Handle<TofuHandler>,
+    host: &str,
+) -> Result<HashAlg, ConnectError> {
+    match handle.best_supported_rsa_hash().await? {
+        Some(Some(hash)) => Ok(hash),
+        Some(None) => Err(ConnectError::RsaSha1Only {
+            host: host.to_owned(),
+        }),
+        None => {
+            tracing::debug!(
+                host,
+                "server-sig-algs sin rsa-sha2 (o sin extensión): se intenta rsa-sha2-256"
+            );
+            Ok(HashAlg::Sha256)
+        }
+    }
+}
+
 /// Carga la clave privada de cliente (con `~` expandido) y aplica la política
-/// ed25519-only (ADR 0015 E, cierra #36/RUSTSEC-2023-0071 de raíz: jamás se
-/// firma con RSA).
+/// de algoritmos: ed25519 siempre (ADR 0015 E); RSA solo con `allow_rsa`
+/// (ADR 0150), porque firmar con él es el camino de RUSTSEC-2023-0071.
 async fn load_client_key(
     path: &Path,
     passphrase: Option<&Secret>,
+    allow_rsa: bool,
 ) -> Result<PrivateKey, ConnectError> {
     // La passphrase viaja zeroizada hasta el descifrado de russh.
     let pass = passphrase.map(|s| Zeroizing::new(s.expose().to_string()));
@@ -385,6 +431,7 @@ async fn load_client_key(
     })?;
     match key.algorithm() {
         Algorithm::Ed25519 => Ok(key),
+        Algorithm::Rsa { .. } if allow_rsa => Ok(key),
         other => Err(ConnectError::KeyUnsupported {
             path: expanded,
             algo: other.to_string(),

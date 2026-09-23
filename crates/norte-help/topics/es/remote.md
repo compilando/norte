@@ -99,6 +99,15 @@ Por lo mismo la contraseña no va nunca en la URL: una dirección tipo
 `sftp://usuario:clave@host` se rechaza en vez de aceptarse sin decir nada,
 porque una URL acaba en el historial, en los logs y en pantalla.
 
+Las claves SSH son ed25519. Una clave RSA se rechaza, porque firmar con ella
+pasa por una debilidad de temporización conocida en la biblioteca que usa
+norte. Cuando un servidor te da una clave RSA y nada más, añade
+`allow_rsa = true` a la entrada de esa conexión. Solo esa entrada acepta RSA,
+y solo con firmas SHA-2. Cada autenticación con RSA queda como aviso en el
+log del daemon, o en la terminal cuando `norte` corre sin daemon.
+`norte doctor` te lo recuerda mientras esté puesto. Pide una clave ed25519
+cuando puedas.
+
 > ⚠ El FTP va en claro. No «salvo que actives TLS»: todavía no hay FTPS, así que ese ajuste no significa nada y la contraseña y todos los bytes de todos los ficheros cruzan la red a la vista. Cada conexión FTP te lo avisa. Fuera de tu propia red, usa `sftp://`.
 
 > ⚠ En el almacenamiento de objetos **no hay directorios**. Una carpeta es el prefijo común de las claves que cuelgan de ella, así que una carpeta vacía solo existe si alguien escribió un objeto marcador, y borrar la última clave de un prefijo hace desaparecer la carpeta. Renombrarla es copiar todas las claves y luego borrarlas todas, no una operación instantánea.
