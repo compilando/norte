@@ -1677,6 +1677,82 @@ async fn hydrate_plan(
     Ok(())
 }
 
+/// ¿El directorio de destino SIGUE siendo el que se abrió?
+///
+/// Hermana de [`same_root_or_fail`] y separada de ella a propósito, porque
+/// contestan preguntas distintas en momentos distintos:
+///
+/// - `same_root_or_fail` corre al ABRIR la raíz y su fallo es `EscapesRoot`:
+///   la ruta lleva a otro sitio, normalmente por un enlace, y escribir ahí
+///   sería salirse de lo que el caller nombró.
+/// - ésta corre DURANTE la tarea y su fallo es `DestinationGone`: la ruta no
+///   lleva a ningún sitio, o lleva a otro directorio. La carpeta se fue.
+///
+/// La diferencia no es cosmética. `EscapesRoot` se lee como un problema de
+/// seguridad y `NotFound` a secas —que es lo que este caso contestaba antes—
+/// se lee, en mitad de una copia de miles de ficheros, como «falta algo del
+/// origen». Lo que de verdad pasó es que alguien borró la carpeta de destino,
+/// y eso se arregla volviéndola a crear y reintentando.
+///
+/// Que el destino desaparezca NO es un caso rebuscado y no hace falta que sea
+/// desde norte: basta un `rm` en otra terminal, otro gestor de ficheros, u
+/// otra máquina sobre el mismo montaje.
+async fn dest_sigue_ahi_o_falla(
+    dst: &dyn Provider,
+    root: &dyn norte_vfs::ConfinedRoot,
+    path: &VPath,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let abierta = root.root_id().await?;
+    let en_ruta = match with_retry(cancel, || dst.node_id(path, FollowLinks::No).boxed()).await {
+        Ok(id) => id,
+        // La ruta ya no resuelve: eso ES el caso, y decirlo `NotFound` sería
+        // dejar que el lector lo confunda con un fichero del origen.
+        Err(Error::NotFound) => {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::DestinationGone,
+            });
+        }
+        Err(e) => return Err(e),
+    };
+    // Sin identidad por alguno de los dos lados no se afirma nada: un provider
+    // que no sabe dar `node_id` no puede desmentir nada, y negarse aquí
+    // rompería copias que funcionan.
+    let (Some(abierta), Some(en_ruta)) = (abierta, en_ruta) else {
+        return Ok(());
+    };
+    if abierta == en_ruta {
+        return Ok(());
+    }
+    tracing::warn!(
+        dest = %crate::engine::span_path(path),
+        "el directorio de destino ya no es el mismo: se para en vez de seguir \
+         llenando uno que el lector ya no ve"
+    );
+    Err(Error::Conflict {
+        conflict: ConflictKind::DestinationGone,
+    })
+}
+
+/// Cada cuántas ENTRADAS se vuelve a comprobar que el destino siga ahí.
+///
+/// No en cada una porque son dos saltos a `spawn_blocking` (el `fstat` del
+/// descriptor y la resolución de la ruta) y hay árboles de cien mil ficheros
+/// pequeños. Repartido entre 32 es tiempo despreciable al lado de abrir,
+/// escribir y cerrar cada fichero.
+const COMPROBAR_RAIZ_CADA: usize = 32;
+
+/// …y cada cuánto TIEMPO, que es el otro disparador y hace falta.
+///
+/// Contar solo entradas acota el daño en ficheros y no en bytes ni en reloj:
+/// un plan de diez ficheros de cincuenta gigas se comprueba en el primero y al
+/// final, así que podría pasarse cinco horas llenando una carpeta que ya no
+/// existe. Con el plazo, lo que se acota es lo que de verdad le duele a
+/// alguien — cuánto tiempo se sigue escribiendo a ciegas—, y las dos
+/// condiciones juntas cubren los dos extremos: muchos ficheros diminutos y
+/// pocos enormes.
+const COMPROBAR_RAIZ_CADA_SEGUNDOS: u64 = 5;
+
 /// Copia el árbol `from` → `to` según un plan YA walkeado (el walk es del
 /// caller: el move lo reusa para el delete — issue #9). La copia ignora la
 /// provenance (un dir sintético de un link expandido se crea como dir
@@ -1727,10 +1803,34 @@ async fn copy_tree(
     let into = Destination::new(&**dst, root.as_deref(), to);
 
     let mut skipped: Vec<VPath> = Vec::new();
-    for pe in plan {
+    let mut ultima_comprobacion = std::time::Instant::now();
+    for (i, pe) in plan.iter().enumerate() {
         // Entre entrada y entrada se puede PAUSAR (ADR 0147): es el único
         // sitio donde se para una copia sin chunks (servidor-a-servidor).
         ctx.checkpoint().await?;
+        // Y se vuelve a mirar que la raíz abierta SIGA siendo la ruta a la que
+        // se pidió copiar.
+        //
+        // Comprobarlo solo al abrirla no basta, y esto es un fallo que un
+        // lector encontró: puso a copiar una carpeta grande y, con la barra
+        // corriendo, borró la de destino. Norte borra a la papelera, o sea un
+        // `rename`, y un `rename` NO invalida el descriptor: el directorio
+        // sigue vivo con su mismo inodo en otro sitio, así que la copia siguió
+        // llenándolo tan tranquila y la tarea acabó diciendo «completada».
+        // Los ficheros estaban en la papelera. Decir «hecho» ahí es peor que
+        // fallar, porque nadie lo va a comprobar.
+        // `i > 0`: en la primera vuelta acaba de correr la comprobación de
+        // arriba, con solo un `Destination::new` sin E/S en medio. Sin esto,
+        // toda copia —incluida la de UNA entrada— pagaba la comprobación tres
+        // veces y se exponía una vez más a un falso positivo.
+        if let Some(root) = root.as_deref()
+            && i > 0
+            && (i % COMPROBAR_RAIZ_CADA == 0
+                || ultima_comprobacion.elapsed().as_secs() >= COMPROBAR_RAIZ_CADA_SEGUNDOS)
+        {
+            dest_sigue_ahi_o_falla(&**dst, root, to, &ctx.cancel).await?;
+            ultima_comprobacion = std::time::Instant::now();
+        }
         let entry = &pe.entry;
         let target = rebase(&entry.path, from, to)?;
         ctx.progress
@@ -1762,6 +1862,14 @@ async fn copy_tree(
             EntryKind::Other => return Err(Error::Unsupported),
         }
         ctx.progress.update(|p| p.entries_done += 1);
+    }
+    // Y una última vez ANTES de decir que se completó, cueste lo que cueste el
+    // stat: que el destino desapareciera con el último fichero en vuelo es
+    // exactamente el caso que la comprobación periódica se salta, y es también
+    // el único momento en el que mentir tiene consecuencias — un «completada»
+    // lo cierra todo y nadie vuelve a mirar.
+    if let Some(root) = root.as_deref() {
+        dest_sigue_ahi_o_falla(&**dst, root, to, &ctx.cancel).await?;
     }
     Ok(skipped)
 }

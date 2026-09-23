@@ -39,6 +39,39 @@ pub enum ConflictKind {
     /// ve `NotFound` responde creando el padre, que es exactamente la
     /// operación que este subtipo existe para impedir.
     EscapesRoot,
+    /// El DIRECTORIO DE DESTINO dejó de estar donde se pidió, con la tarea ya
+    /// en marcha (0.84.0, ADR 0151).
+    ///
+    /// Lo borraron, lo movieron o lo sustituyeron por otro mientras se
+    /// copiaba. Pasa de verdad y no hace falta mala fe: basta borrar la
+    /// carpeta de destino desde otro sitio —otro gestor, un `rm` en una
+    /// terminal, otra máquina sobre el mismo montaje— mientras la barra de
+    /// progreso corre.
+    ///
+    /// **Es distinto de [`Self::EscapesRoot`] y la diferencia importa.**
+    /// `EscapesRoot` dice que la ruta lleva a otro sitio por un enlace, o sea
+    /// que escribir ahí sería salirse: es una respuesta sobre la FORMA de la
+    /// ruta, y quien la lee piensa en seguridad. Esto dice que el sitio que
+    /// nombraste ya no es ese: no hay nada malo en la ruta, es que la carpeta
+    /// se fue. El remedio también es otro —volver a crearla y reintentar— y
+    /// por eso no podían compartir subtipo.
+    ///
+    /// Tampoco es `Error::NotFound`: eso no dice QUÉ no se encontró, y en
+    /// mitad de una copia de miles de ficheros se lee como «no encuentra un
+    /// fichero del origen», que es lo contrario de lo que ha pasado.
+    ///
+    /// **Qué lo emite, hoy**: la copia de un ÁRBOL. La de un fichero suelto y
+    /// `sync.apply` todavía no (#367, #368), así que un cliente que espere
+    /// este subtipo de ellas esperará en vano. Antes de 0.84.0 el caso no
+    /// tenía respuesta: la copia daba `Completed` con los ficheros en la
+    /// carpeta borrada.
+    ///
+    /// Un cliente N-1 lo degrada a [`Self::Unknown`] y enseña «conflicto» a
+    /// secas. Lo que pierde es la frase, no la protección: quien comprueba es
+    /// el daemon, así que la tarea falla en vez de decir que copió. Lo ya
+    /// escrito se queda en la carpeta que se borró, para los dos por igual
+    /// (#369).
+    DestinationGone,
     /// La `revision` que traía el escritor no es la vigente (0.48.0, L2): otro
     /// cliente escribió la sesión de UI entre su lectura y su escritura.
     ///
@@ -62,6 +95,10 @@ impl fmt::Display for ConflictKind {
             Self::Normalization => "unicode normalization collision",
             Self::TypeMismatch => "destination type mismatch",
             Self::EscapesRoot => "path escapes its confined root",
+            // Escueto como sus hermanos, y no es cosmética: esta cadena acaba
+            // en el `message` de un `RpcError` y `norte-mcp` se la entrega
+            // tal cual a un agente.
+            Self::DestinationGone => "destination directory is gone",
             Self::StaleRevision => "stale revision",
             Self::Unknown => "unknown conflict kind (newer protocol)",
         })
