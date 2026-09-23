@@ -38,5 +38,16 @@ vte = "0.15"
 # `norte-frontend` y `norte-tui` ya usan para medir texto.
 unicode-width = "0.2"
 
+[dev-dependencies]
+# El corpus hostil CANÓNICO, que es lo que el plan pedía para esta fase y lo
+# que una lista escrita a mano aquí no da: un fixture nuevo entra en el corpus
+# y lo prueba todo el que lo usa, incluida esta rejilla. Un programa dentro del
+# panel es contenido ajeno, igual que un nombre de fichero.
+norte-testkit.workspace = true
+# Los bytes que NADIE escribiría a mano: un emulador se alimenta de lo que
+# otro programa escupa, así que lo que hay que probar es que ninguna secuencia
+# lo tumbe, no las quince que se nos ocurran.
+proptest.workspace = true
+
 [lints]
 workspace = true

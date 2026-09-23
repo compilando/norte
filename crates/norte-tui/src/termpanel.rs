@@ -112,6 +112,35 @@ impl TermPanel {
             norte_frontend::shell::LEVEL_VAR,
             norte_frontend::shell::next_norte_level(),
         );
+        // **`TERM` se pone a mano, y es lo único del entorno que se toca.**
+        //
+        // Heredar el resto es correcto: es el entorno que el shell del lector
+        // le dio a norte, y quitárselo dejaría un shell sin `PATH` ni `HOME`
+        // que nadie pidió. `TERM` es distinto en especie. Para el subshell y
+        // para `app.terminal` el hijo habla con la terminal DE VERDAD, así que
+        // el `TERM` heredado es la verdad. Aquí el otro extremo es esta
+        // rejilla, que hace SGR, CUP, los cuatro movimientos, ED, EL y esconder
+        // el cursor — y nada más. Ni pantalla alterna, ni regiones de scroll,
+        // ni `ESC 7`/`ESC 8`, ni insertar o borrar líneas.
+        //
+        // Con `xterm-256color` heredado se le dice a cada programa de dentro
+        // que puede usar todo eso. Un `less` o un `vim` pintan entonces una
+        // pantalla coherente que no se corresponde con su estado, y al salir
+        // dejan su último fotograma puesto porque el cambio de pantalla
+        // alterna no hace nada. Es una superficie en la que alguien LEE algo y
+        // después teclea una orden, así que mentir aquí es peor que quedarse
+        // corto: «prometer capacidades que luego no se cumplen es peor que no
+        // prometerlas» ya está escrito en el subshell, sobre esto mismo.
+        //
+        // `vt100` es lo que esta rejilla es de verdad. Cuesta el color de un
+        // `ls` —vt100 no declara ninguno— y lo recupera #366, que implementa
+        // lo que falta y sube el `TERM` de una vez.
+        cmd.env("TERM", "vt100");
+        // Y el tamaño heredado es el de la terminal de FUERA, que no tiene
+        // nada que ver con el hueco: quien pregunte por ahí se llevaría el
+        // ancho equivocado. El pty ya dice el bueno por `TIOCGWINSZ`.
+        cmd.env_remove("COLUMNS");
+        cmd.env_remove("LINES");
         let hijo = par
             .slave
             .spawn_command(cmd)
@@ -196,9 +225,33 @@ impl TermPanel {
         &self.pantalla
     }
 
-    /// Mata el shell. Lo llama el cierre del panel.
+    /// Mata el shell y lo espera.
+    ///
+    /// Lo llaman el cierre del hueco y el [`Drop`]. Esperar detrás del `kill`
+    /// no es cortesía: sin recoger al hijo queda un zombi hasta que norte
+    /// salga.
     pub fn matar(&mut self) {
         let _ = self.hijo.kill();
+        let _ = self.hijo.wait();
+    }
+}
+
+/// **El shell muere CON el panel, salga norte por donde salga.**
+///
+/// Sin esto, `matar` no lo llamaba nadie —estaba escrito y sin un solo
+/// llamante— y la documentación de `App::terminal` prometía que cerrar el
+/// hueco o salir de norte lo mataban. Ninguna de las dos era cierta: cerrar
+/// el hueco quitaba el nodo y dejaba el shell vivo con su hilo lector, su pty
+/// y su directorio abierto —un montaje ocupado seguía ocupado—, invisible y
+/// sin forma de volver a él. Al salir moría por accidente, porque el maestro
+/// se cierra y el núcleo manda `SIGHUP`, y lo que ignore esa señal sobrevivía
+/// a norte entero.
+///
+/// Es exactamente el razonamiento que [`crate::subshell::Subshell`] ya había
+/// escrito para su propio `Drop`, y que aquí se olvidó.
+impl Drop for TermPanel {
+    fn drop(&mut self) {
+        self.matar();
     }
 }
 
@@ -227,6 +280,20 @@ fn lanzar_lector(
                     // y la respuesta no puede esperar a que alguien repinte.
                     // Es la misma función que usa el subshell: una consulta de
                     // terminal se contesta igual venga de donde venga.
+                    //
+                    // Lo que hay que saber de esto: el disparador es el
+                    // CONTENIDO, no el shell. `terminal_reply` busca la
+                    // secuencia como subcadena, así que un fichero con
+                    // `\x1b[c` dentro hace que norte teclee la respuesta
+                    // donde esté el cursor del editor de línea. No es
+                    // peligroso —las dos respuestas son constantes fijas sin
+                    // CR, así que no ejecutan nada, y cualquier terminal de
+                    // verdad contesta igual sin mirar quién preguntó—, pero
+                    // es una escritura no pedida en un editor de línea, que es
+                    // la forma estructural de #363 con una carga que no daña.
+                    // Lo correcto sería que la decidiera el parser de la
+                    // rejilla (un `csi_dispatch` para `c`), que es quien sabe
+                    // si está dentro de una cadena OSC o DCS.
                     if let Some(r) = norte_frontend::subshell::terminal_reply(&buf[..n]) {
                         let mut e = escritura
                             .lock()
@@ -236,6 +303,14 @@ fn lanzar_lector(
                     }
                     let mut b = buzon_de(&buzon);
                     b.pendiente.extend_from_slice(&buf[..n]);
+                    // El corte cae en un byte CUALQUIERA, y eso se acepta: un
+                    // escape partido por ahí pierde su `ESC [` y su cola se
+                    // pinta como texto (`31m` en pantalla). Es feo y no es
+                    // peligroso —la garantía de la rejilla aguanta igual, un
+                    // byte de control no llega a una celda—, y solo pasa si
+                    // un programa escribió 256 KiB mientras nadie repintaba.
+                    // Buscar una frontera de secuencia aquí obligaría a meter
+                    // el parser en el hilo lector para tirar bytes.
                     if b.pendiente.len() > BUFFER_MAX {
                         let sobra = b.pendiente.len() - BUFFER_MAX;
                         b.pendiente.drain(..sobra);

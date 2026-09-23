@@ -5434,6 +5434,8 @@ dependencies = [
 name = "norte-term"
 version = "0.3.0-alpha.4"
 dependencies = [
+ "norte-testkit",
+ "proptest",
  "unicode-width",
  "vte",
 ]
