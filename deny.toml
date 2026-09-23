@@ -82,9 +82,12 @@ ignore = [
     # por `russh` → `ssh-key` → `rsa` (norte-vfs-sftp, ADR 0013). SIN fix
     # upstream (abierto desde 2023; lo arrastra todo el ecosistema SSH/TLS de
     # Rust). Exposición en norte: es CLIENTE sftp, no expone un oráculo RSA;
-    # el único vector sería auth de cliente con clave RSA propia — fase 6, con
-    # ed25519 por defecto. Riesgo aceptado y vigilado en issue #36 (migrar a
-    # una pila SSH sin `rsa` en la ruta de firma, o esperar el fix upstream).
+    # el único vector sería auth de cliente con clave RSA propia. Por defecto
+    # RSA se rechaza (ADR 0015); desde la ADR 0150 una conexión PUEDE firmar
+    # con RSA si lo pide con `allow_rsa = true` — solo esa entrada, avisado en
+    # el log en cada auth y por `norte doctor`. Riesgo aceptado y vigilado en
+    # issue #36 (migrar a una pila SSH sin `rsa` en la ruta de firma, o
+    # esperar el fix upstream).
     "RUSTSEC-2023-0071",
     # RUSTSEC-2026-0173 — `proc-macro-error2` SIN MANTENER (no es
     # vulnerabilidad). Es un proc-macro de BUILD-TIME que entra por

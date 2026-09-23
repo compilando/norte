@@ -51,13 +51,17 @@ impl russh::server::Handler for ServerHandler {
         user: &str,
         public_key: &PublicKey,
     ) -> Result<Auth, Self::Error> {
-        Ok(
-            if user == USER && Some(public_key) == self.allowed_pubkey.as_ref() {
-                Auth::Accept
-            } else {
-                Auth::reject()
-            },
-        )
+        // Por `key_data` y no por `PublicKey`: su `==` incluye el COMENTARIO,
+        // que la fixture RSA lleva y la clave recibida por el cable no.
+        let autorizada = self
+            .allowed_pubkey
+            .as_ref()
+            .is_some_and(|k| k.key_data() == public_key.key_data());
+        Ok(if user == USER && autorizada {
+            Auth::Accept
+        } else {
+            Auth::reject()
+        })
     }
 
     async fn channel_open_session(
@@ -110,10 +114,21 @@ impl russh_sftp::server::Handler for TrivialSftp {
 
 /// Arranca el servidor SSH de test en 127.0.0.1:0 y devuelve el puerto.
 async fn spawn_server(host_key: PrivateKey, allowed_pubkey: Option<PublicKey>) -> u16 {
+    spawn_server_with(host_key, allowed_pubkey, russh::Preferred::default()).await
+}
+
+/// Como [`spawn_server`], con los algoritmos preferidos a medida: su lista
+/// `key` es también lo que el servidor anuncia en `server-sig-algs`.
+async fn spawn_server_with(
+    host_key: PrivateKey,
+    allowed_pubkey: Option<PublicKey>,
+    preferred: russh::Preferred,
+) -> u16 {
     let config = Arc::new(russh::server::Config {
         keys: vec![host_key],
         auth_rejection_time: std::time::Duration::from_millis(10),
         auth_rejection_time_initial: Some(std::time::Duration::ZERO),
+        preferred,
         ..Default::default()
     });
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -328,8 +343,6 @@ async fn auth_por_clave_ed25519_cifrada() {
 /// recomienda ed25519 (ADR 0015 E, cierra #36 / RUSTSEC-2023-0071).
 #[tokio::test]
 async fn clave_rsa_rechazada_sin_red() {
-    // Fixture RSA generada para tests (jamás usada en nada real).
-    const RSA_FIXTURE: &str = include_str!("fixtures/id_rsa_test");
     let dir = tempfile::tempdir().unwrap();
     let key_path = dir.path().join("id_rsa");
     std::fs::write(&key_path, RSA_FIXTURE).unwrap();
@@ -352,6 +365,64 @@ async fn clave_rsa_rechazada_sin_red() {
     assert!(
         format!("{err}").contains("ed25519"),
         "el error debe recomendar ed25519"
+    );
+}
+
+/// Fixture RSA generada para tests (jamás usada en nada real).
+const RSA_FIXTURE: &str = include_str!("fixtures/id_rsa_test");
+
+/// Spec `auth = "key"` sobre la fixture RSA, con `allow_rsa` a elegir.
+fn spec_rsa(dir: &Path, port: u16, allow_rsa: bool) -> ConnectionSpec {
+    let key_path = dir.join("id_rsa");
+    std::fs::write(&key_path, RSA_FIXTURE).unwrap();
+    ConnectionSpec {
+        url: format!("sftp://{USER}@127.0.0.1:{port}"),
+        auth: AuthMethod::Key,
+        key: Some(key_path),
+        tls: TlsMode::Require,
+        allow_rsa,
+        ..Default::default()
+    }
+}
+
+/// Con `allow_rsa = true` (ADR 0150) la MISMA clave RSA que se rechaza por
+/// defecto autentica, firmando con rsa-sha2 negociado vía `server-sig-algs`.
+#[tokio::test]
+async fn clave_rsa_con_allow_rsa_autentica() {
+    let host_key = clave();
+    let fp = fingerprint(host_key.public_key());
+    let rsa = PrivateKey::from_openssh(RSA_FIXTURE).expect("fixture RSA");
+    let port = spawn_server(host_key, Some(rsa.public_key().clone())).await;
+    let dir = tempfile::tempdir().unwrap();
+    let conn = connector(dir.path());
+    conn.trust_host_key("127.0.0.1", port, &fp).await.unwrap();
+
+    let _session = conn
+        .connect(&spec_rsa(dir.path(), port, true), None)
+        .await
+        .unwrap();
+}
+
+/// Un servidor que solo acepta `ssh-rsa` (firma SHA-1) se rechaza con un
+/// error propio: el opt-in abre RSA, NUNCA SHA-1.
+#[tokio::test]
+async fn clave_rsa_contra_servidor_solo_sha1_es_error() {
+    let host_key = clave();
+    let fp = fingerprint(host_key.public_key());
+    let rsa = PrivateKey::from_openssh(RSA_FIXTURE).expect("fixture RSA");
+    let preferred = russh::Preferred {
+        key: std::borrow::Cow::Owned(vec![Algorithm::Ed25519, Algorithm::Rsa { hash: None }]),
+        ..Default::default()
+    };
+    let port = spawn_server_with(host_key, Some(rsa.public_key().clone()), preferred).await;
+    let dir = tempfile::tempdir().unwrap();
+    let conn = connector(dir.path());
+    conn.trust_host_key("127.0.0.1", port, &fp).await.unwrap();
+
+    let err = connect_err(&conn, &spec_rsa(dir.path(), port, true), None).await;
+    assert!(
+        matches!(err, ConnectError::RsaSha1Only { .. }),
+        "fue {err:?}"
     );
 }
 

@@ -18,7 +18,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use norte_config::Layers;
-use norte_connect::{AuthMethod, ConnectionsFile};
+use norte_connect::{AuthMethod, ConnectionSpec, ConnectionsFile};
 use norte_frontend::keymap::{Effective, KeymapDiagnostic, Screen, presets};
 use serde::Serialize;
 
@@ -870,6 +870,7 @@ pub fn check_connections(
                         },
                         detail: name.clone(),
                     });
+                    findings.extend(rsa_finding(name, spec, &ep.scheme));
                 }
                 Err(e) => {
                     findings.push(Finding {
@@ -953,6 +954,26 @@ pub fn check_connections(
         }
     }
     findings
+}
+
+/// ADR 0150: `allow_rsa` es un riesgo aceptado, no una preferencia, así que se
+/// recuerda mientras esté puesto. Solo actúa en sftp con `auth = "key"`; en
+/// otra parte no hace nada, y eso también se dice (como #325).
+fn rsa_finding(name: &str, spec: &ConnectionSpec, scheme: &str) -> Option<Finding> {
+    if !spec.allow_rsa {
+        return None;
+    }
+    let actua = scheme == "sftp" && spec.auth == AuthMethod::Key;
+    Some(Finding {
+        section: "connections",
+        severity: Severity::Warn,
+        code: if actua {
+            "conn-rsa-allowed"
+        } else {
+            "conn-rsa-allowed-inert"
+        },
+        detail: name.to_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -2113,6 +2134,35 @@ max = 10
         let findings = check_connections(dir.path(), &env(&[]));
         let typo = findings.iter().find(|f| f.detail == "typo").unwrap();
         assert_eq!(typo.code, "connection-ok");
+    }
+
+    /// ADR 0150: `allow_rsa` es un riesgo ACEPTADO, y `doctor` lo recuerda
+    /// mientras esté puesto (`Warn`, no `Ok`). Donde no puede hacer nada —auth
+    /// que no es `key`, o un scheme que no es sftp— se dice aparte, como
+    /// `conn-secret-prompt-inert`: una clave que no hace nada no se calla.
+    #[test]
+    fn allow_rsa_avisa_y_donde_no_aplica_se_dice() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("connections.toml"),
+            "[connections.rsa]\nurl = \"sftp://u@h\"\nauth = \"key\"\n\
+             key = \"/k\"\nallow_rsa = true\n\
+             [connections.pass]\nurl = \"sftp://u@h\"\nauth = \"password\"\nallow_rsa = true\n\
+             [connections.s3]\nurl = \"s3://bucket\"\nregion = \"eu-west-1\"\nallow_rsa = true\n\
+             [connections.limpia]\nurl = \"sftp://u@h\"\nauth = \"key\"\nkey = \"/k\"\n",
+        )
+        .unwrap();
+        let findings = check_connections(dir.path(), &env(&[]));
+        let de = |code: &str| -> Vec<&str> {
+            findings
+                .iter()
+                .filter(|f| f.code == code)
+                .inspect(|f| assert_eq!(f.severity, Severity::Warn, "{f:?}"))
+                .map(|f| f.detail.as_str())
+                .collect()
+        };
+        assert_eq!(de("conn-rsa-allowed"), ["rsa"], "{findings:?}");
+        assert_eq!(de("conn-rsa-allowed-inert"), ["pass", "s3"], "{findings:?}");
     }
 
     /// TDD: broken `connections.toml` → a single `Error` finding, `detail`

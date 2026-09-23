@@ -98,6 +98,14 @@ It is also why a password never goes in the URL: an address of the form
 `sftp://user:pass@host` is rejected rather than quietly accepted, because a URL
 ends up in history, in logs and on screen.
 
+SSH keys are ed25519. An RSA key is refused, because signing with one goes
+through a known timing weakness in the library norte uses. When a server hands
+you an RSA key and nothing else, add `allow_rsa = true` to that connection's
+entry. Only that entry accepts RSA, and only with SHA-2 signatures. Each RSA
+authentication is logged as a warning, in the daemon's log or on the terminal
+when `norte` runs without a daemon. `norte doctor` keeps reminding you while
+it is set. Ask for an ed25519 key when you can.
+
 > ⚠ FTP is plaintext. Not "unless you turn on TLS" — there is no FTPS yet, so the setting means nothing and the password and every byte of every file cross the network in the clear. Each FTP connection says so. Off your own network, use `sftp://`.
 
 > ⚠ Object storage has **no directories**. A folder there is a common prefix of the keys under it, so an empty folder exists only if something wrote a marker object for it, and removing the last key under a prefix makes the folder itself disappear. Renaming one is a copy of every key followed by a delete of every key, not an instant operation.

@@ -2070,6 +2070,8 @@ cli-doctor-detail-conn-secret-env-not-utf8 = { $detail } tiene bytes que no son 
 cli-doctor-detail-conn-secret-env-absent = { $detail } no está definida; el keyring o secrets.age todavía pueden dar el secreto — es solo un aviso porque desde aquí no se comprueban
 cli-doctor-detail-conn-secret-prompt = { $detail } no está definida, y la entrada dice secret = "prompt": norte lo pedirá al abrir la conexión
 cli-doctor-detail-conn-secret-prompt-inert = { $detail } dice secret = "prompt", que con este método de auth no hace nada — solo se aplica a password y access-key
+cli-doctor-detail-conn-rsa-allowed = { $detail } acepta una clave RSA (allow_rsa): firma por el camino de RUSTSEC-2023-0071, un riesgo aceptado (ADR 0150) — pásate a ed25519 en cuanto el servidor lo permita
+cli-doctor-detail-conn-rsa-allowed-inert = { $detail } dice allow_rsa = true, que aquí no hace nada — solo se aplica a sftp con auth = "key"
 cli-doctor-detail-connection-scheme-unserved = { $detail }: nada sirve ese scheme — ni el core, ni ningún provider plugin instalado lo declara (un error de tecleo, o un plugin por instalar)
 cli-doctor-detail-plugin-wit-mismatch = { $detail }: compilado contra un paquete WIT que este norte no sirve — recompila el plugin contra el WIT actual y vuelve a aprobarlo
 cli-doctor-detail-plugin-digest-stale = { $id }: las capabilities del manifiesto cambiaron desde la aprobación; requiere re-aprobación

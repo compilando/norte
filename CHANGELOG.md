@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **RSA client keys as a per-connection opt-in** (ADR 0150). An SFTP
+  connection with `auth = "key"` accepts an RSA key file when its entry says
+  `allow_rsa = true`. Signatures are rsa-sha2 only: a server that accepts
+  nothing but SHA-1 `ssh-rsa` is refused. Every RSA authentication is logged
+  as a warning, and `norte doctor` reports `conn-rsa-allowed` while the key is
+  set, or `conn-rsa-allowed-inert` where it does nothing. Without the key, RSA
+  is rejected as before.
 - **A serial queue for transfers** (ADR 0149, protocol 0.83.0).
   `task.queue` (`Ctrl+Alt+Q`) sends the transfers you start from then on to a
   queue that runs them one at a time — on a spinning disk that is faster than

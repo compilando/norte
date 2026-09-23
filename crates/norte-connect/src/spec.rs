@@ -68,6 +68,16 @@ pub struct ConnectionSpec {
     /// defecto: el borrado degrada a permanente con aviso del frontend.
     #[serde(default)]
     pub logical_trash: bool,
+    /// (sftp, `auth = "key"`) Acepta una clave de cliente RSA (ADR 0150).
+    ///
+    /// Off por defecto: sin él RSA se rechaza como siempre (ADR 0015). Con él
+    /// se firma con el crate `rsa`, el camino de RUSTSEC-2023-0071 (Marvin)
+    /// que la 0015 cerró, así que es un riesgo ACEPTADO por conexión y no una
+    /// preferencia: cada conexión que firma con RSA lo avisa en el log, y
+    /// `norte doctor` lo recuerda mientras esté puesto. Solo rsa-sha2: un
+    /// servidor que únicamente acepta `ssh-rsa` (SHA-1) se rechaza igual.
+    #[serde(default)]
+    pub allow_rsa: bool,
     /// De dónde sale el secreto cuando los tres escalones de siempre no lo
     /// tienen (#325).
     ///
@@ -412,6 +422,19 @@ mod tests {
             toml::from_str("[connections.b]\nurl = \"sftp://h\"\nlogical_trash = true\n")
                 .expect("parse");
         assert!(f.connections["b"].logical_trash);
+    }
+
+    #[test]
+    fn allow_rsa_defaults_off_and_parses() {
+        // Ausente → false: RSA sigue rechazado por defecto (ADR 0150).
+        let f: ConnectionsFile =
+            toml::from_str("[connections.a]\nurl = \"sftp://h\"\n").expect("parse");
+        assert!(!f.connections["a"].allow_rsa);
+
+        let f: ConnectionsFile =
+            toml::from_str("[connections.b]\nurl = \"sftp://h\"\nallow_rsa = true\n")
+                .expect("parse");
+        assert!(f.connections["b"].allow_rsa);
     }
 
     #[test]
