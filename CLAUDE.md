@@ -61,6 +61,60 @@ gate time, the cheapest part of the session.
 `cov` is the bulk of `just ci` and can only move if you touched proto/vfs/core
 — the sole crates under the 85% gate — so it stays out of the loop entirely.
 
+### `git push` IS a gate run. Do not pay for two.
+
+**The pre-push hook runs `ci-fast`, and `gui-ci` too if the push touches the
+window.** So `just ci-fast && git push` runs the whole thing twice, back to
+back, for nothing. Measured on the five-issue session (2026-09-24): three full
+duplicate runs, ~8 minutes each.
+
+The rule is one line: **when the work is committed and you intend to push,
+push.** The hook is the gate run. Run `ci-fast` by hand only when you are NOT
+about to push — mid-plan, every ~3 tasks, as the table above says.
+
+**And run `just gui-ci` BEFORE pushing if you touched
+`crates/norte-gui-tauri/**`, `ui/` included.** It is not in `ci-fast`
+(`core_pkgs` excludes it on purpose — see the disk budget), so a green
+`ci-fast` says nothing about it, and the hook finds it only after having
+rebuilt the whole workspace. That is a rejected push and a second full run. It
+cost two pushes that session: two `.ts` files prettier had not seen, and two
+CSS variables no theme fed. `gui-ci` alone is ~1 minute against a warm target.
+
+### Before the gate, the ten-second checks
+
+Every one of these is seconds and each one caught something that would
+otherwise have cost a full gate round trip:
+
+| you did this | run this first | why |
+| --- | --- | --- |
+| added a field to a public struct | `cargo test -p <crate> --doc` | doctests build struct literals, `just t` does not run them and `just c` does not compile them |
+| added a variant to a proto enum | the checklist below | six discoveries, one per gate run, versus one pass |
+| just want to know it compiles | `cargo check -p <crate> --all-targets` (~5s) | `just t <crate>` is ~40s and tells you the same thing |
+| added a field to a wire struct | `rg -c "StructName \{" --glob '*.rs'` | counts the literal sites you are about to break |
+
+That last one is a design signal and not just a chore. `DaemonConfig` gained a
+field and twenty literals across four crates stopped compiling; the right move
+was to widen an existing field's meaning and document it, not to touch twenty
+files. **Size it before you choose it.**
+
+**A new proto enum variant touches six places**, and finding them one gate run
+at a time is how an afternoon goes:
+
+1. the variant, with its rustdoc (what a N-1 client sees);
+2. its arm in every exhaustive `match` — the crates compile them on purpose so
+   you have to decide;
+3. the case list in `crates/norte-proto/tests/golden_types.rs`;
+4. the fixture in `crates/norte-proto/tests/golden/types/*.json`;
+5. `NORTE_UPDATE_SCHEMA=1 just t norte-proto`;
+6. if it is user-visible: the Fluent string in **both** locales and the
+   frontend `match` that translates it — `norte-frontend` has a guard that
+   fails when the proto declares a value nothing translates, and that guard is
+   the last thing to fire, not the first.
+
+**A wire subtype nobody emits is a lie.** If the code that would produce it
+changes shape, remove the variant in the same commit instead of leaving it as a
+promise — `ConflictKind::NotTheSameNode` lived for two commits that way.
+
 ### The token budget
 
 **Generated tokens are the wall clock.** Measured on the keymap session (K1 +
@@ -138,6 +192,41 @@ free: its `target/` is its own, so it is another ~30 GB and one cold build
 (~250s). Use it when sessions genuinely overlap, and `git worktree remove` when
 they stop — a forgotten worktree is 30 GB of nothing (`just disk` lists them).
 
+### One explanation, one home. The rest point at it.
+
+This is where "write less" actually bites, and it is not about being terse.
+Measured on 2026-09-24: the same explanation — zsh's `push-line`, type-ahead,
+the concatenated `cd` — was written **five times**: the ADR, the rustdoc of
+`ir_a`, the commit message, the CHANGELOG and a test's doc comment. Four of
+them were the same reasoning re-derived at ~50 tokens/second.
+
+| what | where the reasoning lives | everywhere else |
+| --- | --- | --- |
+| a decision, and why not the alternative | the ADR | `(ADR 01NN)` plus one line |
+| how a bug worked | the commit message, once | the issue number |
+| what a reader must now do differently | the CHANGELOG | — |
+| what a test pins, and how it once passed measuring nothing | the test's doc | — |
+| **why this code looks wrong and is right** | the comment, right there | — |
+
+**That last row is never waste.** A comment that stops somebody reverting a
+line is worth ten times its length, and this repository has earned several of
+them. Everything above it is worth writing once and referencing after.
+
+Three places to spend less, none of which loses anything:
+
+- **A private helper gets one line.** What it does, not the tour. `uid_propio`
+  needed «el uid sin `unsafe`: el dueño de un fichero recién creado es nuestro
+  euid» and got a paragraph.
+- **History belongs in the commit, not in the comment.** "This used to do X and
+  it failed" earns its place only when it stops somebody writing X again. If
+  nobody would, it is a memoir — and the commit already has it.
+- **Never narrate the code underneath.** If the comment and the three lines
+  below it say the same thing, the comment is the one to cut.
+
+And a commit message says **what the diff cannot**: what broke, what was
+decided, and what is NOT covered. The mechanism goes in it once, or in the ADR
+and not in it; it does not go in both.
+
 ### Who does the work: default to doing it yourself
 
 **Measured on the debt-wave session (2026-08-14, five waves, 26 issues closed):**
@@ -195,6 +284,14 @@ All three bit in one session:
 If you touch a documented item: `cargo test -p <crate> --doc`. If you write a
 doc link: `cargo doc -p <crate> --no-deps`. Seconds each.
 
+**The trigger that keeps being missed is not "I wrote a doc".** It is **"I
+added a field to a struct"**: doctests build struct literals, so a field nobody
+wrote a line of prose about still breaks them, and it breaks them in the one
+recipe the whole loop skips. It bit again on 2026-09-24 with a counter added to
+`PolicyUndoReportResult`. When a field lands anywhere public,
+`cargo test --workspace --exclude norte-gui-tauri --doc` is ~10 seconds and
+saves a rejected push.
+
 ### Two git habits that are not optional
 
 - **Read `git diff --cached --stat` before every commit.** `commit-tree` will
@@ -204,6 +301,25 @@ doc link: `cargo doc -p <crate> --no-deps`. Seconds each.
   five minutes. Run the recipes one at a time in the foreground (`lint`, `test`,
   `docs`, `cov`), and never through `| tail`: a killed pipe leaves
   nothing behind, so five minutes of compute reports nothing at all.
+
+### Tool frictions that cost round trips here
+
+None of these is interesting. Each one cost several wasted exchanges because
+somebody rediscovered it mid-task.
+
+- **Editing files through Bash is blocked** by a hook — `sed -i`, `perl -0pi`,
+  a heredoc, a Python script that writes, all of them. Use `Edit`/`Write`.
+  Reaching for a shell one-liner "just this once" costs a round trip every
+  time, and it costs more when the block is intermittent enough to look like
+  luck.
+- **`grep` through Bash gets denied** by the permission classifier; `rg` does
+  not. Use `rg`, always.
+- **A commit message with `<…>` or `=>` in it needs `git commit -F <file>`**:
+  the hook reads the angle brackets as a redirection. The attribution trailer
+  has them, so this is every commit.
+- **A background job that pipes to `| tail` reports nothing when it is killed**,
+  and long ones do get killed (memory pressure, the five-minute cap). Let it
+  write the file and read the tail afterwards.
 
 ### A key change is not done until EVERY preset is done
 
@@ -443,6 +559,14 @@ loss, wrong-file renames and overclaimed tamper evidence. What costs time is
 reports once with the findings already applied. One agent lifecycle instead of
 three, and the reviewer's context is the code that is still warm. Pick by
 surface, not by habit:
+
+**A dispatched reviewer takes eight to ten minutes. Do not spend them
+waiting.** Measured twice on 2026-09-24: a review went out and the controller
+sat re-reading its own diff until the report came back. Start the next issue —
+a different crate, so the reviewer's files stay still — and apply its findings
+when they land, in the batch the gate budget already asks for. What you must
+not do is commit the reviewed work before the report arrives: that is the
+mistake this section exists to prevent, and it looks exactly like being busy.
 
 | surface touched | reviewer |
 | --- | --- |
