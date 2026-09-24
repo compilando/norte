@@ -1,43 +1,44 @@
-//! [`Style`]: el aspecto de un [`Role`](crate::Role) — color de frente/fondo y
-//! atributos. Independiente del backend: el frontend traduce a su tipo `Style`.
+//! [`Style`]: the look of a [`Role`](crate::Role) — foreground/background color and
+//! attributes. Backend-independent: the frontend translates it to its `Style` type.
 
 use serde::{Deserialize, Serialize};
 
 use crate::color::Color;
 
-/// Estilo visual: colores opcionales + atributos. Un campo ausente = «hereda»
-/// (el frontend deja el del terminal / el heredado del rol base).
-// Los cinco atributos son banderas independientes de terminal (bold/dim/
-// italic/underline/reverse): un struct de bools ES la representación natural,
-// no un enum ni flags empaquetadas.
+/// Visual style: optional colors + attributes. An absent field = "inherit"
+/// (the frontend keeps the terminal's / the one inherited from the base role).
+// The five attributes are independent terminal flags (bold/dim/
+// italic/underline/reverse): a struct of bools IS the natural representation,
+// not an enum or packed flags.
+// TODO(translation): review — the reason says four attributes; there are five.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "cuatro atributos de estilo independientes, no un enum ni flags empaquetadas"
+    reason = "four independent style attributes, not an enum or packed flags"
 )]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Style {
-    /// Color de primer plano (texto).
+    /// Foreground (text) color.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fg: Option<Color>,
-    /// Color de fondo.
+    /// Background color.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bg: Option<Color>,
-    /// Negrita.
+    /// Bold.
     pub bold: bool,
-    /// Atenuado.
+    /// Dimmed.
     pub dim: bool,
-    /// Cursiva.
+    /// Italic.
     pub italic: bool,
-    /// Subrayado.
+    /// Underlined.
     pub underline: bool,
-    /// Invierte frente y fondo (el `REVERSED` de hoy).
+    /// Swaps foreground and background (today's `REVERSED`).
     pub reverse: bool,
 }
 
 impl Style {
-    /// Estilo vacío (todo heredado).
+    /// Empty style (everything inherited).
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -51,43 +52,43 @@ impl Style {
         }
     }
 
-    /// Con color de frente.
+    /// With a foreground color.
     #[must_use]
     pub const fn fg(mut self, c: Color) -> Self {
         self.fg = Some(c);
         self
     }
 
-    /// Con color de fondo.
+    /// With a background color.
     #[must_use]
     pub const fn bg(mut self, c: Color) -> Self {
         self.bg = Some(c);
         self
     }
 
-    /// Marca negrita.
+    /// Sets bold.
     #[must_use]
     pub const fn bold(mut self) -> Self {
         self.bold = true;
         self
     }
 
-    /// Marca atenuado.
+    /// Sets dimmed.
     #[must_use]
     pub const fn dim(mut self) -> Self {
         self.dim = true;
         self
     }
 
-    /// Marca invertido.
+    /// Sets reversed.
     #[must_use]
     pub const fn reverse(mut self) -> Self {
         self.reverse = true;
         self
     }
 
-    /// Superpone `over` SOBRE `self`: los colores presentes en `over` pisan;
-    /// los atributos se acumulan con OR (un rol base + override del tema).
+    /// Overlays `over` ON TOP of `self`: colors present in `over` win;
+    /// attributes accumulate with OR (a base role + the theme's override).
     #[must_use]
     pub fn overlay(self, over: Style) -> Style {
         Style {

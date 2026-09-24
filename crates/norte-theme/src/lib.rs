@@ -1,11 +1,11 @@
-//! Modelo de theming compartido de norte: colores, roles semánticos y temas,
-//! independientes del framework de render (ADR 0020).
+//! norte's shared theming model: colors, semantic roles and themes,
+//! independent of the rendering framework (ADR 0020).
 //!
-//! El TUI (`norte-tui`) lo consume ya; la GUI de M5 REUSA el mismo modelo. Por
-//! eso este crate NO depende de `ratatui` ni de ningún backend: expone un
-//! [`Color`] propio (RGB de 24 bits con degradación a 256/16), [`Style`]s por
-//! [`Role`] semántico, y una capa de efectos OPACA reservada a la GPU de la
-//! GUI que un frontend de terminal ignora sin coste.
+//! The TUI (`norte-tui`) already consumes it; the M5 GUI REUSES the same model. That
+//! is why this crate does NOT depend on `ratatui` or any backend: it exposes its own
+//! [`Color`] (24-bit RGB with degradation to 256/16), [`Style`]s per semantic
+//! [`Role`], and an OPAQUE effects layer reserved for the GUI's GPU that a
+//! terminal frontend ignores at no cost.
 //!
 //! ```
 //! use norte_theme::{Theme, Role, ColorDepth, ResolvedColor};
@@ -16,7 +16,7 @@
 //! "##).unwrap();
 //! let sel = theme.style(Role::Selection);
 //! assert!(sel.bold);
-//! // El color degrada a la profundidad del terminal:
+//! // The color degrades to the terminal's depth:
 //! let bg = sel.bg.unwrap().resolve(ColorDepth::Truecolor);
 //! assert_eq!(bg, ResolvedColor::Rgb(0x45, 0x47, 0x5a));
 //! ```

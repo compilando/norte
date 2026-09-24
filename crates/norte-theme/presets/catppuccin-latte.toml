@@ -1,6 +1,6 @@
 name = "catppuccin-latte"
 
-# Catppuccin claro (Latte): fondo marfil, acentos suaves.
+# Light Catppuccin (Latte): ivory background, soft accents.
 
 [roles]
 background       = { bg = "#eff1f5" }
@@ -15,13 +15,13 @@ status-bar       = { fg = "#eff1f5", bg = "#1e66f5" }
 title            = { fg = "#1e66f5", bold = true }
 hostile-badge    = { fg = "#d20f39", bold = true }
 error            = { fg = "#d20f39" }
-warning          = { fg = "#996214" } # AA sobre latte base: el yellow #df8e1d da 2.31:1
+warning          = { fg = "#996214" } # AA over latte base: the yellow #df8e1d gives 2.31:1
 info             = { fg = "#1e66f5" }
 match            = { fg = "#eff1f5", bg = "#df8e1d" }
 pane-background       = { bg = "#e6e9ef" } # mantle
 pane-focus-background = { bg = "#dce0e8" } # crust
 mark                  = { bg = "#f0e0b2" } # yellow tint, visibly distinct from mantle/crust
-stripe                = { bg = "#dee2ea" } # un punto bajo mantle: la banda del pijama
+stripe                = { bg = "#dee2ea" } # a notch below mantle: the row stripe
 
 [files.kind]
 dir          = { fg = "#1e66f5", bold = true }

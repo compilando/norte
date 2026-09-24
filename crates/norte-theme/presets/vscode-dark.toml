@@ -1,29 +1,29 @@
 name = "vscode-dark"
 
-# Dark Modern, el tema por defecto de Visual Studio Code desde la 1.75.
+# Dark Modern, Visual Studio Code's default theme since 1.75.
 #
-# Es una TRANSCRIPCIÓN, no una imitación a ojo. Las fuentes, en el orden en
-# que se resuelve cada id de color:
+# It is a TRANSCRIPTION, not an imitation by eye. The sources, in the order in
+# which each color id is resolved:
 #
 #   1. extensions/theme-defaults/themes/dark_modern.json
-#   2. su `include`: dark_plus.json, y el de este: dark_vs.json
-#   3. lo que ninguno de los tres define: los valores por defecto del REGISTRO
-#      de colores del editor (src/vs/platform/theme/common/colors/), que es
-#      donde viven de verdad `list.*`, `scrollbarSlider.*` y compañía.
+#   2. its `include`: dark_plus.json, and that one's: dark_vs.json
+#   3. what none of the three defines: the default values of the editor's color
+#      REGISTRY (src/vs/platform/theme/common/colors/), which is
+#      where `list.*`, `scrollbarSlider.*` and friends really live.
 #
-# El punto 3 no es un detalle: un tema de VSCode NO es una paleta completa.
-# Ninguno de los tres ficheros de la cadena define el fondo de la fila
-# seleccionada. Quien copie solo el JSON se queda sin la mitad de la ventana.
+# Point 3 is not a detail: a VSCode theme is NOT a complete palette.
+# None of the three files in the chain defines the background of the selected
+# row. Whoever copies only the JSON is left without half the window.
 #
-# --- De dónde sale cada rol -------------------------------------------------
+# --- Where each role comes from ---------------------------------------------
 #
 #   background            editor.background            (dark_modern)
 #   regular               foreground                   (dark_modern)
 #   pane-background       sideBar.background           (dark_modern)
 #   pane-focus-background editor.background            (dark_modern)
-#   selection             list.activeSelection*        (REGISTRO)
-#   selection-unfocused   list.inactiveSelectionBackground (REGISTRO)
-#   hover                 list.hoverBackground         (REGISTRO)
+#   selection             list.activeSelection*        (REGISTRY)
+#   selection-unfocused   list.inactiveSelectionBackground (REGISTRY)
+#   hover                 list.hoverBackground         (REGISTRY)
 #   border-focus          focusBorder                  (dark_modern)
 #   border-unfocused      panel.border                 (dark_modern)
 #   separator             panel.border                 (dark_modern)
@@ -39,38 +39,38 @@ name = "vscode-dark"
 #   focus-border          focusBorder                  (dark_modern)
 #   match                 editor.findMatchBackground   (dark_modern)
 #   error                 errorForeground              (dark_modern)
-#   warning               editorWarning.foreground     (REGISTRO)
-#   info                  editorInfo.foreground        (REGISTRO)
-#   scrollbar-slider      scrollbarSlider.background   (REGISTRO, aplanado)
+#   warning               editorWarning.foreground     (REGISTRY)
+#   info                  editorInfo.foreground        (REGISTRY)
+#   scrollbar-slider      scrollbarSlider.background   (REGISTRY, flattened)
 #
-# --- Divergencias y omisiones, que es lo que un lector viene a buscar -------
+# --- Divergences and omissions, which is what a reader comes looking for ----
 #
-# `scrollbar-slider` está APLANADO. El registro lo da como #797979 al 40 % de
-# opacidad, y el modelo de tema de norte es RGB de 24 bits sin canal alfa
-# (ADR 0020). #434343 es ese 40 % compuesto sobre #1F1F1F, que es el fondo
-# real contra el que se ve.
+# `scrollbar-slider` is FLATTENED. The registry gives it as #797979 at 40 %
+# opacity, and norte's theme model is 24-bit RGB with no alpha channel
+# (ADR 0020). #434343 is that 40 % composited over #1F1F1F, which is the actual
+# background it is seen against.
 #
-# `widget-shadow` NO se define, y es la única de las veintiocho que falta.
-# Una sombra es alfa por naturaleza y aquí no hay alfa: un #000000 sólido con
-# 16 px de desenfoque pesa mucho más que el rgba(0,0,0,.36) del original. Sin
-# definirla, la hoja de estilos de la ventana usa su propio respaldo
-# translúcido, que es exactamente lo que se quiere.
+# `widget-shadow` is NOT defined, and it is the only one of the twenty-eight missing.
+# A shadow is alpha by nature and there is no alpha here: a solid #000000 with
+# 16 px of blur weighs much more than the original's rgba(0,0,0,.36). With it
+# undefined, the window's stylesheet uses its own translucent
+# fallback, which is exactly what is wanted.
 #
-# `hostile-badge`, `mark`, `[files.kind]` y `[files.ext]` son DERIVADOS. VSCode
-# no colorea una lista de ficheros por tipo de nodo, así que no hay id que
-# transcribir. Se derivan de colores que este tema sí atesta (textLink,
-# editorGutter.*, chat.editedFileForeground) y se dice aquí en vez de
-# presentarlos como si vinieran del original.
+# `hostile-badge`, `mark`, `[files.kind]` and `[files.ext]` are DERIVED. VSCode
+# does not color a file list by node type, so there is no id to
+# transcribe. They are derived from colors this theme does attest (textLink,
+# editorGutter.*, chat.editedFileForeground) and that is said here instead of
+# presenting them as if they came from the original.
 #
-# --- Tipografía -------------------------------------------------------------
+# --- Typography -------------------------------------------------------------
 #
-# Un tema NO lleva fuentes, a propósito: son dos elecciones independientes.
-# El juego tipográfico de VSCode se pide desde `[ui]` de norte.toml:
+# A theme does NOT carry fonts, on purpose: they are two independent choices.
+# VSCode's typographic set is requested from `[ui]` in norte.toml:
 #
 #   [ui]
 #   font_size = 13
 #
-# `font` y `mono_font` mandan sobre las empaquetadas si quieres las suyas.
+# `font` and `mono_font` override the bundled ones if you want your own.
 
 [roles]
 background            = { bg = "#1f1f1f" }
@@ -89,19 +89,19 @@ match                 = { fg = "#ffffff", bg = "#9e6a03" }
 error                 = { fg = "#f85149" }
 warning               = { fg = "#cca700" }
 info                  = { fg = "#59a4f9" }
-# Derivado: ningún id de VSCode nombra un fichero enmascarado. Naranja fuerte,
-# separado del rojo de `error` para que no se confundan, y a 8,5:1 sobre el
-# fondo — esta es la marca que hay que poder leer cuando algo va mal.
+# Derived: no VSCode id names a masked file. Strong orange,
+# apart from `error`'s red so they are not confused, and at 8.5:1 over the
+# background — this is the mark that must be readable when something goes wrong.
 hostile-badge         = { fg = "#ffa657", bold = true }
-# Derivado: el ámbar de aviso rebajado a fondo.
+# Derived: the warning amber toned down into a background.
 mark                  = { bg = "#4a3b14" }
-# Por ENCIMA de los dos fondos de panel (#181818 y #1f1f1f). Entre ellos la
-# banda se leía más clara en el panel sin foco y más oscura en el que lo
-# tiene: se invertía al pulsar Tab.
+# ABOVE both pane backgrounds (#181818 and #1f1f1f). Between them the
+# stripe read lighter in the unfocused pane and darker in the focused
+# one: it flipped when pressing Tab.
 stripe                = { bg = "#252525" }
 
-# Cromo de la ventana (spec 2026-09-11, F2). Los ocho presets de siempre los
-# callan y la hoja los deriva; este los dice, porque para él son el asunto.
+# Window chrome (spec 2026-09-11, F2). The usual eight presets leave them
+# unsaid and the stylesheet derives them; this one states them, because for it they are the point.
 hover                 = { bg = "#2a2d2e" }
 input-background      = { bg = "#313131" }
 input-border          = { fg = "#3c3c3c" }
@@ -112,7 +112,7 @@ separator             = { fg = "#2b2b2b" }
 focus-border          = { fg = "#0078d4" }
 muted                 = { fg = "#9d9d9d" }
 
-# Derivados, todos: ver el bloque de divergencias de arriba.
+# Derived, all of them: see the divergences block above.
 [files.kind]
 dir          = { fg = "#4daafc", bold = true }  # textLink.foreground
 symlink      = { fg = "#56b6c2" }

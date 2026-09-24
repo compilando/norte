@@ -1,6 +1,6 @@
 name = "gruvbox-light"
 
-# Gruvbox claro: fondo crema y los AMARILLOS/naranjas cálidos de la paleta.
+# Light Gruvbox: cream background and the palette's warm YELLOWS/oranges.
 
 [roles]
 background       = { bg = "#fbf1c7" }
@@ -15,13 +15,13 @@ status-bar       = { fg = "#fbf1c7", bg = "#b57614" }
 title            = { fg = "#af3a03", bold = true }
 hostile-badge    = { fg = "#9d0006", bold = true }
 error            = { fg = "#9d0006" }
-warning          = { fg = "#976311" } # AA sobre light0: el faded_yellow #b57614 da 3.33:1
+warning          = { fg = "#976311" } # AA over light0: the faded_yellow #b57614 gives 3.33:1
 info             = { fg = "#076678" }
 match            = { fg = "#fbf1c7", bg = "#b57614" }
 pane-background       = { bg = "#f2e5bc" } # light0_soft
 pane-focus-background = { bg = "#ebdbb2" } # light1
 mark                  = { bg = "#ead9a0" } # gold tint, visibly distinct from light0_soft/light1
-stripe                = { bg = "#ece0b6" } # un punto bajo light0_soft
+stripe                = { bg = "#ece0b6" } # a notch below light0_soft
 
 [files.kind]
 dir          = { fg = "#076678", bold = true }

@@ -11,15 +11,15 @@ border-unfocused = { fg = "#928374", dim = true }
 modal-border     = { fg = "#d3869b" }
 status-bar       = { fg = "#282828", bg = "#83a598" }
 title            = { fg = "#83a598", bold = true }
-hostile-badge    = { fg = "#fb533f", bold = true } # AA: señal de seguridad, spec §6
-error            = { fg = "#fb533f" } # AA sobre dark0: el bright_red #fb4934 da 4.29:1
+hostile-badge    = { fg = "#fb533f", bold = true } # AA: security signal, spec §6
+error            = { fg = "#fb533f" } # AA over dark0: the bright_red #fb4934 gives 4.29:1
 warning          = { fg = "#fabd2f" }
 info             = { fg = "#83a598" }
 match            = { fg = "#282828", bg = "#fabd2f" }
 pane-background       = { bg = "#3c3836" } # bg1
 pane-focus-background = { bg = "#504945" } # bg2
 mark                  = { bg = "#413416" } # dark blend of bright_yellow
-stripe                = { bg = "#423e3b" } # entre bg1 y bg2
+stripe                = { bg = "#423e3b" } # between bg1 and bg2
 
 [files.kind]
 dir          = { fg = "#83a598", bold = true }
