@@ -540,7 +540,7 @@ fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
     "#,
     )
     .unwrap();
-    // En Browse, el q global manda y enter existe.
+    // In Browse, the global q rules and enter exists.
     let browse = Effective::build_for(&preset, &[], COMANDOS, Screen::Browse).unwrap();
     let mut r = Resolver::new(browse);
     assert_eq!(

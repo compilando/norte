@@ -1,31 +1,31 @@
-//! Adapter [`PluginProvider`] (#30 stage 2b, ADR 0032): expone un
-//! guest-provider WASM como un [`norte_vfs::Provider`] normal. REENSAMBLA los
-//! streams del trait a partir de las llamadas ACOTADAS del guest — `list`
-//! paginando hasta agotar el cursor, `read` leyendo por rango hasta EOF. Las
-//! mutaciones se DELEGAN al guest: `write` proyecta el [`ByteSink`]
-//! transaccional sobre el `writer` resource del guest (staging → commit/abort),
-//! y `mkdir`/`remove`/`rename` llaman a sus funciones. Un guest read-only
-//! responde [`Error::Unsupported`] en todas y el adapter lo propaga; `trash`/
-//! `symlink` no están en la interfaz WIT → Unsupported directo.
+//! Adapter [`PluginProvider`] (#30 stage 2b, ADR 0032): exposes a WASM
+//! guest-provider as a normal [`norte_vfs::Provider`]. It REASSEMBLES the
+//! trait's streams from the guest's BOUNDED calls — `list` paginating until
+//! the cursor is exhausted, `read` reading by range until EOF. Mutations are
+//! DELEGATED to the guest: `write` projects the transactional [`ByteSink`]
+//! onto the guest's `writer` resource (staging → commit/abort), and
+//! `mkdir`/`remove`/`rename` call its functions. A read-only guest responds
+//! [`Error::Unsupported`] on all of them and the adapter propagates it;
+//! `trash`/`symlink` are not in the WIT interface → Unsupported directly.
 //!
-//! Cada llamada al guest es SÍNCRONA (wasmtime) y serializada por un `Mutex`;
-//! se ejecuta en `spawn_blocking` para no bloquear el executor async (regla 2).
-//! El `PluginProvider` mantiene vivo el [`PluginRuntime`] (su ticker de época
-//! gobierna el deadline de CPU del guest).
+//! Every call to the guest is SYNCHRONOUS (wasmtime) and serialized by a
+//! `Mutex`; it runs inside `spawn_blocking` so it does not block the async
+//! executor (rule 2). `PluginProvider` keeps the [`PluginRuntime`] alive (its
+//! epoch ticker governs the guest's CPU deadline).
 //!
-//! **`[config]` (P2 Task 4a) — deferral documentado:** [`PluginProvider::set_settings`]
-//! existe (mismo contrato que [`norte_plugin_host::PluginInstance::set_settings`]/
-//! [`ProviderInstance::set_settings`], usado por `command`/`previewer` desde
-//! Task 3/4a), pero NINGÚN caller de producción lo invoca hoy. Razón
-//! estructural, no descuido: un `PluginProvider` NUNCA se construye a partir
-//! del catálogo de plugins ([`norte_plugin_host::Catalog`]/
-//! `norte_core::plugins::PluginRegistry`) — no hay `plugin.toml` ni `[config]`
-//! que resolver. El único provider real hoy (FTP, `ftp_plugin.rs`) se
-//! construye desde `ConnectionSpec`/`connections.toml` (un subsistema de
-//! configuración TOTALMENTE distinto, sin esquema `[config]`). El método
-//! queda listo para el día en que un provider SÍ nazca de un manifiesto de
-//! plugin con `[config]` propio, sin tener que tocar más que ese único punto
-//! de wiring.
+//! **`[config]` (P2 Task 4a) — documented deferral:** [`PluginProvider::set_settings`]
+//! exists (the same contract as [`norte_plugin_host::PluginInstance::set_settings`]/
+//! [`ProviderInstance::set_settings`], used by `command`/`previewer` since
+//! Task 3/4a), but NO production caller invokes it today. This is a
+//! structural reason, not an oversight: a `PluginProvider` is NEVER built
+//! from the plugin catalog ([`norte_plugin_host::Catalog`]/
+//! `norte_core::plugins::PluginRegistry`) — there is no `plugin.toml` or
+//! `[config]` to resolve. The one real provider today (FTP, `ftp_plugin.rs`)
+//! is built from `ConnectionSpec`/`connections.toml` (a configuration
+//! subsystem that is TOTALLY separate, with no `[config]` schema). The
+//! method is ready for the day a provider IS born from a plugin manifest
+//! with its own `[config]`, without having to touch more than that one
+//! wiring point.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -43,35 +43,38 @@ use norte_vfs::proto::{
 use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider, SymlinkKind};
 use tokio::sync::Mutex;
 
-/// Timeout por operación del guest (M2, ADR 0033): una llamada bloqueada en un
-/// socket wasip2 no la corta el epoch deadline (sólo traba CPU del guest). Al
-/// expirar, la op falla y el provider se marca muerto. 30 s = orden del connect.
+/// Per-operation timeout for the guest (M2, ADR 0033): a call blocked on a
+/// wasip2 socket is not cut off by the epoch deadline (that only throttles
+/// the guest's CPU). On expiry, the op fails and the provider is marked
+/// dead. 30 s = the order of magnitude of connect.
 const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Un provider VFS respaldado por un plugin WASM que exporta la interfaz WIT
-/// `provider` (#30). Ver el módulo.
+/// A VFS provider backed by a WASM plugin that exports the WIT `provider`
+/// interface (#30). See the module docs.
 pub struct PluginProvider {
-    /// Mantiene vivo el ticker de época (deadline de CPU del guest).
+    /// Keeps the epoch ticker alive (the guest's CPU deadline).
     _runtime: PluginRuntime,
-    /// La instancia del guest; el `Mutex` serializa sus llamadas síncronas.
+    /// The guest instance; the `Mutex` serializes its synchronous calls.
     inst: Arc<Mutex<ProviderInstance>>,
-    /// Scheme que sirve este provider (p. ej. `mem`, `ftp`).
+    /// The scheme this provider serves (e.g. `mem`, `ftp`).
     scheme: String,
-    /// Capabilities cacheadas al construir (`Provider::capabilities` es sync).
+    /// Capabilities cached at construction (`Provider::capabilities` is sync).
     caps: Capabilities,
-    /// `true` cuando una op expiró (M2): el hilo `spawn_blocking` colgado retiene
-    /// el `Mutex` para siempre, así que toda op futura falla rápido sin tocarlo.
+    /// `true` once an op has timed out (M2): the hung `spawn_blocking` thread
+    /// holds the `Mutex` forever, so every future op fails fast without
+    /// touching it.
     dead: Arc<AtomicBool>,
-    /// Timeout por op (override en tests para no esperar 30 s).
+    /// Per-op timeout (overridden in tests so they don't wait 30 s).
     op_timeout: Duration,
 }
 
 impl PluginProvider {
-    /// Instancia el guest `wasm` bajo `host_caps` y cachea sus capabilities.
+    /// Instantiates the `wasm` guest under `host_caps` and caches its
+    /// capabilities.
     ///
     /// # Errors
-    /// [`RuntimeError`] si el artefacto no instancia o la llamada a
-    /// `capabilities` atrapa.
+    /// [`RuntimeError`] if the artifact fails to instantiate or the call to
+    /// `capabilities` traps.
     pub fn new(
         runtime: PluginRuntime,
         wasm: &norte_plugin_host::WasmArtifact,
@@ -82,13 +85,14 @@ impl PluginProvider {
         Self::from_instance(runtime, inst, scheme)
     }
 
-    /// Como [`Self::new`] pero instanciando el guest desde los BYTES de un
-    /// componente EMBEBIDO (ADR 0033): el guest FTP va `include_bytes!`-ado en
-    /// `norte-core` porque el target `wasm32-wasip2` puede faltar en el host de
-    /// compilación.
+    /// Like [`Self::new`] but instantiating the guest from the BYTES of an
+    /// EMBEDDED component (ADR 0033): the FTP guest is `include_bytes!`-ed
+    /// into `norte-core` because the `wasm32-wasip2` target may be missing
+    /// on the build host.
     ///
     /// # Errors
-    /// [`RuntimeError`] si los bytes no instancian o `capabilities` atrapa.
+    /// [`RuntimeError`] if the bytes fail to instantiate or `capabilities`
+    /// traps.
     pub fn from_bytes(
         runtime: PluginRuntime,
         bytes: &[u8],
@@ -99,16 +103,17 @@ impl PluginProvider {
         Self::from_instance(runtime, inst, scheme)
     }
 
-    /// Cachea las capabilities del guest y monta el adapter.
+    /// Caches the guest's capabilities and assembles the adapter.
     fn from_instance(
         runtime: PluginRuntime,
         mut inst: ProviderInstance,
         scheme: impl Into<String>,
     ) -> Result<Self, RuntimeError> {
         let guest = inst.capabilities()?;
-        // Proyecta los flags que el guest declara honestamente (los ausentes se
-        // quedan sin poner → capability ausente). Symlinks/trash/server-copy no
-        // viajan por la interfaz WIT → el adapter los deja fuera (Unsupported).
+        // Projects the flags the guest declares honestly (absent ones are
+        // simply left unset → capability absent). Symlinks/trash/server-copy
+        // do not travel over the WIT interface → the adapter leaves them out
+        // (Unsupported).
         let mut flags = CapabilityFlags::empty();
         if guest.read_only {
             flags |= CapabilityFlags::READ_ONLY;
@@ -132,7 +137,7 @@ impl PluginProvider {
         })
     }
 
-    /// Fija un timeout por op corto (tests de M2). Doc-hidden: no es API de prod.
+    /// Sets a short per-op timeout (M2 tests). Doc-hidden: not production API.
     #[doc(hidden)]
     #[must_use]
     pub fn with_op_timeout(mut self, timeout: Duration) -> Self {
@@ -140,30 +145,30 @@ impl PluginProvider {
         self
     }
 
-    /// Instala los valores de `[config]` (P2 Task 4a) que el guest verá vía
-    /// `host-config::get`/`all` — mismo contrato que
-    /// [`norte_plugin_host::PluginInstance::set_settings`]: llamar ANTES de
-    /// cualquier operación que invoque al guest. Ver el deferral documentado
-    /// en el doc del módulo: NINGÚN caller de producción lo usa hoy (los
-    /// providers no nacen de un manifiesto de plugin), pero la plomería
-    /// existe y es segura de llamar — incluso con un mapa vacío, que es el
-    /// comportamiento por defecto sin llamarla en absoluto.
+    /// Installs the `[config]` values (P2 Task 4a) that the guest will see
+    /// via `host-config::get`/`all` — the same contract as
+    /// [`norte_plugin_host::PluginInstance::set_settings`]: call it BEFORE
+    /// any operation that invokes the guest. See the documented deferral in
+    /// the module docs: NO production caller uses it today (providers are
+    /// not born from a plugin manifest), but the plumbing exists and is
+    /// safe to call — even with an empty map, which is the default behavior
+    /// when it is never called at all.
     ///
-    /// No hace falta `spawn_blocking`: es una escritura pura en memoria del
-    /// `Store` (ni compila ni ejecuta el guest), a diferencia de
-    /// [`Self::configure`] u otras ops.
+    /// `spawn_blocking` is not needed: it is a pure in-memory write to the
+    /// `Store` (it neither compiles nor runs the guest), unlike
+    /// [`Self::configure`] or other ops.
     pub async fn set_settings(&self, settings: BTreeMap<String, String>) {
         let mut guard = self.inst.lock().await;
         guard.set_settings(settings);
     }
 
-    /// Configura la conexión del guest-provider (#30 stage 3c): endpoint YA
-    /// resuelto por el host, credenciales y base. Se llama UNA vez tras
-    /// construir, antes de usar el provider. Un guest sin conexión (mem) lo
-    /// implementa como no-op.
+    /// Configures the guest-provider's connection (#30 stage 3c): the
+    /// endpoint ALREADY resolved by the host, credentials and base. Called
+    /// ONCE after construction, before using the provider. A connectionless
+    /// guest (mem) implements it as a no-op.
     ///
     /// # Errors
-    /// El error lógico del guest (mapeado) o un fallo del runtime.
+    /// The guest's logical error (mapped) or a runtime failure.
     pub async fn configure(
         &self,
         endpoint: String,
@@ -185,19 +190,20 @@ impl PluginProvider {
         .await
     }
 
-    /// Los segmentos crudos de `p` (el path que entiende el guest). Solo los
-    /// SEGMENTOS cruzan al guest; la authority (`ftp://user@host:port/…`, que el
-    /// engine sí incluye al enrutar una conexión remota) NO se proyecta — el
-    /// guest ya está atado a UNA conexión vía `configure`, así que el path que le
-    /// interesa es relativo a esa raíz. Un provider local scheme-only (mem) no
-    /// lleva authority y da lo mismo. (Antes había un `debug_assert!` de
-    /// authority ausente: era un invariante FALSO — los paths de FTP enrutados
-    /// por el engine SÍ llevan authority y panicaban en debug; encoding H1.)
+    /// The raw segments of `p` (the path the guest understands). Only the
+    /// SEGMENTS cross over to the guest; the authority (`ftp://user@host:port/…`,
+    /// which the engine does include when routing a remote connection) is
+    /// NOT projected — the guest is already bound to ONE connection via
+    /// `configure`, so the path it cares about is relative to that root. A
+    /// local scheme-only provider (mem) carries no authority and it makes
+    /// no difference. (There used to be a `debug_assert!` for an absent
+    /// authority: that was a FALSE invariant — FTP paths routed by the
+    /// engine DO carry an authority and it panicked in debug; encoding H1.)
     fn segments(p: &VPath) -> Vec<Vec<u8>> {
         p.segments().map(<[u8]>::to_vec).collect()
     }
 
-    /// Ejecuta una llamada al guest bajo el lock + timeout (M2). Ver
+    /// Runs a call to the guest under the lock + timeout (M2). See
     /// [`run_guarded`].
     async fn call<T, F>(&self, f: F) -> Result<T, Error>
     where
@@ -208,15 +214,16 @@ impl PluginProvider {
     }
 }
 
-/// Corre `f` sobre el guest bajo el lock ASÍNCRONO + un timeout por-op (M2).
+/// Runs `f` against the guest under the ASYNC lock + a per-op timeout (M2).
 ///
-/// El `Mutex` es de tokio: la espera del lock es `.await` (CANCELABLE), así que
-/// una op que expira esperando el lock sólo suelta su futuro — NO parquea un
-/// hilo. Sólo el `spawn_blocking` que ejecuta el guest COLGADO puede leak-ear UN
-/// hilo (I/O de socket wasip2 no cancelable), y sólo uno: los demás esperan
-/// async. Al expirar se marca `dead` y toda op futura falla rápido sin tocar el
-/// lock. El `OwnedMutexGuard` se mueve al hilo bloqueante y se suelta ahí tras
-/// el guest, de modo que el lock queda tomado exactamente mientras el guest corre.
+/// The `Mutex` is tokio's: waiting for the lock is `.await` (CANCELABLE), so
+/// an op that times out while waiting for the lock only drops its future —
+/// it does NOT park a thread. Only the `spawn_blocking` that runs the HUNG
+/// guest can leak ONE thread (non-cancelable wasip2 socket I/O), and only
+/// one: the rest wait asynchronously. On expiry `dead` is set and every
+/// future op fails fast without touching the lock. The `OwnedMutexGuard` is
+/// moved to the blocking thread and dropped there after the guest runs, so
+/// the lock stays held for exactly as long as the guest is running.
 async fn run_guarded<T, F>(
     inst: &Arc<Mutex<ProviderInstance>>,
     dead: &Arc<AtomicBool>,
@@ -227,36 +234,38 @@ where
     T: Send + 'static,
     F: FnOnce(&mut ProviderInstance) -> Result<T, Error> + Send + 'static,
 {
-    // Provider ya muerto por un timeout previo (M2): falla rápido sin esperar el
-    // lock (que el hilo colgado retiene para siempre).
+    // Provider already dead from a previous timeout (M2): fail fast without
+    // waiting for the lock (which the hung thread holds forever).
     if dead.load(Ordering::Relaxed) {
         return Err(Error::ProviderUnavailable { retryable: true });
     }
     let inst = Arc::clone(inst);
     let work = async move {
-        let mut guard = inst.lock_owned().await; // espera ASÍNCRONA, cancelable
+        let mut guard = inst.lock_owned().await; // ASYNC wait, cancelable
         crate::blocking::spawn_blocking(move || {
             let r = f(&mut guard);
-            drop(guard); // libera el lock en este hilo tras el guest
+            drop(guard); // releases the lock on this thread after the guest
             r
         })
         .await
     };
     let Ok(join) = tokio::time::timeout(op_timeout, work).await else {
-        // El guest sigue colgado en el socket (M2): marca muerto el provider para
-        // que las ops futuras no bloqueen (leak aceptado de UN hilo por socket
-        // estancado; el humano reconecta). El hilo lleva el span de su
-        // petición (ADR 0127), así que ese span tampoco se cierra: coste
-        // acotado por el mismo hilo, y lo que registre sigue diciendo de quién.
+        // The guest is still hung on the socket (M2): mark the provider dead
+        // so future ops don't block (an accepted leak of ONE thread per
+        // stuck socket; the human reconnects). The thread carries its
+        // request's span (ADR 0127), so that span never closes either: the
+        // cost is bounded by that same thread, and whatever it logs still
+        // says who it belongs to.
         dead.store(true, Ordering::Relaxed);
         return Err(Error::ProviderUnavailable { retryable: true });
     };
     join.map_err(|_| Error::Internal { panic: true })?
 }
 
-/// Traduce el error lógico del guest a la taxonomía del protocolo. `other` cae a
-/// `Internal` no-panic (categoría gruesa, sin inventar detalle);
-/// `conflict`/`no-space` (alcanzables en el camino de escritura) se mapean fiel.
+/// Translates the guest's logical error into the protocol's taxonomy.
+/// `other` falls to non-panic `Internal` (a coarse category, without
+/// inventing detail); `conflict`/`no-space` (reachable on the write path)
+/// are mapped faithfully.
 fn map_vfs_error(e: provider_iface::VfsError) -> Error {
     use provider_iface::VfsError as V;
     match e {
@@ -267,9 +276,10 @@ fn map_vfs_error(e: provider_iface::VfsError) -> Error {
         V::Io => Error::Io { retryable: false },
         V::Corrupt => Error::Corrupt,
         V::CursorExpired => Error::CursorExpired,
-        // Transitorio remoto (TCP/servidor caído): reintentable — el scheduler
-        // reintenta en vez de fallar en duro (rust review m1; el enum WIT no
-        // transporta el flag `retryable`, así que se fija al mapear de vuelta).
+        // Transient remote condition (TCP/server down): retryable — the
+        // scheduler retries instead of failing hard (rust review m1; the WIT
+        // enum does not carry the `retryable` flag, so it is fixed when
+        // mapping back).
         V::ProviderUnavailable => Error::ProviderUnavailable { retryable: true },
         V::Loop => Error::Loop,
         V::Conflict => Error::Conflict {
@@ -280,30 +290,33 @@ fn map_vfs_error(e: provider_iface::VfsError) -> Error {
     }
 }
 
-/// Fallo del runtime del guest.
+/// Failure of the guest's runtime.
 ///
-/// Solo un TRAP es panic-clase (el guest crasheó); un rechazo controlado
-/// —tope de retorno, instanciación— es un fallo interno NO-panic.
+/// Only a TRAP is panic-class (the guest crashed); a controlled rejection
+/// —a return-value cap, instantiation— is a NON-panic internal failure.
 ///
-/// Un PRESUPUESTO agotado no es ninguna de las dos cosas (#211): el deadline
-/// se mide en reloj, así que una máquina cargada se lo come con un plugin que
-/// solo es lento, y decir «el plugin crasheó» es la única respuesta que seguro
-/// es falsa. Va a `ProviderUnavailable { retryable: true }`, que es lo que de
-/// verdad pasó: no le dio tiempo, y otra vez puede que sí.
+/// An exhausted BUDGET is neither of the two (#211): the deadline is
+/// measured on the wall clock, so a loaded machine eats it with a plugin
+/// that is merely slow, and saying "the plugin crashed" is the one answer
+/// guaranteed to be false. It goes to `ProviderUnavailable { retryable: true }`,
+/// which is what really happened: it wasn't given enough time, and next
+/// time it might be.
 pub(crate) fn map_runtime_error(e: &RuntimeError) -> Error {
     match e {
         RuntimeError::Deadline => Error::ProviderUnavailable { retryable: true },
-        // El binario no es el aprobado (ADR 0142): lo mismo que dice
-        // `connect` cuando lo detecta él — no hay permiso para ESE código.
+        // The binary is not the approved one (ADR 0142): the same thing
+        // `connect` says when it detects it itself — there is no permission
+        // for THAT code.
         RuntimeError::DigestMismatch => Error::PermissionDenied,
-        otro => Error::Internal {
-            panic: matches!(otro, RuntimeError::Trap(_)),
+        other => Error::Internal {
+            panic: matches!(other, RuntimeError::Trap(_)),
         },
     }
 }
 
-/// Tope de entradas que el adapter reensambla de un `list` antes de fallar
-/// fail-loud — un guest hostil no cuelga el host paginando sin fin.
+/// Cap on the number of entries the adapter reassembles from a `list`
+/// before failing fail-loud — a hostile guest cannot hang the host by
+/// paginating forever.
 const MAX_LIST_ENTRIES: usize = 1_000_000;
 
 fn map_kind(k: provider_iface::EntryKind) -> EntryKind {
@@ -348,9 +361,9 @@ impl Provider for PluginProvider {
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
         let segs = Self::segments(p);
         let dir = p.clone();
-        // Reensamblado EAGER: se agotan todas las páginas del cursor y se
-        // devuelve un stream sobre el Vec (stage 2 de-risk; lazy = optimización
-        // posterior). El árbol de un contrato es pequeño.
+        // EAGER reassembly: every page of the cursor is drained and a stream
+        // is returned over the Vec (stage 2 de-risk; lazy = a later
+        // optimization). A contract's tree is small.
         let entries: Vec<Entry> = self
             .call(move |g| {
                 let mut out = Vec::new();
@@ -361,21 +374,21 @@ impl Provider for PluginProvider {
                         .map_err(|e| map_runtime_error(&e))?
                         .map_err(map_vfs_error)?;
                     for e in page.entries {
-                        // El modelo de segmentos del WIT es MÁS permisivo que
-                        // `VPath`: un nombre con `/` (o NUL, `.`/`..`) es válido
-                        // como bytes pero NO como `Segment`. Se OMITE con warn
-                        // — no tiene ruta representable donde vivir (mismo
-                        // criterio que los providers archive, #93). Deuda
-                        // stage-2b: contarlo y exponerlo por `list_skipped`.
+                        // The WIT segment model is MORE permissive than
+                        // `VPath`: a name with `/` (or NUL, `.`/`..`) is
+                        // valid as bytes but NOT as a `Segment`. It is
+                        // SKIPPED with a warn — it has no representable path
+                        // to live at (the same criterion as the archive
+                        // providers, #93). Stage-2b debt: count it and
+                        // expose it via `list_skipped`.
                         let name = e.name;
                         let Ok(seg) = Segment::new(name.clone()) else {
-                            // Sin el nombre y en `debug`, por lo mismo que su
-                            // gemelo de `zip_cd`: es un byte string elegido por
-                            // el plugin, de longitud que decide él, y desde el
-                            // ítem 9 del roadmap el log persiste en disco.
-                            tracing::debug!(
-                                "nombre del provider no representable como VPath: omitido"
-                            );
+                            // Without the name and at `debug`, for the same
+                            // reason as its `zip_cd` twin: it is a byte
+                            // string chosen by the plugin, of a length it
+                            // decides, and since roadmap item 9 the log
+                            // persists to disk.
+                            tracing::debug!("provider name not representable as VPath: skipped");
                             continue;
                         };
                         out.push(Entry {
@@ -385,7 +398,8 @@ impl Provider for PluginProvider {
                             size: e.size,
                             mtime_ms: None,
                         });
-                        // Cota anti-DoS: un guest hostil no reensambla sin fin.
+                        // Anti-DoS cap: a hostile guest cannot reassemble
+                        // forever.
                         if out.len() > MAX_LIST_ENTRIES {
                             return Err(Error::LimitExceeded {
                                 limit: Error::LIMIT_ENTRIES.to_owned(),
@@ -409,12 +423,12 @@ impl Provider for PluginProvider {
             None => (0u64, None),
             Some(r) => (r.offset, r.len),
         };
-        // Reensamblado LAZY: cada poll lee UN chunk acotado del guest en
-        // spawn_blocking — jamás se bufferiza el fichero entero (regla 2 + cota
-        // de memoria: un guest hostil no infla la RAM del host, cada llamada
-        // está acotada por `want` y por el deadline de época). El error de
-        // apertura (fichero inexistente, dir) llega como el primer item del
-        // stream. Estado: (instancia, segmentos, offset, bytes ya leídos).
+        // LAZY reassembly: every poll reads ONE bounded chunk from the guest
+        // inside spawn_blocking — the whole file is never buffered (rule 2 +
+        // a memory cap: a hostile guest cannot inflate the host's RAM, every
+        // call is bounded by `want` and by the epoch deadline). The open
+        // error (nonexistent file, dir) arrives as the stream's first item.
+        // State: (instance, segments, offset, bytes read so far).
         let inst = Arc::clone(&self.inst);
         let dead = Arc::clone(&self.dead);
         let timeout = self.op_timeout;
@@ -433,8 +447,9 @@ impl Provider for PluginProvider {
                     None => CHUNK,
                 };
                 let segs2 = segs.clone();
-                // Mismo lock async + timeout + dead que `call` (M2): una lectura
-                // colgada leak-ea a lo sumo UN hilo, no parquea a los que esperan.
+                // Same async lock + timeout + dead as `call` (M2): a hung
+                // read leaks at most ONE thread, it does not park the ones
+                // waiting.
                 let chunk: Vec<u8> = run_guarded(&inst, &dead, timeout, move |g| {
                     g.read(&segs2, off, want)
                         .map_err(|e| map_runtime_error(&e))?
@@ -444,8 +459,9 @@ impl Provider for PluginProvider {
                 if chunk.is_empty() {
                     return Ok(None); // EOF
                 }
-                // Un guest hostil que devuelve MÁS que `want` se recorta: el
-                // rango pedido manda (contrato de `ByteRange`).
+                // A hostile guest that returns MORE than `want` gets
+                // truncated: the requested range rules (the `ByteRange`
+                // contract).
                 let mut chunk = chunk;
                 if chunk.len() as u64 > want {
                     chunk.truncate(usize::try_from(want).unwrap_or(usize::MAX));
@@ -460,14 +476,14 @@ impl Provider for PluginProvider {
         Ok(stream.boxed())
     }
 
-    // ---- mutaciones: se DELEGAN al guest (#30 stage 2b-write). Un guest
-    // read-only responde Unsupported en cada una y el adapter lo propaga; uno
-    // escribible hace el trabajo. ----
+    // ---- mutations: DELEGATED to the guest (#30 stage 2b-write). A
+    // read-only guest responds Unsupported on each one and the adapter
+    // propagates it; a writable one does the work. ----
 
     async fn write(&self, p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
         let segs = Self::segments(p);
-        // Abre el writer transaccional del guest (staging propio; el path final
-        // no existe hasta commit — contrato de ByteSink).
+        // Opens the guest's transactional writer (its own staging; the
+        // final path does not exist until commit — the ByteSink contract).
         let handle = self
             .call(move |g| {
                 g.open_writer(&segs)
@@ -514,8 +530,8 @@ impl Provider for PluginProvider {
         .await
     }
 
-    // `trash`/`symlink` no están en la interfaz WIT `provider` (stage 2): un
-    // guest no los ofrece → Unsupported directo.
+    // `trash`/`symlink` are not in the WIT `provider` interface (stage 2): a
+    // guest does not offer them → Unsupported directly.
     async fn trash(
         &self,
         _p: &VPath,
@@ -534,37 +550,40 @@ impl Provider for PluginProvider {
     }
 }
 
-/// `ByteSink` (#30 stage 2b-write) respaldado por un `writer` resource del
-/// guest: `write` añade un chunk, `commit`/`abort` publican o descartan y
-/// liberan el handle (salvo si el guest atrapa — el trap envenena la instancia,
-/// que se descarta). Soltar el sink sin commit/abort dispara un `abort`+drop
-/// best-effort en [`Drop`] (contrato de `ByteSink`; síncrono con `try_lock`).
+/// `ByteSink` (#30 stage 2b-write) backed by a `writer` resource of the
+/// guest: `write` appends a chunk, `commit`/`abort` publish or discard and
+/// release the handle (unless the guest traps — the trap poisons the
+/// instance, which is discarded). Dropping the sink without commit/abort
+/// fires a best-effort `abort`+drop in [`Drop`] (the `ByteSink` contract;
+/// synchronous, with `try_lock`).
 struct PluginByteSink {
     inst: Arc<Mutex<ProviderInstance>>,
-    /// Flag de muerte compartido con el `PluginProvider` (M2).
+    /// Death flag shared with the `PluginProvider` (M2).
     dead: Arc<AtomicBool>,
-    /// Timeout por op (heredado del provider).
+    /// Per-op timeout (inherited from the provider).
     op_timeout: Duration,
-    /// `Some` mientras el handle no se haya liberado; `commit`/`abort`/`Drop` lo
-    /// toman.
+    /// `Some` while the handle has not been released yet; `commit`/`abort`/`Drop`
+    /// take it.
     writer: Option<norte_plugin_host::WriterHandle>,
 }
 
 impl Drop for PluginByteSink {
     fn drop(&mut self) {
-        // Best-effort (contrato de `ByteSink`): soltar sin commit/abort limpia
-        // el staging del guest. Síncrono (las llamadas al guest lo son) con
-        // `try_lock` — no bloquea en el mutex: si estuviera tomado se cede el
-        // handle a la tabla de recursos del store hasta que el provider muera.
+        // Best-effort (the `ByteSink` contract): dropping without
+        // commit/abort cleans up the guest's staging. Synchronous (the
+        // guest calls are too), with `try_lock` — it does not block on the
+        // mutex: if it were held, the handle is ceded to the store's
+        // resource table until the provider dies.
         //
-        // NO es asíncrono, así que NO puede envolverse en `tokio::time::timeout`
-        // (M2): `writer_abort` emite un `rm` de control por el socket wasip2. Si
-        // el provider ya está MUERTO por un timeout previo, se salta — el hilo
-        // colgado retiene el estado y limpiar es fútil. Un servidor VIVO-pero-
-        // -estancado aún podría bloquear este `Drop` en el socket (mismo motivo
-        // de I/O no cancelable que el leak aceptado de M2); deuda residual.
+        // It is NOT async, so it CANNOT be wrapped in `tokio::time::timeout`
+        // (M2): `writer_abort` emits a control `rm` over the wasip2 socket.
+        // If the provider is already DEAD from a previous timeout, it is
+        // skipped — the hung thread holds the state and cleaning up is
+        // futile. A server that is ALIVE-but-stuck could still block this
+        // `Drop` on the socket (the same non-cancelable-I/O reason as the
+        // leak accepted in M2); residual debt.
         if self.dead.load(Ordering::Relaxed) {
-            self.writer.take(); // suelta el handle sin tocar el socket
+            self.writer.take(); // release the handle without touching the socket
             return;
         }
         if let Some(w) = self.writer.take()
@@ -577,8 +596,8 @@ impl Drop for PluginByteSink {
 }
 
 impl PluginByteSink {
-    /// Ejecuta una op sobre el writer bajo el lock + timeout (M2): delega en
-    /// [`run_guarded`], el mismo camino que [`PluginProvider::call`].
+    /// Runs an op on the writer under the lock + timeout (M2): delegates to
+    /// [`run_guarded`], the same path as [`PluginProvider::call`].
     async fn call<F>(
         inst: &Arc<Mutex<ProviderInstance>>,
         dead: &Arc<AtomicBool>,
@@ -596,7 +615,7 @@ impl PluginByteSink {
 impl ByteSink for PluginByteSink {
     async fn write(&mut self, chunk: Bytes) -> Result<(), Error> {
         let Some(w) = self.writer else {
-            return Err(Error::Internal { panic: false }); // usado tras consumir
+            return Err(Error::Internal { panic: false }); // used after being consumed
         };
         Self::call(&self.inst, &self.dead, self.op_timeout, move |g| {
             g.writer_write(w, &chunk)
@@ -615,8 +634,9 @@ impl ByteSink for PluginByteSink {
                 .writer_commit(w)
                 .map_err(|e| map_runtime_error(&e))?
                 .map_err(map_vfs_error);
-            // El handle se libera tras un commit lógico (OK o VfsError); si el
-            // guest ATRAPÓ, `?` ya salió y la instancia envenenada se descarta.
+            // The handle is released after a logical commit (OK or
+            // VfsError); if the guest TRAPPED, `?` has already returned and
+            // the poisoned instance is discarded.
             let _ = g.writer_drop(w);
             r
         })

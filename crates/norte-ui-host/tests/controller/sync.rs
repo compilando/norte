@@ -896,8 +896,8 @@ pub(super) fn arbol_con_esquema(
     Arc::new(f)
 }
 
-/// El esquema de prueba: un `bool`, un `int` acotado y un `kind` que este
-/// build no conoce.
+/// The test schema: a `bool`, a bounded `int` and a `kind` this build does
+/// not know.
 pub(super) fn esquema_de_prueba() -> Vec<norte_proto::methods::PluginConfigKeyWire> {
     vec![
         norte_proto::methods::PluginConfigKeyWire {
@@ -4585,7 +4585,7 @@ async fn el_hueco_de_preview_con_el_foco_se_mueve_con_las_teclas_del_visor() {
     .await;
     assert_eq!(movido.viewer.expect("viewer").first_line, 1);
 
-    // La rueda, por el host.
+    // The wheel, via the host.
     h.dispatch(UiAction::PreviewScroll {
         slot_id: slot,
         delta: 3,

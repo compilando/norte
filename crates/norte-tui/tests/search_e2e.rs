@@ -72,7 +72,7 @@ async fn drain(
 // finds both (and the nested UTF-8 one), streaming; F5 from a hit copies
 // the real file and the destination is byte-exact against the original.
 #[tokio::test]
-async fn criterio_de_salida_año() {
+async fn exit_criterion_año() {
     let (backend, mem) = backend_mem();
     write_file(&mem, "mem:///f1", "un año".as_bytes()).await;
     // Raw Latin-1: 'a' 0xF1 'o' = "año" with the ñ as a single high byte.
@@ -147,7 +147,7 @@ async fn criterio_de_salida_año() {
 // Clean cancellation (rule 3): after the first batch, cancel; the hits
 // already received are kept in what was drained, the Task ends Cancelled.
 #[tokio::test]
-async fn cancel_conserva_lo_llegado() {
+async fn cancel_keeps_what_arrived() {
     let (backend, mem) = backend_mem();
     for i in 0..200 {
         write_file(
@@ -186,7 +186,7 @@ async fn cancel_conserva_lo_llegado() {
 // Hostile name: raw non-UTF8 bytes (0xFF 0xFE) survive intact through a
 // "*" glob — no panic, no path corruption (rule 1).
 #[tokio::test]
-async fn nombre_hostil() {
+async fn hostile_name() {
     let (backend, mem) = backend_mem();
     let hostile = write_named(&mem, &[0xFF, 0xFE], b"x").await;
 
@@ -215,10 +215,10 @@ async fn nombre_hostil() {
 }
 
 // 4 ───────────────────────────────────────────────────────────────────────
-// The four criterion axes (name_glob covered in `nombre_hostil`, content
-// in `criterio_de_salida_año`): here name_regex and content_regex.
+// The four criterion axes (name_glob covered in `hostile_name`, content
+// in `exit_criterion_año`): here name_regex and content_regex.
 #[tokio::test]
-async fn ejes_name_regex_y_content_regex() {
+async fn axes_name_regex_and_content_regex() {
     let (backend, mem) = backend_mem();
     write_file(&mem, "mem:///main.rs", b"fn main() {}\n").await;
     write_file(&mem, "mem:///notes.txt", b"nothing here\n").await;

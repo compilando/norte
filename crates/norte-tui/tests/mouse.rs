@@ -1333,7 +1333,7 @@ fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
 /// The range's anchor is also the HIGHLIGHTED row (the filter's selection),
 /// not the real cursor, which under a filter can be anywhere.
 #[test]
-fn marcar_bajo_un_filtro_no_alcanza_lo_que_el_filtro_esconde() {
+fn marking_under_a_filter_does_not_reach_what_the_filter_hides() {
     let dir = vp("file:///casa");
     // Alternating names: the `sí` filter leaves the EVEN indices visible, so
     // there is always a hidden one between two painted rows.

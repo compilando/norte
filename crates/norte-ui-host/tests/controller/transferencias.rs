@@ -314,7 +314,7 @@ pub(super) async fn dos_paneles_en_disco(
     let backend = Arc::new(f);
     let (h, snap) = host_ortodoxo_en(Arc::clone(&backend), "file:///casa").await;
     let mut sub = h.subscribe();
-    // El hueco 2 baja a `docs`, que es el destino del rol.
+    // Slot 2 goes down into `docs`, which is the role's destination.
     let b2 = listado_de(&snap, 2);
     let docs = b2
         .rows
@@ -1669,7 +1669,7 @@ async fn el_cuerpo_de_una_confirmacion_marca_lo_que_enmascara() {
         let backend = Arc::new(f);
         let (h, snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
         let mut sub = h.subscribe();
-        // El cursor, sobre la entrada hostil.
+        // The cursor, on the hostile entry.
         let b1 = listado_de(&snap, 1);
         let fila = b1
             .rows
@@ -2155,7 +2155,7 @@ async fn en_solo_lectura_la_paleta_no_ofrece_lo_que_muta() {
     }))
     .await
     .expect("host alive");
-    let p = siguiente_paleta(&mut sub).await.expect("la paleta abre");
+    let p = siguiente_paleta(&mut sub).await.expect("the palette opens");
     let solo_lectura =
         norte_ui_host::commands::implementados(norte_ui_host::commands::Efectos::SoloLectura);
     let no_inertes = norte_ui_host::commands::IMPLEMENTADOS
@@ -2164,22 +2164,22 @@ async fn en_solo_lectura_la_paleta_no_ofrece_lo_que_muta() {
     for cmd in no_inertes {
         assert!(
             !p.rows.iter().any(|r| r.text == *cmd),
-            "la paleta de una ventana de solo lectura ofrece {cmd}"
+            "a read-only window's palette offers {cmd}"
         );
     }
 }
 
-/// Y la tecla lo dice con SU motivo, no con uno cualquiera.
+/// And the key says so with ITS OWN reason, not just any one.
 #[tokio::test]
-async fn en_solo_lectura_copiar_dice_por_que() {
+async fn in_read_only_copy_says_why() {
     let (h, _snap) = host_solo_lectura(arbol()).await;
     let ack = h.dispatch(tecla("F5")).await.expect("host alive");
     let ActionAck::Unavailable { reason_key } = ack else {
-        panic!("se esperaba no disponible: {ack:?}");
+        panic!("expected unavailable: {ack:?}");
     };
     assert!(
         reason_key == "cmd-not-here" || reason_key == "host-read-only",
-        "y con un motivo del vocabulario, no uno inventado: {reason_key}"
+        "and with a reason from the vocabulary, not a made-up one: {reason_key}"
     );
 }
 
@@ -2413,7 +2413,7 @@ async fn el_lote_dice_cuantas_terminaron_bien_y_cuantas_no() {
         ],
     );
     f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
-    // Nacen TERMINALES y bien: el camino donde `progreso` no se llama nunca.
+    // They are born TERMINAL and well: the path where `progress` is never called.
     f.estado_transferencia = Some(norte_proto::TaskState::Completed);
     let backend = Arc::new(f);
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
@@ -2919,7 +2919,7 @@ async fn un_informe_a_medias_no_abre_veredicto() {
     );
 }
 
-/// `alt+A`, el acorde que los tres presets nativos dan a `pane.chmod`.
+/// `alt+A`, the chord the three native presets give to `pane.chmod`.
 pub(super) fn alt_a() -> UiAction {
     UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "A".to_owned(),

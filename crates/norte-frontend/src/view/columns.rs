@@ -1497,14 +1497,14 @@ const SIZE_FORMATS: &[(&str, SizeFormat)] = &[
     ("exact", SizeFormat::Exact),
 ];
 
-/// Tabla str ↔ enum de `Mtime` — mismas reglas que [`SIZE_FORMATS`].
+/// str ↔ `Mtime` enum table — same rules as [`SIZE_FORMATS`].
 const TIME_FORMATS: &[(&str, TimeFormat)] = &[
     ("relative", TimeFormat::Relative),
     ("iso", TimeFormat::Iso),
     ("smart", TimeFormat::Smart),
 ];
 
-/// [`TimeFormat`] de un `[ui] date_format` (spec 2026-09-10).
+/// [`TimeFormat`] of a `[ui] date_format` (spec 2026-09-10).
 #[must_use]
 pub fn time_format_of(f: norte_config::DateFormat) -> TimeFormat {
     match f {
@@ -1514,9 +1514,9 @@ pub fn time_format_of(f: norte_config::DateFormat) -> TimeFormat {
     }
 }
 
-/// Tabla str ↔ enum de columnas con hint `Mode` — mismas reglas que
-/// [`SIZE_FORMATS`]. Las cadenas entran al vocabulario global de config
-/// en la tarea 4 de #117.
+/// str ↔ enum table for columns with the `Mode` hint — same rules as
+/// [`SIZE_FORMATS`]. The strings enter the global config vocabulary in
+/// task 4 of #117.
 const MODE_FORMATS: &[(&str, ModeFormat)] =
     &[("rwx", ModeFormat::Rwx), ("octal", ModeFormat::Octal)];
 

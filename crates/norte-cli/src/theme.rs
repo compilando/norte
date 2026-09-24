@@ -26,19 +26,19 @@ const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Subcommand, Clone)]
 pub(crate) enum ThemeCmd {
-    /// Importa un tema de VS Code (`.json`, con comentarios o sin ellos) a
-    /// `<config>/themes/<nombre>.toml`, pintado sobre `vscode-dark` o
-    /// `vscode-light` según su tipo. Sigue su cadena `include`
+    /// Imports a VS Code theme (`.json`, with or without comments) into
+    /// `<config>/themes/<name>.toml`, painted over `vscode-dark` or
+    /// `vscode-light` depending on its type. Follows its `include` chain
     Import {
-        /// El fichero JSON del tema
+        /// The theme's JSON file
         file: PathBuf,
-        /// Nombre del tema; por defecto, el `name` del JSON o el del fichero
+        /// Theme name; defaults to the JSON's `name` or the file's
         #[arg(long)]
         name: Option<String>,
-        /// Además, lo deja puesto en `[ui] theme`
+        /// Also sets it as the active `[ui] theme`
         #[arg(long = "use")]
-        usar: bool,
-        /// Sustituye un tema con ese nombre si ya existe
+        activate: bool,
+        /// Replaces a theme with that name if it already exists
         #[arg(long)]
         force: bool,
     },
@@ -49,7 +49,7 @@ pub(crate) fn run(cmd: &ThemeCmd) -> anyhow::Result<ExitCode> {
     let ThemeCmd::Import {
         file,
         name,
-        usar,
+        activate,
         force,
     } = cmd;
     let config_dir = norte_config::user_config_dir()
@@ -78,7 +78,7 @@ pub(crate) fn run(cmd: &ThemeCmd) -> anyhow::Result<ExitCode> {
             )
         );
     }
-    if *usar {
+    if *activate {
         let written = norte_config::persist_set(
             &config_dir,
             "ui",
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn slug_of_real_names() {
         assert_eq!(slug("One Dark Pro"), "one-dark-pro");
-        assert_eq!(slug("Mi Tema: Noche"), "mi-tema-noche");
+        assert_eq!(slug("My Theme: Night"), "my-theme-night");
         assert_eq!(slug("  --Dracula--  "), "dracula");
         assert_eq!(slug("日本"), "");
     }

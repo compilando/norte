@@ -136,7 +136,7 @@ pub enum SettingKind {
     /// it, which has to be written into the file by hand.
     Args,
     /// A NUMBER in `[min, max]` — despite the name, the buffer parses as
-    /// `f64` and accepts a fractional part (revisión S, M4): `ui.font-size`
+    /// `f64` and accepts a fractional part (revision S, M4): `ui.font-size`
     /// is the only entry using this kind, and its underlying config field
     /// (`CommonConfig::ui_font_size`) is `f32`, not an integer — a
     /// hand-edited `font_size = 14.5` was previously un-editable from this
@@ -1790,7 +1790,7 @@ impl SettingsState {
     }
 
     /// Confirms the inline edit buffer: `Int` parses the buffer as `f64`
-    /// (revisión S, M4 — see [`SettingKind::Int`]'s doc for why a "whole
+    /// (revision S, M4 — see [`SettingKind::Int`]'s doc for why a "whole
     /// number" kind accepts a fractional part) and validates `[min, max]`
     /// ([`SettingsEditError`] WITHOUT persisting, buffer intact — the user
     /// corrects and retries); `Text` accepts anything. Only reachable with
@@ -1918,7 +1918,7 @@ pub(crate) fn cycle(current: &str, values: &[&str]) -> String {
 /// `TaskBoard::has_active`; GUI: tasks/marks/inflight, see
 /// `confirm_quit_task_count`) — the caller computes THAT; this is only the
 /// three-way decision from the mode, and it was byte-identical in both
-/// frontends before this hoist (revisión S, M6: TUI's `quit_needs_confirm`
+/// frontends before this hoist (revision S, M6: TUI's `quit_needs_confirm`
 /// and the GUI's `confirm_quit_should_open`).
 #[must_use]
 pub fn quit_needs_confirm(mode: norte_config::ConfirmQuit, pending: bool) -> bool {
@@ -1931,7 +1931,7 @@ pub fn quit_needs_confirm(mode: norte_config::ConfirmQuit, pending: bool) -> boo
 
 /// Status-bar/inline message for a [`SettingsEditError`] — by CATEGORY
 /// (Fluent), never ad hoc text (#73 pattern). Shared by the TUI overlay
-/// (S3) and the GUI view (S4, revisión S M6): both had their own
+/// (S3) and the GUI view (S4, revision S M6): both had their own
 /// byte-identical copy of this match before this hoist.
 #[must_use]
 pub fn edit_error_message(e: &SettingsEditError) -> String {
@@ -2448,7 +2448,7 @@ mod tests {
         assert_eq!(write.display, "16");
     }
 
-    /// Revisión S, M4: `ui.font-size` accepts a FRACTIONAL value (`[ui]
+    /// Revision S, M4: `ui.font-size` accepts a FRACTIONAL value (`[ui]
     /// font_size` is `f32` in `norte_config`, not an integer — a hand-edited
     /// `norte.toml` with `font_size = 14.5` was impossible to re-edit from
     /// here before this fix, the strict `i64::parse` rejected it outright).
@@ -3119,7 +3119,7 @@ mod tests {
         );
     }
 
-    // --- `quit_needs_confirm`/`edit_error_message` (revisión S, M6 hoist) ---
+    // --- `quit_needs_confirm`/`edit_error_message` (revision S, M6 hoist) ---
 
     #[test]
     fn quit_needs_confirm_all_three_modes() {

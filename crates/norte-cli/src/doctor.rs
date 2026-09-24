@@ -2130,10 +2130,10 @@ max = 10
         let ok = findings
             .iter()
             .find(|f| f.detail == "ok")
-            .expect("la buena");
+            .expect("the good one");
         assert_eq!(ok.code, "connection-ok");
 
-        // Instalado un provider que declara `sfpt`, deja de ser un typo.
+        // Once a provider that declares `sfpt` is installed, it stops being a typo.
         let plugin = dir.path().join("plugins/org.demo.sfpt");
         std::fs::create_dir_all(&plugin).unwrap();
         std::fs::write(

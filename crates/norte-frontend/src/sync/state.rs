@@ -806,8 +806,8 @@ pub fn status_line(view: &SyncView, lang: Lang) -> String {
                 ],
             )
         }
-        // Sin informe, el fallo manda: un error tiene que llegar entero, y no
-        // hay recuento que lo pueda sustituir.
+        // With no report, the failure rules: an error has to arrive whole,
+        // and no tally can stand in for it.
         (_, SyncRunState::Failed) => ta_in(
             lang,
             "sync-status-failed",

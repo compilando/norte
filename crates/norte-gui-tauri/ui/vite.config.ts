@@ -1,25 +1,25 @@
 import { defineConfig } from "vite";
 
-// Assets EMPAQUETADOS y nada más: la webview de producción no habla con
-// ningún servidor de desarrollo, no trae sourcemaps de terceros y no carga
-// nada remoto (ADR 0066, decisión D11).
+// BUNDLED assets and nothing else: the production webview doesn't talk to
+// any dev server, doesn't ship third-party sourcemaps, and loads nothing
+// remote (ADR 0066, decision D11).
 export default defineConfig({
   root: ".",
   build: {
     outDir: "dist",
     emptyOutDir: true,
     target: "es2022",
-    // Rutas RELATIVAS: la webview sirve desde `tauri://localhost`, y un
-    // `/assets/...` absoluto se resuelve fuera del bundle.
+    // RELATIVE paths: the webview serves from `tauri://localhost`, and an
+    // absolute `/assets/...` resolves outside the bundle.
     assetsDir: "assets",
-    // NADA se incrusta como `data:`: la CSP de la webview no admite fuentes
-    // en línea, y la de símbolos Nerd (3,8 KB) quedaba por debajo del
-    // límite por defecto (4 KB), se incrustaba, y cada icono era una caja.
-    // Como fichero en `assets/` carga igual que las otras.
+    // NOTHING gets inlined as `data:`: the webview's CSP doesn't allow
+    // inline fonts, and the Nerd symbols one (3.8 KB) fell under the default
+    // limit (4 KB), got inlined, and every icon was a box. As a file under
+    // `assets/` it loads the same as the others.
     assetsInlineLimit: 0,
     sourcemap: false,
-    // Un solo fichero por tipo: menos peticiones en el arranque frío, que es
-    // una de las cosas que este spike mide.
+    // One file per type: fewer requests at cold start, which is one of the
+    // things this spike measures.
     rollupOptions: {
       output: {
         entryFileNames: "assets/[name].js",

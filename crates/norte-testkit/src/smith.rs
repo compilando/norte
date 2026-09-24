@@ -701,7 +701,7 @@ pub fn which_7z() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Una entrada de la forja RAR5.
+/// An entry of the RAR5 forge.
 struct RarEntry {
     name: Vec<u8>,
     content: Vec<u8>,
@@ -860,7 +860,7 @@ impl RarSmith {
 fn rar4_main_head() -> Vec<u8> {
     let mut body = vec![0x73, 0x00, 0x00, 13, 0x00];
     body.extend_from_slice(&[0u8; 6]); // RESERVED1(2) + RESERVED2(4)
-    rar4_con_crc(&body)
+    rar4_with_crc(&body)
 }
 
 /// A RAR4 file header (`HEAD_TYPE` 0x74) followed by its data.
@@ -886,14 +886,14 @@ fn rar4_file_head(name: &[u8], data: &[u8]) -> Vec<u8> {
     body.extend_from_slice(&u16::try_from(name.len()).unwrap_or(u16::MAX).to_le_bytes());
     body.extend_from_slice(&0x20u32.to_le_bytes()); // ATTR
     body.extend_from_slice(name);
-    let mut block = rar4_con_crc(&body);
+    let mut block = rar4_with_crc(&body);
     block.extend_from_slice(data);
     block
 }
 
-/// Antepone el `HEAD_CRC` de RAR4: los DOS BYTES BAJOS del CRC32 de la
+/// Prepends RAR4's `HEAD_CRC`: the LOW TWO BYTES of the CRC32 of the
 /// header, counting from `HEAD_TYPE`.
-fn rar4_con_crc(body: &[u8]) -> Vec<u8> {
+fn rar4_with_crc(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(body.len() + 2);
     // The truncation IS the format, not an oversight: RAR4 stores two bytes
     // where there is a CRC32, and they are the low ones. `unrar` validates

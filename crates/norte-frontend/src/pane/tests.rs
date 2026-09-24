@@ -3400,9 +3400,9 @@ fn plugin_columns_pins_by_bytes_not_by_display() {
     );
 }
 
-/// ADR 0137: el elemento de estado de un plugin es el valor de su columna
-/// para la entrada bajo el CURSOR, enmascarado y acotado; sin valor, no
-/// sale; y no se pulsa.
+/// ADR 0137: a plugin's status item is the value of its column for the
+/// entry under the CURSOR, masked and bounded; with no value, it does not
+/// show; and it is not pulled.
 #[test]
 fn plugin_items_report_the_column_under_the_cursor() {
     use crate::statusbar::{PLUGIN_ITEM_MAX_CELLS, plugin_items};

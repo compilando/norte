@@ -3,25 +3,25 @@ Type=Application
 Name=norte
 GenericName=File Manager
 Comment=norte, gestor de ficheros ortodoxo
-# `%f` y NO `%U`: `%U` entrega una URL (`file:///casa`) y `norte-gui` espera
-# una RUTA — `PathBuf::from("file:///casa")` es una ruta RELATIVA que no
-# existe, así que la ventana abriría sobre un error en vez de sobre la carpeta
-# que el escritorio acaba de nombrar. `%f` entrega la ruta local, que es lo
-# que este binario sabe leer.
+# `%f` and NOT `%U`: `%U` delivers a URL (`file:///home`) and `norte-gui`
+# expects a PATH — `PathBuf::from("file:///home")` is a RELATIVE path that
+# doesn't exist, so the window would open on an error instead of the folder
+# the desktop just named. `%f` delivers the local path, which is what this
+# binary knows how to read.
 Exec=norte-gui %f
 Icon=norte-gui
 Terminal=false
 StartupWMClass=norte-gui
-# UNA categoría principal (`System`) y las dos adicionales que describen qué
-# es: con dos principales, `desktop-file-validate` avisa de que la aplicación
-# puede salir DOS VECES en el menú. `FileManager` es lo que hace que el
-# escritorio ofrezca norte en «abrir carpeta con…»; solo `Utility` —lo que el
-# bundler genera por defecto— lo dejaba en el cajón de sastre y fuera de esa
-# lista.
+# ONE main category (`System`) and the two additional ones that describe what
+# it is: with two main categories, `desktop-file-validate` warns that the
+# application can show up TWICE in the menu. `FileManager` is what makes the
+# desktop offer norte in "open folder with…"; only `Utility` — what the
+# bundler generates by default — left it in the miscellaneous drawer and out
+# of that list.
 Categories=System;FileTools;FileManager;
-# Un directorio. Sin esto, «abrir con…» sobre una carpeta no ofrece norte, que
-# para un gestor de ficheros es la integración entera. Sin
-# `x-directory/normal`: es un tipo viejo que el validador desaconseja, y los
-# escritorios que quedan entienden `inode/directory`.
+# A directory. Without this, "open with…" on a folder doesn't offer norte,
+# which for a file manager is the entire integration. Without
+# `x-directory/normal`: it's an old type the validator discourages, and the
+# remaining desktops understand `inode/directory`.
 MimeType=inode/directory;
 Keywords=file;manager;explorer;ficheros;archivos;

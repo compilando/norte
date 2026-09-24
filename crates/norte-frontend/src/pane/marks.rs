@@ -990,9 +990,9 @@ impl PaneState {
     /// computed.
     #[must_use]
     pub fn marked_bytes(&self) -> u64 {
-        // Sin marcas no hay nada que sumar: recorrer veinte mil entradas
-        // resumiendo cada ruta, por cada tecla, era la mitad del coste de
-        // mover el cursor en un directorio grande.
+        // With no marks there is nothing to add up: walking twenty thousand
+        // entries summing every path, on every keystroke, was half the cost
+        // of moving the cursor in a large directory.
         if self.marks.is_empty() {
             return 0;
         }

@@ -258,7 +258,7 @@ export function paintMetadata(this: Screen, dom: SlotDom, slot: MetadataSlotView
   // space at the end of a text node collapses against the span next to it —
   // "Details ·⟨file⟩/…" glued together.
   const label = document.createTextNode(`${this.t("metadata-title")} ·\xa0`);
-const path = document.createElement("span");
+  const path = document.createElement("span");
   path.className = "title-path";
   path.textContent = slot.follows_display;
   dom.title.replaceChildren(label, path);

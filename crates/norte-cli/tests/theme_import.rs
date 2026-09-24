@@ -87,7 +87,7 @@ fn the_name_comes_from_the_json() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(config.path().join("themes/mi-tema-noche.toml").is_file());
+    assert!(config.path().join("themes/my-theme-night.toml").is_file());
 }
 
 /// A name that is already an embedded preset gets REJECTED: the resolver puts

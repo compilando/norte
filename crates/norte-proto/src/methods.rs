@@ -5355,7 +5355,7 @@ pub enum PairTransform {
 impl PairTransform {
     /// Do the two spellings safely name ONE SAME text?
     ///
-    /// `true` solo para [`PairTransform::CaseFold`] y
+    /// `true` only for [`PairTransform::CaseFold`] and
     /// [`PairTransform::Normalization`], which are the two transforms whose
     /// pairing is the wanted behavior.
     /// [`PairTransform::NormalizationSingleton`] is `false` because it may

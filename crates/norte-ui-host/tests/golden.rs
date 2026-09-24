@@ -642,8 +642,8 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("set_viewer_rows", UiAction::SetViewerRows { rows: 40 }),
-        // La rueda sobre el visor, con los dos ejes: un solo gesto los
-        // produce (`shift` va de lado).
+        // The wheel over the viewer, with both axes: one single gesture
+        // produces them (`shift` goes sideways).
         (
             "viewer_scroll",
             UiAction::ViewerScroll { lines: 3, cols: -8 },
@@ -1635,8 +1635,9 @@ fn snapshot_de_referencia() -> ViewSnapshot {
             label: "Partir lado a lado".to_owned(),
             chord: "—".to_owned(),
         }],
-        // El pijama ENCENDIDO en la referencia (puente 80): un booleano que
-        // el golden fija a `false` no distingue «lo manda» de «no existe».
+        // The pajama ON in the reference (bridge 80): a boolean that the
+        // golden pins to `false` does not distinguish "it commands it" from
+        // "it does not exist".
         row_stripes: true,
         profiles: Some(perfiles_de_referencia()),
         wizard: Some(asistente_de_referencia()),
@@ -2128,9 +2129,9 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
                     hostile: false,
                     editable: true,
                 },
-                // Un `enum` cuyo dominio lleva texto del plugin con un
-                // override bidi dentro: llega enmascarado Y marcado, y el
-                // `·` que lo une no puede fabricarse desde el `plugin.toml`.
+                // An `enum` whose domain carries plugin text with a bidi
+                // override inside: it arrives masked AND flagged, and the
+                // `·` that joins it cannot be manufactured from `plugin.toml`.
                 ExtensionConfigRowView {
                     key: "mode".to_owned(),
                     kind: "enum".to_owned(),
@@ -2529,7 +2530,7 @@ fn cambios_del_listado() -> Vec<(&'static str, ViewChange)> {
     ]
 }
 
-/// Los cambios que describen un OVERLAY: cada superficie que se abre encima.
+/// The changes that describe an OVERLAY: every surface that opens on top.
 fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
     vec![
         (

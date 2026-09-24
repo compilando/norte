@@ -1647,7 +1647,7 @@ fn the_help_footer_adapts_to_the_width() {
     }
 }
 
-/// Fila del frame en la que cae el PIE del overlay de ayuda, para un frame de
+/// The frame row where the help overlay's FOOTER falls, for a frame of
 /// `w`×`h`.
 ///
 /// Traces `ui::help_layout`'s arithmetic, which is private: the box is
@@ -1661,11 +1661,11 @@ fn the_help_footer_adapts_to_the_width() {
 /// language that `help_body_size` now asks for decides only the WIDTH split
 /// and nothing else, so any one will do here.
 fn help_footer_row(w: u16, h: u16) -> usize {
-    let alto_caja = h.saturating_sub(2).max(6).min(h);
-    let arriba = (h - alto_caja) / 2;
-    let (_, alto_cuerpo) =
+    let box_height = h.saturating_sub(2).max(6).min(h);
+    let top = (h - box_height) / 2;
+    let (_, body_height) =
         ui::help_body_size(ratatui::layout::Rect::new(0, 0, w, h), norte_i18n::Lang::Es);
-    usize::from(arriba + 1) + alto_cuerpo
+    usize::from(top + 1) + body_height
 }
 
 /// H3b, H1's lesson over a new PAINTED surface: help's filter matches the

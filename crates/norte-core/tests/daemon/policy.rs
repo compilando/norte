@@ -2544,11 +2544,11 @@ async fn a_scopeless_agent_does_not_search() {
     write_file(&d.mem, "mem:///proj/a.rs", b"x").await;
     let mut agent = connected_agent(&d, "s1").await;
 
-    // 1) Sin scope: denegado por el gate de lectura.
+    // 1) No scope: denied by the read gate.
     let err = agent
         .call::<_, FsTaskResult>(methods::FS_SEARCH, &search_by_name("mem:///proj", "*.rs"))
         .await
-        .expect_err("sin scope no busca");
+        .expect_err("without scope it does not search");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),

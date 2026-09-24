@@ -8,43 +8,43 @@
   </head>
   <body>
     <main id="screen" role="application" aria-label="norte"></main>
-    <!-- La barra de menús va DESPUÉS de la pantalla, y no es estética: aquí
-         no hay `z-index` en ninguna parte, así que entre elementos
-         posicionados manda el orden del documento. Declarada antes, su
-         desplegable quedaba por DEBAJO de los paneles —que son absolutos y
-         vienen después— y el menú se abría invisible. La barra en sí es
-         `fixed` arriba y `#screen` se aparta con un margen, así que la fila
-         sigue reservada: el reparto que el host calcula cuenta con ella.
-         Todo lo que se declara más abajo la tapa, que es lo correcto — un
-         diálogo o la ayuda mandan sobre un menú. -->
-    <!-- La barra de paneles (#324) va ANTES del menú por la misma regla: el
-         desplegable del menú tiene que pintarse por encima de ella. -->
+    <!-- The menu bar goes AFTER the screen, and it isn't aesthetic: there is
+         no `z-index` anywhere here, so among positioned elements document
+         order wins. Declared before it, its dropdown used to end up BELOW
+         the panels — which are absolute and come later — and the menu
+         opened invisible. The bar itself is `fixed` at the top and
+         `#screen` steps aside with a margin, so the row stays reserved: the
+         layout the host computes counts on it. Everything declared further
+         down covers it, which is correct — a dialog or help outrank a
+         menu. -->
+    <!-- The panel bar (#324) goes BEFORE the menu by the same rule: the
+         menu's dropdown has to paint above it. -->
     <div id="panelbar"></div>
     <div id="menu" data-open="false"></div>
     <div id="palette" data-open="false"></div>
     <div id="goto" data-open="false"></div>
     <div id="whichkey" data-open="false"></div>
     <div id="viewer" data-open="false"></div>
-    <!-- La salida de un comando de extensión va JUSTO DEBAJO de los
-         diálogos, y el orden importa dos veces: pinta con un velo a pantalla
-         completa y sin `z-index` en ninguna parte, así que quien va después
-         en el DOM tapa al anterior. Declarada tras `#dialogs` cubría una
-         confirmación que seguía teniendo el teclado —y el momento lo elegía
-         el plugin, que decide cuándo contesta su comando—. -->
+    <!-- An extension command's output goes RIGHT BELOW the dialogs, and the
+         order matters twice: it paints with a full-screen veil and there's
+         no `z-index` anywhere, so whoever comes later in the DOM covers
+         whoever came before. Declared after `#dialogs` it used to cover a
+         confirmation that still held the keyboard — and the plugin chooses
+         the moment, since it decides when it answers its command. -->
     <div id="plugin-output" data-open="false"></div>
     <div id="program-output" data-open="false"></div>
-    <!-- La ayuda va la ÚLTIMA a propósito: se abre encima de lo que
-         hubiera —también encima del visor y de un diálogo— y el orden del
-         documento es lo que decide quién tapa a quién sin inventarse un
-         `z-index`. Con la ayuda antes del visor, `F1` en el visor pintaba una
-         ayuda debajo de un fondo opaco. -->
+    <!-- Help comes LAST on purpose: it opens over whatever was there —
+         including over the viewer and a dialog — and document order is what
+         decides who covers whom without inventing a `z-index`. With help
+         before the viewer, `F1` in the viewer used to paint help under an
+         opaque background. -->
     <div id="settings" data-open="false"></div>
-    <!-- Las sesiones de agente van ENTRE los ajustes y las extensiones, y no
-         es estética: el teclado se lo queda el gestor de extensiones antes
-         que este panel, y este antes que los ajustes, así que el orden del
-         DOM —que es el de pintado, porque no hay `z-index` en ninguna
-         parte— tiene que decir lo mismo. Declarado antes que `#settings`,
-         los ajustes tapaban un panel que seguía teniendo las teclas. -->
+    <!-- Agent sessions go BETWEEN settings and extensions, and it isn't
+         aesthetic: the extensions manager keeps the keyboard ahead of this
+         panel, and this one ahead of settings, so DOM order — which is
+         paint order, because there is no `z-index` anywhere — has to say
+         the same thing. Declared before `#settings`, settings used to cover
+         a panel that still held the keys. -->
     <div id="agents" data-open="false"></div>
     <div id="extensions" data-open="false"></div>
     <div id="theme" data-open="false"></div>
@@ -55,24 +55,22 @@
     <div id="search" data-open="false"></div>
     <div id="compare" data-open="false"></div>
     <div id="sync" data-open="false"></div>
-    <!-- La revisión de un plan de renombrado va aquí, casi al final: se
-         queda el teclado por encima de los selectores (columnas, temas,
-         ajustes, búsqueda…), y todos ellos pintan un fondo opaco a pantalla
-         completa. Colocada antes, la revisión recibía las teclas mientras un
-         selector la tapaba del todo — o sea que se podía aprobar un
-         renombrado desde una pantalla que el que aprueba no ve. Solo la
-         ayuda y los diálogos van por encima, y esos SÍ se quedan las
-         teclas. -->
+    <!-- A rename plan's review goes here, almost at the end: it keeps the
+         keyboard above the selectors (columns, themes, settings,
+         search…), and all of them paint an opaque full-screen background.
+         Placed earlier, the review used to receive the keys while a
+         selector covered it entirely — meaning a rename could be approved
+         from a screen the approver couldn't see. Only help and dialogs go
+         above it, and those DO hold on to the keys. -->
     <div id="ai-rename" data-open="false"></div>
     <div id="organize" data-open="false"></div>
-    <!-- Los diálogos van DESPUÉS de todos los selectores y paneles, y antes
-         solo de la ayuda: un diálogo se queda el teclado por encima de lo que
-         hubiera, así que tiene que pintarse encima. Declarados antes que
-         `#settings`, el prompt que pide el valor de un ajuste (puente 60)
-         abría DEBAJO de los ajustes: se veía el velo oscurecerse y ningún
-         campo — un diálogo con el teclado que nadie podía ver. La salida de
-         un plugin sigue antes que ellos, que es lo que aquel comentario pide.
-         -->
+    <!-- Dialogs go AFTER every selector and panel, and before only help: a
+         dialog keeps the keyboard over whatever was there, so it has to
+         paint above it. Declared before `#settings`, the prompt asking for
+         a setting's value (bridge 60) used to open BELOW settings: you'd see
+         the veil darken and no field — a dialog holding the keyboard that
+         nobody could see. A plugin's output still comes before them, which
+         is what that comment up there asks for. -->
     <div id="dialogs"></div>
     <div id="help" data-open="false"></div>
     <div id="splash" data-open="false"></div>

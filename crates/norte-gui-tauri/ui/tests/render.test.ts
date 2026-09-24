@@ -1,7 +1,7 @@
-// El pintado: virtualización, estados del listado, accesibilidad y gestos.
+// Painting: virtualization, listing states, accessibility and gestures.
 //
-// Todo con un bridge FALSO. No hace falta ni ventana ni WebKitGTK para
-// comprobar lo que este renderer promete.
+// All with a FAKE bridge. No window nor WebKitGTK is needed to check what
+// this renderer promises.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -12,7 +12,7 @@ import { Screen } from "../src/render";
 import { MARK_RULER_COLOR, OVERSCAN, markRulerImage } from "../src/render/dom";
 import { zonaDe } from "../src/render/mover";
 import { objetivoRevelado } from "../src/render/settings";
-import { catalogoReal } from "./fixtures";
+import { realCatalog } from "./fixtures";
 import { BRIDGE_VERSION } from "../src/types";
 import type {
   BrowserSlotView,
@@ -27,26 +27,26 @@ import type {
 
 const CELL_H = 20;
 
-function catalogo(): HostCatalog {
+function catalog(): HostCatalog {
   return {
-    // De la constante, NUNCA un literal: éste decía 5 durante tres bumps
-    // sin que nadie lo notara, que es la misma clase de rancio contra la
-    // que existe el resto de este fichero (#259).
+    // From the constant, NEVER a literal: this one said 5 for three bumps
+    // without anyone noticing, which is the same kind of staleness the rest
+    // of this file exists against (#259).
     bridge_version: BRIDGE_VERSION,
     instance_id: "host-1",
     locale: "es",
-    // El catálogo DE VERDAD, no dos claves inventadas: con un fixture
-    // inventado, una clave que falta se pinta igual que una que está.
-    strings: catalogoReal(),
+    // The REAL catalogue, not two made-up keys: with an invented fixture, a
+    // missing key paints the same as one that exists.
+    strings: realCatalog(),
     theme: {},
     measure: false,
   };
 }
 
-function fila(key: number, nombre: string, extra: Partial<RowView> = {}): RowView {
+function row(key: number, name: string, extra: Partial<RowView> = {}): RowView {
   return {
     key,
-    display_name: nombre,
+    display_name: name,
     hostile: false,
     kind: "file",
     selected: false,
@@ -66,7 +66,7 @@ function fila(key: number, nombre: string, extra: Partial<RowView> = {}): RowVie
   };
 }
 
-function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
+function view(browser: Partial<BrowserSlotView>): ViewSnapshot {
   return {
     connection: { state: "connected" },
     layout: {
@@ -86,7 +86,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
         path_hostile: false,
         total_rows: 2,
         first_visible: 0,
-        rows: [fila(0, "a.txt"), fila(1, "b.txt")],
+        rows: [row(0, "a.txt"), row(1, "b.txt")],
         icon_column: false,
         cursor: 0,
         marks: 0,
@@ -165,10 +165,10 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
   };
 }
 
-describe("ir a cualquier sitio (#357)", () => {
-  it("pinta cabeceras que no se eligen y filas con el cursor y su badge", () => {
-    const { screen } = montar();
-    const v = vista({});
+describe("go to anywhere (#357)", () => {
+  it("paints headers that aren't selectable and rows with the cursor and their badge", () => {
+    const { screen } = mount();
+    const v = view({});
     v.goto = {
       query: "doc",
       lines: [
@@ -180,19 +180,19 @@ describe("ir a cualquier sitio (#357)", () => {
       empty: "nada casa con eso",
     };
     screen.paint(v);
-    const cabecera = document.querySelector(".goto-header");
-    expect(cabecera?.textContent).toBe("Historia");
-    // Una cabecera no es una opción: el lector de pantalla no la ofrece.
-    expect(cabecera?.getAttribute("role")).toBe("presentation");
-    const filas = document.querySelectorAll(".goto .palette-row");
-    expect(filas.length).toBe(2);
-    expect(filas[1]?.getAttribute("aria-selected")).toBe("true");
-    expect(filas[1]?.getAttribute("data-hostile")).toBe("true");
+    const header = document.querySelector(".goto-header");
+    expect(header?.textContent).toBe("Historia");
+    // A header is not an option: the screen reader doesn't offer it.
+    expect(header?.getAttribute("role")).toBe("presentation");
+    const rows = document.querySelectorAll(".goto .palette-row");
+    expect(rows.length).toBe(2);
+    expect(rows[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(rows[1]?.getAttribute("data-hostile")).toBe("true");
   });
 
-  it("sin líneas dice que nada casa, y cerrada no deja nada", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("with no lines says nothing matches, and closed leaves nothing", () => {
+    const { screen } = mount();
+    const v = view({});
     v.goto = { query: "zzz", lines: [], cursor: null, empty: "nada casa con eso" };
     screen.paint(v);
     expect(document.querySelector(".goto .empty")?.textContent).toBe("nada casa con eso");
@@ -202,10 +202,10 @@ describe("ir a cualquier sitio (#357)", () => {
   });
 });
 
-describe("la pantalla de arranque", () => {
-  /** Una pantalla con una sección de una fila numerada. */
-  function conSplash(closeAfterMs: number | null): ViewSnapshot {
-    const v = vista({});
+describe("the splash screen", () => {
+  /** A screen with one section holding one numbered row. */
+  function withSplash(closeAfterMs: number | null): ViewSnapshot {
+    const v = view({});
     v.splash = {
       art: ["   ·   "],
       version: "0.1.0",
@@ -223,13 +223,13 @@ describe("la pantalla de arranque", () => {
     return v;
   }
 
-  it("pinta el arte, las secciones y sus filas numeradas", () => {
-    const { screen } = montar();
-    screen.paint(conSplash(null));
-    const caja = document.querySelector(".splash");
-    expect(caja).not.toBeNull();
-    // El arte NO se lee en voz alta: una brújula de barras y guiones se
-    // deletrea como ruido.
+  it("paints the art, the sections and their numbered rows", () => {
+    const { screen } = mount();
+    screen.paint(withSplash(null));
+    const box = document.querySelector(".splash");
+    expect(box).not.toBeNull();
+    // The art is NOT read aloud: a compass of bars and dashes spells out as
+    // noise.
     expect(document.querySelector(".splash-art")?.getAttribute("aria-hidden")).toBe(
       "true",
     );
@@ -240,111 +240,114 @@ describe("la pantalla de arranque", () => {
     expect(document.querySelector(".splash-label")?.textContent).toBe("casa");
   });
 
-  // La PORTADA: `brief` viene sin secciones, y entonces la pantalla de
-  // arranque deja de ser una caja centrada para ocupar el hueco entero. La
-  // señal es la misma que usa el terminal —no hay secciones—, así que las dos
-  // superficies deciden igual sin que el modo tenga que viajar por el puente.
-  it("sin secciones se pinta como portada", () => {
-    const { screen } = montar();
-    const v = conSplash(null);
+  // The COVER: `brief` comes with no sections, and then the splash screen
+  // stops being a centered box and takes up the whole slot. The signal is
+  // the same one the terminal uses — there are no sections — so both
+  // surfaces decide the same way without the mode having to travel over the
+  // bridge.
+  it("with no sections it paints as a cover", () => {
+    const { screen } = mount();
+    const v = withSplash(null);
     if (v.splash) {
       v.splash.sections = [];
     }
     screen.paint(v);
-    const caja = document.querySelector(".splash") as HTMLElement;
-    expect(caja.dataset["cover"]).toBe("true");
+    const box = document.querySelector(".splash") as HTMLElement;
+    expect(box.dataset["cover"]).toBe("true");
   });
 
-  // Y con lista sigue siendo una caja: las filas numeradas se leen y se
-  // pulsan, y sueltas sobre el fondo pierden el marco que las delimita.
-  it("con secciones sigue siendo una caja", () => {
-    const { screen } = montar();
-    screen.paint(conSplash(null));
-    const caja = document.querySelector(".splash") as HTMLElement;
-    expect(caja.dataset["cover"]).toBeUndefined();
+  // And with a list it's still a box: the numbered rows are read and
+  // pressed, and loose over the background they'd lose the frame that
+  // bounds them.
+  it("with sections it's still a box", () => {
+    const { screen } = mount();
+    screen.paint(withSplash(null));
+    const box = document.querySelector(".splash") as HTMLElement;
+    expect(box.dataset["cover"]).toBeUndefined();
   });
 
-  it("un clic en cualquier sitio la quita", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conSplash(null));
-    const raiz =
+  it("a click anywhere dismisses it", () => {
+    const { screen, sent } = mount();
+    screen.paint(withSplash(null));
+    const root =
       document.getElementById("splash") ??
       document.querySelector(".splash")?.parentElement;
-    (raiz as HTMLElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(enviadas.at(-1)).toEqual({ action: "splash_close" });
+    (root as HTMLElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "splash_close" });
   });
 
-  it("un clic en una fila numerada la abre, y no cuenta además como cierre", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conSplash(null));
-    const fila = document.querySelector(".splash-row") as HTMLElement;
-    fila.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(enviadas.at(-1)).toEqual({ action: "splash_activate_row", number: 1 });
-    // Una sola acción: el clic de la fila no burbujea hasta el velo, o el
-    // host recibiría «ábrela» y «quítala» y la navegación se perdería.
-    expect(enviadas).toHaveLength(1);
+  it("a click on a numbered row opens it, and it doesn't also count as dismissal", () => {
+    const { screen, sent } = mount();
+    screen.paint(withSplash(null));
+    const row = document.querySelector(".splash-row") as HTMLElement;
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "splash_activate_row", number: 1 });
+    // A single action: the row's click doesn't bubble up to the veil, or the
+    // host would receive "open it" and "dismiss it" and navigation would be
+    // lost.
+    expect(sent).toHaveLength(1);
   });
 
-  it("el plazo del modo breve la quita sola, sin que nadie toque nada", () => {
+  it("the brief mode's timeout dismisses it on its own, with nobody touching anything", () => {
     vi.useFakeTimers();
     try {
-      const { screen, enviadas } = montar();
-      screen.paint(conSplash(1200));
-      expect(enviadas).toHaveLength(0);
+      const { screen, sent } = mount();
+      screen.paint(withSplash(1200));
+      expect(sent).toHaveLength(0);
       vi.advanceTimersByTime(1199);
-      expect(enviadas).toHaveLength(0);
+      expect(sent).toHaveLength(0);
       vi.advanceTimersByTime(1);
-      expect(enviadas.at(-1)).toEqual({ action: "splash_close" });
+      expect(sent.at(-1)).toEqual({ action: "splash_close" });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("el plazo NO se rearma en cada repintado", () => {
+  it("the timeout does NOT re-arm on every repaint", () => {
     vi.useFakeTimers();
     try {
-      const { screen, enviadas } = montar();
-      const v = conSplash(1200);
+      const { screen, sent } = mount();
+      const v = withSplash(1200);
       screen.paint(v);
       vi.advanceTimersByTime(600);
-      // Otro parche cualquiera: el host manda la vista ENTERA cada vez, y
-      // durante el arranque no paran de llegar. Si cada pintada rearmara el
-      // plazo, «1,2 segundos» sería «1,2 segundos tras el último parche», y
-      // con una tarea en marcha la pantalla no se iría nunca.
+      // Any other patch: the host sends the WHOLE view every time, and
+      // during startup they keep arriving nonstop. If every paint re-armed
+      // the timeout, "1.2 seconds" would become "1.2 seconds after the last
+      // patch", and with a task running the screen would never leave.
       screen.paint(JSON.parse(JSON.stringify(v)) as ViewSnapshot);
       vi.advanceTimersByTime(600);
-      expect(enviadas.at(-1)).toEqual({ action: "splash_close" });
+      expect(sent.at(-1)).toEqual({ action: "splash_close" });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("al quitarse, el plazo pendiente se desarma", () => {
+  it("on dismissal, a pending timeout is disarmed", () => {
     vi.useFakeTimers();
     try {
-      const { screen, enviadas } = montar();
-      screen.paint(conSplash(1200));
-      // El host ya la quitó (una tecla): el temporizador que quedaba vivo
-      // mandaría un cierre de una pantalla que ya no está.
-      screen.paint(vista({}));
+      const { screen, sent } = mount();
+      screen.paint(withSplash(1200));
+      // The host already dismissed it (a key): a timer left alive would send
+      // a close for a screen that's no longer there.
+      screen.paint(view({}));
       vi.advanceTimersByTime(5000);
-      expect(enviadas).toHaveLength(0);
+      expect(sent).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
   });
 });
 
-describe("el panel sin el teclado se atenúa", () => {
-  // El atenuado es CSS y cuelga de `.scroller`: solo un listado conserva esa
-  // clase, y los paneles laterales la sustituyen por la suya. Por rol no se
-  // pueden distinguir —un listado sin destino que marcar se queda sin rol,
-  // igual que un lateral—, así que este invariante es lo único que impide
-  // que el registro o el propio panel de procesos se pinten apagados
-  // mientras tienen el teclado.
-  it("un panel lateral no conserva la clase del listado", () => {
-    const { screen, root } = montar();
-    const v = vista({});
+describe("a panel without the keyboard dims", () => {
+  // The dimming is CSS and hangs off `.scroller`: only a listing keeps that
+  // class, and the side panels replace it with their own. They can't be
+  // told apart by role — a listing with nothing to mark as a target is left
+  // without a role, same as a side panel — so this invariant is the only
+  // thing stopping the log or the processes panel itself from painting
+  // dimmed while they hold the keyboard.
+  it("a side panel doesn't keep the listing's class", () => {
+    const { screen, root } = mount();
+    const v = view({});
     v.slots = [...v.slots, { kind: "processes", slot_id: 7, cursor: null } as never];
     v.layout.placements = [
       ...v.layout.placements,
@@ -356,64 +359,64 @@ describe("el panel sin el teclado se atenúa", () => {
   });
 });
 
-describe("repintar sin cambios (el parpadeo al desplazarse)", () => {
-  // Cada respuesta a un scroll trae la vista ENTERA. Rehacer los nodos que no
-  // cambiaron se veía como un parpadeo sutil en WebKitGTK: lo que se pinta
-  // igual tiene que quedarse siendo el MISMO nodo.
-  it("la misma foto conserva barras, título, cabecera y filas", () => {
-    const { screen, root } = montar();
-    const v = vista({});
+describe("repainting without changes (the flicker while scrolling)", () => {
+  // Every response to a scroll carries the WHOLE view. Rebuilding the nodes
+  // that didn't change showed up as a subtle flicker in WebKitGTK: whatever
+  // paints the same has to stay being the SAME node.
+  it("the same snapshot keeps the bars, title, header and rows", () => {
+    const { screen, root } = mount();
+    const v = view({});
     screen.paint(v);
-    const antes = {
-      columna: root.querySelector(".slot-columns .col"),
-      ruta: root.querySelector(".title-path"),
-      celda: root.querySelector(".row .cell-name"),
-      paneles: document.querySelector(".panelbar"),
+    const before = {
+      column: root.querySelector(".slot-columns .col"),
+      path: root.querySelector(".title-path"),
+      cell: root.querySelector(".row .cell-name"),
+      panels: document.querySelector(".panelbar"),
       menu: document.querySelector(".menubar"),
     };
-    expect(antes.columna).not.toBeNull();
-    expect(antes.celda).not.toBeNull();
+    expect(before.column).not.toBeNull();
+    expect(before.cell).not.toBeNull();
     screen.paint(JSON.parse(JSON.stringify(v)) as ViewSnapshot);
-    expect(root.querySelector(".slot-columns .col")).toBe(antes.columna);
-    expect(root.querySelector(".title-path")).toBe(antes.ruta);
-    expect(root.querySelector(".row .cell-name")).toBe(antes.celda);
-    expect(document.querySelector(".panelbar")).toBe(antes.paneles);
-    expect(document.querySelector(".menubar")).toBe(antes.menu);
+    expect(root.querySelector(".slot-columns .col")).toBe(before.column);
+    expect(root.querySelector(".title-path")).toBe(before.path);
+    expect(root.querySelector(".row .cell-name")).toBe(before.cell);
+    expect(document.querySelector(".panelbar")).toBe(before.panels);
+    expect(document.querySelector(".menubar")).toBe(before.menu);
   });
 
-  it("pero lo que SÍ cambió se repinta", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({}));
+  it("but what DID change gets repainted", () => {
+    const { screen, root } = mount();
+    screen.paint(view({}));
     screen.paint(
-      vista({
-        rows: [fila(0, "a.txt", { marked: true }), fila(1, "c.txt")],
+      view({
+        rows: [row(0, "a.txt", { marked: true }), row(1, "c.txt")],
         path_display: "⟨file⟩/otra",
       }),
     );
-    const filas = root.querySelectorAll<HTMLElement>(".row");
-    expect(filas[0]?.dataset["marked"]).toBe("true");
+    const rows = root.querySelectorAll<HTMLElement>(".row");
+    expect(rows[0]?.dataset["marked"]).toBe("true");
     expect(root.textContent).toContain("c.txt");
     expect(root.querySelector(".title-path")?.textContent).toContain("otra");
   });
 
-  it("el aviso de espera sigue dentro del título aunque el título no se rehaga", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({}));
-    screen.paint(vista({ state: { state: "loading" } }));
+  it("the busy notice stays inside the title even when the title isn't rebuilt", () => {
+    const { screen, root } = mount();
+    screen.paint(view({}));
+    screen.paint(view({ state: { state: "loading" } }));
     const busy = root.querySelector(".slot-busy");
     expect(busy?.parentElement?.classList.contains("slot-title")).toBe(true);
     expect((busy as HTMLElement | null)?.hidden).toBe(false);
   });
 });
 
-function montar(
-  opciones: {
+function mount(
+  options: {
     imageBytes?: () => Promise<ArrayBuffer>;
     windowControl?: (verb: WindowVerb) => void;
   } = {},
 ): {
   screen: Screen;
-  enviadas: UiAction[];
+  sent: UiAction[];
   root: HTMLElement;
 } {
   document.body.replaceChildren();
@@ -466,7 +469,7 @@ function montar(
   );
   document.documentElement.style.setProperty("--cell-h", `${CELL_H}px`);
   document.documentElement.style.setProperty("--cell-w", "8px");
-  const enviadas: UiAction[] = [];
+  const sent: UiAction[] = [];
   const screen = new Screen(
     root,
     menu,
@@ -493,12 +496,12 @@ function montar(
     organize,
     splash,
     goto,
-    catalogo(),
-    (a: UiAction) => enviadas.push(a),
-    opciones.imageBytes ?? (() => Promise.resolve(new ArrayBuffer(0))),
-    opciones.windowControl,
+    catalog(),
+    (a: UiAction) => sent.push(a),
+    options.imageBytes ?? (() => Promise.resolve(new ArrayBuffer(0))),
+    options.windowControl,
   );
-  return { screen, enviadas, root };
+  return { screen, sent, root };
 }
 
 describe("Screen", () => {
@@ -509,19 +512,19 @@ describe("Screen", () => {
     });
   });
 
-  it("coloca cada hueco donde el host dijo, en píxeles de celda", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({}));
+  it("places every slot where the host said, in cell pixels", () => {
+    const { screen, root } = mount();
+    screen.paint(view({}));
     const slots = root.querySelectorAll(".slot");
     expect(slots).toHaveLength(2);
-    const primero = slots[0] as HTMLElement;
-    expect(primero.style.width).toBe(`${60 * 8}px`);
-    expect(primero.dataset["role"]).toBe("active");
+    const first = slots[0] as HTMLElement;
+    expect(first.style.width).toBe(`${60 * 8}px`);
+    expect(first.dataset["role"]).toBe("active");
   });
 
-  it("los tiradores de los bordes quedan POR ENCIMA de los huecos", () => {
-    const { screen, root } = montar();
-    const v = vista({});
+  it("the border handles stay ABOVE the slots", () => {
+    const { screen, root } = mount();
+    const v = view({});
     v.layout.placements = [
       { slot_id: 1, x: 0, y: 0, width: 60, height: 38, role: "active", focus_index: 0 },
       { slot_id: 2, x: 60, y: 0, width: 60, height: 38, role: null, focus_index: 1 },
@@ -529,31 +532,30 @@ describe("Screen", () => {
     v.slots = [v.slots[0]!, { ...(v.slots[0] as BrowserSlotView), slot_id: 2 }];
     screen.paint(v);
 
-    const tiradores = [...root.querySelectorAll(".resize-handle")];
-    expect(tiradores.length).toBeGreaterThan(0);
+    const handles = [...root.querySelectorAll(".resize-handle")];
+    expect(handles.length).toBeGreaterThan(0);
 
-    // Esta hoja de estilos no usa `z-index` en ninguna parte a propósito: el
-    // apilado lo da el ORDEN del documento. Los tiradores se insertaban ANTES
-    // que los huecos, así que cada panel —que también es `absolute`— los
-    // tapaba y el `pointerdown` no les llegaba nunca. O sea que no se podía
-    // redimensionar con el ratón.
-    const clases = Array.from(root.children).map((n) => n.className);
-    const ultimoHueco = clases.lastIndexOf("slot");
-    const primerTirador = clases.findIndex((c) => c.startsWith("resize-handle"));
-    expect(ultimoHueco).toBeGreaterThanOrEqual(0);
-    expect(primerTirador).toBeGreaterThan(ultimoHueco);
+    // This stylesheet uses `z-index` nowhere on purpose: stacking comes from
+    // document ORDER. The handles used to be inserted BEFORE the slots, so
+    // every panel — also `absolute` — covered them and `pointerdown` never
+    // reached them. Meaning you couldn't resize with the mouse.
+    const classes = Array.from(root.children).map((n) => n.className);
+    const lastSlot = classes.lastIndexOf("slot");
+    const firstHandle = classes.findIndex((c) => c.startsWith("resize-handle"));
+    expect(lastSlot).toBeGreaterThanOrEqual(0);
+    expect(firstHandle).toBeGreaterThan(lastSlot);
   });
 
-  it("marca el destino solo cuando el host dice que dice algo", () => {
-    const { screen, root } = montar();
-    // El UMBRAL lo decide Rust (`layout::target_worth_marking`) y llega en
-    // `mark_target`: contarlo aquí sería repetir en TypeScript un número que
-    // ya vive en el crate compartido, o sea la misma decisión en dos sitios.
-    // Lo que este test fija es que el renderer OBEDECE la bandera y no se
-    // inventa el rol a partir de `role`.
-    const conBandera = (marcar: boolean): ViewSnapshot => {
-      const v = vista({});
-      v.layout.mark_target = marcar;
+  it("marks the target only when the host says it says something", () => {
+    const { screen, root } = mount();
+    // The THRESHOLD is decided by Rust (`layout::target_worth_marking`) and
+    // arrives in `mark_target`: repeating it here would restate in
+    // TypeScript a number that already lives in the shared crate, i.e. the
+    // same decision in two places. What this test pins down is that the
+    // renderer OBEYS the flag and doesn't make up the role from `role`.
+    const withFlag = (mark: boolean): ViewSnapshot => {
+      const v = view({});
+      v.layout.mark_target = mark;
       v.layout.placements = [
         { slot_id: 1, x: 0, y: 0, width: 20, height: 10, role: "active", focus_index: 0 },
         { slot_id: 4, x: 0, y: 0, width: 20, height: 10, role: "target", focus_index: 1 },
@@ -561,29 +563,30 @@ describe("Screen", () => {
       return v;
     };
 
-    // El rol viaja igual —es el modelo— y aun así no se pinta: con dos
-    // listados el destino es «el otro», y una marca que sale siempre deja de
-    // leerse justo el día que hay tres y hace falta (ADR 0058 D7).
-    screen.paint(conBandera(false));
+    // The role travels the same either way — it's the model — and still
+    // doesn't get painted: with two listings the target is "the other one",
+    // and a mark that always shows up stops being readable exactly the day
+    // there are three and it's actually needed (ADR 0058 D7).
+    screen.paint(withFlag(false));
     expect(root.querySelectorAll('[data-role="target"]')).toHaveLength(0);
     expect(root.querySelectorAll('[data-role="active"]')).toHaveLength(1);
 
-    screen.paint(conBandera(true));
+    screen.paint(withFlag(true));
     expect(root.querySelectorAll('[data-role="target"]')).toHaveLength(1);
   });
 
-  it("esperando: dice el verbo, a dónde va, y marca una ruta alterada", () => {
-    const { screen, root } = montar();
-    // Un refresco: no va a ninguna parte, así que no se inventa un sitio.
-    screen.paint(vista({ state: { state: "loading", verb_key: "busy-listing" } }));
-    const aviso = root.querySelector(".slot-busy") as HTMLElement;
-    expect(aviso.hidden).toBe(false);
-    expect(aviso.querySelector(".slot-busy-target")).toBeNull();
+  it("waiting: says the verb, where it's going, and marks an altered path", () => {
+    const { screen, root } = mount();
+    // A refresh: it's not going anywhere, so no destination is made up.
+    screen.paint(view({ state: { state: "loading", verb_key: "busy-listing" } }));
+    const notice = root.querySelector(".slot-busy") as HTMLElement;
+    expect(notice.hidden).toBe(false);
+    expect(notice.querySelector(".slot-busy-target")).toBeNull();
 
-    // Yendo a un sitio, y con la ruta pintada distinta de lo que es: es la
-    // que el lector mira mientras espera.
+    // Going somewhere, with the painted path different from what it is: it's
+    // the one the reader looks at while waiting.
     screen.paint(
-      vista({
+      view({
         state: {
           state: "loading",
           verb_key: "busy-connecting",
@@ -592,23 +595,23 @@ describe("Screen", () => {
         },
       }),
     );
-    const destino = root.querySelector(".slot-busy-target");
-    expect(destino?.textContent).toBe("⟨sftp⟩casa/caf�");
+    const target = root.querySelector(".slot-busy-target");
+    expect(target?.textContent).toBe("⟨sftp⟩casa/caf�");
     expect(root.querySelector(".slot-busy .hostile-badge")).not.toBeNull();
 
-    // Con el listado ya puesto se ESCONDE, y es el MISMO nodo: su umbral es
-    // un `animation-delay`, y recrearlo lo reiniciaría en cada pintada hasta
-    // no aparecer nunca — que es justo en los casos lentos.
-    const antes = root.querySelector(".slot-busy");
-    screen.paint(vista({}));
+    // With the listing already in place it HIDES, and it's the SAME node:
+    // its threshold is an `animation-delay`, and recreating it would reset
+    // it on every paint until it never shows up — right in the slow cases.
+    const before = root.querySelector(".slot-busy");
+    screen.paint(view({}));
     expect((root.querySelector(".slot-busy") as HTMLElement).hidden).toBe(true);
-    expect(root.querySelector(".slot-busy")).toBe(antes);
+    expect(root.querySelector(".slot-busy")).toBe(before);
   });
 
-  it("apila en la cabecera todo lo que dice que el listado no es lo que parece", () => {
-    const { screen, root } = montar();
+  it("stacks in the header everything that says the listing isn't what it looks like", () => {
+    const { screen, root } = mount();
     screen.paint(
-      vista({
+      view({
         filling_note: "cargando… (3)",
         skipped_note: "⚠ 2 entradas omitidas",
         names_note: "nombres: cp866",
@@ -617,15 +620,15 @@ describe("Screen", () => {
         marked_note: "2 marcadas, 4,0 kB",
       }),
     );
-    const notas = Array.from(
+    const notes = Array.from(
       root.querySelectorAll(
         ".slot-filling, .slot-skipped, .slot-names, .slot-pruned, .slot-hidden, .slot-marked",
       ),
     );
-    expect(notas).toHaveLength(6);
-    // Cada una en SU nodo: pegadas en uno solo, un lector de pantalla lee una
-    // frase sola y el recorte se las lleva todas juntas.
-    expect(notas.map((n) => n.className)).toEqual([
+    expect(notes).toHaveLength(6);
+    // Each in ITS OWN node: glued into one, a screen reader reads a single
+    // sentence and truncation takes them all together.
+    expect(notes.map((n) => n.className)).toEqual([
       "slot-filling",
       "slot-skipped",
       "slot-names",
@@ -633,66 +636,64 @@ describe("Screen", () => {
       "slot-hidden",
       "slot-marked",
     ]);
-    // El ORDEN es la decisión: los AVISOS antes que el CONTADOR de marcas. El
-    // sitio se acaba, y un aviso recortado deja de avisar mientras que un
-    // contador recortado solo deja de contar.
-    expect(notas[notas.length - 1]?.className).toBe("slot-marked");
+    // The ORDER is the decision: WARNINGS before the mark COUNTER. Space
+    // runs out, and a truncated warning stops warning while a truncated
+    // counter merely stops counting.
+    expect(notes[notes.length - 1]?.className).toBe("slot-marked");
   });
 
-  it("no pinta cien mil filas para enseñar cuarenta", () => {
-    const { screen, root } = montar();
-    const rows = Array.from({ length: 40 }, (_, i) =>
-      fila(1000 + i, `f${String(i)}.txt`),
-    );
-    screen.paint(vista({ total_rows: 100_000, first_visible: 1000, rows }));
+  it("doesn't paint a hundred thousand rows to show forty", () => {
+    const { screen, root } = mount();
+    const rows = Array.from({ length: 40 }, (_, i) => row(1000 + i, `f${String(i)}.txt`));
+    screen.paint(view({ total_rows: 100_000, first_visible: 1000, rows }));
     expect(root.querySelectorAll(".row")).toHaveLength(40);
     const canvas = root.querySelector(".canvas") as HTMLElement;
-    // El alto SÍ es el del directorio entero: la barra de scroll no miente.
+    // The height IS the whole directory's: the scrollbar doesn't lie.
     expect(canvas.style.height).toBe(`${100_000 * CELL_H}px`);
-    const primera = root.querySelector(".row") as HTMLElement;
-    expect(primera.style.top).toBe(`${1000 * CELL_H}px`);
-    expect(primera.getAttribute("aria-rowindex")).toBe("1001");
+    const first = root.querySelector(".row") as HTMLElement;
+    expect(first.style.top).toBe(`${1000 * CELL_H}px`);
+    expect(first.getAttribute("aria-rowindex")).toBe("1001");
   });
 
-  it("un nombre hostil se MARCA, jamás se esconde", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({ rows: [fila(0, "caf�.txt", { hostile: true })] }));
+  it("a hostile name gets MARKED, never hidden", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ rows: [row(0, "caf�.txt", { hostile: true })] }));
     const name = root.querySelector(".cell-name") as HTMLElement;
     expect(name.classList.contains("hostile")).toBe(true);
     expect(name.textContent).toContain("caf�.txt");
   });
 
-  it("un nombre con HTML dentro es TEXTO, no marcado", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({ rows: [fila(0, "<img src=x onerror=alert(1)>")] }));
+  it("a name with HTML inside is TEXT, not markup", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ rows: [row(0, "<img src=x onerror=alert(1)>")] }));
     const name = root.querySelector(".cell-name") as HTMLElement;
     expect(name.querySelector("img")).toBeNull();
     expect(name.textContent).toBe("<img src=x onerror=alert(1)>");
   });
 
-  it("el tema colorea el nombre de una entrada", () => {
-    const { screen, root } = montar();
+  it("the theme colors an entry's name", () => {
+    const { screen, root } = mount();
     screen.paint(
-      vista({
-        rows: [fila(0, "src", { kind: "dir", name_color: "#4daafc", name_bold: true })],
+      view({
+        rows: [row(0, "src", { kind: "dir", name_color: "#4daafc", name_bold: true })],
       }),
     );
     const name = root.querySelector(".cell-name") as HTMLElement;
-    // El navegador normaliza a rgb(): se compara lo que de verdad computa.
+    // The browser normalizes to rgb(): what's actually computed is compared.
     expect(name.style.color).toBe("rgb(77, 170, 252)");
     expect(name.style.fontWeight).toBe("bold");
   });
 
-  it("bajo el CURSOR manda el color de la selección, no el del fichero", () => {
-    // Réplica del terminal, donde `highlight_style` pisa el estilo del item
-    // cuando el tema da primer plano a `selection` — y los diez presets se lo
-    // dan. Sin esto, un directorio azul oscuro sobre el #04395e de
-    // vscode-dark sería ilegible justo en la fila que se está mirando.
-    const { screen, root } = montar();
+  it("under the CURSOR the selection's color wins, not the file's", () => {
+    // Mirrors the terminal, where `highlight_style` overrides the item's
+    // style when the theme gives `selection` a foreground — and all ten
+    // presets do. Without this, a dark blue directory over vscode-dark's
+    // #04395e would be illegible in exactly the row being looked at.
+    const { screen, root } = mount();
     screen.paint(
-      vista({
+      view({
         rows: [
-          fila(0, "src", {
+          row(0, "src", {
             kind: "dir",
             selected: true,
             name_color: "#4daafc",
@@ -703,19 +704,19 @@ describe("Screen", () => {
     );
     const name = root.querySelector(".cell-name") as HTMLElement;
     expect(name.style.color).toBe("");
-    // La negrita SÍ se conserva: dice qué ES la entrada, no de qué color, y
-    // no compite con el fondo de la selección.
+    // Bold IS kept: it says what the entry IS, not what color, and it
+    // doesn't compete with the selection's background.
     expect(name.style.fontWeight).toBe("bold");
   });
 
-  it("los atributos del tema llegan, no solo el color", () => {
-    // `retro-crt` atenúa zip/tar/gz con `dim = true`: llevando solo `fg`
-    // salían apagados en el terminal y a plena luz aquí.
-    const { screen, root } = montar();
+  it("the theme's attributes come through, not just the color", () => {
+    // `retro-crt` dims zip/tar/gz with `dim = true`: carrying only `fg` they
+    // came out dim in the terminal and at full brightness here.
+    const { screen, root } = mount();
     screen.paint(
-      vista({
+      view({
         rows: [
-          fila(0, "backup.zip", {
+          row(0, "backup.zip", {
             name_color: "#d75f5f",
             name_dim: true,
             name_italic: true,
@@ -730,68 +731,69 @@ describe("Screen", () => {
     expect(name.style.textDecoration).toBe("underline");
   });
 
-  it("el icono lleva el color de su entrada (ADR 0105)", () => {
-    // Un icono dice qué ES la fila, no en qué estado está: sigue al color de
-    // su nombre, como en el terminal.
-    const { screen, root } = montar();
+  it("the icon carries its entry's color (ADR 0105)", () => {
+    // An icon says what the row IS, not what state it's in: it follows its
+    // name's color, same as the terminal.
+    const { screen, root } = mount();
     screen.paint(
-      vista({
+      view({
         icon_column: true,
-        rows: [fila(0, "src", { kind: "dir", icon: "📁", name_color: "#4daafc" })],
+        rows: [row(0, "src", { kind: "dir", icon: "📁", name_color: "#4daafc" })],
       }),
     );
-    const icono = root.querySelector(".cell-icon") as HTMLElement;
-    expect(icono.style.color).toBe("rgb(77, 170, 252)");
+    const icon = root.querySelector(".cell-icon") as HTMLElement;
+    expect(icon.style.color).toBe("rgb(77, 170, 252)");
   });
 
-  it("un tema que no dice nada de una entrada no le pone color", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({ rows: [fila(0, "notas.txt")] }));
+  it("a theme that says nothing about an entry gives it no color", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ rows: [row(0, "notas.txt")] }));
     const name = root.querySelector(".cell-name") as HTMLElement;
     expect(name.style.color).toBe("");
     expect(name.style.fontWeight).toBe("");
   });
 
-  it("la regla de marcas se pinta con marcas y se quita sin ellas (ADR 0135)", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({ marks: 3, mark_ruler: [0, 1, 128] }));
+  it("the mark ruler paints with marks and clears without them (ADR 0135)", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ marks: 3, mark_ruler: [0, 1, 128] }));
     const grid = root.querySelector(".scroller") as HTMLElement;
     expect(grid.dataset["ruler"]).toBe("true");
-    const regla = grid.style.getPropertyValue("--mark-ruler");
-    // Los tramos 0 y 1 son UNA banda; el 128, otra, a mitad del listado.
+    const ruler = grid.style.getPropertyValue("--mark-ruler");
+    // Stretches 0 and 1 are ONE band; 128 is another, halfway down the
+    // listing.
     const c = MARK_RULER_COLOR;
-    expect(regla).toContain(`${c} 0%`);
-    expect(regla).toContain(`${c} 0.7813%`);
-    expect(regla).toContain(`${c} 50%`);
-    screen.paint(vista({ marks: 0, mark_ruler: [] }));
+    expect(ruler).toContain(`${c} 0%`);
+    expect(ruler).toContain(`${c} 0.7813%`);
+    expect(ruler).toContain(`${c} 50%`);
+    screen.paint(view({ marks: 0, mark_ruler: [] }));
     expect(grid.dataset["ruler"]).toBeUndefined();
     expect(grid.style.getPropertyValue("--mark-ruler")).toBe("");
   });
 
-  it("markRulerImage: rachas en una banda, nada sin tramos", () => {
+  it("markRulerImage: runs within a band, nothing with no stretches", () => {
     expect(markRulerImage([], 256)).toBe("");
     expect(markRulerImage([3], 0)).toBe("");
     const img = markRulerImage([2, 3, 4, 10], 20);
     expect(img.startsWith("linear-gradient(to bottom, transparent 0%")).toBe(true);
-    // [2..=4] va de 10% a 25%; [10] de 50% a 55%.
+    // [2..=4] runs from 10% to 25%; [10] from 50% to 55%.
     const c = MARK_RULER_COLOR;
     expect(img).toContain(`${c} 10%, ${c} 25%`);
     expect(img).toContain(`${c} 50%, ${c} 55%`);
     expect(img.match(/transparent/g)).toHaveLength(5);
   });
 
-  it("un listado vacío lo dice", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({ total_rows: 0, rows: [], cursor: null }));
+  it("an empty listing says so", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ total_rows: 0, rows: [], cursor: null }));
     expect(root.querySelector(".empty")?.textContent).toBe("vacío");
   });
 
-  it("cargando se anuncia, y un fallo se cuenta con su motivo", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({ state: { state: "loading" } }));
+  it("loading is announced, and a failure is reported with its reason", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ state: { state: "loading" } }));
     expect(root.querySelector(".scroller")?.getAttribute("aria-busy")).toBe("true");
     screen.paint(
-      vista({
+      view({
         state: { state: "error", reason_key: "listing-failed", detail: "EACCES" },
       }),
     );
@@ -800,56 +802,56 @@ describe("Screen", () => {
     expect(err.textContent).toContain("EACCES");
   });
 
-  it("las filas llevan roles y estado para el lector de pantalla", () => {
-    const { screen, root } = montar();
-    screen.paint(
-      vista({ rows: [fila(0, "a.txt", { selected: true }), fila(1, "b.txt")] }),
-    );
+  it("rows carry roles and state for the screen reader", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ rows: [row(0, "a.txt", { selected: true }), row(1, "b.txt")] }));
     const grid = root.querySelector(".scroller") as HTMLElement;
     expect(grid.getAttribute("role")).toBe("grid");
     expect(grid.getAttribute("aria-rowcount")).toBe("2");
-    const seleccionada = root.querySelector('.row[aria-selected="true"]') as HTMLElement;
-    expect(grid.getAttribute("aria-activedescendant")).toBe(seleccionada.id);
+    const selected = root.querySelector('.row[aria-selected="true"]') as HTMLElement;
+    expect(grid.getAttribute("aria-activedescendant")).toBe(selected.id);
   });
 
-  it("el parche del cursor, que muta `selected` en su sitio, se repinta", () => {
-    // La fila se salta por IDENTIDAD si nada cambió; el cursor es lo único
-    // que la sesión cambia sin sustituir la fila, y no puede perderse.
-    const { screen, root } = montar();
-    const v = vista({ rows: [fila(0, "a.txt", { selected: true }), fila(1, "b.txt")] });
+  it("the cursor patch, which mutates `selected` in place, gets repainted", () => {
+    // A row is skipped by IDENTITY if nothing changed; the cursor is the one
+    // thing the session changes without replacing the row, and it can't be
+    // lost.
+    const { screen, root } = mount();
+    const v = view({ rows: [row(0, "a.txt", { selected: true }), row(1, "b.txt")] });
     screen.paint(v);
     const slot = v.slots[0];
     if (slot?.kind !== "browser") {
-      throw new Error("se esperaba un listado");
+      throw new Error("expected a listing");
     }
     const [a, b] = slot.rows;
     if (a === undefined || b === undefined) {
-      throw new Error("se esperaban dos filas");
+      throw new Error("expected two rows");
     }
     a.selected = false;
     b.selected = true;
     slot.cursor = 1;
     screen.paint(v);
-    const filas = root.querySelectorAll(".row");
-    expect(filas[0]?.getAttribute("aria-selected")).toBe("false");
-    expect(filas[1]?.getAttribute("aria-selected")).toBe("true");
+    const rows = root.querySelectorAll(".row");
+    expect(rows[0]?.getAttribute("aria-selected")).toBe("false");
+    expect(rows[1]?.getAttribute("aria-selected")).toBe("true");
   });
 
-  it("un click señala la fila; dos seguidos sobre la misma la abren", () => {
-    const { screen, enviadas, root } = montar();
-    screen.paint(vista({}));
-    const fila1 = root.querySelectorAll(".row")[1] as HTMLElement;
-    fila1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    expect(enviadas.at(-1)).toEqual({
+  it("a click marks the row; two in a row on the same one open it", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(view({}));
+    const row1 = root.querySelectorAll(".row")[1] as HTMLElement;
+    row1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(sent.at(-1)).toEqual({
       action: "select_row",
       slot_id: 1,
       key: 1,
       generation: 1,
     });
-    // El SEGUNDO `mousedown` sobre la misma fila: se cuenta aquí, sin
-    // esperar al evento `dblclick` del motor — que es lo que fallaba.
-    fila1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    expect(enviadas.at(-1)).toEqual({
+    // The SECOND `mousedown` on the same row: it counts here, without
+    // waiting for the engine's `dblclick` event — which is what used to
+    // fail.
+    row1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(sent.at(-1)).toEqual({
       action: "activate",
       slot_id: 1,
       key: 1,
@@ -857,75 +859,75 @@ describe("Screen", () => {
     });
   });
 
-  it("los botones laterales del ratón son atrás y adelante en la historia", () => {
-    // Spec 2026-09-15 D1: la convención de escritorio. Se escuchan en
-    // `mouseup` y se cancelan, para que el webview no los tome por navegación
-    // de la PÁGINA.
-    const { screen, enviadas, root } = montar();
-    screen.paint(vista({}));
-    const fila = root.querySelectorAll(".row")[0] as HTMLElement;
-    const atras = new MouseEvent("mouseup", {
+  it("the mouse's side buttons are back and forward in history", () => {
+    // Spec 2026-09-15 D1: the desktop convention. Listened for on `mouseup`
+    // and cancelled, so the webview doesn't mistake them for PAGE
+    // navigation.
+    const { screen, sent, root } = mount();
+    screen.paint(view({}));
+    const row = root.querySelectorAll(".row")[0] as HTMLElement;
+    const back = new MouseEvent("mouseup", {
       bubbles: true,
       cancelable: true,
       button: 3,
     });
-    fila.dispatchEvent(atras);
-    expect(enviadas.at(-1)).toEqual({ action: "history", slot_id: 1, back: true });
-    expect(atras.defaultPrevented).toBe(true);
-    fila.dispatchEvent(
+    row.dispatchEvent(back);
+    expect(sent.at(-1)).toEqual({ action: "history", slot_id: 1, back: true });
+    expect(back.defaultPrevented).toBe(true);
+    row.dispatchEvent(
       new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 4 }),
     );
-    expect(enviadas.at(-1)).toEqual({ action: "history", slot_id: 1, back: false });
-    // El botón principal no toca el rastro.
-    const antes = enviadas.length;
-    fila.dispatchEvent(
+    expect(sent.at(-1)).toEqual({ action: "history", slot_id: 1, back: false });
+    // The main button doesn't touch the trail.
+    const before = sent.length;
+    row.dispatchEvent(
       new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }),
     );
-    expect(enviadas).toHaveLength(antes);
+    expect(sent).toHaveLength(before);
   });
 
-  it("dos clics en filas DISTINTAS no abren nada, y el tercero de una ráfaga tampoco", () => {
-    const { screen, enviadas, root } = montar();
-    screen.paint(vista({ rows: [fila(0, "a.txt"), fila(1, "b.txt")] }));
-    const filas = root.querySelectorAll(".row");
-    (filas[0] as HTMLElement).dispatchEvent(
+  it("two clicks on DIFFERENT rows open nothing, and neither does a burst's third", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(view({ rows: [row(0, "a.txt"), row(1, "b.txt")] }));
+    const rows = root.querySelectorAll(".row");
+    (rows[0] as HTMLElement).dispatchEvent(
       new MouseEvent("mousedown", { bubbles: true }),
     );
-    (filas[1] as HTMLElement).dispatchEvent(
+    (rows[1] as HTMLElement).dispatchEvent(
       new MouseEvent("mousedown", { bubbles: true }),
     );
-    expect(enviadas.some((a) => a.action === "activate")).toBe(false);
-    // Dos sobre la misma: abre UNA vez.
-    (filas[1] as HTMLElement).dispatchEvent(
+    expect(sent.some((a) => a.action === "activate")).toBe(false);
+    // Two on the same one: opens ONCE.
+    (rows[1] as HTMLElement).dispatchEvent(
       new MouseEvent("mousedown", { bubbles: true }),
     );
-    (filas[1] as HTMLElement).dispatchEvent(
+    (rows[1] as HTMLElement).dispatchEvent(
       new MouseEvent("mousedown", { bubbles: true }),
     );
-    expect(enviadas.filter((a) => a.action === "activate")).toHaveLength(1);
+    expect(sent.filter((a) => a.action === "activate")).toHaveLength(1);
   });
 
-  it("dos clics separados en el tiempo son dos clics, no un doble", () => {
-    const { screen, enviadas, root } = montar();
-    screen.paint(vista({}));
-    const fila1 = root.querySelectorAll(".row")[1] as HTMLElement;
-    const reloj = vi.spyOn(Date, "now");
-    reloj.mockReturnValue(1_000);
-    fila1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    reloj.mockReturnValue(1_000 + 900);
-    fila1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    reloj.mockRestore();
-    expect(enviadas.some((a) => a.action === "activate")).toBe(false);
+  it("two clicks apart in time are two clicks, not a double", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(view({}));
+    const row1 = root.querySelectorAll(".row")[1] as HTMLElement;
+    const clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(1_000);
+    row1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    clock.mockReturnValue(1_000 + 900);
+    row1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    clock.mockRestore();
+    expect(sent.some((a) => a.action === "activate")).toBe(false);
   });
 
-  it("shift+click manda UN rango: quién entra en él lo decide el host", () => {
-    const { screen, enviadas, root } = montar();
+  it("shift+click sends ONE range: who's in it is the host's call", () => {
+    const { screen, sent, root } = mount();
     screen.paint(
-      vista({ rows: [fila(0, "a", { selected: true }), fila(1, "b"), fila(2, "c")] }),
+      view({ rows: [row(0, "a", { selected: true }), row(1, "b"), row(2, "c")] }),
     );
-    const tercera = root.querySelectorAll(".row")[2] as HTMLElement;
-    tercera.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, shiftKey: true }));
-    expect(enviadas.at(-1)).toEqual({
+    const third = root.querySelectorAll(".row")[2] as HTMLElement;
+    third.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, shiftKey: true }));
+    expect(sent.at(-1)).toEqual({
       action: "mark_range",
       slot_id: 1,
       from: 0,
@@ -934,12 +936,12 @@ describe("Screen", () => {
     });
   });
 
-  it("ctrl+click marca una sola", () => {
-    const { screen, enviadas, root } = montar();
-    screen.paint(vista({}));
-    const fila0 = root.querySelector(".row") as HTMLElement;
-    fila0.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, ctrlKey: true }));
-    expect(enviadas.at(-1)).toEqual({
+  it("ctrl+click marks just one", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(view({}));
+    const row0 = root.querySelector(".row") as HTMLElement;
+    row0.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, ctrlKey: true }));
+    expect(sent.at(-1)).toEqual({
       action: "toggle_mark",
       slot_id: 1,
       key: 0,
@@ -947,59 +949,59 @@ describe("Screen", () => {
     });
   });
 
-  it("el scroll no cruza: cruza QUÉ filas hacen falta", () => {
-    const { screen, enviadas, root } = montar();
-    screen.paint(vista({ total_rows: 10_000 }));
+  it("scrolling doesn't cross a threshold: it crosses WHICH rows are needed", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(view({ total_rows: 10_000 }));
     const scroller = root.querySelector(".scroller") as HTMLElement;
     Object.defineProperty(scroller, "scrollTop", { value: 400, configurable: true });
     Object.defineProperty(scroller, "clientHeight", { value: 200, configurable: true });
     scroller.dispatchEvent(new Event("scroll"));
-    const ultima = enviadas.at(-1);
-    expect(ultima?.action).toBe("set_visible_range");
-    if (ultima?.action === "set_visible_range") {
-      // 400/20 = fila 20 arriba y 200/20 = 10 visibles, con el margen por
-      // cada lado. De la constante: con el 8 escrito aquí, subir el margen
-      // rompía el test sin que el comportamiento cambiara.
-      expect(ultima.first).toBe(Math.max(0, 20 - OVERSCAN));
-      expect(ultima.count).toBe(10 + OVERSCAN * 2);
+    const last = sent.at(-1);
+    expect(last?.action).toBe("set_visible_range");
+    if (last?.action === "set_visible_range") {
+      // 400/20 = row 20 at the top and 200/20 = 10 visible, plus the margin
+      // on each side. From the constant: with the 8 written here, raising
+      // the margin broke the test without the behavior changing.
+      expect(last.first).toBe(Math.max(0, 20 - OVERSCAN));
+      expect(last.count).toBe(10 + OVERSCAN * 2);
     }
   });
 
-  it("la barra de estado se anuncia sin robar el foco", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({}));
+  it("the status bar is announced without stealing focus", () => {
+    const { screen, root } = mount();
+    screen.paint(view({}));
     const status = root.querySelectorAll(".slot")[1]?.querySelector(".statusbar");
     expect(status?.getAttribute("aria-live")).toBe("polite");
     expect(status?.textContent).toContain("2 entradas");
   });
 
-  it("una orden que el host rechaza en la frontera se ve en la barra de estado", () => {
-    // Una acción que no deserializa muere en `dispatch`, antes de que el
-    // host la vea: nadie salvo el renderer puede decirlo. Así estuvo la
-    // barra de paneles entera, con el error solo en la consola.
-    const { screen, root } = montar();
-    screen.paint(vista({}));
-    const barra = () => root.querySelectorAll(".slot")[1]?.querySelector(".statusbar");
+  it("a command the host rejects at the boundary shows up in the status bar", () => {
+    // An action that fails to deserialize dies in `dispatch`, before the
+    // host ever sees it: nobody but the renderer can say so. That's how the
+    // whole panel bar was, with the error only in the console.
+    const { screen, root } = mount();
+    screen.paint(view({}));
+    const bar = () => root.querySelectorAll(".slot")[1]?.querySelector(".statusbar");
     screen.rejected(
       { action: "panel_bar_activate", button: 1 },
       new Error("unknown variant"),
     );
-    expect(barra()?.textContent).toContain("panel_bar_activate");
-    expect(barra()?.querySelector(".banner.rejected")).not.toBeNull();
-    // Sigue viéndose en el siguiente repintado del host: el aviso es local.
-    screen.paint(vista({}));
-    expect(barra()?.textContent).toContain("panel_bar_activate");
-    // La primera orden aceptada lo retira.
+    expect(bar()?.textContent).toContain("panel_bar_activate");
+    expect(bar()?.querySelector(".banner.rejected")).not.toBeNull();
+    // Still visible on the host's next repaint: the notice is local.
+    screen.paint(view({}));
+    expect(bar()?.textContent).toContain("panel_bar_activate");
+    // The first accepted command withdraws it.
     expect(screen.accepted()).toBe(true);
     expect(screen.accepted()).toBe(false);
-    screen.paint(vista({}));
-    expect(barra()?.textContent).not.toContain("panel_bar_activate");
-    expect(barra()?.textContent).toContain("2 entradas");
+    screen.paint(view({}));
+    expect(bar()?.textContent).not.toContain("panel_bar_activate");
+    expect(bar()?.textContent).toContain("2 entradas");
   });
 
-  it("un diálogo es modal, tiene nombre y dice cuál respuesta destruye", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("a dialog is modal, has a name and says which answer destroys", () => {
+    const { screen } = mount();
+    const v = view({});
     v.dialogs = [
       {
         id: 3,
@@ -1023,13 +1025,13 @@ describe("Screen", () => {
     const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
     expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(dialog.getAttribute("aria-labelledby")).toBeTruthy();
-    const destructivo = dialog.querySelector('button[data-destructive="true"]');
-    expect(destructivo).not.toBeNull();
+    const destructive = dialog.querySelector('button[data-destructive="true"]');
+    expect(destructive).not.toBeNull();
   });
 
-  it("un formulario pinta sus campos y cada uno manda SU id", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+  it("a form paints its fields and each one sends ITS id", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     v.dialogs = [
       {
         id: 7,
@@ -1081,69 +1083,70 @@ describe("Screen", () => {
     ];
     screen.paint(v);
     const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
-    const textos = dialog.querySelectorAll<HTMLInputElement>('input[type="text"]');
-    expect(textos.length).toBe(2);
-    expect(textos[0]?.value).toBe("*.rs");
+    const texts = dialog.querySelectorAll<HTMLInputElement>('input[type="text"]');
+    expect(texts.length).toBe(2);
+    expect(texts[0]?.value).toBe("*.rs");
     expect(dialog.querySelectorAll('input[type="checkbox"]').length).toBe(1);
 
-    // Teclear en el SEGUNDO campo manda el id del segundo, no el del primero:
-    // es la razón de que los campos se nombren por id y no por posición.
-    const segundo = textos[1];
-    expect(segundo).toBeDefined();
-    if (segundo !== undefined) {
-      segundo.value = "1M";
-      segundo.dispatchEvent(new Event("input"));
+    // Typing in the SECOND field sends the second one's id, not the first's:
+    // that's why fields are named by id and not by position.
+    const second = texts[1];
+    expect(second).toBeDefined();
+    if (second !== undefined) {
+      second.value = "1M";
+      second.dispatchEvent(new Event("input"));
     }
-    expect(enviadas.at(-1)).toEqual({
+    expect(sent.at(-1)).toEqual({
       action: "dialog_field",
       id: 7,
       field: "min-size",
       value: { set: "text", text: "1M" },
     });
 
-    // Un interruptor dice que se TOCÓ y no a qué estado va: el destino lo
-    // decide el host, para que dos pulsaciones rápidas no se pisen.
-    const casilla = dialog.querySelector<HTMLInputElement>('input[type="checkbox"]');
-    casilla?.dispatchEvent(new Event("change"));
-    expect(enviadas.at(-1)).toEqual({
+    // A toggle says it was TOUCHED, not which state it's going to: the host
+    // decides the destination, so two quick presses don't step on each
+    // other.
+    const checkbox = dialog.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    checkbox?.dispatchEvent(new Event("change"));
+    expect(sent.at(-1)).toEqual({
       action: "dialog_field",
       id: 7,
       field: "recursive",
       value: { set: "toggled" },
     });
 
-    // Y el ciclo, que es un botón.
-    const boton = dialog.querySelector<HTMLButtonElement>('button[data-campo="kinds"]');
-    boton?.click();
-    expect(enviadas.at(-1)).toEqual({
+    // And the cycle, which is a button.
+    const button = dialog.querySelector<HTMLButtonElement>('button[data-campo="kinds"]');
+    button?.click();
+    expect(sent.at(-1)).toEqual({
       action: "dialog_field",
       id: 7,
       field: "kinds",
       value: { set: "cycled" },
     });
 
-    // **Un repintado NO re-siembra un campo de texto.**
+    // **A repaint does NOT reseed a text field.**
     //
-    // Lo que manda el host es su PROYECCIÓN —enmascarada y acotada—, así que
-    // sembrarla de vuelta haría que la siguiente tecla la devolviera como si
-    // fuera lo tecleado: un `U+FFFD` de pantalla acabaría siendo el patrón que
-    // se busca. El nodo se reutiliza, que es lo que ya hace el diálogo de un
-    // solo campo.
-    const antes = dialog.querySelector<HTMLInputElement>('input[data-campo="name"]');
-    expect(antes).not.toBeNull();
-    if (antes !== null) {
-      antes.value = "a medio escribir";
+    // What the host sends is its PROJECTION — masked and bounded — so
+    // seeding it back would make the next keystroke return it as if it were
+    // what was typed: an on-screen `U+FFFD` would end up being the pattern
+    // being searched for. The node gets reused, which is what the
+    // single-field dialog already does.
+    const before = dialog.querySelector<HTMLInputElement>('input[data-campo="name"]');
+    expect(before).not.toBeNull();
+    if (before !== null) {
+      before.value = "a medio escribir";
     }
-    const v2 = vista({});
+    const v2 = view({});
     v2.dialogs = v.dialogs;
     screen.paint(v2);
-    const despues = document.querySelector<HTMLInputElement>('input[data-campo="name"]');
-    expect(despues).toBe(antes);
-    expect(despues?.value).toBe("a medio escribir");
+    const after = document.querySelector<HTMLInputElement>('input[data-campo="name"]');
+    expect(after).toBe(before);
+    expect(after?.value).toBe("a medio escribir");
   });
 
-  it("un destino a medio comprobar lo DICE, y sus avisos salen antes de los botones", () => {
-    const { screen } = montar();
+  it("a half-checked destination SAYS SO, and its warnings come out before the buttons", () => {
+    const { screen } = mount();
     const base = {
       id: 4,
       title_key: "modal-copy-title",
@@ -1162,17 +1165,18 @@ describe("Screen", () => {
       input_secret: false,
     };
 
-    // Mientras se pregunta se DICE. Sin esta línea la ausencia de la de #164
-    // se leería como «este destino confina», que es una afirmación.
-    const preguntando = vista({});
-    preguntando.dialogs = [{ ...base, dest_check: { state: "checking" } }];
-    screen.paint(preguntando);
+    // While it's being checked, it SAYS SO. Without this line, the absence
+    // of #164's would read as "this destination confines", which is an
+    // assertion.
+    const checking = view({});
+    checking.dialogs = [{ ...base, dest_check: { state: "checking" } }];
+    screen.paint(checking);
     expect(document.querySelector(".dialog-checking")).not.toBeNull();
     expect(document.querySelectorAll(".dialog-warning")).toHaveLength(0);
 
-    // Contestado y con avisos: uno por línea, cada uno como alerta.
-    const conAvisos = vista({});
-    conAvisos.dialogs = [
+    // Answered and with warnings: one per line, each one as an alert.
+    const withWarnings = view({});
+    withWarnings.dialogs = [
       {
         ...base,
         dest_check: {
@@ -1181,34 +1185,35 @@ describe("Screen", () => {
         },
       },
     ];
-    screen.paint(conAvisos);
-    const avisos = Array.from(document.querySelectorAll(".dialog-warning"));
-    expect(avisos).toHaveLength(2);
-    const primero = avisos[0] as HTMLElement;
-    expect(primero.textContent).toBe("no cabe");
-    expect(primero.getAttribute("role")).toBe("alert");
+    screen.paint(withWarnings);
+    const warnings = Array.from(document.querySelectorAll(".dialog-warning"));
+    expect(warnings).toHaveLength(2);
+    const first = warnings[0] as HTMLElement;
+    expect(first.textContent).toBe("no cabe");
+    expect(first.getAttribute("role")).toBe("alert");
     expect(document.querySelector(".dialog-checking")).toBeNull();
-    // Y ANTES de los botones: un aviso que aterrizara debajo movería lo que
-    // hay bajo el puntero de quien ya iba a pulsar.
-    const dialogo = document.querySelector('[role="dialog"]') as HTMLElement;
-    const clases = Array.from(dialogo.children).map((n) => n.className);
-    const ultimoAviso = clases.lastIndexOf("dialog-warning");
-    const botones = clases.indexOf("choices");
-    expect(ultimoAviso).toBeGreaterThanOrEqual(0);
-    expect(botones).toBeGreaterThan(ultimoAviso);
+    // And BEFORE the buttons: a warning landing below would move whatever's
+    // under the pointer of someone who was already about to click.
+    const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
+    const classes = Array.from(dialog.children).map((n) => n.className);
+    const lastWarning = classes.lastIndexOf("dialog-warning");
+    const buttons = classes.indexOf("choices");
+    expect(lastWarning).toBeGreaterThanOrEqual(0);
+    expect(buttons).toBeGreaterThan(lastWarning);
 
-    // Contestado y limpio: ni una línea. Que quepa y que confine no se
-    // anuncian — una línea en cada copia enseña a saltarse la línea.
-    const limpio = vista({});
-    limpio.dialogs = [{ ...base, dest_check: { state: "done", warnings: [] } }];
-    screen.paint(limpio);
+    // Answered and clean: not a single line. That it fits and that it
+    // confines aren't announced — a line for each would teach people to
+    // skip the line.
+    const clean = view({});
+    clean.dialogs = [{ ...base, dest_check: { state: "done", warnings: [] } }];
+    screen.paint(clean);
     expect(document.querySelectorAll(".dialog-warning")).toHaveLength(0);
     expect(document.querySelector(".dialog-checking")).toBeNull();
   });
 
-  it("responder un diálogo manda su id, no una posición", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+  it("answering a dialog sends its id, not a position", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     v.dialogs = [
       {
         id: 7,
@@ -1226,33 +1231,33 @@ describe("Screen", () => {
       },
     ];
     screen.paint(v);
-    const boton = document.querySelector(".choices button") as HTMLButtonElement;
-    boton.click();
-    expect(enviadas.at(-1)).toEqual({ action: "dialog", id: 7, choice: "cancel" });
+    const button = document.querySelector(".choices button") as HTMLButtonElement;
+    button.click();
+    expect(sent.at(-1)).toEqual({ action: "dialog", id: 7, choice: "cancel" });
   });
 });
 
-describe("la cabecera", () => {
-  it("pinta las etiquetas que vinieron de Rust y marca la que ordena", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({}));
+describe("the header", () => {
+  it("paints the labels that came from Rust and marks the one sorting", () => {
+    const { screen, root } = mount();
+    screen.paint(view({}));
     const cols = root.querySelectorAll(".slot-columns .col");
     expect([...cols].map((c) => c.textContent)).toEqual(["Nombre▲", "Tamaño"]);
     expect(cols[0]?.getAttribute("aria-sort")).toBe("ascending");
     expect(cols[1]?.getAttribute("aria-sort")).toBe("none");
   });
 
-  it("un click en la cabecera manda el ID de la columna, no su posición", () => {
-    const { screen, enviadas, root } = montar();
-    screen.paint(vista({}));
+  it("a click on the header sends the column's ID, not its position", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(view({}));
     const size = root.querySelectorAll(".slot-columns .col")[1] as HTMLElement;
     size.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    expect(enviadas.at(-1)).toEqual({ action: "sort_by", slot_id: 1, column: "size" });
+    expect(sent.at(-1)).toEqual({ action: "sort_by", slot_id: 1, column: "size" });
   });
 
-  it("una columna que no ordena no ofrece el gesto", () => {
-    const { screen, enviadas, root } = montar();
-    const v = vista({});
+  it("a column that doesn't sort doesn't offer the gesture", () => {
+    const { screen, sent, root } = mount();
+    const v = view({});
     const slot = v.slots[0];
     if (slot?.kind === "browser") {
       slot.columns = [
@@ -1269,39 +1274,39 @@ describe("la cabecera", () => {
     screen.paint(v);
     const col = root.querySelector(".slot-columns .col") as HTMLElement;
     col.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    expect(enviadas.some((a) => a.action === "sort_by")).toBe(false);
+    expect(sent.some((a) => a.action === "sort_by")).toBe(false);
   });
 
-  it("un ancho fijo se declara en la raíz del hueco y las celdas lo leen", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({ rows: [fila(1, "a.txt")] }));
-    const hueco = root.querySelector(".slot") as HTMLElement;
-    // `size` viene con 9 celdas y a la derecha; `name` no lleva variable.
-    expect(hueco.style.getPropertyValue("--colw-size")).toBe("calc(var(--cell-w) * 9)");
-    expect(hueco.style.getPropertyValue("--colw-size-align")).toBe("right");
-    expect(hueco.style.getPropertyValue("--colw-name")).toBe("");
-    const celda = root.querySelector(".row .cell") as HTMLElement;
-    expect(celda.style.width).toBe("var(--colw-size, auto)");
-    // El nombre no tiene tirador; el tamaño sí.
+  it("a fixed width is declared on the slot's root and the cells read it", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ rows: [row(1, "a.txt")] }));
+    const slot = root.querySelector(".slot") as HTMLElement;
+    // `size` comes with 9 cells and right-aligned; `name` carries no variable.
+    expect(slot.style.getPropertyValue("--colw-size")).toBe("calc(var(--cell-w) * 9)");
+    expect(slot.style.getPropertyValue("--colw-size-align")).toBe("right");
+    expect(slot.style.getPropertyValue("--colw-name")).toBe("");
+    const cell = root.querySelector(".row .cell") as HTMLElement;
+    expect(cell.style.width).toBe("var(--colw-size, auto)");
+    // The name has no grip; the size does.
     const cols = root.querySelectorAll(".slot-columns .col");
     expect(cols[0]?.querySelector(".col-grip")).toBeNull();
     expect(cols[1]?.querySelector(".col-grip")).not.toBeNull();
   });
 
-  it("arrastrar el tirador manda el ancho en CELDAS al soltar, y no ordena", () => {
-    const { screen, enviadas, root } = montar();
+  it("dragging the grip sends the width in CELLS on release, and doesn't sort", () => {
+    const { screen, sent, root } = mount();
     document.documentElement.style.setProperty("--cell-w", "8px");
-    screen.paint(vista({}));
+    screen.paint(view({}));
     const grip = root.querySelector(".col-grip") as HTMLElement;
     grip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
-    expect(enviadas.some((a) => a.action === "sort_by")).toBe(false);
+    expect(sent.some((a) => a.action === "sort_by")).toBe(false);
     document.dispatchEvent(new MouseEvent("mousemove", { clientX: 140 }));
-    // Mientras se arrastra, solo cambia la variable: ningún envío.
-    const hueco = root.querySelector(".slot") as HTMLElement;
-    expect(hueco.style.getPropertyValue("--colw-size")).toBe("40px");
-    expect(enviadas.some((a) => a.action === "resize_column")).toBe(false);
+    // While dragging, only the variable changes: no dispatch.
+    const slot = root.querySelector(".slot") as HTMLElement;
+    expect(slot.style.getPropertyValue("--colw-size")).toBe("40px");
+    expect(sent.some((a) => a.action === "resize_column")).toBe(false);
     document.dispatchEvent(new MouseEvent("mouseup"));
-    expect(enviadas.at(-1)).toEqual({
+    expect(sent.at(-1)).toEqual({
       action: "resize_column",
       slot_id: 1,
       column: "size",
@@ -1310,79 +1315,79 @@ describe("la cabecera", () => {
   });
 });
 
-describe("las migas, el indicador de espacio y el toast", () => {
-  it("cada tramo de la ruta es un botón que navega a su profundidad, salvo el actual", () => {
-    const { screen, enviadas, root } = montar();
+describe("breadcrumbs, the space indicator and the toast", () => {
+  it("every path segment is a button that navigates to its depth, except the current one", () => {
+    const { screen, sent, root } = mount();
     screen.paint(
-      vista({
+      view({
         path_segments: ["⟨file⟩", "home", "oscar"],
         path_display: "⟨file⟩/home/oscar",
       }),
     );
-    const migas = root.querySelectorAll(".title-path .crumb");
-    expect([...migas].map((m) => m.textContent)).toEqual(["⟨file⟩", "home", "oscar"]);
-    expect((migas[2] as HTMLButtonElement).disabled).toBe(true);
-    // Solo la raíz lleva la marca que la atenúa (spec 2026-09-21, fase D).
-    expect([...migas].map((m) => (m as HTMLElement).dataset["root"])).toEqual([
+    const crumbs = root.querySelectorAll(".title-path .crumb");
+    expect([...crumbs].map((m) => m.textContent)).toEqual(["⟨file⟩", "home", "oscar"]);
+    expect((crumbs[2] as HTMLButtonElement).disabled).toBe(true);
+    // Only the root carries the mark that dims it (spec 2026-09-21, phase D).
+    expect([...crumbs].map((m) => (m as HTMLElement).dataset["root"])).toEqual([
       "true",
       "false",
       "false",
     ]);
-    (migas[1] as HTMLButtonElement).click();
-    expect(enviadas.at(-1)).toEqual({
+    (crumbs[1] as HTMLButtonElement).click();
+    expect(sent.at(-1)).toEqual({
       action: "breadcrumb_activate",
       slot_id: 1,
       depth: 1,
       generation: 1,
     });
-    // La ruta entera sigue disponible de una pieza.
+    // The whole path is still available as one piece.
     expect(root.querySelector(".title-path")?.getAttribute("title")).toBe(
       "⟨file⟩/home/oscar",
     );
   });
 
-  it("sin migas, la ruta va como texto, igual que antes", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({}));
+  it("with no crumbs, the path goes as text, same as before", () => {
+    const { screen, root } = mount();
+    screen.paint(view({}));
     expect(root.querySelector(".title-path")?.textContent).toBe("⟨file⟩/casa");
     expect(root.querySelector(".crumb")).toBeNull();
   });
 
-  it("el pie lleva el indicador solo con dato, y dice su nivel", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({ footer: "2 ficheros", used_ratio: 0.92 }));
+  it("the footer carries the gauge only with data, and states its level", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ footer: "2 ficheros", used_ratio: 0.92 }));
     const gauge = root.querySelector(".slot-footer .slot-gauge") as HTMLElement;
     expect(gauge.getAttribute("aria-valuenow")).toBe("92");
     expect(gauge.dataset["level"]).toBe("critical");
     expect((gauge.firstElementChild as HTMLElement).style.width).toBe("92%");
-    screen.paint(vista({ footer: "2 ficheros", used_ratio: null }));
+    screen.paint(view({ footer: "2 ficheros", used_ratio: null }));
     expect(root.querySelector(".slot-gauge")).toBeNull();
   });
 
-  it("el mensaje efímero va en su nodo de toast", () => {
-    const { screen, root } = montar();
-    screen.paint(vista({}));
+  it("the ephemeral message goes in its own toast node", () => {
+    const { screen, root } = mount();
+    screen.paint(view({}));
     expect(root.querySelector(".statusbar .status-message")?.textContent).toBe(
       "2 entradas",
     );
   });
 });
 
-describe("la casilla de marca", () => {
-  it("cada fila lleva la casilla, dice si está marcada, y pulsarla alterna la marca", () => {
-    const { screen, enviadas, root } = montar();
-    screen.paint(vista({ rows: [fila(1, "a.txt"), fila(2, "b.txt", { marked: true })] }));
-    const casillas = root.querySelectorAll(".row .row-check");
-    expect([...casillas].map((c) => c.textContent)).toEqual(["☐", "☑"]);
-    casillas[0]?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    expect(enviadas.at(-1)).toMatchObject({ action: "toggle_mark", slot_id: 1, key: 1 });
+describe("the mark checkbox", () => {
+  it("every row carries the checkbox, says if it's marked, and pressing it toggles the mark", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(view({ rows: [row(1, "a.txt"), row(2, "b.txt", { marked: true })] }));
+    const checks = root.querySelectorAll(".row .row-check");
+    expect([...checks].map((c) => c.textContent)).toEqual(["☐", "☑"]);
+    checks[0]?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(sent.at(-1)).toMatchObject({ action: "toggle_mark", slot_id: 1, key: 1 });
   });
 });
 
-describe("el visor", () => {
-  it("tapa la pantalla y dice con qué encoding está leyendo", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+describe("the viewer", () => {
+  it("covers the screen and says which encoding it's reading with", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     v.viewer = {
       path_display: "⟨file⟩/casa/notas.txt",
       path_hostile: false,
@@ -1409,15 +1414,15 @@ describe("el visor", () => {
     expect(doc.getAttribute("aria-label")).toContain("notas.txt");
     expect(doc.querySelector(".viewer-body")?.textContent).toBe("primera\nsegunda");
     expect(doc.querySelector(".viewer-meta")?.textContent).toContain("UTF-8");
-    // Quien pinta declara el tamaño del cuerpo: filas Y columnas (puente
-    // 53), que es lo que el previewer recibe la próxima vez.
-    expect(enviadas.some((a) => a.action === "set_viewer_rows")).toBe(true);
-    expect(enviadas.some((a) => a.action === "set_viewer_cols")).toBe(true);
+    // Whoever paints declares the body's size: rows AND columns (bridge 53),
+    // which is what the previewer receives next time.
+    expect(sent.some((a) => a.action === "set_viewer_rows")).toBe(true);
+    expect(sent.some((a) => a.action === "set_viewer_cols")).toBe(true);
   });
 
-  it("dice que hay más a lo ancho, y la rueda lo mueve", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+  it("says there's more sideways, and the wheel moves it", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     const base = {
       path_display: "⟨file⟩/casa/pagina.html",
       path_hostile: false,
@@ -1438,41 +1443,42 @@ describe("el visor", () => {
       styled: [],
     };
 
-    // Cabe a lo ancho: ninguna barra que arrastrar.
+    // It fits sideways: no bar to drag.
     v.viewer = { ...base, total_cols: 0, first_col: 0 };
     screen.paint(v);
     expect(document.querySelector(".viewer-bar-h")).toBe(null);
 
-    // No cabe: barra, y con la posición dentro.
+    // It doesn't fit: bar, with the position inside it.
     v.viewer = { ...base, total_cols: 800, first_col: 400 };
     screen.paint(v);
-    const barra = document.querySelector(".viewer-bar-h") as HTMLElement;
-    expect(barra).not.toBe(null);
-    // La barra es un INDICADOR y va `aria-hidden`: `role="scrollbar"` promete
-    // un control que no existe. La posición se lee en las marcas de la
-    // cabecera, con palabras, que es lo que llega a quien no la ve.
-    expect(barra.getAttribute("aria-hidden")).toBe("true");
+    const bar = document.querySelector(".viewer-bar-h") as HTMLElement;
+    expect(bar).not.toBe(null);
+    // The bar is an INDICATOR and gets `aria-hidden`: `role="scrollbar"`
+    // promises a control that doesn't exist. The position is read from the
+    // header's marks, in words, which is what reaches someone who can't see
+    // it.
+    expect(bar.getAttribute("aria-hidden")).toBe("true");
     expect(document.querySelector(".viewer-meta")?.textContent).toContain("401/800");
 
-    // Y la rueda desplaza por el HOST: con `shift`, de lado.
-    const caja = document.querySelector(".viewer") as HTMLElement;
-    caja.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
-    const abajo = enviadas.find((a) => a.action === "viewer_scroll");
-    expect(abajo).toBeDefined();
-    expect(abajo?.action === "viewer_scroll" && abajo.lines > 0).toBe(true);
-    expect(abajo?.action === "viewer_scroll" && abajo.cols === 0).toBe(true);
+    // And the wheel scrolls through the HOST: with `shift`, sideways.
+    const box = document.querySelector(".viewer") as HTMLElement;
+    box.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+    const down = sent.find((a) => a.action === "viewer_scroll");
+    expect(down).toBeDefined();
+    expect(down?.action === "viewer_scroll" && down.lines > 0).toBe(true);
+    expect(down?.action === "viewer_scroll" && down.cols === 0).toBe(true);
 
-    caja.dispatchEvent(
+    box.dispatchEvent(
       new WheelEvent("wheel", { deltaY: 120, shiftKey: true, bubbles: true }),
     );
-    const lado = enviadas.filter((a) => a.action === "viewer_scroll").at(-1);
-    expect(lado?.action === "viewer_scroll" && lado.lines === 0).toBe(true);
-    expect(lado?.action === "viewer_scroll" && lado.cols > 0).toBe(true);
+    const sideways = sent.filter((a) => a.action === "viewer_scroll").at(-1);
+    expect(sideways?.action === "viewer_scroll" && sideways.lines === 0).toBe(true);
+    expect(sideways?.action === "viewer_scroll" && sideways.cols > 0).toBe(true);
   });
 
-  it("un parche que no toca el visor no lo reconstruye", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("a patch that doesn't touch the viewer doesn't rebuild it", () => {
+    const { screen } = mount();
+    const v = view({});
     v.viewer = {
       path_display: "⟨file⟩/casa/largo.txt",
       path_hostile: false,
@@ -1495,23 +1501,23 @@ describe("el visor", () => {
       styled: [],
     };
     screen.paint(v);
-    const antes = document.querySelector(".viewer");
-    expect(antes).not.toBe(null);
-    // Otra cosa cambia —el estado, como hace una tarea al avanzar— y el
-    // visor es el mismo objeto: su DOM se queda.
+    const before = document.querySelector(".viewer");
+    expect(before).not.toBe(null);
+    // Something else changes — the state, like a task does as it progresses
+    // — and the viewer is the same object: its DOM stays.
     v.status = { ...v.status, message: "copiando" };
     screen.paint(v);
-    expect(document.querySelector(".viewer")).toBe(antes);
-    // DESPLAZARSE (un visor nuevo del mismo fichero) cambia el cuerpo y las
-    // marcas en su sitio: la caja y la cabecera se quedan.
-    const cabecera = document.querySelector(".viewer-head");
+    expect(document.querySelector(".viewer")).toBe(before);
+    // SCROLLING (a new viewer for the same file) changes the body and the
+    // marks in place: the box and the header stay.
+    const head = document.querySelector(".viewer-head");
     v.viewer = { ...v.viewer, first_line: 1, lines: ["b", "c"] };
     screen.paint(v);
-    expect(document.querySelector(".viewer")).toBe(antes);
-    expect(document.querySelector(".viewer-head")).toBe(cabecera);
+    expect(document.querySelector(".viewer")).toBe(before);
+    expect(document.querySelector(".viewer-head")).toBe(head);
     expect(document.querySelector(".viewer-body")?.textContent).toBe("b\nc");
     expect(document.querySelector(".viewer-meta")?.textContent).toContain("2/3");
-    // A lo ancho aparece la barra horizontal, una sola, y se mueve.
+    // Sideways, the horizontal bar appears, just one, and it moves.
     v.viewer = { ...v.viewer, total_cols: 800, first_col: 0 };
     screen.paint(v);
     v.viewer = { ...v.viewer, first_col: 400 };
@@ -1519,27 +1525,27 @@ describe("el visor", () => {
     expect(document.querySelectorAll(".viewer-bar-h")).toHaveLength(1);
     expect(document.querySelector(".viewer-meta")?.textContent).toContain("401/800");
     v.viewer = { ...v.viewer, total_cols: 0, first_col: 0 };
-    // Otro FICHERO rehace la caja entera.
+    // Another FILE rebuilds the whole box.
     v.viewer = { ...v.viewer, path_display: "⟨file⟩/casa/otro.txt" };
     screen.paint(v);
-    expect(document.querySelector(".viewer")).not.toBe(antes);
+    expect(document.querySelector(".viewer")).not.toBe(before);
     expect(document.querySelector(".viewer")?.getAttribute("aria-label")).toContain(
       "otro.txt",
     );
     expect(document.querySelector(".viewer-bar-h")).toBe(null);
-    // Cerrarlo y reabrir el MISMO objeto lo vuelve a pintar.
-    const mismo = v.viewer;
+    // Closing it and reopening the SAME object paints it again.
+    const same = v.viewer;
     v.viewer = null;
     screen.paint(v);
     expect(document.querySelector(".viewer")).toBe(null);
-    v.viewer = mismo;
+    v.viewer = same;
     screen.paint(v);
     expect(document.querySelector(".viewer-body")?.textContent).toBe("b\nc");
   });
 
-  it("un binario se pinta como hexadecimal y lo dice", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("a binary paints as hexadecimal and says so", () => {
+    const { screen } = mount();
+    const v = view({});
     v.viewer = {
       path_display: "⟨file⟩/casa/raro.bin",
       path_hostile: false,
@@ -1568,9 +1574,9 @@ describe("el visor", () => {
     expect(document.querySelector(".viewer-meta")?.textContent).toContain("hex");
   });
 
-  it("una preview de plugin se pinta por fragmentos, con su rol o su color", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("a plugin preview paints in fragments, with its role or its color", () => {
+    const { screen } = mount();
+    const v = view({});
     v.viewer = {
       path_display: "⟨file⟩/casa/main.rs",
       path_hostile: false,
@@ -1600,35 +1606,36 @@ describe("el visor", () => {
     };
     screen.paint(v);
     const body = document.querySelector(".viewer-body") as HTMLElement;
-    const lineas = body.querySelectorAll(".viewer-line");
-    expect(lineas.length).toBe(2);
-    const spans = (lineas[0] as Element).querySelectorAll<HTMLElement>(".viewer-span");
+    const lines = body.querySelectorAll(".viewer-line");
+    expect(lines.length).toBe(2);
+    const spans = (lines[0] as Element).querySelectorAll<HTMLElement>(".viewer-span");
     expect(spans.length).toBe(2);
     const fn_ = spans[0] as HTMLElement;
     const main = spans[1] as HTMLElement;
     expect(fn_.textContent).toBe("fn");
-    // El rol manda: va en `data-role` y el color fijo del plugin NO se aplica.
+    // The role wins: it goes in `data-role` and the plugin's fixed color is
+    // NOT applied.
     expect(fn_.dataset["role"]).toBe("title");
     expect(fn_.style.color).toBe("");
-    // Sin rol, el color propio del plugin sí.
+    // With no role, the plugin's own color does apply.
     expect(main.dataset["role"]).toBeUndefined();
     expect(main.style.color).toBe("rgb(0, 128, 255)");
-    // Y el fondo, cuando viene (puente 50).
+    // And the background, when it comes (bridge 50).
     expect(main.style.backgroundColor).toBe("rgb(0, 255, 0)");
     expect(fn_.style.backgroundColor).toBe("");
-    // El texto sigue siendo TEXTO.
+    // The text is still TEXT.
     expect(body.textContent).toBe("fn mainplano");
   });
 
-  it("sin visor abierto, no hay nada que tape la pantalla", () => {
-    const { screen } = montar();
-    screen.paint(vista({}));
+  it("with no viewer open, there's nothing covering the screen", () => {
+    const { screen } = mount();
+    screen.paint(view({}));
     expect(document.querySelector('[role="document"]')).toBeNull();
   });
 
-  it("el contenido de un fichero es TEXTO, nunca marcado", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("a file's content is TEXT, never markup", () => {
+    const { screen } = mount();
+    const v = view({});
     v.viewer = {
       path_display: "x",
       path_hostile: false,
@@ -1657,36 +1664,36 @@ describe("el visor", () => {
   });
 });
 
-describe("la generación", () => {
-  it("viaja con cada gesto de fila, y es la que se PINTÓ", () => {
-    const { screen, enviadas, root } = montar();
-    const v = vista({ generation: 7 });
+describe("the generation", () => {
+  it("travels with every row gesture, and it's the one that was PAINTED", () => {
+    const { screen, sent, root } = mount();
+    const v = view({ generation: 7 });
     screen.paint(v);
-    const fila = root.querySelector(".row") as HTMLElement;
-    fila.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    const accion = enviadas.at(-1);
-    expect(accion?.action).toBe("select_row");
-    if (accion?.action === "select_row") {
-      expect(accion.generation).toBe(7);
+    const row = root.querySelector(".row") as HTMLElement;
+    row.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    const action = sent.at(-1);
+    expect(action?.action).toBe("select_row");
+    if (action?.action === "select_row") {
+      expect(action.generation).toBe(7);
     }
   });
 
-  it("se actualiza al repintar: un gesto posterior lleva la nueva", () => {
-    const { screen, enviadas, root } = montar();
-    screen.paint(vista({ generation: 7 }));
-    screen.paint(vista({ generation: 8 }));
-    const fila = root.querySelector(".row") as HTMLElement;
-    fila.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    const accion = enviadas.at(-1);
-    if (accion?.action === "select_row") {
-      expect(accion.generation).toBe(8);
+  it("updates on repaint: a later gesture carries the new one", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(view({ generation: 7 }));
+    screen.paint(view({ generation: 8 }));
+    const row = root.querySelector(".row") as HTMLElement;
+    row.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    const action = sent.at(-1);
+    if (action?.action === "select_row") {
+      expect(action.generation).toBe(8);
     }
   });
 });
 
-describe("el campo de texto de un diálogo", () => {
-  function conDialogo(input: string, hostile: boolean) {
-    const v = vista({});
+describe("a dialog's text field", () => {
+  function withDialog(input: string, hostile: boolean) {
+    const v = view({});
     v.dialogs = [
       {
         id: 9,
@@ -1706,127 +1713,128 @@ describe("el campo de texto de un diálogo", () => {
     return v;
   }
 
-  // El campo VIVO, reconsultado del DOM.
+  // The LIVE field, re-queried from the DOM.
   //
-  // Capturarlo una vez no vale: el diálogo se repinta con
-  // `replaceChildren`, así que la referencia vieja queda desconectada y una
-  // aserción sobre ella pasa mientras el campo de la pantalla está vacío.
-  // Eso es exactamente lo que tapó que cada tecla vaciaba el campo.
-  function campoVivo(): HTMLInputElement {
+  // Capturing it once doesn't work: the dialog repaints with
+  // `replaceChildren`, so the old reference is left disconnected and an
+  // assertion on it passes while the field on screen is empty. That's
+  // exactly what hid every key emptying the field.
+  function liveField(): HTMLInputElement {
     const input = document.querySelector(".dialog input");
     expect(input).not.toBeNull();
     expect(input?.isConnected).toBe(true);
     return input as HTMLInputElement;
   }
 
-  it("no se pisa en cada repintado: lo tecleado manda", () => {
-    const { screen } = montar();
-    screen.paint(conDialogo("", false));
-    // El usuario escribe; el host contesta con SU proyección.
-    campoVivo().value = "carpeta nueva";
-    screen.paint(conDialogo("carpeta nu…", false));
-    expect(campoVivo().value).toBe("carpeta nueva");
+  it("doesn't get overwritten on every repaint: what was typed wins", () => {
+    const { screen } = mount();
+    screen.paint(withDialog("", false));
+    // The user types; the host answers with ITS projection.
+    liveField().value = "carpeta nueva";
+    screen.paint(withDialog("carpeta nu…", false));
+    expect(liveField().value).toBe("carpeta nueva");
   });
 
-  it("sobrevive a una tecla por parche, que es como se teclea de verdad", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conDialogo("", false));
-    // Cada tecla provoca un `dialog_input` y el host contesta con un parche,
-    // o sea un repintado. Se teclea letra a letra, como una persona.
-    const nombre = "informe";
-    for (let i = 1; i <= nombre.length; i += 1) {
-      const campo = campoVivo();
-      campo.value = nombre.slice(0, i);
-      campo.dispatchEvent(new Event("input", { bubbles: true }));
-      screen.paint(conDialogo(nombre.slice(0, i), false));
+  it("survives one key per patch, which is how typing really happens", () => {
+    const { screen, sent } = mount();
+    screen.paint(withDialog("", false));
+    // Every key triggers a `dialog_input` and the host answers with a patch,
+    // i.e. a repaint. It's typed letter by letter, like a person.
+    const name = "informe";
+    for (let i = 1; i <= name.length; i += 1) {
+      const field = liveField();
+      field.value = name.slice(0, i);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      screen.paint(withDialog(name.slice(0, i), false));
     }
-    expect(campoVivo().value).toBe("informe");
-    const ultima = enviadas.at(-1);
-    expect(ultima?.action).toBe("dialog_input");
-    if (ultima?.action === "dialog_input") {
-      expect(ultima.text).toBe("informe");
+    expect(liveField().value).toBe("informe");
+    const last = sent.at(-1);
+    expect(last?.action).toBe("dialog_input");
+    if (last?.action === "dialog_input") {
+      expect(last.text).toBe("informe");
     }
   });
 
-  it("el campo conserva el FOCO a través del parche que provoca cada tecla", () => {
-    // Reusar el nodo no bastaba: la caja se rehace y el campo se mueve a la
-    // nueva, y mover un nodo lo saca del documento un instante — ahí perdía
-    // el foco. Borrar un número en «Tamaño de letra» dejaba el campo sin
-    // foco y la siguiente tecla se iba al host como un acorde.
-    const { screen } = montar();
-    screen.paint(conDialogo("10", false));
-    const campo = campoVivo();
-    campo.focus();
-    expect(document.activeElement).toBe(campo);
-    campo.value = "1";
-    campo.dispatchEvent(new Event("input", { bubbles: true }));
-    screen.paint(conDialogo("1", false));
-    expect(campoVivo()).toBe(campo);
-    expect(document.activeElement).toBe(campo);
+  it("the field keeps FOCUS across the patch each key triggers", () => {
+    // Reusing the node wasn't enough: the box gets rebuilt and the field
+    // moves to the new one, and moving a node takes it out of the document
+    // for an instant — that's where it lost focus. Deleting a digit in
+    // "Font size" left the field unfocused and the next key went to the
+    // host as a chord.
+    const { screen } = mount();
+    screen.paint(withDialog("10", false));
+    const field = liveField();
+    field.focus();
+    expect(document.activeElement).toBe(field);
+    field.value = "1";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    screen.paint(withDialog("1", false));
+    expect(liveField()).toBe(field);
+    expect(document.activeElement).toBe(field);
   });
 
-  it("una contraseña se pinta como contraseña y no se resiembra con los puntos", () => {
-    const { screen, enviadas } = montar();
-    const v = conDialogo("", false);
+  it("a password paints as a password and doesn't get reseeded with dots", () => {
+    const { screen, sent } = mount();
+    const v = withDialog("", false);
     v.dialogs[0]!.title_key = "modal-ask-secret-title";
     v.dialogs[0]!.input_secret = true;
     screen.paint(v);
 
-    const campo = campoVivo();
-    expect(campo.type).toBe("password");
-    // Ni el gestor de contraseñas del navegador lo ofrece ni lo guarda: esto
-    // es para ESTA sesión, que es lo que el cuerpo del diálogo promete.
-    // `new-password` y no `off`: Chromium y WebView2 IGNORAN `off` en un campo
-    // de contraseña a propósito, y este es el valor que sí respetan.
-    expect(campo.autocomplete).toBe("new-password");
+    const field = liveField();
+    expect(field.type).toBe("password");
+    // Neither the browser's password manager offers it nor saves it: this is
+    // for THIS session, which is what the dialog's body promises.
+    // `new-password` and not `off`: Chromium and WebView2 IGNORE `off` on a
+    // password field on purpose, and this is the value they do respect.
+    expect(field.autocomplete).toBe("new-password");
 
-    campo.value = "s3cr3t";
-    campo.dispatchEvent(new Event("input", { bubbles: true }));
+    field.value = "s3cr3t";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
 
-    // Teclear NO manda nada: por `dialog_input` cruzarían `s`, `s3`, `s3c`… y
-    // cada prefijo se quedaría en un trozo de heap que nadie pisa.
-    expect(enviadas.some((a) => a.action === "dialog_input")).toBe(false);
+    // Typing sends NOTHING: through `dialog_input` `s`, `s3`, `s3c`… would
+    // cross, and every prefix would sit in a chunk of heap nobody overwrites.
+    expect(sent.some((a) => a.action === "dialog_input")).toBe(false);
 
-    // Y un repintado no resiembra el campo: hacerlo convertiría la contraseña
-    // del usuario en lo que mandara el host.
+    // And a repaint doesn't reseed the field: doing so would turn the user's
+    // password into whatever the host sent.
     screen.paint(v);
-    expect(campoVivo().value).toBe("s3cr3t");
+    expect(liveField().value).toBe("s3cr3t");
 
-    // Cruza UNA vez, con la respuesta.
-    const boton = document.querySelector(".dialog .choices button");
-    (boton as HTMLButtonElement).click();
-    const ultima = enviadas.at(-1);
-    expect(ultima?.action).toBe("dialog");
-    if (ultima?.action === "dialog") {
-      expect(ultima.choice).toBe("confirm");
-      expect(ultima.secret).toBe("s3cr3t");
+    // It crosses ONCE, with the answer.
+    const button = document.querySelector(".dialog .choices button");
+    (button as HTMLButtonElement).click();
+    const last = sent.at(-1);
+    expect(last?.action).toBe("dialog");
+    if (last?.action === "dialog") {
+      expect(last.choice).toBe("confirm");
+      expect(last.secret).toBe("s3cr3t");
     }
   });
 
-  it("Enter dentro del campo de contraseña confirma y lleva el valor", () => {
-    const { screen, enviadas } = montar();
-    const v = conDialogo("", false);
+  it("Enter inside the password field confirms and carries the value", () => {
+    const { screen, sent } = mount();
+    const v = withDialog("", false);
     v.dialogs[0]!.title_key = "modal-ask-secret-title";
     v.dialogs[0]!.input_secret = true;
     screen.paint(v);
 
-    const campo = campoVivo();
-    campo.value = "s3cr3t";
-    campo.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const field = liveField();
+    field.value = "s3cr3t";
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
-    // Sin esto, Enter salía al host como el acorde `dialog.confirm` — que
-    // sobre un diálogo de contraseña no lleva nada y por tanto es inerte—,
-    // así que la forma más natural de contestar no habría hecho nada.
-    const ultima = enviadas.at(-1);
-    expect(ultima?.action).toBe("dialog");
-    if (ultima?.action === "dialog") {
-      expect(ultima.secret).toBe("s3cr3t");
+    // Without this, Enter went out to the host as the `dialog.confirm`
+    // chord — which over a password dialog carries nothing and so is inert
+    // — so the most natural way to answer would have done nothing.
+    const last = sent.at(-1);
+    expect(last?.action).toBe("dialog");
+    if (last?.action === "dialog") {
+      expect(last.secret).toBe("s3cr3t");
     }
   });
 
-  it("cancelar no lleva la contraseña", () => {
-    const { screen, enviadas } = montar();
-    const v = conDialogo("", false);
+  it("cancelling doesn't carry the password", () => {
+    const { screen, sent } = mount();
+    const v = withDialog("", false);
     v.dialogs[0]!.title_key = "modal-ask-secret-title";
     v.dialogs[0]!.input_secret = true;
     v.dialogs[0]!.choices = [
@@ -1834,48 +1842,48 @@ describe("el campo de texto de un diálogo", () => {
       { id: "cancel", label_key: "dialog-cancel", destructive: false },
     ];
     screen.paint(v);
-    campoVivo().value = "s3cr3t";
+    liveField().value = "s3cr3t";
 
-    const botones = document.querySelectorAll(".dialog .choices button");
-    (botones[1] as HTMLButtonElement).click();
-    const ultima = enviadas.at(-1);
-    expect(ultima?.action).toBe("dialog");
-    if (ultima?.action === "dialog") {
-      expect(ultima.choice).toBe("cancel");
-      expect(ultima.secret).toBeUndefined();
+    const buttons = document.querySelectorAll(".dialog .choices button");
+    (buttons[1] as HTMLButtonElement).click();
+    const last = sent.at(-1);
+    expect(last?.action).toBe("dialog");
+    if (last?.action === "dialog") {
+      expect(last.choice).toBe("cancel");
+      expect(last.secret).toBeUndefined();
     }
   });
 
-  it("los bytes hostiles que se teclean llegan enteros, y se avisa", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conDialogo("", true));
-    // `rtl_override` del corpus: lo que se apruebe tiene que ser lo que se
-    // teclea, no una reconstrucción de ello.
-    const hostil = "fact\u202Egpj.exe";
-    const campo = campoVivo();
-    campo.value = hostil;
-    campo.dispatchEvent(new Event("input", { bubbles: true }));
-    // El host contesta con su proyección: enmascarada y distinta.
-    screen.paint(conDialogo("fact\uFFFDgpj.exe", true));
-    expect(campoVivo().value).toBe(hostil);
-    const ultima = enviadas.at(-1);
-    if (ultima?.action === "dialog_input") {
-      expect(ultima.text).toBe(hostil);
+  it("hostile bytes that get typed arrive whole, and a warning shows", () => {
+    const { screen, sent } = mount();
+    screen.paint(withDialog("", true));
+    // `rtl_override` from the corpus: what gets approved has to be what was
+    // typed, not a reconstruction of it.
+    const hostile = "fact\u202Egpj.exe";
+    const field = liveField();
+    field.value = hostile;
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    // The host answers with its projection: masked and different.
+    screen.paint(withDialog("fact\uFFFDgpj.exe", true));
+    expect(liveField().value).toBe(hostile);
+    const last = sent.at(-1);
+    if (last?.action === "dialog_input") {
+      expect(last.text).toBe(hostile);
     }
     expect(document.querySelector('.dialog [role="alert"]')).not.toBeNull();
   });
 
-  it("un nombre que se pinta distinto de lo que es lo DICE", () => {
-    const { screen } = montar();
-    screen.paint(conDialogo("caf\ufffde.txt", true));
-    const aviso = document.querySelector('.dialog [role="alert"]');
-    expect(aviso).not.toBeNull();
+  it("a name that paints differently from what it is SAYS SO", () => {
+    const { screen } = mount();
+    screen.paint(withDialog("caf\ufffde.txt", true));
+    const notice = document.querySelector('.dialog [role="alert"]');
+    expect(notice).not.toBeNull();
   });
 });
 
-describe("la imagen del visor", () => {
-  function conImagen(image: ViewSnapshot["viewer"]): ViewSnapshot {
-    const v = vista({});
+describe("the viewer's image", () => {
+  function withImage(image: ViewSnapshot["viewer"]): ViewSnapshot {
+    const v = view({});
     v.viewer = image;
     return v;
   }
@@ -1899,41 +1907,41 @@ describe("la imagen del visor", () => {
     styled: [],
   };
 
-  it("pide los bytes APARTE y los pinta como blob", async () => {
+  it("requests the bytes SEPARATELY and paints them as a blob", async () => {
     const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
-    const { screen } = montar({ imageBytes: () => Promise.resolve(bytes) });
+    const { screen } = mount({ imageBytes: () => Promise.resolve(bytes) });
     screen.paint(
-      conImagen({
+      withImage({
         ...base,
         image: { format: "PNG", width: 800, height: 600 },
         image_refused: "",
         image_zoom: 100,
       }),
     );
-    // La promesa se resuelve en el siguiente turno.
+    // The promise resolves on the next turn.
     await Promise.resolve();
     await Promise.resolve();
     const img = document.querySelector<HTMLImageElement>(".viewer-image");
     expect(img).not.toBeNull();
-    // `blob:`, jamás `file:` ni `data:` (ADR 0069).
+    // `blob:`, never `file:` nor `data:` (ADR 0069).
     expect(img?.src.startsWith("blob:")).toBe(true);
-    // Con el tamaño DECLARADO, para que la caja no salte al cargar.
+    // With the DECLARED size, so the box doesn't jump on load.
     expect(img?.width).toBe(800);
     expect(img?.height).toBe(600);
   });
 
-  it("y cerrar el visor REVOCA el blob", async () => {
-    const revocadas: string[] = [];
+  it("and closing the viewer REVOKES the blob", async () => {
+    const revoked: string[] = [];
     const revoke = URL.revokeObjectURL.bind(URL);
     URL.revokeObjectURL = (u: string) => {
-      revocadas.push(u);
+      revoked.push(u);
       revoke(u);
     };
     try {
       const bytes = new Uint8Array([1, 2, 3]).buffer;
-      const { screen } = montar({ imageBytes: () => Promise.resolve(bytes) });
+      const { screen } = mount({ imageBytes: () => Promise.resolve(bytes) });
       screen.paint(
-        conImagen({
+        withImage({
           ...base,
           image: { format: "PNG", width: 10, height: 10 },
           image_refused: "",
@@ -1942,25 +1950,25 @@ describe("la imagen del visor", () => {
       );
       await Promise.resolve();
       await Promise.resolve();
-      screen.paint(conImagen(null));
-      // Un object URL sin revocar retiene sus bytes mientras viva el
-      // documento, y esto son megas.
-      expect(revocadas).toHaveLength(1);
+      screen.paint(withImage(null));
+      // An unrevoked object URL keeps its bytes alive as long as the
+      // document lives, and these are megabytes.
+      expect(revoked).toHaveLength(1);
     } finally {
       URL.revokeObjectURL = revoke;
     }
   });
 
-  it("una imagen RECHAZADA se dice, y no se pide nada", () => {
-    let pedida = false;
-    const { screen } = montar({
+  it("a REFUSED image says so, and nothing is requested", () => {
+    let requested = false;
+    const { screen } = mount({
       imageBytes: () => {
-        pedida = true;
+        requested = true;
         return Promise.resolve(new ArrayBuffer(0));
       },
     });
     screen.paint(
-      conImagen({
+      withImage({
         ...base,
         image: null,
         image_refused: "imagen demasiado grande para previsualizarla",
@@ -1969,18 +1977,19 @@ describe("la imagen del visor", () => {
     );
     const no = document.querySelector(".viewer-image-refused");
     expect(no?.textContent).toContain("demasiado grande");
-    // Anunciado, para quien no mira la pantalla: caer al hexview en silencio
-    // parece norte roto, no norte prudente.
+    // Announced, for whoever isn't looking at the screen: silently falling
+    // back to the hexview looks like norte is broken, not norte being
+    // careful.
     expect(no?.getAttribute("role")).toBe("status");
-    expect(pedida).toBe(false);
+    expect(requested).toBe(false);
     expect(document.querySelector(".viewer-image")).toBeNull();
   });
 });
 
-describe("la preview de un plugin en el visor", () => {
-  it("dice de quién es lo que enseña, y aparte del aviso de pérdida", () => {
-    const { screen } = montar();
-    const v = vista({});
+describe("a plugin's preview in the viewer", () => {
+  it("says whose the shown content is, apart from the loss notice", () => {
+    const { screen } = mount();
+    const v = view({});
     v.viewer = {
       path_display: "⟨file⟩/casa/informe.pdf",
       path_hostile: false,
@@ -2005,19 +2014,19 @@ describe("la preview de un plugin en el visor", () => {
     screen.paint(v);
     const via = document.querySelector(".viewer-via");
     expect(via?.textContent).toBe("via PDF de ACME");
-    // El aviso de pérdida en su PROPIO nodo: `had_errors` es el de la vista
-    // cruda y este es el de la decodificación que se le dio al previewer.
-    // Son dos decodificaciones, y confundirlas culpa al fichero de lo que
-    // hizo la lectura.
-    const aviso = document.querySelector(".viewer-via-lossy");
-    expect(aviso).not.toBeNull();
-    expect(aviso?.textContent).toBe(catalogoReal()["viewer-plugin-preview-lossy"] ?? "");
-    expect(via?.contains(aviso)).toBe(false);
+    // The loss notice in its OWN node: `had_errors` is the raw view's and
+    // this one is the decoding the previewer was given. They're two
+    // decodings, and mixing them up blames the file for what the reading
+    // did.
+    const notice = document.querySelector(".viewer-via-lossy");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toBe(realCatalog()["viewer-plugin-preview-lossy"] ?? "");
+    expect(via?.contains(notice)).toBe(false);
   });
 
-  it("la RUTA es lo que se recorta, no las marcas", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("the PATH is what gets truncated, not the marks", () => {
+    const { screen } = mount();
+    const v = view({});
     v.viewer = {
       path_display: "⟨file⟩/casa/informe.pdf",
       path_hostile: false,
@@ -2041,19 +2050,19 @@ describe("la preview de un plugin en el visor", () => {
     };
     screen.paint(v);
     const head = document.querySelector(".viewer-head");
-    const ruta = head?.querySelector(".viewer-path");
-    // La ruta en su PROPIO nodo y las marcas como HERMANAS suyas. Suelta como
-    // texto era un item de flex anónimo que no se encoge, así que empujaba
-    // fuera de la vista todo lo que viniera detrás. jsdom no hace layout, así
-    // que lo que se clava aquí es la estructura que lo hace imposible.
-    expect(ruta?.textContent).toContain("informe.pdf");
+    const path = head?.querySelector(".viewer-path");
+    // The path in its OWN node and the marks as its SIBLINGS. Loose as text
+    // it was an anonymous flex item that doesn't shrink, so it pushed
+    // everything that came after it out of view. jsdom doesn't do layout, so
+    // what's pinned here is the structure that makes it impossible.
+    expect(path?.textContent).toContain("informe.pdf");
     expect(head?.querySelector(".viewer-via")?.parentElement).toBe(head);
-    expect(ruta?.querySelector(".viewer-via")).toBeNull();
+    expect(path?.querySelector(".viewer-via")).toBeNull();
   });
 
-  it("y sin plugin no se atribuye nada a nadie", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("and with no plugin, nothing is attributed to anyone", () => {
+    const { screen } = mount();
+    const v = view({});
     v.viewer = {
       path_display: "⟨file⟩/casa/notas.txt",
       path_hostile: false,
@@ -2081,14 +2090,14 @@ describe("la preview de un plugin en el visor", () => {
   });
 });
 
-describe("el selector de columnas", () => {
-  function conColumnas(): ViewSnapshot {
-    const v = vista({});
+describe("the column selector", () => {
+  function withColumns(): ViewSnapshot {
+    const v = view({});
     v.columns = {
       title: "Columnas — sftp",
       cursor: 1,
       note: "se aplica a esta ventana; no se guarda",
-      // El pie lo pinta el HOST desde el keymap (#287).
+      // The footer is painted by the HOST from the keymap (#287).
       hint: "Espacio activa · Enter aplica",
       rows: [
         {
@@ -2123,176 +2132,179 @@ describe("el selector de columnas", () => {
     return v;
   }
 
-  it("dice qué está encendido, qué es fijo y qué formato tiene cada una", () => {
-    const { screen } = montar();
-    screen.paint(conColumnas());
-    const filas = [...document.querySelectorAll(".columns-row")];
-    expect(filas).toHaveLength(3);
-    // Encendida o no, al lector de pantalla y no solo al que mira.
-    expect(filas[0]?.getAttribute("aria-checked")).toBe("true");
-    expect(filas[2]?.getAttribute("aria-checked")).toBe("false");
-    // El NOMBRE es fijo: ni se apaga ni se mueve.
-    expect(filas[0]?.getAttribute("data-fixed")).toBe("true");
-    expect(filas[1]?.getAttribute("data-fixed")).toBe("false");
-    // El formato bloqueado se PINTA apagado, no desaparece: una tecla que no
-    // hace nada y no dice por qué es peor que una que dice que no.
-    const fmt = filas[2]?.querySelector(".columns-format");
+  it("says what's on, what's fixed and what format each one has", () => {
+    const { screen } = mount();
+    screen.paint(withColumns());
+    const rows = [...document.querySelectorAll(".columns-row")];
+    expect(rows).toHaveLength(3);
+    // On or off, to the screen reader too, not just to whoever looks.
+    expect(rows[0]?.getAttribute("aria-checked")).toBe("true");
+    expect(rows[2]?.getAttribute("aria-checked")).toBe("false");
+    // NAME is fixed: it's neither turned off nor moved.
+    expect(rows[0]?.getAttribute("data-fixed")).toBe("true");
+    expect(rows[1]?.getAttribute("data-fixed")).toBe("false");
+    // A locked format PAINTS dimmed, it doesn't disappear: a key that does
+    // nothing and doesn't say why is worse than one that says no.
+    const fmt = rows[2]?.querySelector(".columns-format");
     expect(fmt?.textContent).toBe("symbolic");
     expect(fmt?.getAttribute("data-locked")).toBe("true");
-    // Y una columna sin formato no inventa uno.
-    expect(filas[0]?.querySelector(".columns-format")).toBeNull();
+    // And a column with no format doesn't make one up.
+    expect(rows[0]?.querySelector(".columns-format")).toBeNull();
   });
 
-  it("dice que lo elegido NO se guarda", () => {
-    const { screen } = montar();
-    screen.paint(conColumnas());
-    const nota = document.querySelector(".columns-note");
-    expect(nota?.textContent).toContain("no se guarda");
-    // Con `role="note"`, para quien no mira la pantalla: creerse que uno
-    // acaba de configurar norte y descubrir que no es peor que no poder.
-    expect(nota?.getAttribute("role")).toBe("note");
+  it("says the choice is NOT saved", () => {
+    const { screen } = mount();
+    screen.paint(withColumns());
+    const note = document.querySelector(".columns-note");
+    expect(note?.textContent).toContain("no se guarda");
+    // With `role="note"`, for whoever isn't looking at the screen: thinking
+    // you just configured norte and finding out you didn't is worse than not
+    // being able to.
+    expect(note?.getAttribute("role")).toBe("note");
   });
 
-  it("y el alcance va en el TÍTULO, que es lo primero que se lee", () => {
-    const { screen } = montar();
-    screen.paint(conColumnas());
-    const caja = document.querySelector(".columns-picker");
-    expect(caja?.querySelector("h1")?.textContent).toContain("sftp");
-    expect(caja?.getAttribute("aria-modal")).toBe("true");
+  it("and the scope goes in the TITLE, which is the first thing read", () => {
+    const { screen } = mount();
+    screen.paint(withColumns());
+    const box = document.querySelector(".columns-picker");
+    expect(box?.querySelector("h1")?.textContent).toContain("sftp");
+    expect(box?.getAttribute("aria-modal")).toBe("true");
   });
 });
 
-describe("las entradas que el provider se saltó", () => {
-  it("se DICEN en la cabecera, que es donde el lector puede verlas", () => {
-    const { screen } = montar();
-    const v = vista({ skipped_note: "se saltaron 3 entradas" });
+describe("entries the provider skipped", () => {
+  it("are SAID in the header, which is where the reader can see them", () => {
+    const { screen } = mount();
+    const v = view({ skipped_note: "se saltaron 3 entradas" });
     screen.paint(v);
-    const aviso = document.querySelector(".slot-skipped");
-    expect(aviso?.textContent).toBe("se saltaron 3 entradas");
-    // En la CABECERA: al final de la lista no serviría de nada, porque lo
-    // que falta no está y no hay ninguna fila con la que tropezarse.
-    expect(aviso?.closest(".slot-title")).not.toBeNull();
-    // Y anunciado, para quien no mira la pantalla.
-    expect(aviso?.getAttribute("role")).toBe("status");
+    const notice = document.querySelector(".slot-skipped");
+    expect(notice?.textContent).toBe("se saltaron 3 entradas");
+    // In the HEADER: at the end of the list it would be useless, because
+    // what's missing isn't there and there's no row to stumble on.
+    expect(notice?.closest(".slot-title")).not.toBeNull();
+    // And announced, for whoever isn't looking at the screen.
+    expect(notice?.getAttribute("role")).toBe("status");
   });
 
-  it("la ruta es lo que se recorta, no el aviso", () => {
-    const { screen } = montar();
-    screen.paint(vista({ skipped_note: "se saltaron 3 entradas" }));
-    const titulo = document.querySelector(".slot-title");
-    const ruta = titulo?.querySelector(".title-path");
-    const aviso = titulo?.querySelector(".slot-skipped");
-    // La ruta en su PROPIO nodo y el aviso como HERMANO suyo. Con la ruta
-    // como texto suelto de la cabecera, una larga empujaba el aviso fuera de
-    // la vista y desaparecía en silencio. jsdom no hace layout, así que lo
-    // que se puede clavar aquí es la estructura que lo hace imposible; el
-    // recorte de verdad se comprueba pintando.
-    expect(ruta?.textContent).toContain("casa");
-    expect(aviso?.parentElement).toBe(titulo);
-    expect(ruta?.contains(aviso ?? null)).toBe(false);
+  it("the path is what gets truncated, not the notice", () => {
+    const { screen } = mount();
+    screen.paint(view({ skipped_note: "se saltaron 3 entradas" }));
+    const title = document.querySelector(".slot-title");
+    const path = title?.querySelector(".title-path");
+    const notice = title?.querySelector(".slot-skipped");
+    // The path in its OWN node and the notice as its SIBLING. With the path
+    // as loose text in the header, a long one pushed the notice out of view
+    // and it disappeared in silence. jsdom doesn't do layout, so what can be
+    // pinned here is the structure that makes it impossible; the actual
+    // truncation is checked by painting.
+    expect(path?.textContent).toContain("casa");
+    expect(notice?.parentElement).toBe(title);
+    expect(path?.contains(notice ?? null)).toBe(false);
   });
 
-  it("y un listado completo no dice nada", () => {
-    const { screen } = montar();
-    screen.paint(vista({}));
+  it("and a complete listing says nothing", () => {
+    const { screen } = mount();
+    screen.paint(view({}));
     expect(document.querySelector(".slot-skipped")).toBeNull();
   });
 });
 
-describe("la insignia de un plugin en una fila", () => {
-  it("va en su propio nodo, con el rol del tema y sin tocar el nombre", () => {
-    const { screen } = montar();
-    const v = vista({});
+describe("a plugin's badge on a row", () => {
+  it("goes in its own node, with the theme's role and without touching the name", () => {
+    const { screen } = mount();
+    const v = view({});
     const slot = v.slots[0];
     if (slot?.kind === "browser") {
       slot.rows = [
-        fila(1, "limpio.rs"),
-        fila(2, "cambiado.rs", { badge: "M", badge_role: "warning" }),
+        row(1, "limpio.rs"),
+        row(2, "cambiado.rs", { badge: "M", badge_role: "warning" }),
       ];
       slot.total_rows = 2;
     }
     screen.paint(v);
-    const filas = [...document.querySelectorAll(".row")];
-    expect(filas[0]?.querySelector(".cell-badge")).toBeNull();
-    const marca = filas[1]?.querySelector(".cell-badge");
-    expect(marca?.textContent).toBe("M");
-    // El ROL, no un color que el plugin elija.
-    expect(marca?.getAttribute("data-role")).toBe("warning");
-    // Y en su propio nodo: unirla al nombre deja que una reordene a la otra.
-    expect(filas[1]?.querySelector(".cell-name")?.textContent).toBe("cambiado.rs");
+    const rows = [...document.querySelectorAll(".row")];
+    expect(rows[0]?.querySelector(".cell-badge")).toBeNull();
+    const badge = rows[1]?.querySelector(".cell-badge");
+    expect(badge?.textContent).toBe("M");
+    // The ROLE, not a color the plugin picks.
+    expect(badge?.getAttribute("data-role")).toBe("warning");
+    // And in its own node: joining it to the name lets one reorder the
+    // other.
+    expect(rows[1]?.querySelector(".cell-name")?.textContent).toBe("cambiado.rs");
   });
 
-  it("el icono va a la IZQUIERDA del nombre, y la columna se abre para todas las filas", () => {
-    const { screen } = montar();
+  it("the icon goes to the LEFT of the name, and the column opens for every row", () => {
+    const { screen } = mount();
     screen.paint(
-      vista({
+      view({
         rows: [
-          fila(1, "src", { kind: "dir", icon: "📁" }),
-          fila(2, "main.rs", { icon: "🦀", badge: "M", badge_role: "warning" }),
-          fila(3, "sin-icono"),
+          row(1, "src", { kind: "dir", icon: "📁" }),
+          row(2, "main.rs", { icon: "🦀", badge: "M", badge_role: "warning" }),
+          row(3, "sin-icono"),
         ],
         icon_column: true,
       }),
     );
-    const filas = [...document.querySelectorAll(".row")];
-    // Las tres llevan la celda: la que no tiene icono, vacía, para que los
-    // nombres sigan alineados.
-    for (const f of filas) {
+    const rows = [...document.querySelectorAll(".row")];
+    // All three carry the cell: the one with no icon, empty, so names stay
+    // aligned.
+    for (const f of rows) {
       expect(f.querySelector(".cell-icon")).not.toBeNull();
     }
-    expect(filas[0]?.querySelector(".cell-icon")?.textContent).toBe("📁");
-    expect(filas[2]?.querySelector(".cell-icon")?.textContent).toBe("");
-    // Antes del nombre; la insignia, detrás. Los dos huecos en una fila.
-    const bloque = filas[1]?.querySelector(".name-block");
-    const hijos = [...(bloque?.children ?? [])].map((c) => c.className);
-    expect(hijos).toEqual(["cell-icon", "cell-name", "cell-badge"]);
+    expect(rows[0]?.querySelector(".cell-icon")?.textContent).toBe("📁");
+    expect(rows[2]?.querySelector(".cell-icon")?.textContent).toBe("");
+    // Before the name; the badge, after. The two slots in one row.
+    const block = rows[1]?.querySelector(".name-block");
+    const children = [...(block?.children ?? [])].map((c) => c.className);
+    expect(children).toEqual(["cell-icon", "cell-name", "cell-badge"]);
   });
 
-  it("la columna la abre el HOST, no las filas visibles", () => {
-    const { screen } = montar();
-    // Sin iconos a la vista pero con la columna abierta —una página sin
-    // iconos de un listado que sí los tiene—: la celda sigue, para que los
-    // nombres no se corran al desplazarse.
-    screen.paint(vista({ rows: [fila(1, "a.rs"), fila(2, "b.rs")], icon_column: true }));
+  it("the HOST opens the column, not the visible rows", () => {
+    const { screen } = mount();
+    // No icons in sight but with the column open — a page with no icons from
+    // a listing that does have them: the cell still shows, so names don't
+    // shift while scrolling.
+    screen.paint(view({ rows: [row(1, "a.rs"), row(2, "b.rs")], icon_column: true }));
     expect(document.querySelectorAll(".cell-icon")).toHaveLength(2);
-    // Y al revés: un icono en una fila con la columna cerrada no la abre.
-    screen.paint(vista({ rows: [fila(1, "a.rs", { icon: "🦀" })], icon_column: false }));
+    // And the other way: an icon on a row with the column closed doesn't
+    // open it.
+    screen.paint(view({ rows: [row(1, "a.rs", { icon: "🦀" })], icon_column: false }));
     expect(document.querySelector(".cell-icon")).toBeNull();
   });
 
-  it("un icono que se pinta distinto de lo que es lo DICE", () => {
-    const { screen } = montar();
+  it("an icon that paints differently from what it is SAYS SO", () => {
+    const { screen } = mount();
     screen.paint(
-      vista({
-        rows: [fila(1, "x", { icon: "�", icon_hostile: true })],
+      view({
+        rows: [row(1, "x", { icon: "�", icon_hostile: true })],
         icon_column: true,
       }),
     );
-    const icono = document.querySelector(".cell-icon");
-    expect(icono?.getAttribute("data-hostile")).toBe("true");
-    expect(icono?.querySelector(".hostile-badge")).not.toBeNull();
+    const icon = document.querySelector(".cell-icon");
+    expect(icon?.getAttribute("data-hostile")).toBe("true");
+    expect(icon?.querySelector(".hostile-badge")).not.toBeNull();
   });
 
-  it("una insignia que se pinta distinta de lo que es lo DICE", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("a badge that paints differently from what it is SAYS SO", () => {
+    const { screen } = mount();
+    const v = view({});
     const slot = v.slots[0];
     if (slot?.kind === "browser") {
       slot.rows = [
-        fila(1, "x.rs", { badge: "a\uFFFDb", badge_hostile: true, badge_role: "error" }),
+        row(1, "x.rs", { badge: "a\uFFFDb", badge_hostile: true, badge_role: "error" }),
       ];
       slot.total_rows = 1;
     }
     screen.paint(v);
-    const marca = document.querySelector(".cell-badge");
-    expect(marca?.getAttribute("data-hostile")).toBe("true");
-    expect(marca?.querySelector(".hostile-badge")).not.toBeNull();
+    const badge = document.querySelector(".cell-badge");
+    expect(badge?.getAttribute("data-hostile")).toBe("true");
+    expect(badge?.querySelector(".hostile-badge")).not.toBeNull();
   });
 });
 
-describe("el scroll de la ayuda", () => {
-  function conAyuda(topic: string, cursor: number): ViewSnapshot {
-    const v = vista({});
+describe("help's scroll", () => {
+  function withHelp(topic: string, cursor: number): ViewSnapshot {
+    const v = view({});
     v.help = {
       title: "Copiar",
       topic_id: topic,
@@ -2314,31 +2326,31 @@ describe("el scroll de la ayuda", () => {
     return v;
   }
 
-  it("no vuelve arriba en cada parche: leer media página y bajar el cursor", () => {
-    const { screen } = montar();
-    screen.paint(conAyuda("copying", 0));
-    const cuerpo = () => document.querySelector(".help-body") as HTMLElement;
-    // El lector baja por la página. `scrollTop` en jsdom no se limita solo,
-    // que es justo lo que hace falta para comprobar que se conserva.
-    cuerpo().scrollTop = 120;
-    // Un parche cualquiera —mover el cursor de la lateral lo es— repinta.
-    screen.paint(conAyuda("copying", 1));
-    expect(cuerpo().scrollTop).toBe(120);
+  it("doesn't jump back to the top on every patch: read half a page and move the cursor down", () => {
+    const { screen } = mount();
+    screen.paint(withHelp("copying", 0));
+    const body = () => document.querySelector(".help-body") as HTMLElement;
+    // The reader scrolls down the page. jsdom's `scrollTop` doesn't clamp
+    // itself, which is exactly what's needed to check it's preserved.
+    body().scrollTop = 120;
+    // Any patch — moving the sidebar's cursor is one — repaints.
+    screen.paint(withHelp("copying", 1));
+    expect(body().scrollTop).toBe(120);
   });
 
-  it("y cambiar de PÁGINA empieza arriba, que es lo que hace un lector", () => {
-    const { screen } = montar();
-    screen.paint(conAyuda("copying", 0));
-    const cuerpo = () => document.querySelector(".help-body") as HTMLElement;
-    cuerpo().scrollTop = 120;
-    screen.paint(conAyuda("moving", 0));
-    expect(cuerpo().scrollTop).toBe(0);
+  it("and changing PAGE starts at the top, which is what a reader does", () => {
+    const { screen } = mount();
+    screen.paint(withHelp("copying", 0));
+    const body = () => document.querySelector(".help-body") as HTMLElement;
+    body().scrollTop = 120;
+    screen.paint(withHelp("moving", 0));
+    expect(body().scrollTop).toBe(0);
   });
 });
 
 describe("which-key", () => {
-  function conPanel() {
-    const v = vista({});
+  function withPanel() {
+    const v = view({});
     v.whichkey = {
       title: "ctrl+x",
       rows: [
@@ -2362,49 +2374,49 @@ describe("which-key", () => {
     return v;
   }
 
-  it("enseña las continuaciones con su etiqueta, y marca las que abren otra secuencia", () => {
-    const { screen } = montar();
-    screen.paint(conPanel());
-    const filas = document.querySelectorAll(".whichkey-row");
-    expect(filas).toHaveLength(3);
-    expect(filas[0]?.textContent).toBe("gIr al principio");
-    // Una que abre secuencia se MARCA en vez de nombrar un comando que no
-    // ejecuta.
-    expect(filas[1]?.textContent).toContain("…");
+  it("shows continuations with their label, and marks the ones that open another sequence", () => {
+    const { screen } = mount();
+    screen.paint(withPanel());
+    const rows = document.querySelectorAll(".whichkey-row");
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.textContent).toBe("gIr al principio");
+    // One that opens a sequence gets MARKED instead of naming a command it
+    // doesn't run.
+    expect(rows[1]?.textContent).toContain("…");
   });
 
-  it("una tecla que aquí no se puede dice por qué, y no se esconde", () => {
-    const { screen } = montar();
-    screen.paint(conPanel());
-    const apagada = document.querySelectorAll('.whichkey-row[data-enabled="false"]');
-    expect(apagada).toHaveLength(1);
-    expect(apagada[0]?.textContent).toContain("aquí no");
+  it("a key that can't be used here says why, and isn't hidden", () => {
+    const { screen } = mount();
+    screen.paint(withPanel());
+    const disabled = document.querySelectorAll('.whichkey-row[data-enabled="false"]');
+    expect(disabled).toHaveLength(1);
+    expect(disabled[0]?.textContent).toContain("aquí no");
   });
 
-  it("no es un diálogo: no captura el foco", () => {
-    const { screen } = montar();
-    screen.paint(conPanel());
+  it("isn't a dialog: it doesn't capture focus", () => {
+    const { screen } = mount();
+    screen.paint(withPanel());
     const panel = document.querySelector(".whichkey");
     expect(panel?.getAttribute("role")).toBe("group");
     expect(panel?.getAttribute("aria-modal")).toBeNull();
   });
 
-  it("sin prefijo a medias no hay panel", () => {
-    const { screen } = montar();
-    screen.paint(vista({}));
+  it("with no prefix half-typed, there's no panel", () => {
+    const { screen } = mount();
+    screen.paint(view({}));
     expect(document.querySelector(".whichkey")).toBeNull();
   });
 });
 
-describe("mover un panel arrastrándolo (ADR 0138)", () => {
-  /** Dos listados lado a lado, 600×400 px cada uno. */
-  function dosListados(): ViewSnapshot {
-    const v = vista({});
-    const primero = v.slots[0];
-    if (primero === undefined || primero.kind !== "browser") {
-      throw new Error("la vista de partida trae un listado");
+describe("moving a panel by dragging it (ADR 0138)", () => {
+  /** Two listings side by side, 600x400 px each. */
+  function twoListings(): ViewSnapshot {
+    const v = view({});
+    const first = v.slots[0];
+    if (first === undefined || first.kind !== "browser") {
+      throw new Error("the starting view carries a listing");
     }
-    v.slots.push({ ...primero, slot_id: 2 });
+    v.slots.push({ ...first, slot_id: 2 });
     v.layout.placements = [
       { slot_id: 1, x: 0, y: 0, width: 60, height: 38, role: "active", focus_index: 0 },
       { slot_id: 2, x: 60, y: 0, width: 60, height: 38, role: null, focus_index: 1 },
@@ -2427,47 +2439,47 @@ describe("mover un panel arrastrándolo (ADR 0138)", () => {
   });
   afterEach(async () => {
     vi.restoreAllMocks();
-    // El trago del clic que sigue a un arrastre se quita en un temporizador
-    // de cero: sin dejarlo correr, se comería el primer clic del test de al
-    // lado.
+    // The click swallowed at the end of a drag is cleared on a zero
+    // timer: without letting it run, it would eat the next test's first
+    // click.
     await new Promise((r) => setTimeout(r, 0));
   });
 
-  const puntero = (tipo: string, x: number, y: number): MouseEvent =>
-    new MouseEvent(tipo, { button: 0, clientX: x, clientY: y, bubbles: true });
+  const pointer = (type: string, x: number, y: number): MouseEvent =>
+    new MouseEvent(type, { button: 0, clientX: x, clientY: y, bubbles: true });
 
-  // Regresión (captura del 2026-09-21): cada paso del arrastre de un borde
-  // cambia el reparto y rehace los tiradores; con la captura en el tirador,
-  // el arrastre moría en el primer paso y el borde no subía ni bajaba.
-  it("arrastrar un borde sobrevive a que el reparto rehaga los tiradores", () => {
-    const { screen, enviadas } = montar();
-    const v = dosListados();
+  // Regression (caught 2026-09-21): every step of dragging a border changes
+  // the layout and rebuilds the handles; with the capture on the handle, the
+  // drag died on the first step and the border wouldn't move either way.
+  it("dragging a border survives the layout rebuilding the handles", () => {
+    const { screen, sent } = mount();
+    const v = twoListings();
     screen.paint(v);
-    const tirador = document.querySelector(".resize-handle.col") as HTMLElement;
-    tirador.dispatchEvent(puntero("pointerdown", 480, 100));
-    window.dispatchEvent(puntero("pointermove", 400, 100));
-    // El host contesta con otro reparto: se rehacen huecos y tiradores.
-    const otro = dosListados();
-    otro.layout.placements = [
+    const handle = document.querySelector(".resize-handle.col") as HTMLElement;
+    handle.dispatchEvent(pointer("pointerdown", 480, 100));
+    window.dispatchEvent(pointer("pointermove", 400, 100));
+    // The host answers with another layout: slots and handles get rebuilt.
+    const other = twoListings();
+    other.layout.placements = [
       { slot_id: 1, x: 0, y: 0, width: 50, height: 38, role: "active", focus_index: 0 },
       { slot_id: 2, x: 50, y: 0, width: 70, height: 38, role: null, focus_index: 1 },
       { slot_id: 4, x: 0, y: 39, width: 120, height: 1, role: null, focus_index: 2 },
     ];
-    screen.paint(otro);
-    expect(document.body.contains(tirador)).toBe(false);
-    window.dispatchEvent(puntero("pointermove", 320, 100));
-    window.dispatchEvent(puntero("pointermove", 321, 100));
-    window.dispatchEvent(puntero("pointerup", 320, 100));
-    window.dispatchEvent(puntero("pointermove", 200, 100));
-    const pasos = enviadas.filter((a) => a.action === "resize_slot");
-    expect(pasos).toEqual([
+    screen.paint(other);
+    expect(document.body.contains(handle)).toBe(false);
+    window.dispatchEvent(pointer("pointermove", 320, 100));
+    window.dispatchEvent(pointer("pointermove", 321, 100));
+    window.dispatchEvent(pointer("pointerup", 320, 100));
+    window.dispatchEvent(pointer("pointermove", 200, 100));
+    const steps = sent.filter((a) => a.action === "resize_slot");
+    expect(steps).toEqual([
       { action: "resize_slot", slot_id: 1, cells: 50 },
       { action: "resize_slot", slot_id: 1, cells: 40 },
     ]);
     expect(document.documentElement.dataset["dragging"]).toBeUndefined();
   });
 
-  it("zonaDe: el lado más cercano a menos de un cuarto, si no el centro", () => {
+  it("zonaDe: the nearest side under a quarter away, else the center", () => {
     const r = { left: 0, top: 0, width: 100, height: 100 };
     expect(zonaDe(5, 50, r)).toBe("left");
     expect(zonaDe(95, 50, r)).toBe("right");
@@ -2476,60 +2488,56 @@ describe("mover un panel arrastrándolo (ADR 0138)", () => {
     expect(zonaDe(50, 50, r)).toBe("center");
   });
 
-  it("arrastrar el título y soltar sobre otro manda move_slot con la zona", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(dosListados());
-    enviadas.length = 0;
-    const titulo = document.querySelector(
-      '[data-slot-id="1"] .slot-title',
-    ) as HTMLElement;
-    titulo.dispatchEvent(puntero("pointerdown", 10, 5));
-    window.dispatchEvent(puntero("pointermove", 900, 200));
+  it("dragging the title and dropping on another sends move_slot with the zone", () => {
+    const { screen, sent } = mount();
+    screen.paint(twoListings());
+    sent.length = 0;
+    const title = document.querySelector('[data-slot-id="1"] .slot-title') as HTMLElement;
+    title.dispatchEvent(pointer("pointerdown", 10, 5));
+    window.dispatchEvent(pointer("pointermove", 900, 200));
     expect(document.documentElement.dataset["dragging"]).toBe("slot");
-    const velo = document.querySelector(".drop-target") as HTMLElement;
-    expect(velo.hidden).toBe(false);
-    expect(velo.dataset["zone"]).toBe("center");
-    window.dispatchEvent(puntero("pointermove", 1150, 200));
-    expect(velo.dataset["zone"]).toBe("right");
-    window.dispatchEvent(puntero("pointerup", 1150, 200));
-    expect(enviadas.filter((a) => a.action === "move_slot")).toEqual([
+    const veil = document.querySelector(".drop-target") as HTMLElement;
+    expect(veil.hidden).toBe(false);
+    expect(veil.dataset["zone"]).toBe("center");
+    window.dispatchEvent(pointer("pointermove", 1150, 200));
+    expect(veil.dataset["zone"]).toBe("right");
+    window.dispatchEvent(pointer("pointerup", 1150, 200));
+    expect(sent.filter((a) => a.action === "move_slot")).toEqual([
       { action: "move_slot", slot_id: 1, target: 2, zone: "right" },
     ]);
     expect(document.querySelector(".drop-target")).toBeNull();
     expect(document.documentElement.dataset["dragging"]).toBeUndefined();
   });
 
-  it("un clic, soltar sobre sí mismo o sobre el cromo, y Esc no mueven nada", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(dosListados());
-    const titulo = document.querySelector(
-      '[data-slot-id="1"] .slot-title',
-    ) as HTMLElement;
-    const intento = (pasos: [number, number][], antesDeSoltar?: () => void): void => {
-      titulo.dispatchEvent(puntero("pointerdown", 10, 5));
-      for (const [x, y] of pasos) {
-        window.dispatchEvent(puntero("pointermove", x, y));
+  it("a click, dropping on itself or on the chrome, and Esc move nothing", () => {
+    const { screen, sent } = mount();
+    screen.paint(twoListings());
+    const title = document.querySelector('[data-slot-id="1"] .slot-title') as HTMLElement;
+    const attempt = (steps: [number, number][], beforeDrop?: () => void): void => {
+      title.dispatchEvent(pointer("pointerdown", 10, 5));
+      for (const [x, y] of steps) {
+        window.dispatchEvent(pointer("pointermove", x, y));
       }
-      antesDeSoltar?.();
-      window.dispatchEvent(puntero("pointerup", 0, 0));
+      beforeDrop?.();
+      window.dispatchEvent(pointer("pointerup", 0, 0));
     };
-    intento([[12, 6]]);
-    intento([[300, 200]]);
-    intento([[300, 410]]);
-    intento([[900, 200]], () => {
+    attempt([[12, 6]]);
+    attempt([[300, 200]]);
+    attempt([[300, 410]]);
+    attempt([[900, 200]], () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     });
-    intento([[900, 200]], () => {
+    attempt([[900, 200]], () => {
       window.dispatchEvent(new Event("pointercancel"));
     });
-    expect(enviadas.filter((a) => a.action === "move_slot")).toEqual([]);
+    expect(sent.filter((a) => a.action === "move_slot")).toEqual([]);
     expect(document.querySelector(".drop-target")).toBeNull();
   });
 });
 
-describe("la barra de menús", () => {
-  function conMenu(open: number | null) {
-    const v = vista({});
+describe("the menu bar", () => {
+  function withMenu(open: number | null) {
+    const v = view({});
     v.menu = {
       bar: true,
       titles: ["Archivo", "Paneles"],
@@ -2565,35 +2573,35 @@ describe("la barra de menús", () => {
     return v;
   }
 
-  it("pinta las secciones sin contarlas como entradas", () => {
-    const { screen } = montar();
-    screen.paint(conMenu(1));
-    const secciones = [...document.querySelectorAll(".menu-section")];
-    expect(secciones.map((s) => s.textContent)).toEqual(["Sitios", ""]);
-    expect(secciones.every((s) => s.getAttribute("role") === "separator")).toBe(true);
-    // El cursor sigue nombrando ENTRADAS: la 1 es «Desconectar», no la raya.
-    const actual = document.querySelector('.menu-item[data-current="true"]');
-    expect(actual?.id).toBe("menu-item-1");
-    const borrar = document.querySelector("#menu-item-2");
-    expect(borrar?.getAttribute("data-role")).toBe("destructive");
+  it("paints sections without counting them as entries", () => {
+    const { screen } = mount();
+    screen.paint(withMenu(1));
+    const sections = [...document.querySelectorAll(".menu-section")];
+    expect(sections.map((s) => s.textContent)).toEqual(["Sitios", ""]);
+    expect(sections.every((s) => s.getAttribute("role") === "separator")).toBe(true);
+    // The cursor still names ENTRIES: 1 is "Desconectar", not the divider.
+    const current = document.querySelector('.menu-item[data-current="true"]');
+    expect(current?.id).toBe("menu-item-1");
+    const del = document.querySelector("#menu-item-2");
+    expect(del?.getAttribute("data-role")).toBe("destructive");
   });
 
-  it("pinta los títulos y reserva su fila", () => {
-    const { screen } = montar();
-    screen.paint(conMenu(null));
-    const titulos = [...document.querySelectorAll(".menubar-title")].map(
+  it("paints the titles and reserves their row", () => {
+    const { screen } = mount();
+    screen.paint(withMenu(null));
+    const titles = [...document.querySelectorAll(".menubar-title")].map(
       (t) => t.textContent,
     );
-    expect(titulos).toEqual(["Archivo", "Paneles"]);
-    // La fila se RESERVA: el reparto del host se calcula sobre el alto que
-    // este renderer declara, y una barra flotante taparía la primera fila.
+    expect(titles).toEqual(["Archivo", "Paneles"]);
+    // The row is RESERVED: the host's layout is computed over the height
+    // this renderer declares, and a floating bar would cover the first row.
     expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe(
       "var(--cell-h)",
     );
     expect(document.querySelector(".menu-items")).toBeNull();
   });
 
-  describe("con la barra de título propia (ADR 0136)", () => {
+  describe("with its own title bar (ADR 0136)", () => {
     beforeEach(() => {
       document.documentElement.dataset["titlebar"] = "custom";
     });
@@ -2601,50 +2609,50 @@ describe("la barra de menús", () => {
       delete document.documentElement.dataset["titlebar"];
     });
 
-    it("lleva los tres botones de la ventana y cada uno pide su verbo", () => {
-      const pedidos: WindowVerb[] = [];
-      const { screen, enviadas } = montar({ windowControl: (v) => pedidos.push(v) });
-      screen.paint(conMenu(null));
-      const botones = [
+    it("carries the three window buttons and each one requests its verb", () => {
+      const requests: WindowVerb[] = [];
+      const { screen, sent } = mount({ windowControl: (v) => requests.push(v) });
+      screen.paint(withMenu(null));
+      const buttons = [
         ...document.querySelectorAll(".menubar .window-controls .window-control"),
       ] as HTMLButtonElement[];
-      expect(botones.map((b) => b.dataset["verb"])).toEqual([
+      expect(buttons.map((b) => b.dataset["verb"])).toEqual([
         "minimize",
         "toggle_maximize",
         "close",
       ]);
-      expect(botones.every((b) => b.querySelector("svg.panelbar-icon") !== null)).toBe(
+      expect(buttons.every((b) => b.querySelector("svg.panelbar-icon") !== null)).toBe(
         true,
       );
-      expect(botones[2]?.getAttribute("aria-label")).toBe("Cerrar");
-      for (const b of botones) {
+      expect(buttons[2]?.getAttribute("aria-label")).toBe("Cerrar");
+      for (const b of buttons) {
         b.click();
       }
-      expect(pedidos).toEqual(["minimize", "toggle_maximize", "close"]);
-      // Nada de esto es del host: no es estado de pantalla.
-      expect(enviadas).toEqual([]);
+      expect(requests).toEqual(["minimize", "toggle_maximize", "close"]);
+      // None of this belongs to the host: it isn't screen state.
+      expect(sent).toEqual([]);
     });
 
-    it("el hueco libre arrastra y un doble clic maximiza; un título no", () => {
-      const pedidos: WindowVerb[] = [];
-      const { screen } = montar({ windowControl: (v) => pedidos.push(v) });
-      screen.paint(conMenu(null));
-      const barra = document.querySelector(".menubar") as HTMLElement;
-      barra.dispatchEvent(
+    it("the free space drags and a double click maximizes; a title doesn't", () => {
+      const requests: WindowVerb[] = [];
+      const { screen } = mount({ windowControl: (v) => requests.push(v) });
+      screen.paint(withMenu(null));
+      const bar = document.querySelector(".menubar") as HTMLElement;
+      bar.dispatchEvent(
         new MouseEvent("mousedown", { button: 0, detail: 1, bubbles: true }),
       );
-      barra.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-      const titulo = document.querySelector(".menubar-title") as HTMLElement;
-      titulo.dispatchEvent(
+      bar.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      const title = document.querySelector(".menubar-title") as HTMLElement;
+      title.dispatchEvent(
         new MouseEvent("mousedown", { button: 0, detail: 1, bubbles: true }),
       );
-      titulo.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-      expect(pedidos).toEqual(["drag", "toggle_maximize"]);
+      title.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(requests).toEqual(["drag", "toggle_maximize"]);
     });
 
-    it("con el menú apagado la fila sigue: es lo único que mueve y cierra", () => {
-      const { screen } = montar();
-      const v = conMenu(null);
+    it("with the menu off the row stays: it's the only thing that moves and closes", () => {
+      const { screen } = mount();
+      const v = withMenu(null);
       v.menu.bar = false;
       screen.paint(v);
       expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe(
@@ -2655,77 +2663,77 @@ describe("la barra de menús", () => {
     });
   });
 
-  it("con la barra nativa no hay botones de ventana", () => {
-    const { screen } = montar();
-    screen.paint(conMenu(null));
+  it("with the native bar there are no window buttons", () => {
+    const { screen } = mount();
+    screen.paint(withMenu(null));
     expect(document.querySelector(".window-controls")).toBeNull();
     expect(
       (document.querySelector(".menubar") as HTMLElement).dataset["titlebar"],
     ).toBeUndefined();
   });
 
-  it("con la barra apagada no reserva nada", () => {
-    const { screen } = montar();
-    const v = conMenu(null);
+  it("with the bar off, nothing is reserved", () => {
+    const { screen } = mount();
+    const v = withMenu(null);
     v.menu.bar = false;
     screen.paint(v);
     expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe("0px");
     expect(document.querySelector(".menubar")).toBeNull();
   });
 
-  // #324: la barra de paneles ENSEÑA los paneles — estado, novedad, y un
-  // click que vuelve como índice, nunca como comando (ADR 0069).
-  it("la barra de paneles pinta cada botón con su estado y reserva su fila", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(vista({}));
+  // #324: the panel bar SHOWS the panels — state, novelty, and a click that
+  // comes back as an index, never as a command (ADR 0069).
+  it("the panel bar paints every button with its state and reserves its row", () => {
+    const { screen, sent } = mount();
+    screen.paint(view({}));
     expect(document.documentElement.style.getPropertyValue("--panelbar-h")).toBe(
       "var(--cell-h)",
     );
-    const botones = [
+    const buttons = [
       ...document.querySelectorAll(".panelbar-button"),
     ] as HTMLButtonElement[];
-    expect(botones.map((b) => b.dataset["kind"])).toEqual(["places", "log"]);
-    expect(botones[0]?.dataset["state"]).toBe("open");
-    expect(botones[0]?.getAttribute("aria-pressed")).toBe("true");
-    expect(botones[0]?.title).toBe("Sitios (alt+p)");
-    expect(botones[1]?.dataset["state"]).toBe("closed");
-    expect(botones[1]?.getAttribute("aria-pressed")).toBe("false");
-    expect(botones[1]?.title).toBe("Registro");
-    // La novedad es una marca APARTE, no un cambio de estilo del botón.
-    expect(botones[0]?.querySelector(".panelbar-attention")).toBeNull();
-    expect(botones[1]?.querySelector(".panelbar-attention")).not.toBeNull();
-    // Y la fila tiene su landmark, traducido del catálogo real.
+    expect(buttons.map((b) => b.dataset["kind"])).toEqual(["places", "log"]);
+    expect(buttons[0]?.dataset["state"]).toBe("open");
+    expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[0]?.title).toBe("Sitios (alt+p)");
+    expect(buttons[1]?.dataset["state"]).toBe("closed");
+    expect(buttons[1]?.getAttribute("aria-pressed")).toBe("false");
+    expect(buttons[1]?.title).toBe("Registro");
+    // Novelty is a SEPARATE mark, not a change to the button's style.
+    expect(buttons[0]?.querySelector(".panelbar-attention")).toBeNull();
+    expect(buttons[1]?.querySelector(".panelbar-attention")).not.toBeNull();
+    // And the row has its landmark, translated from the real catalogue.
     expect(document.querySelector(".panelbar")?.getAttribute("aria-label")).toBe(
       "Barra de paneles",
     );
 
-    botones[1]?.click();
-    expect(enviadas).toEqual([{ action: "panel_bar_activate", button: 1 }]);
+    buttons[1]?.click();
+    expect(sent).toEqual([{ action: "panel_bar_activate", button: 1 }]);
   });
 
-  it("los botones de disposición van a la derecha del menú y vuelven por id", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+  it("layout buttons go to the right of the menu and come back by id", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     v.layout_buttons = [
       { id: "split-h", label: "Partir lado a lado", chord: "ctrl+\\" },
       { id: "pick", label: "Disposición...", chord: "—" },
     ];
     screen.paint(v);
-    const botones = [
+    const buttons = [
       ...document.querySelectorAll(".menubar .menubar-actions .menubar-action"),
     ] as HTMLButtonElement[];
-    expect(botones.map((b) => b.dataset["id"])).toEqual(["split-h", "pick"]);
-    expect(botones[0]?.querySelector("svg.panelbar-icon")).not.toBeNull();
-    expect(botones[0]?.title).toBe("Partir lado a lado (ctrl+\\)");
-    expect(botones[1]?.title).toBe("Disposición...");
-    expect(botones[1]?.getAttribute("aria-label")).toBe("Disposición...");
-    botones[1]?.click();
-    expect(enviadas).toEqual([{ action: "layout_button_activate", id: "pick" }]);
+    expect(buttons.map((b) => b.dataset["id"])).toEqual(["split-h", "pick"]);
+    expect(buttons[0]?.querySelector("svg.panelbar-icon")).not.toBeNull();
+    expect(buttons[0]?.title).toBe("Partir lado a lado (ctrl+\\)");
+    expect(buttons[1]?.title).toBe("Disposición...");
+    expect(buttons[1]?.getAttribute("aria-label")).toBe("Disposición...");
+    buttons[1]?.click();
+    expect(sent).toEqual([{ action: "layout_button_activate", id: "pick" }]);
   });
 
-  it("un grupo de PANELES no lleva + ni × y se marca para su estilo", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+  it("a PANEL group carries neither + nor x and gets marked for its style", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     v.layout.tabs = [
       {
         slot_id: 1,
@@ -2740,15 +2748,15 @@ describe("la barra de menús", () => {
     screen.paint(v);
     expect(document.querySelector(".tab-new")).toBeNull();
     expect(document.querySelector(".tab-close")).toBeNull();
-    const tira = document.querySelector(".slot-tabs") as HTMLElement;
-    expect(tira.dataset["panels"]).toBe("true");
+    const strip = document.querySelector(".slot-tabs") as HTMLElement;
+    expect(strip.dataset["panels"]).toBe("true");
     (document.querySelectorAll(".tab")[0] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "select_tab", slot_id: 7 }]);
+    expect(sent).toEqual([{ action: "select_tab", slot_id: 7 }]);
   });
 
-  it("las pestañas de un grupo llevan su × y el grupo su +, y la × no elige", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+  it("a group's tabs carry their x and the group its +, and the x doesn't select", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     v.layout.tabs = [
       {
         slot_id: 1,
@@ -2760,42 +2768,43 @@ describe("la barra de menús", () => {
       },
     ];
     screen.paint(v);
-    const cerrar = [
+    const close = [
       ...document.querySelectorAll(".tab .tab-close"),
     ] as HTMLButtonElement[];
-    expect(cerrar).toHaveLength(2);
-    cerrar[1]?.click();
-    // UNA orden: la × no deja que el clic llegue a la pestaña y la elija.
-    expect(enviadas).toEqual([{ action: "tab_action", slot_id: 7, verb: "close" }]);
-    enviadas.length = 0;
+    expect(close).toHaveLength(2);
+    close[1]?.click();
+    // ONE command: the x doesn't let the click reach the tab and select it.
+    expect(sent).toEqual([{ action: "tab_action", slot_id: 7, verb: "close" }]);
+    sent.length = 0;
     (document.querySelector(".tab-new") as HTMLButtonElement).click();
-    // El `+` abre detrás de la ACTIVA del grupo.
-    expect(enviadas).toEqual([{ action: "tab_action", slot_id: 1, verb: "new" }]);
+    // `+` opens behind the group's ACTIVE tab.
+    expect(sent).toEqual([{ action: "tab_action", slot_id: 1, verb: "new" }]);
   });
 
-  it("la mitad derecha de la barra de estado pinta sus elementos y se pulsan", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+  it("the status bar's right half paints its items and they're clickable", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     v.status_items = [
       { id: "position", text: "3/120", tooltip: "Posición", clickable: false },
       { id: "notices", text: "!2", tooltip: "Avisos", clickable: true },
     ];
     screen.paint(v);
-    const derecha = document.querySelector(".statusbar .status-items") as HTMLElement;
-    expect(derecha).not.toBeNull();
-    const els = [...derecha.querySelectorAll(".status-item")] as HTMLElement[];
+    const right = document.querySelector(".statusbar .status-items") as HTMLElement;
+    expect(right).not.toBeNull();
+    const els = [...right.querySelectorAll(".status-item")] as HTMLElement[];
     expect(els.map((e) => e.textContent)).toEqual(["3/120", "!2"]);
-    // Lo que no se pulsa no es un botón: un lector no lo anuncia como tal.
+    // What isn't clickable isn't a button: a reader doesn't announce it as
+    // one.
     expect(els[0]?.tagName).toBe("SPAN");
     expect(els[1]?.tagName).toBe("BUTTON");
     expect(els[1]?.title).toBe("Avisos");
     els[1]?.click();
-    expect(enviadas).toEqual([{ action: "status_item_activate", id: "notices" }]);
+    expect(sent).toEqual([{ action: "status_item_activate", id: "notices" }]);
   });
 
-  it("con la barra de paneles apagada no reserva nada", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("with the panel bar off, nothing is reserved", () => {
+    const { screen } = mount();
+    const v = view({});
     v.panel_bar.bar = false;
     screen.paint(v);
     expect(document.documentElement.style.getPropertyValue("--panelbar-h")).toBe("0px");
@@ -2803,9 +2812,9 @@ describe("la barra de menús", () => {
     expect(document.querySelector(".panelbar")).toBeNull();
   });
 
-  it("en columna es la barra de actividad: reserva ANCHO, icono y cifra", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+  it("in column layout it's the activity bar: reserves WIDTH, icon and count", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     v.panel_bar.vertical = true;
     const log = v.panel_bar.buttons[1];
     if (log !== undefined) {
@@ -2821,88 +2830,89 @@ describe("la barra de menús", () => {
       count: 150,
     });
     screen.paint(v);
-    const raiz = document.documentElement.style;
-    // Columna: la fila de arriba no reserva nada y el borde izquierdo sí.
-    expect(raiz.getPropertyValue("--panelbar-h")).toBe("0px");
-    expect(raiz.getPropertyValue("--activity-w")).toBe("var(--activity-size)");
+    const root = document.documentElement.style;
+    // Column: the top row reserves nothing and the left border does.
+    expect(root.getPropertyValue("--panelbar-h")).toBe("0px");
+    expect(root.getPropertyValue("--activity-w")).toBe("var(--activity-size)");
     expect(screen.takeViewportDirty()).toBe(true);
-    const barra = document.querySelector(".panelbar") as HTMLElement;
-    expect(barra.dataset["vertical"]).toBe("true");
-    expect(barra.getAttribute("aria-orientation")).toBe("vertical");
-    const botones = [
+    const bar = document.querySelector(".panelbar") as HTMLElement;
+    expect(bar.dataset["vertical"]).toBe("true");
+    expect(bar.getAttribute("aria-orientation")).toBe("vertical");
+    const buttons = [
       ...document.querySelectorAll(".panelbar-button"),
     ] as HTMLButtonElement[];
-    // Un kind de serie lleva su icono; uno que norte no conoce —el de un
-    // plugin— lleva su letra, que es lo que ya se sabe de él.
-    expect(botones[0]?.querySelector("svg.panelbar-icon")).not.toBeNull();
-    expect(botones[2]?.querySelector("svg")).toBeNull();
-    expect(botones[2]?.querySelector(".panelbar-letter")?.textContent).toBe("G");
-    // Sin texto visible, el NOMBRE es lo que oye un lector de pantalla.
-    expect(botones[0]?.getAttribute("aria-label")).toBe("Sitios");
-    expect(botones[0]?.title).toBe("Sitios (alt+p)");
-    // La cifra, acotada: una insignia de cuatro dígitos no cabe en 48 px.
-    expect(botones[0]?.querySelector(".panelbar-attention")).toBeNull();
-    expect(botones[1]?.querySelector(".panelbar-attention")?.textContent).toBe("7");
-    expect(botones[2]?.querySelector(".panelbar-attention")?.textContent).toBe("99+");
-    expect(botones[2]?.dataset["state"]).toBe("focused");
+    // A built-in kind carries its icon; one norte doesn't know — a plugin's
+    // — carries its letter, which is all that's known about it.
+    expect(buttons[0]?.querySelector("svg.panelbar-icon")).not.toBeNull();
+    expect(buttons[2]?.querySelector("svg")).toBeNull();
+    expect(buttons[2]?.querySelector(".panelbar-letter")?.textContent).toBe("G");
+    // With no visible text, the NAME is what a screen reader hears.
+    expect(buttons[0]?.getAttribute("aria-label")).toBe("Sitios");
+    expect(buttons[0]?.title).toBe("Sitios (alt+p)");
+    // The count, bounded: a four-digit badge doesn't fit in 48 px.
+    expect(buttons[0]?.querySelector(".panelbar-attention")).toBeNull();
+    expect(buttons[1]?.querySelector(".panelbar-attention")?.textContent).toBe("7");
+    expect(buttons[2]?.querySelector(".panelbar-attention")?.textContent).toBe("99+");
+    expect(buttons[2]?.dataset["state"]).toBe("focused");
 
-    botones[2]?.click();
-    expect(enviadas).toEqual([{ action: "panel_bar_activate", button: 2 }]);
+    buttons[2]?.click();
+    expect(sent).toEqual([{ action: "panel_bar_activate", button: 2 }]);
 
-    // Y volver a fila devuelve el ancho: la reserva sigue a la barra.
+    // And back to row layout returns the width: the reservation follows the
+    // bar.
     v.panel_bar.vertical = false;
     screen.paint(v);
-    expect(raiz.getPropertyValue("--activity-w")).toBe("0px");
-    expect(raiz.getPropertyValue("--panelbar-h")).toBe("var(--cell-h)");
+    expect(root.getPropertyValue("--activity-w")).toBe("0px");
+    expect(root.getPropertyValue("--panelbar-h")).toBe("var(--cell-h)");
   });
 
-  it("el desplegado marca su título, su cursor y lo que no se puede hacer", () => {
-    const { screen } = montar();
-    screen.paint(conMenu(1));
-    const abierto = document.querySelectorAll('.menubar-title[aria-expanded="true"]');
-    expect(abierto).toHaveLength(1);
-    expect(abierto[0]?.textContent).toBe("Paneles");
-    const lista = document.querySelector(".menu-items") as HTMLElement;
-    expect(lista.getAttribute("aria-activedescendant")).toBe("menu-item-1");
-    const filas = [...document.querySelectorAll(".menu-item")];
-    expect(filas[0]?.textContent).toBe("Cambiar de paneltab");
-    // Una entrada que esta ventana no ejecuta SIGUE saliendo: el menú es
-    // donde se ve qué existe.
-    expect(filas[1]?.getAttribute("aria-disabled")).toBe("true");
+  it("the open menu marks its title, its cursor and what can't be done", () => {
+    const { screen } = mount();
+    screen.paint(withMenu(1));
+    const open = document.querySelectorAll('.menubar-title[aria-expanded="true"]');
+    expect(open).toHaveLength(1);
+    expect(open[0]?.textContent).toBe("Paneles");
+    const list = document.querySelector(".menu-items") as HTMLElement;
+    expect(list.getAttribute("aria-activedescendant")).toBe("menu-item-1");
+    const rows = [...document.querySelectorAll(".menu-item")];
+    expect(rows[0]?.textContent).toBe("Cambiar de paneltab");
+    // An entry this window doesn't run STILL shows up: the menu is where you
+    // see what exists.
+    expect(rows[1]?.getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("el desplegable cuelga del título PINTADO, no de una cuenta en celdas", () => {
-    // Los títulos se pintan con relleno en píxeles y no miden lo mismo: una
-    // cuenta a `12ch` por título se desviaba más cuanto más a la derecha, y
-    // «Ayuda» abría su desplegable un título más allá. jsdom no maqueta, así
-    // que la geometría del título se finge: lo que se comprueba es que la
-    // medida del título es lo que coloca la lista.
-    const { screen } = montar();
-    const medida = vi
+  it("the dropdown hangs off the PAINTED title, not a count in cells", () => {
+    // Titles are painted with pixel padding and don't measure the same: a
+    // count at `12ch` per title drifted further the more to the right, and
+    // "Ayuda" opened its dropdown one title over. jsdom doesn't do layout, so
+    // the title's geometry is faked: what's checked is that the title's
+    // measurement is what places the list.
+    const { screen } = mount();
+    const measure = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")
       .mockImplementation(function (this: HTMLElement): DOMRect {
         const left = this.id === "menu-title-1" ? 123 : 0;
         return new DOMRect(left, 0, 0, 0);
       });
     try {
-      screen.paint(conMenu(1));
+      screen.paint(withMenu(1));
     } finally {
-      medida.mockRestore();
+      measure.mockRestore();
     }
-    const lista = document.querySelector(".menu-items") as HTMLElement;
-    expect(lista.style.getPropertyValue("--menu-left")).toBe("123px");
+    const list = document.querySelector(".menu-items") as HTMLElement;
+    expect(list.style.getPropertyValue("--menu-left")).toBe("123px");
   });
 
-  it("el ratón despliega, señala, ejecuta y cierra", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conMenu(null));
+  it("the mouse opens, points, activates and closes", () => {
+    const { screen, sent } = mount();
+    screen.paint(withMenu(null));
     (document.querySelectorAll(".menubar-title")[1] as HTMLElement).click();
-    screen.paint(conMenu(1));
-    const fila = document.querySelectorAll(".menu-item")[0] as HTMLElement;
-    fila.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
-    fila.click();
+    screen.paint(withMenu(1));
+    const row = document.querySelectorAll(".menu-item")[0] as HTMLElement;
+    row.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    row.click();
     (document.querySelector(".menu-veil") as HTMLElement).click();
-    expect(enviadas).toEqual([
+    expect(sent).toEqual([
       { action: "menu_open", menu: 1 },
       { action: "menu_point_row", row: 0 },
       { action: "menu_activate_row", row: 0 },
@@ -2911,9 +2921,9 @@ describe("la barra de menús", () => {
   });
 });
 
-describe("la paleta", () => {
-  function conPaleta(cursor: number | null) {
-    const v = vista({});
+describe("the palette", () => {
+  function withPalette(cursor: number | null) {
+    const v = view({});
     v.palette = {
       query: "cur",
       rows: [
@@ -2938,31 +2948,31 @@ describe("la paleta", () => {
     return v;
   }
 
-  it("es modal, dice cuánto acota y marca la selección", () => {
-    const { screen } = montar();
-    screen.paint(conPaleta(1));
-    const caja = document.querySelector(".palette") as HTMLElement;
-    expect(caja.getAttribute("aria-modal")).toBe("true");
+  it("is modal, says how much it narrows down, and marks the selection", () => {
+    const { screen } = mount();
+    screen.paint(withPalette(1));
+    const box = document.querySelector(".palette") as HTMLElement;
+    expect(box.getAttribute("aria-modal")).toBe("true");
     expect(document.querySelector(".palette-count")?.textContent).toBe("2/24");
-    const lista = document.querySelector(".palette-rows") as HTMLElement;
-    expect(lista.getAttribute("aria-activedescendant")).toBe("palette-row-1");
+    const list = document.querySelector(".palette-rows") as HTMLElement;
+    expect(list.getAttribute("aria-activedescendant")).toBe("palette-row-1");
     const sel = document.querySelectorAll('.palette-row[aria-selected="true"]');
     expect(sel).toHaveLength(1);
     expect(sel[0]?.textContent).toContain("cursor.down");
   });
 
-  it("cada fila enseña su atajo real", () => {
-    const { screen } = montar();
-    screen.paint(conPaleta(0));
+  it("every row shows its real shortcut", () => {
+    const { screen } = mount();
+    screen.paint(withPalette(0));
     const chords = [...document.querySelectorAll(".palette-chord")].map(
       (c) => c.textContent,
     );
     expect(chords).toEqual(["Up", "Down"]);
   });
 
-  it("sin coincidencias lo dice en vez de quedarse en blanco", () => {
-    const { screen } = montar();
-    const v = conPaleta(null);
+  it("with no matches it says so instead of staying blank", () => {
+    const { screen } = mount();
+    const v = withPalette(null);
     if (v.palette !== null) {
       v.palette.rows = [];
     }
@@ -2970,17 +2980,17 @@ describe("la paleta", () => {
     expect(document.querySelector(".palette-rows .empty")).not.toBeNull();
   });
 
-  it("cerrada, no tapa nada", () => {
-    const { screen } = montar();
-    screen.paint(vista({}));
+  it("closed, it covers nothing", () => {
+    const { screen } = mount();
+    screen.paint(view({}));
     expect(document.querySelector(".palette")).toBeNull();
   });
 });
 
-describe("la ayuda", () => {
-  /** Una página con prosa, marcas ya resueltas y una fila apagada. */
-  function conAyuda(): ViewSnapshot {
-    const v = vista({});
+describe("help", () => {
+  /** A page with prose, already-resolved marks and one disabled row. */
+  function withHelp(): ViewSnapshot {
+    const v = view({});
     v.help = {
       title: "Copiar",
       topic_id: "copying",
@@ -3056,40 +3066,40 @@ describe("la ayuda", () => {
     return v;
   }
 
-  it("es modal y estructura la página con encabezados y listas de verdad", () => {
-    const { screen } = montar();
-    screen.paint(conAyuda());
-    const caja = document.querySelector(".help") as HTMLElement;
-    expect(caja.getAttribute("role")).toBe("dialog");
-    expect(caja.getAttribute("aria-modal")).toBe("true");
-    // El título de la página es el `h1`; un encabezado del cuerpo baja un
-    // nivel, así que la jerarquía no tiene dos raíces.
-    expect(caja.querySelectorAll("h1")).toHaveLength(1);
-    expect(caja.querySelector("h1")?.textContent).toBe("Copiar");
-    expect(caja.querySelector("h2")?.textContent).toBe("Copiar ficheros");
-    expect(caja.querySelectorAll(".help-bullets li")).toHaveLength(2);
-    expect(caja.querySelector("pre code")?.textContent).toBe("norte --help");
-    expect(caja.querySelectorAll(".help-table th")).toHaveLength(2);
-    expect(caja.querySelector(".help-callout")?.getAttribute("data-kind")).toBe("warn");
+  it("is modal and structures the page with real headings and lists", () => {
+    const { screen } = mount();
+    screen.paint(withHelp());
+    const box = document.querySelector(".help") as HTMLElement;
+    expect(box.getAttribute("role")).toBe("dialog");
+    expect(box.getAttribute("aria-modal")).toBe("true");
+    // The page's title is the `h1`; a heading from the body drops a level,
+    // so the hierarchy doesn't have two roots.
+    expect(box.querySelectorAll("h1")).toHaveLength(1);
+    expect(box.querySelector("h1")?.textContent).toBe("Copiar");
+    expect(box.querySelector("h2")?.textContent).toBe("Copiar ficheros");
+    expect(box.querySelectorAll(".help-bullets li")).toHaveLength(2);
+    expect(box.querySelector("pre code")?.textContent).toBe("norte --help");
+    expect(box.querySelectorAll(".help-table th")).toHaveLength(2);
+    expect(box.querySelector(".help-callout")?.getAttribute("data-kind")).toBe("warn");
   });
 
-  it("una marca del corpus llega como TECLA y nunca como marcado", () => {
-    const { screen } = montar();
-    screen.paint(conAyuda());
+  it("a mark from the corpus arrives as a KEY and never as markup", () => {
+    const { screen } = mount();
+    screen.paint(withHelp());
     const kbd = document.querySelector(".help-body kbd");
     expect(kbd?.textContent).toBe("F5");
-    // Ni una marca sin resolver ni un `{{cmd:`: el host las convierte.
+    // Neither an unresolved mark nor a `{{cmd:`: the host converts them.
     expect(document.querySelector(".help")?.textContent).not.toContain("{{cmd:");
   });
 
-  it("NADA de lo que llega se interpreta como HTML", () => {
-    const { screen } = montar();
-    const v = conAyuda();
+  it("NOTHING that arrives is interpreted as HTML", () => {
+    const { screen } = mount();
+    const v = withHelp();
     if (v.help !== null) {
-      // Texto de tercero: un `help.md` de un plugin. Si algo de esto se
-      // pintara con `innerHTML`, aquí aparecería un nodo `<img>` y un
-      // atributo `onerror` — que es exactamente el fallo del que protege
-      // que el vocabulario de bloques sea cerrado.
+      // Third-party text: a plugin's `help.md`. If any of this were painted
+      // with `innerHTML`, an `<img>` node and an `onerror` attribute would
+      // show up here — which is exactly the failure the block vocabulary
+      // being closed protects against.
       v.help.title = "<img src=x onerror=alert(1)>";
       v.help.blocks = [
         {
@@ -3102,62 +3112,63 @@ describe("la ayuda", () => {
       v.help.actions = [];
     }
     screen.paint(v);
-    const caja = document.querySelector(".help") as HTMLElement;
-    expect(caja.querySelector("img")).toBeNull();
-    expect(caja.querySelector("script")).toBeNull();
-    expect(caja.querySelector("b")).toBeNull();
-    expect(caja.querySelector("i")).toBeNull();
-    // Y el texto SÍ está: escapado, no perdido.
-    expect(caja.textContent).toContain("<script>alert(1)</script>");
-    expect(caja.querySelector("h1")?.textContent).toBe("<img src=x onerror=alert(1)>");
+    const box = document.querySelector(".help") as HTMLElement;
+    expect(box.querySelector("img")).toBeNull();
+    expect(box.querySelector("script")).toBeNull();
+    expect(box.querySelector("b")).toBeNull();
+    expect(box.querySelector("i")).toBeNull();
+    // And the text IS there: escaped, not lost.
+    expect(box.textContent).toContain("<script>alert(1)</script>");
+    expect(box.querySelector("h1")?.textContent).toBe("<img src=x onerror=alert(1)>");
   });
 
-  it("una fila apagada dice por qué, y un click en una viva la activa", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conAyuda());
-    const filas = [...document.querySelectorAll(".help-action")];
-    expect(filas).toHaveLength(3);
-    expect(filas[1]?.getAttribute("data-enabled")).toBe("false");
-    expect(filas[1]?.textContent).toContain("aquí no");
+  it("a disabled row says why, and a click on an active one activates it", () => {
+    const { screen, sent } = mount();
+    screen.paint(withHelp());
+    const rows = [...document.querySelectorAll(".help-action")];
+    expect(rows).toHaveLength(3);
+    expect(rows[1]?.getAttribute("data-enabled")).toBe("false");
+    expect(rows[1]?.textContent).toContain("aquí no");
 
-    (filas[0] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "help_activate", index: 0 }]);
-    // Una fila apagada no manda nada: el host ya dijo que no se puede.
-    (filas[1] as HTMLElement).click();
-    expect(enviadas).toHaveLength(1);
+    (rows[0] as HTMLElement).click();
+    expect(sent).toEqual([{ action: "help_activate", index: 0 }]);
+    // A disabled row sends nothing: the host already said it can't be done.
+    (rows[1] as HTMLElement).click();
+    expect(sent).toHaveLength(1);
   });
 
-  it("la hoja de teclado explica cada tecla que esta ventana no hace", () => {
-    const { screen } = montar();
-    screen.paint(conAyuda());
-    const filas = [...document.querySelectorAll(".help-keys tbody tr")];
-    expect(filas).toHaveLength(2);
-    expect(filas[0]?.querySelector("th")?.textContent).toBe("F5");
-    expect(filas[1]?.getAttribute("data-enabled")).toBe("false");
-    // El motivo va en su PROPIA celda, no pegado a la etiqueta: compuestos
-    // en banda quedan en la misma corrida bidi, y una etiqueta que acabe en
-    // RTL fuerte se lleva el separador al lado que no es.
-    expect(filas[1]?.querySelector(".help-key-label")?.textContent).toBe("mover");
-    expect(filas[1]?.querySelector(".help-key-reason")?.textContent).toBe("aquí no");
+  it("the key sheet explains every key this window doesn't do", () => {
+    const { screen } = mount();
+    screen.paint(withHelp());
+    const rows = [...document.querySelectorAll(".help-keys tbody tr")];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.querySelector("th")?.textContent).toBe("F5");
+    expect(rows[1]?.getAttribute("data-enabled")).toBe("false");
+    // The reason goes in its OWN cell, not glued to the label: compounded in
+    // one run they'd share the same bidi run, and a label ending strongly
+    // RTL would drag the separator to the wrong side.
+    expect(rows[1]?.querySelector(".help-key-label")?.textContent).toBe("mover");
+    expect(rows[1]?.querySelector(".help-key-reason")?.textContent).toBe("aquí no");
   });
 
-  it("cada dato del host dentro de la prosa es su propia corrida bidi", () => {
-    const { screen } = montar();
-    screen.paint(conAyuda());
-    // Un `<p>` hecho de spans es UNA corrida: sin aislar, prosa RTL de un
-    // tercero puede mover de sitio la tecla que la frase dice que se pulse,
-    // y ahí no hay nada que enmascarar — son letras, no controles.
+  it("every piece of host data inside the prose is its own bidi run", () => {
+    const { screen } = mount();
+    screen.paint(withHelp());
+    // A `<p>` made of spans is ONE run: without isolation, a third party's
+    // RTL prose can move the key the sentence says to press out of place,
+    // and there's nothing to mask there — they're letters, not controls.
     //
-    // Se comprueba sobre la HOJA como texto y no con `getComputedStyle`:
-    // jsdom no aplica la hoja del documento, así que el valor calculado
-    // sería vacío para todo y el test pasaría sin comprobar nada. Lo que
-    // hay que impedir es que la regla desaparezca, y eso sí se ve aquí.
+    // Checked over the SHEET as text and not with `getComputedStyle`: jsdom
+    // doesn't apply the document's stylesheet, so the computed value would
+    // be empty for everything and the test would pass without checking
+    // anything. What has to be prevented is the rule disappearing, and that
+    // does show up here.
     const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
-    const bloque = css
+    const block = css
       .split("}")
       .find((b) => b.includes("unicode-bidi: isolate") && b.includes(".help-chord"));
-    expect(bloque, "no hay regla de aislamiento para la ayuda").toBeDefined();
-    for (const clase of [
+    expect(block, "no isolation rule for help").toBeDefined();
+    for (const cls of [
       ".help-chord",
       ".help-cmd",
       ".help-link",
@@ -3168,105 +3179,105 @@ describe("la ayuda", () => {
       ".help-action-label",
       ".help-action-reason",
     ]) {
-      expect(bloque, `${clase} sin aislar`).toContain(clase);
+      expect(block, `${cls} not isolated`).toContain(cls);
     }
-    // Y las clases existen de verdad en lo pintado, no solo en la hoja.
+    // And the classes really exist in what's painted, not just in the sheet.
     for (const sel of [".help-chord", ".help-key-chord", ".help-action-chord"]) {
-      expect(document.querySelector(sel), `falta ${sel}`).not.toBeNull();
+      expect(document.querySelector(sel), `missing ${sel}`).not.toBeNull();
     }
   });
 
-  it("el cuerpo del visor se pinta en orden lógico, como un terminal", () => {
-    // El recorte horizontal lo hace el HOST en orden lógico, una sola vez, en
-    // el modelo que comparte con el terminal. Un navegador que reordenara por
-    // el algoritmo bidi dejaría la misma `first_col` enseñando cosas distintas
-    // en las dos superficies — y sin ninguna marca, porque una línea de LETRAS
-    // árabes o hebreas no lleva controles: nada se enmascara y `had_errors` es
-    // falso. Es la misma renuncia que ya hace `must_mask` con los aislantes
-    // legítimos: honestidad de rejilla por encima de tipografía.
+  it("the viewer's body paints in logical order, like a terminal", () => {
+    // Horizontal truncation is done by the HOST in logical order, once, in
+    // the model it shares with the terminal. A browser that reordered by the
+    // bidi algorithm would leave the same `first_col` showing different
+    // things on the two surfaces — with no mark at all, because a line of
+    // Arabic or Hebrew LETTERS carries no controls: nothing gets masked and
+    // `had_errors` is false. It's the same tradeoff `must_mask` already makes
+    // with legitimate isolates: grid honesty over typography.
     //
-    // Sobre la HOJA como texto y por el mismo motivo que el bloque de la
-    // ayuda: jsdom no la aplica, así que `getComputedStyle` no comprobaría
-    // nada. Lo que hay que impedir es que la regla desaparezca.
+    // Over the SHEET as text and for the same reason as help's block: jsdom
+    // doesn't apply it, so `getComputedStyle` would check nothing. What has
+    // to be prevented is the rule disappearing.
     const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
-    const bloque = css
+    const block = css
       .split("}")
       .find((b) => b.includes(".viewer-body {") && b.includes("unicode-bidi"));
-    expect(bloque, "el cuerpo del visor sin regla bidi").toBeDefined();
-    expect(bloque).toContain("bidi-override");
-    expect(bloque).toContain("direction: ltr");
+    expect(block, "the viewer's body has no bidi rule").toBeDefined();
+    expect(block).toContain("bidi-override");
+    expect(block).toContain("direction: ltr");
   });
 
-  it("un enlace de la prosa se pulsa y activa SU fila, sin llevar la clave", () => {
-    const { screen, enviadas } = montar();
-    const v = conAyuda();
+  it("a link in the prose gets pressed and activates ITS row, without carrying the key", () => {
+    const { screen, sent } = mount();
+    const v = withHelp();
     if (v.help !== null) {
       v.help.blocks = [
         { block: "paragraph", spans: [{ span: "link", text: "Marcar", action: 1 }] },
       ];
     }
     screen.paint(v);
-    const enlace = document.querySelector(".help-link") as HTMLElement;
-    expect(enlace.getAttribute("role")).toBe("link");
-    // Viaja el índice de la fila, nunca el id del destino.
-    expect(enlace.getAttribute("data-topic")).toBeNull();
-    enlace.click();
-    expect(enviadas).toEqual([{ action: "help_activate", index: 1 }]);
+    const link = document.querySelector(".help-link") as HTMLElement;
+    expect(link.getAttribute("role")).toBe("link");
+    // The row's index travels, never the target's id.
+    expect(link.getAttribute("data-topic")).toBeNull();
+    link.click();
+    expect(sent).toEqual([{ action: "help_activate", index: 1 }]);
   });
 
-  it("un enlace sin fila sigue siendo texto", () => {
-    const { screen, enviadas } = montar();
-    const v = conAyuda();
+  it("a link with no row is still just text", () => {
+    const { screen, sent } = mount();
+    const v = withHelp();
     if (v.help !== null) {
       v.help.blocks = [
         { block: "paragraph", spans: [{ span: "link", text: "Marcar", action: null }] },
       ];
     }
     screen.paint(v);
-    const enlace = document.querySelector(".help-link") as HTMLElement;
-    expect(enlace.getAttribute("role")).toBeNull();
-    enlace.click();
-    expect(enviadas).toEqual([]);
+    const link = document.querySelector(".help-link") as HTMLElement;
+    expect(link.getAttribute("role")).toBeNull();
+    link.click();
+    expect(sent).toEqual([]);
   });
 
-  it("la petición de desplazar del host se aplica UNA vez por número", () => {
-    // Puente 76: qué tecla desplaza lo decide el host con el keymap del
-    // lector; el renderer mide y desplaza. Un parche que repinta la ayuda por
-    // otro motivo trae la misma petición y no la repite.
-    const { screen } = montar();
-    const v = conAyuda();
+  it("the host's scroll request applies ONCE per number", () => {
+    // Bridge 76: which key scrolls is decided by the host with the reader's
+    // keymap; the renderer measures and scrolls. A patch that repaints help
+    // for another reason carries the same request and doesn't repeat it.
+    const { screen } = mount();
+    const v = withHelp();
     screen.paint(v);
-    const cuerpo = () => document.querySelector(".help-body") as HTMLElement;
-    cuerpo().scrollTop = 50;
+    const body = () => document.querySelector(".help-body") as HTMLElement;
+    body().scrollTop = 50;
     if (v.help !== null) {
       v.help = { ...v.help, scroll: { to: "top", seq: 1 } };
     }
     screen.paint(v);
-    expect(cuerpo().scrollTop, "aplicada").toBe(0);
-    cuerpo().scrollTop = 40;
-    // Otro parche de la ayuda (un objeto nuevo, como los pone la sesión)
-    // con la misma petición.
+    expect(body().scrollTop, "applied").toBe(0);
+    body().scrollTop = 40;
+    // Another help patch (a new object, the way the session builds them)
+    // with the same request.
     if (v.help !== null) {
       v.help = { ...v.help };
     }
     screen.paint(v);
-    expect(cuerpo().scrollTop, "la misma petición no se repite").toBe(40);
-    // Y una apertura NUEVA vuelve a numerar desde 1.
-    screen.paint(vista({}));
+    expect(body().scrollTop, "the same request doesn't repeat").toBe(40);
+    // And a NEW opening numbers again from 1.
+    screen.paint(view({}));
     screen.paint(v);
-    expect(cuerpo().scrollTop, "otra apertura, otra cuenta").toBe(0);
+    expect(body().scrollTop, "another opening, another count").toBe(0);
   });
 
-  it("las teclas ya no las consume el renderer: van al host", () => {
-    const { screen } = montar();
-    screen.paint(conAyuda());
-    // No queda ninguna ruta que atienda `PageDown` sin preguntar al keymap.
+  it("keys are no longer consumed by the renderer: they go to the host", () => {
+    const { screen } = mount();
+    screen.paint(withHelp());
+    // No path is left that handles `PageDown` without asking the keymap.
     expect("helpBodyScrolls" in screen).toBe(false);
   });
 
-  it("una página con tres secciones o más lleva su índice arriba", () => {
-    const { screen } = montar();
-    const v = conAyuda();
+  it("a page with three sections or more carries its index up top", () => {
+    const { screen } = mount();
+    const v = withHelp();
     if (v.help !== null) {
       v.help.blocks = ["Uno", "Dos", "Tres"].flatMap((t) => [
         { block: "heading" as const, level: 1, text: t },
@@ -3274,15 +3285,15 @@ describe("la ayuda", () => {
       ]);
     }
     screen.paint(v);
-    const botones = [...document.querySelectorAll(".help-toc-item")].map(
+    const buttons = [...document.querySelectorAll(".help-toc-item")].map(
       (b) => b.textContent,
     );
-    expect(botones).toEqual(["Uno", "Dos", "Tres"]);
+    expect(buttons).toEqual(["Uno", "Dos", "Tres"]);
   });
 
-  it("con menos de tres secciones no hay índice de página", () => {
-    const { screen } = montar();
-    const v = conAyuda();
+  it("with fewer than three sections there's no page index", () => {
+    const { screen } = mount();
+    const v = withHelp();
     if (v.help !== null) {
       v.help.blocks = [{ block: "heading", level: 1, text: "Sola" }];
     }
@@ -3290,31 +3301,31 @@ describe("la ayuda", () => {
     expect(document.querySelector(".help-toc")).toBeNull();
   });
 
-  it("un click en la lateral pide ESA página", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conAyuda());
-    const lista = document.querySelector(".help-topic-rows") as HTMLElement;
-    expect(lista.getAttribute("aria-activedescendant")).toBe("help-topic-1");
-    const paginas = [...document.querySelectorAll(".help-topic")];
-    (paginas[1] as HTMLElement).click();
-    // La fila 0 es la CABECERA del grupo: la segunda página es la fila 2.
-    expect(enviadas).toEqual([{ action: "help_select_topic", row: 2 }]);
+  it("a click on the sidebar requests THAT page", () => {
+    const { screen, sent } = mount();
+    screen.paint(withHelp());
+    const list = document.querySelector(".help-topic-rows") as HTMLElement;
+    expect(list.getAttribute("aria-activedescendant")).toBe("help-topic-1");
+    const pages = [...document.querySelectorAll(".help-topic")];
+    (pages[1] as HTMLElement).click();
+    // Row 0 is the group's HEADER: the second page is row 2.
+    expect(sent).toEqual([{ action: "help_select_topic", row: 2 }]);
   });
 
-  it("cerrada, no tapa nada", () => {
-    const { screen } = montar();
-    screen.paint(vista({}));
+  it("closed, it covers nothing", () => {
+    const { screen } = mount();
+    screen.paint(view({}));
     expect(document.querySelector(".help")).toBeNull();
   });
 });
 
-describe("los ajustes", () => {
-  function conAjustes(): ViewSnapshot {
-    const v = vista({});
+describe("settings", () => {
+  function withSettings(): ViewSnapshot {
+    const v = view({});
     v.settings = {
       index: [
         { key: "appearance", title: "Apariencia", visible: 2 },
-        // Vaciada por el filtro: sigue en el índice, apagada.
+        // Emptied by the filter: it stays in the index, dimmed.
         { key: "open-with", title: "Abrir con", visible: 0 },
         { key: "paths", title: "Dónde vive cada cosa", visible: 2 },
       ],
@@ -3382,111 +3393,111 @@ describe("los ajustes", () => {
     return v;
   }
 
-  it("es modal, no avisa de nada y numera solo las filas elegibles", () => {
-    const { screen } = montar();
-    screen.paint(conAjustes());
-    const caja = document.querySelector(".settings") as HTMLElement;
-    expect(caja.getAttribute("aria-modal")).toBe("true");
-    // La nota de «no escribe» se fue con el puente 60: esta ventana escribe.
-    expect(caja.querySelector(".settings-note")).toBeNull();
-    // Dos cabeceras, cuatro filas: el cursor cuenta filas, no cabeceras.
-    expect(caja.querySelectorAll(".settings-group")).toHaveLength(2);
-    const filas = [...caja.querySelectorAll(".settings-row")];
-    expect(filas).toHaveLength(4);
-    expect(filas.map((f) => f.id)).toEqual([
+  it("is modal, warns of nothing, and numbers only eligible rows", () => {
+    const { screen } = mount();
+    screen.paint(withSettings());
+    const box = document.querySelector(".settings") as HTMLElement;
+    expect(box.getAttribute("aria-modal")).toBe("true");
+    // The "doesn't write" note left with bridge 60: this window writes.
+    expect(box.querySelector(".settings-note")).toBeNull();
+    // Two headers, four rows: the cursor counts rows, not headers.
+    expect(box.querySelectorAll(".settings-group")).toHaveLength(2);
+    const rows = [...box.querySelectorAll(".settings-row")];
+    expect(rows).toHaveLength(4);
+    expect(rows.map((f) => f.id)).toEqual([
       "settings-row-0",
       "settings-row-1",
       "settings-row-2",
       "settings-row-3",
     ]);
-    const lista = caja.querySelector(".settings-rows") as HTMLElement;
-    expect(lista.getAttribute("aria-activedescendant")).toBe("settings-row-1");
+    const list = box.querySelector(".settings-rows") as HTMLElement;
+    expect(list.getAttribute("aria-activedescendant")).toBe("settings-row-1");
   });
 
-  it("pinta el índice y manda al host la sección elegida", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conAjustes());
-    const indice = [...document.querySelectorAll(".settings-index-item")];
-    expect(indice.map((i) => (i as HTMLElement).dataset["key"])).toEqual([
+  it("paints the index and sends the host the chosen section", () => {
+    const { screen, sent } = mount();
+    screen.paint(withSettings());
+    const index = [...document.querySelectorAll(".settings-index-item")];
+    expect(index.map((i) => (i as HTMLElement).dataset["key"])).toEqual([
       "appearance",
       "open-with",
       "paths",
     ]);
-    // La que el filtro vació sigue, apagada y sin poder pulsarse.
-    const vacia = indice[1] as HTMLButtonElement;
-    expect(vacia.dataset["empty"]).toBe("true");
-    expect(vacia.disabled).toBe(true);
-    (indice[0] as HTMLElement).click();
-    expect(enviadas.at(-1)).toEqual({
+    // The one the filter emptied stays, dimmed and unclickable.
+    const empty = index[1] as HTMLButtonElement;
+    expect(empty.dataset["empty"]).toBe("true");
+    expect(empty.disabled).toBe(true);
+    (index[0] as HTMLElement).click();
+    expect(sent.at(-1)).toEqual({
       action: "settings_jump_section",
       section: "appearance",
     });
   });
 
-  it("el buscador manda el texto, no una tecla", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conAjustes());
-    const caja = document.querySelector(".settings-search") as HTMLInputElement;
-    expect(caja.value).toBe("tema");
-    caja.value = "fuente";
-    caja.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(enviadas.at(-1)).toEqual({ action: "settings_query", text: "fuente" });
+  it("the search box sends the text, not a key", () => {
+    const { screen, sent } = mount();
+    screen.paint(withSettings());
+    const box = document.querySelector(".settings-search") as HTMLInputElement;
+    expect(box.value).toBe("tema");
+    box.value = "fuente";
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "settings_query", text: "fuente" });
   });
 
-  it("pinta los dos cursores y apaga el del lado sin teclado", () => {
-    const { screen } = montar();
-    const v = conAjustes();
+  it("paints both cursors and dims the one on the side without the keyboard", () => {
+    const { screen } = mount();
+    const v = withSettings();
     screen.paint(v);
-    // Con el teclado en la lista: la lista viva, el índice con su sección
-    // marcada pero apagada por el CSS.
-    const lista = document.querySelector(".settings-rows") as HTMLElement;
+    // With the keyboard in the list: the list live, the index with its
+    // section marked but dimmed by CSS.
+    const list = document.querySelector(".settings-rows") as HTMLElement;
     const nav = document.querySelector(".settings-index") as HTMLElement;
-    expect(lista.dataset["focused"]).toBe("true");
+    expect(list.dataset["focused"]).toBe("true");
     expect(nav.dataset["focused"]).toBe("false");
-    // El cursor (fila 1) cae en Apariencia, y el índice lo dice por CLAVE.
-    const marcada = nav.querySelector('[aria-current="true"]') as HTMLElement;
-    expect(marcada.dataset["key"]).toBe("appearance");
+    // The cursor (row 1) lands on Apariencia, and the index says so by KEY.
+    const marked = nav.querySelector('[aria-current="true"]') as HTMLElement;
+    expect(marked.dataset["key"]).toBe("appearance");
 
     if (v.settings !== null) {
       v.settings = { ...v.settings, focus: "index" };
     }
     screen.paint(v);
-    const lista2 = document.querySelector(".settings-rows") as HTMLElement;
+    const list2 = document.querySelector(".settings-rows") as HTMLElement;
     const nav2 = document.querySelector(".settings-index") as HTMLElement;
-    expect(lista2.dataset["focused"]).toBe("false");
+    expect(list2.dataset["focused"]).toBe("false");
     expect(nav2.dataset["focused"]).toBe("true");
-    // Y la fila del cursor sigue marcada: se pinta siempre, apagada.
-    expect(lista2.querySelector('[aria-selected="true"]')).not.toBeNull();
+    // And the cursor's row is still marked: it always paints, dimmed.
+    expect(list2.querySelector('[aria-selected="true"]')).not.toBeNull();
   });
 
-  it("un desplegable manda el valor elegido, no un ciclo", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conAjustes());
+  it("a dropdown sends the chosen value, not a cycle", () => {
+    const { screen, sent } = mount();
+    screen.paint(withSettings());
     const sel = document.querySelector("#settings-row-1 select") as HTMLSelectElement;
     expect([...sel.options].map((o) => o.value)).toEqual(["default", "nord"]);
     expect(sel.value).toBe("nord");
     sel.value = "default";
     sel.dispatchEvent(new Event("change", { bubbles: true }));
-    // Por ID y de una vez: `settings_activate` habría ciclado.
-    expect(enviadas.at(-1)).toEqual({
+    // By ID and at once: `settings_activate` would have cycled.
+    expect(sent.at(-1)).toEqual({
       action: "settings_set",
       id: "ui.theme",
       value: "default",
     });
   });
 
-  /// Un valor que el fichero trae y la lista ya no reconoce —un tema
-  /// borrado— se AÑADE al desplegable: enseñar otra cosa de la que hay
-  /// puesta sería mentir sobre la configuración.
-  it("un valor que la lista no reconoce sigue estando en el desplegable", () => {
-    const { screen } = montar();
-    const v = conAjustes();
+  /// A value the file carries that the list no longer recognizes — a deleted
+  /// theme — gets ADDED to the dropdown: showing something else instead of
+  /// what's actually set would be lying about the configuration.
+  it("a value the list doesn't recognize is still there in the dropdown", () => {
+    const { screen } = mount();
+    const v = withSettings();
     if (v.settings !== null) {
       const sec = v.settings.sections[0];
       if (sec?.section === "settings") {
-        const fila = sec.rows[1];
-        if (fila !== undefined) {
-          fila.value = "un-tema-que-borre";
+        const row = sec.rows[1];
+        if (row !== undefined) {
+          row.value = "un-tema-que-borre";
         }
       }
     }
@@ -3496,9 +3507,9 @@ describe("los ajustes", () => {
     expect([...sel.options].map((o) => o.value)).toContain("un-tema-que-borre");
   });
 
-  it("un interruptor dice su estado y manda el contrario", () => {
-    const { screen, enviadas } = montar();
-    const v = conAjustes();
+  it("a toggle states its status and sends the opposite", () => {
+    const { screen, sent } = mount();
+    const v = withSettings();
     if (v.settings !== null) {
       const sec = v.settings.sections[0];
       if (sec?.section === "settings") {
@@ -3524,18 +3535,18 @@ describe("los ajustes", () => {
     const sw = document.querySelector('[role="switch"]') as HTMLButtonElement;
     expect(sw.getAttribute("aria-checked")).toBe("true");
     sw.click();
-    expect(enviadas.at(-1)).toEqual({
+    expect(sent.at(-1)).toEqual({
       action: "settings_set",
       id: "ui.mouse",
       value: "false",
     });
   });
 
-  /// Un campo guarda al SALIR, no en cada tecla: cada pulsación sería una
-  /// escritura en el `norte.toml` y una recarga de la configuración entera.
-  it("un campo de texto guarda al salir y se rinde con escape", () => {
-    const { screen, enviadas } = montar();
-    const v = conAjustes();
+  /// A field saves on BLUR, not on every key: every keystroke would be a
+  /// write to `norte.toml` and a reload of the whole configuration.
+  it("a text field saves on blur and gives up on escape", () => {
+    const { screen, sent } = mount();
+    const v = withSettings();
     if (v.settings !== null) {
       const sec = v.settings.sections[0];
       if (sec?.section === "settings") {
@@ -3558,24 +3569,24 @@ describe("los ajustes", () => {
       }
     }
     screen.paint(v);
-    const campo = document.querySelector(".settings-text") as HTMLInputElement;
-    campo.value = "vim";
-    campo.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
-    expect(enviadas.at(-1)).not.toMatchObject({ action: "settings_set" });
-    campo.dispatchEvent(new FocusEvent("blur"));
-    expect(enviadas.at(-1)).toEqual({
+    const field = document.querySelector(".settings-text") as HTMLInputElement;
+    field.value = "vim";
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(sent.at(-1)).not.toMatchObject({ action: "settings_set" });
+    field.dispatchEvent(new FocusEvent("blur"));
+    expect(sent.at(-1)).toEqual({
       action: "settings_set",
       id: "ui.editor",
       value: "vim",
     });
   });
 
-  /// Un campo vacío dice CUÁL es el valor de fábrica, no una frase sobre
-  /// que lo hay: el marcador ocupa el sitio del dato, así que tiene que ser
-  /// el dato.
-  it("un campo vacío enseña el valor de fábrica como marcador", () => {
-    const { screen } = montar();
-    const v = conAjustes();
+  /// An empty field says WHAT the factory value is, not a sentence about
+  /// there being one: the placeholder takes the data's spot, so it has to be
+  /// the data.
+  it("an empty field shows the factory value as a placeholder", () => {
+    const { screen } = mount();
+    const v = withSettings();
     if (v.settings !== null) {
       const sec = v.settings.sections[0];
       if (sec?.section === "settings") {
@@ -3598,100 +3609,100 @@ describe("los ajustes", () => {
       }
     }
     screen.paint(v);
-    const campo = document.querySelector(".settings-text") as HTMLInputElement;
-    expect(campo.value).toBe("");
-    expect(campo.placeholder).toBe("Inter");
+    const field = document.querySelector(".settings-text") as HTMLInputElement;
+    expect(field.value).toBe("");
+    expect(field.placeholder).toBe("Inter");
   });
 
-  it("el buscador conserva el foco y el caret entre repintados", () => {
-    const { screen } = montar();
-    screen.paint(conAjustes());
-    const caja = document.querySelector(".settings-search") as HTMLInputElement;
-    caja.focus();
-    expect(document.activeElement).toBe(caja);
-    caja.value = "fue";
-    caja.setSelectionRange(3, 3);
-    // El host contesta a cada tecla con un parche, o sea un repintado. Si el
-    // campo se recreara, el lector no podría escribir más de una letra.
-    screen.paint(conAjustes());
-    const despues = document.querySelector(".settings-search") as HTMLInputElement;
-    expect(despues).toBe(caja);
-    expect(document.activeElement).toBe(despues);
-    expect(despues.value).toBe("fue");
-    expect(despues.selectionStart).toBe(3);
+  it("the search box keeps focus and the caret across repaints", () => {
+    const { screen } = mount();
+    screen.paint(withSettings());
+    const box = document.querySelector(".settings-search") as HTMLInputElement;
+    box.focus();
+    expect(document.activeElement).toBe(box);
+    box.value = "fue";
+    box.setSelectionRange(3, 3);
+    // The host answers every key with a patch, i.e. a repaint. If the field
+    // were recreated, the reader couldn't type more than one letter.
+    screen.paint(withSettings());
+    const after = document.querySelector(".settings-search") as HTMLInputElement;
+    expect(after).toBe(box);
+    expect(document.activeElement).toBe(after);
+    expect(after.value).toBe("fue");
+    expect(after.selectionStart).toBe(3);
   });
 
-  /// Cada fila cuelga EXACTAMENTE cuatro celdas, en el mismo orden, tenga o
-  /// no punto y acciones. La rejilla tiene cuatro columnas: un hijo de más
-  /// manda lo que sobra a una fila nueva, y así salía el botón de
-  /// restablecer como una caja de ancho completo.
-  it("cada fila cuelga las mismas cuatro celdas, en el mismo orden", () => {
-    const { screen } = montar();
-    screen.paint(conAjustes());
-    for (const fila of document.querySelectorAll(".settings-row")) {
-      const celdas = [...fila.children].filter(
+  /// Every row carries EXACTLY four cells, in the same order, whether it has
+  /// a dot and actions or not. The grid has four columns: one extra child
+  /// sends the overflow to a new row, and that's how the reset button used
+  /// to come out as a full-width box.
+  it("every row carries the same four cells, in the same order", () => {
+    const { screen } = mount();
+    screen.paint(withSettings());
+    for (const row of document.querySelectorAll(".settings-row")) {
+      const cells = [...row.children].filter(
         (c) => !c.classList.contains("settings-desc"),
       );
-      expect(celdas.map((c) => c.className)).toEqual([
+      expect(cells.map((c) => c.className)).toEqual([
         "settings-dot",
         "settings-name",
         "settings-value",
         "settings-actions",
       ]);
     }
-    // Y lo que antes se iba de la fila vive ahora DENTRO de las acciones.
-    const tocada = document.querySelector("#settings-row-1") as HTMLElement;
-    expect(tocada.querySelector(".settings-actions .settings-reset")).not.toBeNull();
+    // And what used to spill out of the row now lives INSIDE the actions.
+    const touched = document.querySelector("#settings-row-1") as HTMLElement;
+    expect(touched.querySelector(".settings-actions .settings-reset")).not.toBeNull();
   });
 
-  it("una fila tocada lleva punto y botón de restablecer", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conAjustes());
-    const filas = [...document.querySelectorAll(".settings-row")];
-    // La primera está en su valor de fábrica; la segunda no.
-    expect(filas[0]?.querySelector(".settings-reset")).toBeNull();
-    const boton = filas[1]?.querySelector(".settings-reset") as HTMLButtonElement;
-    expect(filas[1]?.querySelector(".settings-dot")?.getAttribute("aria-label")).toBe(
-      catalogoReal()["settings-modified"] ?? "",
+  it("a touched row carries a dot and a reset button", () => {
+    const { screen, sent } = mount();
+    screen.paint(withSettings());
+    const rows = [...document.querySelectorAll(".settings-row")];
+    // The first is at its factory value; the second isn't.
+    expect(rows[0]?.querySelector(".settings-reset")).toBeNull();
+    const button = rows[1]?.querySelector(".settings-reset") as HTMLButtonElement;
+    expect(rows[1]?.querySelector(".settings-dot")?.getAttribute("aria-label")).toBe(
+      realCatalog()["settings-modified"] ?? "",
     );
-    boton.click();
-    expect(enviadas.at(-1)).toEqual({ action: "settings_reset", row: 1 });
+    button.click();
+    expect(sent.at(-1)).toEqual({ action: "settings_reset", row: 1 });
   });
 
-  it("conserva el sitio del scroll al repintar", () => {
-    const { screen } = montar();
-    screen.paint(conAjustes());
-    const lista = document.querySelector(".settings-rows") as HTMLElement;
-    // jsdom no hace layout, así que `scrollTop` solo se conserva si el
-    // renderer lo copia a mano — que es exactamente lo que se comprueba.
-    Object.defineProperty(lista, "scrollTop", { value: 120, writable: true });
-    screen.paint(conAjustes());
-    const despues = document.querySelector(".settings-rows") as HTMLElement;
-    expect(despues.scrollTop).toBe(120);
+  it("keeps the scroll position on repaint", () => {
+    const { screen } = mount();
+    screen.paint(withSettings());
+    const list = document.querySelector(".settings-rows") as HTMLElement;
+    // jsdom doesn't do layout, so `scrollTop` is only preserved if the
+    // renderer copies it by hand — which is exactly what's checked.
+    Object.defineProperty(list, "scrollTop", { value: 120, writable: true });
+    screen.paint(withSettings());
+    const after = document.querySelector(".settings-rows") as HTMLElement;
+    expect(after.scrollTop).toBe(120);
   });
 
-  it("la cabecera de la sección se revela con su primera fila", () => {
-    const { screen } = montar();
-    const v = conAjustes();
+  it("the section header reveals itself along with its first row", () => {
+    const { screen } = mount();
+    const v = withSettings();
     if (v.settings !== null) {
       v.settings.cursor = 0;
     }
     screen.paint(v);
-    const lista = document.querySelector(".settings-rows") as HTMLElement;
-    // Fila 0: abre «Apariencia», así que lo que se desplaza a la vista es la
-    // CABECERA. Revelar solo la fila dejaba el rótulo fuera de la caja, que
-    // es cómo el rótulo dejaba de verse al volver arriba.
-    expect(objetivoRevelado(lista, 0)?.className).toBe("settings-group");
-    expect(objetivoRevelado(lista, 0)?.textContent).toContain("Apariencia");
-    // Fila 1: no abre nada, se revela ella.
-    expect(objetivoRevelado(lista, 1)?.id).toBe("settings-row-1");
-    // Fila 2: abre la sección de rutas, misma regla que la 0.
-    expect(objetivoRevelado(lista, 2)?.className).toBe("settings-group");
+    const list = document.querySelector(".settings-rows") as HTMLElement;
+    // Row 0: opens "Apariencia", so what scrolls into view is the HEADER.
+    // Revealing just the row left the label outside the box, which is how
+    // the label went out of sight when scrolling back up.
+    expect(objetivoRevelado(list, 0)?.className).toBe("settings-group");
+    expect(objetivoRevelado(list, 0)?.textContent).toContain("Apariencia");
+    // Row 1: opens nothing, it reveals itself.
+    expect(objetivoRevelado(list, 1)?.id).toBe("settings-row-1");
+    // Row 2: opens the paths section, same rule as 0.
+    expect(objetivoRevelado(list, 2)?.className).toBe("settings-group");
   });
 
-  it("una ubicación que falta lo dice, y una hostil se marca", () => {
-    const { screen } = montar();
-    const v = conAjustes();
+  it("a missing location says so, and a hostile one is marked", () => {
+    const { screen } = mount();
+    const v = withSettings();
     if (v.settings !== null) {
       const sec = v.settings.sections[1];
       if (sec?.section === "paths") {
@@ -3704,40 +3715,38 @@ describe("los ajustes", () => {
       }
     }
     screen.paint(v);
-    // Las dos primeras son ajustes; las rutas van detrás.
-    const filas = [...document.querySelectorAll(".settings-row")];
-    expect(filas[2]?.querySelector(".settings-value")?.getAttribute("data-hostile")).toBe(
+    // The first two are settings; the paths come after.
+    const rows = [...document.querySelectorAll(".settings-row")];
+    expect(rows[2]?.querySelector(".settings-value")?.getAttribute("data-hostile")).toBe(
       "true",
     );
-    expect(filas[3]?.querySelector(".settings-missing")).not.toBeNull();
-    // La que está no se marca como que falta.
-    expect(filas[2]?.querySelector(".settings-missing")).toBeNull();
+    expect(rows[3]?.querySelector(".settings-missing")).not.toBeNull();
+    // The one that's present isn't marked as missing.
+    expect(rows[2]?.querySelector(".settings-missing")).toBeNull();
   });
 
-  it("si toda la sección pide reiniciar, se dice una vez y no cinco", () => {
-    const { screen } = montar();
-    const v = conAjustes();
+  it("if the whole section needs a restart, it's said once and not five times", () => {
+    const { screen } = mount();
+    const v = withSettings();
     if (v.settings !== null) {
       const sec = v.settings.sections[0];
       if (sec?.section === "settings") {
-        // TODAS: la del fixture que no lo pedía, también.
+        // ALL of them: the fixture's row that didn't ask for it too.
         for (const r of sec.rows) {
           r.restart_required = true;
         }
       }
     }
     screen.paint(v);
-    const cabecera = document.querySelector(".settings-group");
-    expect(cabecera?.textContent).toContain(
-      catalogoReal()["settings-restart-badge"] ?? "",
-    );
-    // Y ninguna fila la repite.
+    const header = document.querySelector(".settings-group");
+    expect(header?.textContent).toContain(realCatalog()["settings-restart-badge"] ?? "");
+    // And no row repeats it.
     expect(document.querySelectorAll(".settings-row .settings-badge")).toHaveLength(0);
   });
 
-  it("si solo algunas lo piden, la insignia va en la fila", () => {
-    const { screen } = montar();
-    const v = conAjustes();
+  it("if only some ask for it, the badge goes on the row", () => {
+    const { screen } = mount();
+    const v = withSettings();
     if (v.settings !== null) {
       const sec = v.settings.sections[0];
       if (sec?.section === "settings") {
@@ -3758,46 +3767,44 @@ describe("los ajustes", () => {
       }
     }
     screen.paint(v);
-    // En la DESCRIPCIÓN de esa fila, no en una pastilla: repetido como
-    // etiqueta en seis filas a la vez dejaba de leerse, y es algo que solo
-    // importa cuando se toca esa fila.
-    const cuando = [...document.querySelectorAll(".settings-desc .settings-when")];
-    expect(cuando).toHaveLength(1);
-    expect(cuando[0]?.textContent).toBe(catalogoReal()["settings-restart-badge"] ?? "");
+    // In that row's DESCRIPTION, not as a pill: repeated as a label on six
+    // rows at once it stopped being readable, and it only matters when that
+    // row is touched.
+    const when = [...document.querySelectorAll(".settings-desc .settings-when")];
+    expect(when).toHaveLength(1);
+    expect(when[0]?.textContent).toBe(realCatalog()["settings-restart-badge"] ?? "");
     expect(document.querySelectorAll(".settings-row .settings-badge")).toHaveLength(0);
     expect(document.querySelector(".settings-group")?.textContent).not.toContain(
-      catalogoReal()["settings-restart-badge"] ?? "",
+      realCatalog()["settings-restart-badge"] ?? "",
     );
   });
 
-  it("un click pide ESA fila, contando por encima de las cabeceras", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conAjustes());
-    const filas = [...document.querySelectorAll(".settings-row")];
-    (filas[2] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "settings_select_row", row: 2 }]);
+  it("a click requests THAT row, counting past the headers", () => {
+    const { screen, sent } = mount();
+    screen.paint(withSettings());
+    const rows = [...document.querySelectorAll(".settings-row")];
+    (rows[2] as HTMLElement).click();
+    expect(sent).toEqual([{ action: "settings_select_row", row: 2 }]);
   });
 
-  it("un doble click ACTIVA esa fila, que es lo que hace enter", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conAjustes());
-    const filas = [...document.querySelectorAll(".settings-row")];
-    (filas[0] as HTMLElement).dispatchEvent(
-      new MouseEvent("dblclick", { bubbles: true }),
-    );
-    expect(enviadas).toEqual([{ action: "settings_activate", row: 0 }]);
+  it("a double click ACTIVATES that row, which is what enter does", () => {
+    const { screen, sent } = mount();
+    screen.paint(withSettings());
+    const rows = [...document.querySelectorAll(".settings-row")];
+    (rows[0] as HTMLElement).dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(sent).toEqual([{ action: "settings_activate", row: 0 }]);
   });
 
-  it("cerrados, no tapan nada", () => {
-    const { screen } = montar();
-    screen.paint(vista({}));
+  it("closed, they cover nothing", () => {
+    const { screen } = mount();
+    screen.paint(view({}));
     expect(document.querySelector(".settings")).toBeNull();
   });
 });
 
-describe("el gestor de extensiones", () => {
-  function conExtensiones(): ViewSnapshot {
-    const v = vista({});
+describe("the extensions manager", () => {
+  function withExtensions(): ViewSnapshot {
+    const v = view({});
     v.extensions = {
       rows: [
         {
@@ -3837,69 +3844,70 @@ describe("el gestor de extensiones", () => {
     return v;
   }
 
-  it("enseña el estado como DOS hechos y las capabilities en la fila", () => {
-    const { screen } = montar();
-    screen.paint(conExtensiones());
-    const filas = [...document.querySelectorAll(".extensions-row")];
-    expect(filas).toHaveLength(2);
-    const uno = filas[0]?.querySelector(".extensions-state");
-    expect(uno?.getAttribute("data-approved")).toBe("true");
-    expect(uno?.getAttribute("data-enabled")).toBe("true");
-    const dos = filas[1]?.querySelector(".extensions-state");
-    expect(dos?.getAttribute("data-approved")).toBe("false");
-    // Las capabilities NO están escondidas tras un gesto: son la decisión.
-    expect(filas[0]?.querySelectorAll(".extensions-cap")).toHaveLength(2);
+  it("shows status as TWO facts and the capabilities on the row", () => {
+    const { screen } = mount();
+    screen.paint(withExtensions());
+    const rows = [...document.querySelectorAll(".extensions-row")];
+    expect(rows).toHaveLength(2);
+    const one = rows[0]?.querySelector(".extensions-state");
+    expect(one?.getAttribute("data-approved")).toBe("true");
+    expect(one?.getAttribute("data-enabled")).toBe("true");
+    const two = rows[1]?.querySelector(".extensions-state");
+    expect(two?.getAttribute("data-approved")).toBe("false");
+    // Capabilities are NOT hidden behind a gesture: they're the decision.
+    expect(rows[0]?.querySelectorAll(".extensions-cap")).toHaveLength(2);
   });
 
-  it("la ficha dice quién está elegida y cuenta las instaladas y las encendidas", () => {
-    const { screen } = montar();
-    screen.paint(conExtensiones());
+  it("the detail pane says which one is selected and counts installed and enabled", () => {
+    const { screen } = mount();
+    screen.paint(withExtensions());
     expect(document.querySelector(".extensions-pane-name")?.textContent).toBe(
       "FTP de ACME",
     );
-    // Dos cuentas: «2 instaladas · 1 encendidas», sin marcadores Fluent.
-    const resumen = document.querySelector(".extensions-summary")?.textContent ?? "";
-    expect(resumen).toContain("2 ");
-    expect(resumen).toContain("1 ");
-    expect(resumen).not.toContain("$");
-    // Sin ficha pedida, se dice cómo pedirla en vez de dejar el hueco.
+    // Two counts: "2 installed · 1 enabled", with no Fluent placeholders.
+    const summary = document.querySelector(".extensions-summary")?.textContent ?? "";
+    expect(summary).toContain("2 ");
+    expect(summary).toContain("1 ");
+    expect(summary).not.toContain("$");
+    // With no pane selected, it says how to select one instead of leaving a
+    // gap.
     expect(document.querySelector(".extensions-detail-hint")).not.toBeNull();
   });
 
-  it("los botones dicen lo que van a hacer y mandan la acción de la fila elegida", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conExtensiones());
-    const acciones = document.querySelector(".extensions-actions") as HTMLElement;
-    // La elegida está aprobada y encendida: revocar, apagar, ayuda, y
-    // desinstalar; nunca «alternar».
-    const etiquetas = [...acciones.querySelectorAll("button")].map((b) => b.textContent);
-    expect(etiquetas).toEqual([
-      catalogoReal()["ext-revoke"],
-      catalogoReal()["ext-disable"],
-      catalogoReal()["ext-help"],
-      catalogoReal()["ext-uninstall"],
+  it("buttons say what they're going to do and send the chosen row's action", () => {
+    const { screen, sent } = mount();
+    screen.paint(withExtensions());
+    const actions = document.querySelector(".extensions-actions") as HTMLElement;
+    // The selected one is approved and enabled: revoke, disable, help, and
+    // uninstall; never "toggle".
+    const labels = [...actions.querySelectorAll("button")].map((b) => b.textContent);
+    expect(labels).toEqual([
+      realCatalog()["ext-revoke"],
+      realCatalog()["ext-disable"],
+      realCatalog()["ext-help"],
+      realCatalog()["ext-uninstall"],
     ]);
-    (acciones.querySelector(".extensions-action-uninstall") as HTMLButtonElement).click();
-    (acciones.querySelector(".extensions-action-enabled") as HTMLButtonElement).click();
-    (acciones.querySelector(".extensions-action-help") as HTMLButtonElement).click();
-    expect(enviadas).toEqual([
+    (actions.querySelector(".extensions-action-uninstall") as HTMLButtonElement).click();
+    (actions.querySelector(".extensions-action-enabled") as HTMLButtonElement).click();
+    (actions.querySelector(".extensions-action-help") as HTMLButtonElement).click();
+    expect(sent).toEqual([
       { action: "extension_govern", row: 0, id: "acme.ftp", change: "uninstall" },
       { action: "extension_govern", row: 0, id: "acme.ftp", change: "enabled" },
       { action: "extension_help", row: 0, id: "acme.ftp" },
     ]);
-    // Desinstalar se pinta como lo que es, y el clic sobre un botón no
-    // vuelve a seleccionar la fila.
+    // Uninstall paints as what it is, and clicking a button doesn't reselect
+    // the row.
     expect(
-      acciones
+      actions
         .querySelector(".extensions-action-uninstall")
         ?.getAttribute("data-destructive"),
     ).toBe("true");
-    expect(enviadas.some((a) => a.action === "extension_select_row")).toBe(false);
+    expect(sent.some((a) => a.action === "extension_select_row")).toBe(false);
   });
 
-  it("una rota es una fila más: se señala y su ficha solo ofrece desinstalar", () => {
-    const { screen, enviadas } = montar();
-    const v = conExtensiones();
+  it("a broken one is one more row: it's flagged and its pane only offers uninstall", () => {
+    const { screen, sent } = mount();
+    const v = withExtensions();
     if (v.extensions !== null) {
       v.extensions.errors = [
         {
@@ -3917,39 +3925,39 @@ describe("el gestor de extensiones", () => {
           id: null,
         },
       ];
-      // Las rotas van detrás de las dos cargadas.
+      // Broken ones go after the two loaded ones.
       v.extensions = { ...v.extensions, cursor: 2 };
     }
     screen.paint(v);
-    const rotas = [...document.querySelectorAll(".extensions-error")];
-    expect(rotas).toHaveLength(2);
-    expect(rotas[0]?.getAttribute("aria-selected")).toBe("true");
-    (rotas[1] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "extension_select_row", row: 3 }]);
-    enviadas.length = 0;
+    const broken = [...document.querySelectorAll(".extensions-error")];
+    expect(broken).toHaveLength(2);
+    expect(broken[0]?.getAttribute("aria-selected")).toBe("true");
+    (broken[1] as HTMLElement).click();
+    expect(sent).toEqual([{ action: "extension_select_row", row: 3 }]);
+    sent.length = 0;
 
-    const acciones = document.querySelector(".extensions-actions") as HTMLElement;
-    const etiquetas = [...acciones.querySelectorAll("button")].map((b) => b.textContent);
-    expect(etiquetas).toEqual([catalogoReal()["ext-uninstall"]]);
-    (acciones.querySelector(".extensions-action-uninstall") as HTMLButtonElement).click();
-    expect(enviadas).toEqual([
+    const actions = document.querySelector(".extensions-actions") as HTMLElement;
+    const labels = [...actions.querySelectorAll("button")].map((b) => b.textContent);
+    expect(labels).toEqual([realCatalog()["ext-uninstall"]]);
+    (actions.querySelector(".extensions-action-uninstall") as HTMLButtonElement).click();
+    expect(sent).toEqual([
       { action: "extension_govern", row: 2, id: "acme.roto", change: "uninstall" },
     ]);
 
-    // Sin id no hay botón: se dice por qué, con la frase del host.
+    // With no id there's no button: it says why, with the host's phrasing.
     if (v.extensions !== null) {
       v.extensions = { ...v.extensions, cursor: 3 };
     }
     screen.paint(v);
     expect(document.querySelector(".extensions-action-uninstall")).toBeNull();
     expect(document.querySelector(".extensions-pane")?.textContent).toContain(
-      catalogoReal()["ext-broken-not-id"],
+      realCatalog()["ext-broken-not-id"],
     );
   });
 
-  it("las rotas son un listbox propio: el cursor sobre una se anuncia", () => {
-    const { screen } = montar();
-    const v = conExtensiones();
+  it("broken ones are their own listbox: the cursor on one gets announced", () => {
+    const { screen } = mount();
+    const v = withExtensions();
     if (v.extensions !== null) {
       v.extensions.errors = [
         {
@@ -3963,12 +3971,12 @@ describe("el gestor de extensiones", () => {
       v.extensions = { ...v.extensions, cursor: 2 };
     }
     screen.paint(v);
-    const errores = document.querySelector(".extensions-errors") as HTMLElement;
-    // Sin el `listbox` que las contiene, el `role="option"` de cada fila es
-    // ARIA inválido y un lector de pantalla no anuncia nada al llegar.
-    expect(errores.getAttribute("role")).toBe("listbox");
-    expect(errores.getAttribute("aria-activedescendant")).toBe("extension-row-2");
-    // Y la lista de cargadas suelta el suyo: el cursor ya no está ahí.
+    const errors = document.querySelector(".extensions-errors") as HTMLElement;
+    // Without the `listbox` containing them, each row's `role="option"` is
+    // invalid ARIA and a screen reader announces nothing on arrival.
+    expect(errors.getAttribute("role")).toBe("listbox");
+    expect(errors.getAttribute("aria-activedescendant")).toBe("extension-row-2");
+    // And the loaded list drops its own: the cursor isn't there anymore.
     expect(
       document.querySelector(".extensions-rows")?.getAttribute("aria-activedescendant"),
     ).toBeNull();
@@ -3985,44 +3993,44 @@ describe("el gestor de extensiones", () => {
     ).toBe("extension-row-0");
   });
 
-  it("sobre una sin aprobar, aprobar es el botón principal y encender no se ofrece", () => {
-    const { screen, enviadas } = montar();
-    const v = conExtensiones();
+  it("on an unapproved one, approve is the primary button and enable isn't offered", () => {
+    const { screen, sent } = mount();
+    const v = withExtensions();
     if (v.extensions !== null) {
       v.extensions = { ...v.extensions, cursor: 1 };
     }
     screen.paint(v);
-    const acciones = document.querySelector(".extensions-actions") as HTMLElement;
-    const aprobar = acciones.querySelector(
+    const actions = document.querySelector(".extensions-actions") as HTMLElement;
+    const approve = actions.querySelector(
       ".extensions-action-approval",
     ) as HTMLButtonElement;
-    expect(aprobar.textContent).toBe(catalogoReal()["ext-approve"]);
-    expect(aprobar.getAttribute("data-primary")).toBe("true");
-    const encender = acciones.querySelector(
+    expect(approve.textContent).toBe(realCatalog()["ext-approve"]);
+    expect(approve.getAttribute("data-primary")).toBe("true");
+    const enable = actions.querySelector(
       ".extensions-action-enabled",
     ) as HTMLButtonElement;
-    expect(encender.disabled).toBe(true);
-    // Y dice por qué, con la frase que el host contestaría.
-    expect(encender.title).toBe(catalogoReal()["host-extension-not-approved"]);
-    // Sin página de ayuda, sin botón de ayuda.
-    expect(acciones.querySelector(".extensions-action-help")).toBeNull();
-    aprobar.click();
-    expect(enviadas).toEqual([
+    expect(enable.disabled).toBe(true);
+    // And says why, with the phrasing the host would answer with.
+    expect(enable.title).toBe(realCatalog()["host-extension-not-approved"]);
+    // With no help page, no help button.
+    expect(actions.querySelector(".extensions-action-help")).toBeNull();
+    approve.click();
+    expect(sent).toEqual([
       { action: "extension_govern", row: 1, id: "org.norte.demo", change: "approval" },
     ]);
   });
 
-  it("cerrar manda la misma tecla que cierra", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conExtensiones());
+  it("closing sends the same key that closes", () => {
+    const { screen, sent } = mount();
+    screen.paint(withExtensions());
     (document.querySelector(".extensions-close") as HTMLButtonElement).click();
-    expect(enviadas).toHaveLength(1);
-    expect(enviadas[0]).toMatchObject({ action: "key", key: "Escape" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ action: "key", key: "Escape" });
   });
 
-  it("«cargando» no se pinta igual que «ninguna»", () => {
-    const { screen } = montar();
-    const v = conExtensiones();
+  it('"loading" doesn\'t paint the same as "none"', () => {
+    const { screen } = mount();
+    const v = withExtensions();
     if (v.extensions !== null) {
       v.extensions.loading = true;
       v.extensions.rows = [];
@@ -4032,23 +4040,23 @@ describe("el gestor de extensiones", () => {
       "status",
     );
     expect(document.querySelector(".extensions-note")?.textContent).toBe(
-      catalogoReal()["ext-loading"] ?? "",
+      realCatalog()["ext-loading"] ?? "",
     );
 
-    const vacio = conExtensiones();
-    if (vacio.extensions !== null) {
-      vacio.extensions.loading = false;
-      vacio.extensions.rows = [];
+    const empty = withExtensions();
+    if (empty.extensions !== null) {
+      empty.extensions.loading = false;
+      empty.extensions.rows = [];
     }
-    screen.paint(vacio);
+    screen.paint(empty);
     expect(document.querySelector(".extensions-note")?.textContent).toBe(
-      catalogoReal()["ext-empty"] ?? "",
+      realCatalog()["ext-empty"] ?? "",
     );
   });
 
-  it("la ficha marca el valor que ya no es el del esquema", () => {
-    const { screen } = montar();
-    const v = conExtensiones();
+  it("the detail pane marks the value that's no longer the schema's", () => {
+    const { screen } = mount();
+    const v = withExtensions();
     if (v.extensions !== null) {
       v.extensions.detail = {
         id: "acme.ftp",
@@ -4091,34 +4099,34 @@ describe("el gestor de extensiones", () => {
       };
     }
     screen.paint(v);
-    const filas = [...document.querySelectorAll(".extensions-config tbody tr")];
-    expect(filas).toHaveLength(3);
-    expect(filas[0]?.getAttribute("data-changed")).toBe("true");
-    expect(filas[1]?.getAttribute("data-changed")).toBe("false");
-    // El valor que el PLUGIN escribe y se pinta distinto de lo que es lleva
-    // su insignia, igual que un nombre de fichero.
-    const valor = filas[2]?.querySelector(".extensions-key-value");
-    expect(valor?.getAttribute("data-hostile")).toBe("true");
-    expect(valor?.querySelector(".hostile-badge")).not.toBeNull();
-    expect(filas[0]?.querySelector(".hostile-badge")).toBeNull();
-    // Y el tipo y su dominio van en nodos SEPARADOS: unirlos en uno solo
-    // deja que un valor de `enum` con letras RTL reordene el par entero.
-    expect(filas[2]?.querySelector(".extensions-key-domain")?.textContent).toBe(
+    const rows = [...document.querySelectorAll(".extensions-config tbody tr")];
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.getAttribute("data-changed")).toBe("true");
+    expect(rows[1]?.getAttribute("data-changed")).toBe("false");
+    // The value the PLUGIN writes and that paints differently from what it
+    // is carries its badge, same as a file name.
+    const value = rows[2]?.querySelector(".extensions-key-value");
+    expect(value?.getAttribute("data-hostile")).toBe("true");
+    expect(value?.querySelector(".hostile-badge")).not.toBeNull();
+    expect(rows[0]?.querySelector(".hostile-badge")).toBeNull();
+    // And the type and its domain go in SEPARATE nodes: joining them into
+    // one lets an `enum` value with RTL letters reorder the whole pair.
+    expect(rows[2]?.querySelector(".extensions-key-domain")?.textContent).toBe(
       "safe · fast\uFFFD",
     );
-    expect(filas[0]?.querySelector(".extensions-key-kind")?.textContent).toContain(
+    expect(rows[0]?.querySelector(".extensions-key-kind")?.textContent).toContain(
       "entre 1 y 300",
     );
-    // La ficha dice DE QUIÉN es: con la lista desplazada, la fila elegida
-    // puede no estar a la vista.
+    // The detail pane says WHOSE it is: with the list scrolled, the chosen
+    // row might not be in view.
     expect(document.querySelector(".extensions-detail-of")?.textContent).toBe(
       "FTP de ACME",
     );
   });
 
-  it("un directorio que no cargó se dice, y uno hostil se marca", () => {
-    const { screen } = montar();
-    const v = conExtensiones();
+  it("a directory that didn't load says so, and a hostile one is marked", () => {
+    const { screen } = mount();
+    const v = withExtensions();
     if (v.extensions !== null) {
       v.extensions.errors = [
         {
@@ -4128,9 +4136,9 @@ describe("el gestor de extensiones", () => {
           reason_hostile: false,
           id: null,
         },
-        // El MOTIVO cita el manifiesto del plugin, así que tiene su propia
-        // marca: una sola para las dos cadenas deja al lector sin saber cuál
-        // de ellas está alterada.
+        // The REASON quotes the plugin's manifest, so it carries its own
+        // mark: one for both strings would leave the reader unable to tell
+        // which of them is altered.
         {
           dir: "/plugins/otro",
           hostile: false,
@@ -4146,30 +4154,30 @@ describe("el gestor de extensiones", () => {
     expect(document.querySelector(".extensions-error-reason")?.textContent).toBe(
       "el manifiesto no parsea",
     );
-    const motivos = [...document.querySelectorAll(".extensions-error-reason")];
-    expect(motivos[0]?.getAttribute("data-hostile")).toBe("false");
-    expect(motivos[1]?.getAttribute("data-hostile")).toBe("true");
-    expect(motivos[1]?.querySelector(".hostile-badge")).not.toBeNull();
+    const reasons = [...document.querySelectorAll(".extensions-error-reason")];
+    expect(reasons[0]?.getAttribute("data-hostile")).toBe("false");
+    expect(reasons[1]?.getAttribute("data-hostile")).toBe("true");
+    expect(reasons[1]?.querySelector(".hostile-badge")).not.toBeNull();
   });
 
-  it("un click elige ESA extensión", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conExtensiones());
-    const filas = [...document.querySelectorAll(".extensions-row")];
-    (filas[1] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "extension_select_row", row: 1 }]);
+  it("a click selects THAT extension", () => {
+    const { screen, sent } = mount();
+    screen.paint(withExtensions());
+    const rows = [...document.querySelectorAll(".extensions-row")];
+    (rows[1] as HTMLElement).click();
+    expect(sent).toEqual([{ action: "extension_select_row", row: 1 }]);
   });
 
-  it("cerrado, no tapa nada", () => {
-    const { screen } = montar();
-    screen.paint(vista({}));
+  it("closed, it covers nothing", () => {
+    const { screen } = mount();
+    screen.paint(view({}));
     expect(document.querySelector(".extensions")).toBeNull();
   });
 });
 
-describe("el selector de perfiles", () => {
-  function conPerfiles() {
-    const v = vista({});
+describe("the profile selector", () => {
+  function withProfiles() {
+    const v = view({});
     v.profiles = {
       rows: [
         {
@@ -4206,32 +4214,32 @@ describe("el selector de perfiles", () => {
     return v;
   }
 
-  it("marca el activo, el cursor, y ENSEÑA el que no carga", () => {
-    const { screen } = montar();
-    screen.paint(conPerfiles());
-    const filas = [...document.querySelectorAll(".profiles-row")];
-    expect(filas).toHaveLength(3);
-    expect(filas[0]?.getAttribute("data-active")).toBe("true");
-    expect(filas[1]?.getAttribute("aria-selected")).toBe("true");
-    // Una fila rota no desaparece: se enseña con su motivo.
-    expect(filas[2]?.getAttribute("data-broken")).toBe("true");
-    expect(filas[2]?.textContent).toContain("falta");
-    // Y el choque de nombre se dice, que si no es una trampa.
-    expect(filas[1]?.textContent).toContain("preset de teclado");
+  it("marks the active one, the cursor, and SHOWS the one that fails to load", () => {
+    const { screen } = mount();
+    screen.paint(withProfiles());
+    const rows = [...document.querySelectorAll(".profiles-row")];
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.getAttribute("data-active")).toBe("true");
+    expect(rows[1]?.getAttribute("aria-selected")).toBe("true");
+    // A broken row doesn't disappear: it's shown with its reason.
+    expect(rows[2]?.getAttribute("data-broken")).toBe("true");
+    expect(rows[2]?.textContent).toContain("falta");
+    // And the name clash is stated, or it would be a trap.
+    expect(rows[1]?.textContent).toContain("preset de teclado");
   });
 
-  it("un click lo activa, con la generación con la que se pintó", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conPerfiles());
+  it("a click activates it, with the generation it was painted with", () => {
+    const { screen, sent } = mount();
+    screen.paint(withProfiles());
     (document.querySelectorAll(".profiles-row")[1] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "profile_activate_row", row: 1, generation: 7 }]);
+    expect(sent).toEqual([{ action: "profile_activate_row", row: 1, generation: 7 }]);
   });
 });
 
-describe("el tema y el selector", () => {
-  it("cada rol se ve, no solo se lee su hex", () => {
-    const { screen } = montar();
-    const v = vista({});
+describe("the theme and the selector", () => {
+  it("every role is SEEN, not just read as hex", () => {
+    const { screen } = mount();
+    const v = view({});
     v.theme = {
       name: "retro",
       roles: [
@@ -4246,22 +4254,22 @@ describe("el tema y el selector", () => {
       cursor: 1,
     };
     screen.paint(v);
-    const filas = [...document.querySelectorAll(".theme-role")];
-    expect(filas).toHaveLength(2);
-    const muestra = filas[0]?.querySelector(".theme-swatch") as HTMLElement;
-    // La muestra ES el dato: un `#2d4f8a` no dice nada hasta que se ve.
-    expect(muestra.style.backgroundColor).not.toBe("");
-    expect(filas[0]?.querySelector(".theme-role-hex")?.textContent).toBe("#2d4f8a");
-    // Y los efectos que esta ventana no pinta se NOMBRAN.
-    const aviso = document.querySelector(".theme-effects");
-    expect(aviso?.getAttribute("role")).toBe("note");
-    expect(aviso?.textContent).toContain("crt");
-    expect(aviso?.textContent).toContain("scanlines");
+    const rows = [...document.querySelectorAll(".theme-role")];
+    expect(rows).toHaveLength(2);
+    const swatch = rows[0]?.querySelector(".theme-swatch") as HTMLElement;
+    // The swatch IS the data: a `#2d4f8a` says nothing until it's seen.
+    expect(swatch.style.backgroundColor).not.toBe("");
+    expect(rows[0]?.querySelector(".theme-role-hex")?.textContent).toBe("#2d4f8a");
+    // And effects this window doesn't paint get NAMED.
+    const notice = document.querySelector(".theme-effects");
+    expect(notice?.getAttribute("role")).toBe("note");
+    expect(notice?.textContent).toContain("crt");
+    expect(notice?.textContent).toContain("scanlines");
   });
 
-  it("un tema sin efectos no pinta el aviso", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("a theme with no effects doesn't paint the notice", () => {
+    const { screen } = mount();
+    const v = view({});
     v.theme = {
       name: "default",
       roles: [{ role: "fg", color: "#d4d8de" }],
@@ -4273,9 +4281,9 @@ describe("el tema y el selector", () => {
     expect(document.querySelector(".theme-effects")).toBeNull();
   });
 
-  it("la lista de temas marca el que está bajo el cursor", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("the theme list marks the one under the cursor", () => {
+    const { screen } = mount();
+    const v = view({});
     v.theme = {
       name: "retro",
       roles: [{ role: "fg", color: "#d4d8de" }],
@@ -4284,16 +4292,16 @@ describe("el tema y el selector", () => {
       cursor: 1,
     };
     screen.paint(v);
-    const lista = document.querySelector(".theme-choices") as HTMLElement;
-    expect(lista.getAttribute("aria-activedescendant")).toBe("theme-choice-1");
-    const marcada = document.querySelectorAll('.theme-choice[aria-selected="true"]');
-    expect(marcada).toHaveLength(1);
-    expect(marcada[0]?.textContent).toBe("retro");
+    const list = document.querySelector(".theme-choices") as HTMLElement;
+    expect(list.getAttribute("aria-activedescendant")).toBe("theme-choice-1");
+    const marked = document.querySelectorAll('.theme-choice[aria-selected="true"]');
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.textContent).toBe("retro");
   });
 
-  it("el selector marca un montaje hostil y dice por qué está vacío", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+  it("the picker marks a hostile mount and says why it's empty", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     v.picker = {
       title: "Volúmenes",
       rows: [
@@ -4305,42 +4313,42 @@ describe("el tema y el selector", () => {
       generation: 1,
     };
     screen.paint(v);
-    const filas = [...document.querySelectorAll(".picker-row")];
-    expect(filas).toHaveLength(2);
-    expect(filas[1]?.querySelector(".picker-label")?.getAttribute("data-hostile")).toBe(
+    const rows = [...document.querySelectorAll(".picker-row")];
+    expect(rows).toHaveLength(2);
+    expect(rows[1]?.querySelector(".picker-label")?.getAttribute("data-hostile")).toBe(
       "true",
     );
-    const lista = document.querySelector(".picker-rows") as HTMLElement;
-    expect(lista.getAttribute("aria-activedescendant")).toBe("picker-row-1");
-    (filas[0] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "picker_select_row", row: 0, generation: 1 }]);
+    const list = document.querySelector(".picker-rows") as HTMLElement;
+    expect(list.getAttribute("aria-activedescendant")).toBe("picker-row-1");
+    (rows[0] as HTMLElement).click();
+    expect(sent).toEqual([{ action: "picker_select_row", row: 0, generation: 1 }]);
 
-    const vacio = vista({});
-    vacio.picker = {
+    const empty = view({});
+    empty.picker = {
       title: "Volúmenes",
       rows: [],
       cursor: null,
       generation: 1,
       empty: "preguntando al host…",
     };
-    screen.paint(vacio);
-    const nota = document.querySelector(".picker-empty");
-    expect(nota?.getAttribute("role")).toBe("status");
-    expect(nota?.textContent).toBe("preguntando al host…");
+    screen.paint(empty);
+    const note = document.querySelector(".picker-empty");
+    expect(note?.getAttribute("role")).toBe("status");
+    expect(note?.textContent).toBe("preguntando al host…");
   });
 
-  it("cerrados, no tapan nada", () => {
-    const { screen } = montar();
-    screen.paint(vista({}));
+  it("closed, they cover nothing", () => {
+    const { screen } = mount();
+    screen.paint(view({}));
     expect(document.querySelector(".theme")).toBeNull();
     expect(document.querySelector(".picker")).toBeNull();
   });
 });
 
-describe("los huecos que no son listados", () => {
-  it("la hoja de atributos pinta etiqueta y valor, y marca un nombre hostil", () => {
-    const { screen } = montar();
-    const v = vista({});
+describe("slots that aren't listings", () => {
+  it("the attribute sheet paints label and value, and marks a hostile name", () => {
+    const { screen } = mount();
+    const v = view({});
     v.slots = [
       ...v.slots,
       {
@@ -4360,19 +4368,19 @@ describe("los huecos que no son listados", () => {
       { slot_id: 7, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 2 },
     ];
     screen.paint(v);
-    const campos = [...document.querySelectorAll(".metadata-fields dt")];
-    expect(campos.map((d) => d.textContent)).toEqual(["Nombre", "Tamaño"]);
-    const valores = [...document.querySelectorAll(".metadata-fields dd")];
-    expect(valores[0]?.getAttribute("data-hostile")).toBe("true");
-    expect(valores[1]?.getAttribute("data-hostile")).toBe("false");
+    const fields = [...document.querySelectorAll(".metadata-fields dt")];
+    expect(fields.map((d) => d.textContent)).toEqual(["Nombre", "Tamaño"]);
+    const values = [...document.querySelectorAll(".metadata-fields dd")];
+    expect(values[0]?.getAttribute("data-hostile")).toBe("true");
+    expect(values[1]?.getAttribute("data-hostile")).toBe("false");
   });
 
-  // «Detalles» a secas no dice de QUÉ son los detalles: con dos listados
-  // abiertos, la única forma de saber cuál se estaba describiendo era mover
-  // el cursor y ver si la hoja se movía.
-  it("la hoja titula con el listado al que sigue", () => {
-    const { screen } = montar();
-    const v = vista({});
+  // "Details" on its own doesn't say WHAT the details are of: with two
+  // listings open, the only way to know which one was being described was
+  // to move the cursor and see if the sheet moved.
+  it("the sheet titles itself with the listing it follows", () => {
+    const { screen } = mount();
+    const v = view({});
     v.slots = [
       ...v.slots,
       {
@@ -4389,19 +4397,20 @@ describe("los huecos que no son listados", () => {
       { slot_id: 7, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 2 },
     ];
     screen.paint(v);
-    const titulo = document.querySelector('[data-slot-id="7"] .slot-title');
-    expect(titulo?.textContent).toContain("⟨file⟩/home/oscar/Downloads");
-    // La ruta va en SU nodo: `.slot-title` recorta sin puntos suspensivos, y
-    // una ruta cortada en seco nombra otro directorio que además existe.
+    const title = document.querySelector('[data-slot-id="7"] .slot-title');
+    expect(title?.textContent).toContain("⟨file⟩/home/oscar/Downloads");
+    // The path goes in ITS OWN node: `.slot-title` truncates with no
+    // ellipsis, and a path cut off flat names another directory that
+    // actually exists too.
     expect(
       document.querySelector('[data-slot-id="7"] .slot-title .title-path')?.textContent,
     ).toBe("⟨file⟩/home/oscar/Downloads");
   });
 
-  // #291: el visor acoplado es el MISMO cuerpo que el grande, en un hueco.
-  it("el visor acoplado pinta las líneas del fichero bajo el cursor con su ruta", () => {
-    const { screen } = montar();
-    const v = vista({});
+  // #291: the docked viewer is the SAME body as the big one, in a slot.
+  it("the docked viewer paints the lines of the file under the cursor with its path", () => {
+    const { screen } = mount();
+    const v = view({});
     v.slots = [
       ...v.slots,
       {
@@ -4439,23 +4448,23 @@ describe("los huecos que no son listados", () => {
       { slot_id: 7, x: 60, y: 0, width: 60, height: 38, role: null, focus_index: 2 },
     ];
     screen.paint(v);
-    const hueco = document.querySelector(".preview") as HTMLElement;
-    expect(hueco.querySelector(".viewer-via")?.textContent).toBe("via Markdown");
-    const lineas = [...hueco.querySelectorAll(".viewer-line")];
-    expect(lineas).toHaveLength(2);
-    expect(lineas[0]?.querySelector(".viewer-span")?.getAttribute("data-role")).toBe(
+    const slot = document.querySelector(".preview") as HTMLElement;
+    expect(slot.querySelector(".viewer-via")?.textContent).toBe("via Markdown");
+    const lines = [...slot.querySelectorAll(".viewer-line")];
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.querySelector(".viewer-span")?.getAttribute("data-role")).toBe(
       "title",
     );
-    const segundo = lineas[1]?.querySelector(".viewer-span") as HTMLElement;
-    expect(segundo.style.color).toBe("rgb(255, 0, 0)");
-    expect(segundo.style.backgroundColor).toBe("rgb(0, 0, 64)");
-    // Y el visor GRANDE no se abrió: es un hueco, no un overlay.
+    const second = lines[1]?.querySelector(".viewer-span") as HTMLElement;
+    expect(second.style.color).toBe("rgb(255, 0, 0)");
+    expect(second.style.backgroundColor).toBe("rgb(0, 0, 64)");
+    // And the BIG viewer didn't open: it's a slot, not an overlay.
     expect(document.querySelector('[role="document"]')).toBeNull();
   });
 
-  it("la rueda sobre el visor acoplado desplaza por el HOST", () => {
-    const { screen, enviadas } = montar();
-    const v = vista({});
+  it("the wheel over the docked viewer scrolls through the HOST", () => {
+    const { screen, sent } = mount();
+    const v = view({});
     v.slots = [
       ...v.slots,
       {
@@ -4490,14 +4499,14 @@ describe("los huecos que no son listados", () => {
       { slot_id: 7, x: 60, y: 0, width: 60, height: 38, role: null, focus_index: 2 },
     ];
     screen.paint(v);
-    const caja = document.querySelector(".preview") as HTMLElement;
-    caja.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
-    expect(enviadas.at(-1)).toEqual({ action: "preview_scroll", slot_id: 7, delta: 3 });
+    const box = document.querySelector(".preview") as HTMLElement;
+    box.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "preview_scroll", slot_id: 7, delta: 3 });
   });
 
-  it("el visor acoplado sin fichero DICE por qué", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("the docked viewer with no file SAYS why", () => {
+    const { screen } = mount();
+    const v = view({});
     v.slots = [
       ...v.slots,
       { kind: "preview", slot_id: 7, note: "directorio", viewer: null },
@@ -4511,9 +4520,9 @@ describe("los huecos que no son listados", () => {
     expect(document.querySelector(".preview .viewer-body")).toBeNull();
   });
 
-  it("la hoja sin nada bajo el cursor lo DICE", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("the sheet with nothing under the cursor SAYS SO", () => {
+    const { screen } = mount();
+    const v = view({});
     v.slots = [
       ...v.slots,
       {
@@ -4536,9 +4545,9 @@ describe("los huecos que no son listados", () => {
     expect(document.querySelector(".metadata-fields")).toBeNull();
   });
 
-  it("el panel de procesos marca su cursor sobre las MISMAS tareas", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("the processes panel marks its cursor over the SAME tasks", () => {
+    const { screen } = mount();
+    const v = view({});
     v.tasks = [
       {
         task_id: 1,
@@ -4569,16 +4578,16 @@ describe("los huecos que no son listados", () => {
       { slot_id: 7, x: 0, y: 0, width: 40, height: 10, role: null, focus_index: 2 },
     ];
     screen.paint(v);
-    const filas = [...document.querySelectorAll(".processes-row")];
-    expect(filas).toHaveLength(2);
-    expect(filas[1]?.getAttribute("aria-selected")).toBe("true");
-    const lista = document.querySelector(".processes-rows") as HTMLElement;
-    expect(lista.getAttribute("aria-activedescendant")).toBe("process-row-1");
+    const rows = [...document.querySelectorAll(".processes-row")];
+    expect(rows).toHaveLength(2);
+    expect(rows[1]?.getAttribute("aria-selected")).toBe("true");
+    const list = document.querySelector(".processes-rows") as HTMLElement;
+    expect(list.getAttribute("aria-activedescendant")).toBe("process-row-1");
   });
 
-  it("sin tareas, el panel lo dice en vez de quedarse en blanco", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("with no tasks, the panel says so instead of staying blank", () => {
+    const { screen } = mount();
+    const v = view({});
     v.slots = [...v.slots, { kind: "processes", slot_id: 7, cursor: null }];
     v.layout.placements = [
       ...v.layout.placements,
@@ -4586,17 +4595,17 @@ describe("los huecos que no son listados", () => {
     ];
     screen.paint(v);
     expect(document.querySelector(".processes .slot-note")?.textContent).toBe(
-      catalogoReal()["processes-empty"] ?? "",
+      realCatalog()["processes-empty"] ?? "",
     );
   });
 });
 
-describe("el panel de un plugin", () => {
-  function conPanel(
+describe("a plugin's panel", () => {
+  function withPanel(
     lines: PanelSlotView["lines"],
     hits: PanelSlotView["hits"],
   ): ViewSnapshot {
-    const v = vista({});
+    const v = view({});
     v.slots = [...v.slots, { kind: "panel", slot_id: 7, title: "status", lines, hits }];
     v.layout.placements = [
       ...v.layout.placements,
@@ -4605,37 +4614,39 @@ describe("el panel de un plugin", () => {
     return v;
   }
 
-  it("pinta lo que el guest describió, con el título del panel", () => {
-    const { screen } = montar();
-    screen.paint(conPanel([[{ text: "rama main", role: null, fg: null, bg: null }]], []));
+  it("paints what the guest described, with the panel's title", () => {
+    const { screen } = mount();
+    screen.paint(
+      withPanel([[{ text: "rama main", role: null, fg: null, bg: null }]], []),
+    );
     expect(document.querySelector(".panel-line")?.textContent).toBe("rama main");
   });
 
-  // Un marco que todavía no llegó —la primera petición en vuelo, o un plugin
-  // que falló— deja el hueco con su borde y su título: se sabe que el panel
-  // está y de quién es, en vez de un hueco mudo.
-  it("sin marco todavía, el hueco sigue siendo suyo", () => {
-    const { screen } = montar();
-    screen.paint(conPanel([], []));
+  // A frame that hasn't arrived yet — the first request in flight, or a
+  // plugin that failed — leaves the slot with its border and title: it's
+  // known that the panel is there and whose it is, instead of a mute slot.
+  it("with no frame yet, the slot is still theirs", () => {
+    const { screen } = mount();
+    screen.paint(withPanel([], []));
     expect(document.querySelectorAll(".panel-line")).toHaveLength(0);
     expect(document.querySelector(".panel-plugin")).not.toBeNull();
   });
 
-  // Lo que viaja es la CELDA. El comando lo resuelve el host contra el marco
-  // que él tiene, con el mismo filtro que el terminal: si el comando cruzara
-  // el cable, podría mandarlo cualquiera que hable con el renderer.
-  it("una zona manda la celda que se pulsó, nunca un comando", () => {
-    const { screen, enviadas } = montar();
+  // What travels is the CELL. The host resolves the command against the
+  // frame it has, with the same filter as the terminal: if the command
+  // crossed the wire, anyone talking to the renderer could send it.
+  it("a hit zone sends the clicked cell, never a command", () => {
+    const { screen, sent } = mount();
     screen.paint(
-      conPanel(
+      withPanel(
         [[{ text: "rama main", role: null, fg: null, bg: null }]],
         [{ row: 0, col: 5, width: 4 }],
       ),
     );
-    const zona = document.querySelector(".panel-hit") as HTMLElement;
-    expect(zona).not.toBeNull();
-    zona.click();
-    expect(enviadas.at(-1)).toEqual({
+    const zone = document.querySelector(".panel-hit") as HTMLElement;
+    expect(zone).not.toBeNull();
+    zone.click();
+    expect(sent.at(-1)).toEqual({
       action: "panel_click",
       slot_id: 7,
       row: 0,
@@ -4644,9 +4655,9 @@ describe("el panel de un plugin", () => {
   });
 });
 
-describe("el panel de registro", () => {
-  function conRegistro(extra: Partial<LogSlotView> = {}): ViewSnapshot {
-    const v = vista({});
+describe("the log panel", () => {
+  function withLog(extra: Partial<LogSlotView> = {}): ViewSnapshot {
+    const v = view({});
     v.slots = [
       ...v.slots,
       {
@@ -4691,104 +4702,104 @@ describe("el panel de registro", () => {
     return v;
   }
 
-  it("pinta las líneas y colorea por NIVEL, no por posición", () => {
-    const { screen } = montar();
-    screen.paint(conRegistro());
-    const filas = [...document.querySelectorAll(".log-line")];
-    expect(filas).toHaveLength(2);
-    // El nivel colorea la línea entera: leer un registro es buscar los
-    // errores, y un color solo en la etiqueta no se ve de un vistazo.
-    expect((filas[0] as HTMLElement).dataset["level"]).toBe("error");
-    expect((filas[1] as HTMLElement).dataset["level"]).toBe("info");
-    expect(filas[0]?.textContent).toContain("no se pudo conectar");
+  it("paints the lines and colors by LEVEL, not by position", () => {
+    const { screen } = mount();
+    screen.paint(withLog());
+    const rows = [...document.querySelectorAll(".log-line")];
+    expect(rows).toHaveLength(2);
+    // The level colors the whole line: reading a log means hunting for
+    // errors, and a color only on the label doesn't show at a glance.
+    expect((rows[0] as HTMLElement).dataset["level"]).toBe("error");
+    expect((rows[1] as HTMLElement).dataset["level"]).toBe("info");
+    expect(rows[0]?.textContent).toContain("no se pudo conectar");
   });
 
-  it("el nivel se PINTA con la etiqueta y se COMPARA con la identidad", () => {
-    const { screen } = montar();
-    const v = conRegistro();
+  it("the level is PAINTED with the label and COMPARED by identity", () => {
+    const { screen } = mount();
+    const v = withLog();
     const log = v.slots.find((s) => s.kind === "log");
     if (log?.kind !== "log") {
-      throw new Error("la fixture trae el panel de registro");
+      throw new Error("the fixture carries the log panel");
     }
     log.level_label = "INFO";
     log.lines[0]!.level_label = "ERROR";
     log.lines[1]!.level_label = "INFO";
     screen.paint(v);
 
-    // La ventana pintaba `error` en la línea, `info` en el chip del título y
-    // «info» traducido en los botones: tres vocabularios del mismo nivel, los
-    // tres a la vez en pantalla. Lo que se lee es la etiqueta, que es la que
-    // pinta el terminal y la que se escribe en `RUST_LOG`.
-    const etiquetas = [...document.querySelectorAll(".log-level")].map(
-      (n) => n.textContent,
-    );
-    expect(etiquetas).toEqual(["ERROR", "INFO"]);
-    // Y la IDENTIDAD sigue siendo la de cable: es con la que se colorea y con
-    // la que se marca qué botón está puesto, y traducirla rompería las dos.
-    const filas = [...document.querySelectorAll(".log-line")];
-    expect((filas[0] as HTMLElement).dataset["level"]).toBe("error");
+    // The window painted `error` on the line, `info` on the title's chip and
+    // "info" translated on the buttons: three vocabularies for the same
+    // level, all three on screen at once. What's read is the label, which is
+    // the one the terminal paints and the one written into `RUST_LOG`.
+    const labels = [...document.querySelectorAll(".log-level")].map((n) => n.textContent);
+    expect(labels).toEqual(["ERROR", "INFO"]);
+    // And the IDENTITY is still the wire one: it's what colors the line and
+    // what marks which button is pressed, and translating it would break
+    // both.
+    const rows = [...document.querySelectorAll(".log-line")];
+    expect((rows[0] as HTMLElement).dataset["level"]).toBe("error");
   });
 
-  it("dice de qué PROCESO son las líneas", () => {
-    // La ventana arranca su propio daemon, así que aquí NO está lo del
-    // daemon. Callarlo haría que el panel pareciera roto: alguien lo abre
-    // mientras una conexión falla y no encuentra la línea que lo explica.
-    const { screen } = montar();
-    screen.paint(conRegistro());
+  it("says which PROCESS the lines belong to", () => {
+    // The window starts its own daemon, so there's NO daemon entry here.
+    // Staying silent about it would make the panel look broken: someone
+    // opens it while a connection fails and can't find the line that
+    // explains it.
+    const { screen } = mount();
+    screen.paint(withLog());
     expect(document.body.textContent).toContain("de esta ventana");
   });
 
-  it("dice cuando está DESPEGADO del final y cuando tiró líneas", () => {
-    // «No pasa nada» y «te has despegado y esto es historia» son
-    // indistinguibles sin decirlo; y un registro con un agujero silencioso
-    // miente sobre lo que pasó.
-    const { screen } = montar();
+  it("says when it's DETACHED from the end and when it dropped lines", () => {
+    // "Nothing's wrong" and "you've detached and this is history" are
+    // indistinguishable without saying so; and a log with a silent gap lies
+    // about what happened.
+    const { screen } = mount();
     screen.paint(
-      conRegistro({ following: false, dropped_note: "17 líneas viejas descartadas" }),
+      withLog({ following: false, dropped_note: "17 líneas viejas descartadas" }),
     );
-    // La cabecera DEL hueco de registro: hay varias en la pantalla, y la
-    // primera es la del listado.
-    const caja = document.querySelector(".log");
-    const cabecera = caja?.parentElement?.querySelector(".slot-title")?.textContent ?? "";
-    expect(cabecera).toContain(catalogoReal()["log-detached"] ?? "");
-    expect(cabecera).toContain("17 líneas viejas descartadas");
+    // The log slot's OWN header: there are several on screen, and the first
+    // one is the listing's.
+    const box = document.querySelector(".log");
+    const header = box?.parentElement?.querySelector(".slot-title")?.textContent ?? "";
+    expect(header).toContain(realCatalog()["log-detached"] ?? "");
+    expect(header).toContain("17 líneas viejas descartadas");
   });
 
-  it("el nivel PUESTO se marca, y pulsar otro lo pide por su id de wire", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conRegistro());
-    const botones = [...document.querySelectorAll(".log-controls button")];
-    const puesto = botones.find((b) => (b as HTMLElement).dataset["on"] === "true");
-    expect(puesto?.textContent).toBe(catalogoReal()["log-level-info"] ?? "");
+  it("the SET level is marked, and pressing another requests it by its wire id", () => {
+    const { screen, sent } = mount();
+    screen.paint(withLog());
+    const buttons = [...document.querySelectorAll(".log-controls button")];
+    const set = buttons.find((b) => (b as HTMLElement).dataset["on"] === "true");
+    expect(set?.textContent).toBe(realCatalog()["log-level-info"] ?? "");
 
-    const debug = botones.find(
-      (b) => b.textContent === (catalogoReal()["log-level-debug"] ?? ""),
+    const debug = buttons.find(
+      (b) => b.textContent === (realCatalog()["log-level-debug"] ?? ""),
     );
     (debug as HTMLButtonElement).click();
-    const ultima = enviadas.at(-1);
-    expect(ultima?.action).toBe("log_set_level");
-    if (ultima?.action === "log_set_level") {
-      // El identificador de WIRE, no la etiqueta traducida: comparar frases
-      // traducidas ataría el nivel al idioma.
-      expect(ultima.level).toBe("debug");
+    const last = sent.at(-1);
+    expect(last?.action).toBe("log_set_level");
+    if (last?.action === "log_set_level") {
+      // The WIRE identifier, not the translated label: comparing translated
+      // phrases would tie the level to the language.
+      expect(last.level).toBe("debug");
     }
   });
 
-  it("sin una segunda fuente NO hay selector que pulsar", () => {
-    // Un mando entre tres vistas de un mismo anillo promete algo que no
-    // existe: el daemon de esta ventana puede no servir su registro, y
-    // entonces la fuente es una etiqueta y no un botón.
-    const { screen } = montar();
-    screen.paint(conRegistro());
+  it("with no second source there's NO selector to press", () => {
+    // A dial between three views of the same ring promises something that
+    // doesn't exist: this window's daemon might not serve its log, and then
+    // the source is a label, not a button.
+    const { screen } = mount();
+    screen.paint(withLog());
     expect(document.querySelector(".log-source")).toBeNull();
-    // Pero se sigue DICIENDO de dónde son las líneas: eso no era opcional.
+    // But it still SAYS where the lines are from: that wasn't optional.
     expect(document.body.textContent).toContain("de esta ventana");
   });
 
-  it("con daemon el selector recorre las tres fuentes de una pulsación", () => {
-    const { screen, enviadas } = montar();
+  it("with a daemon, the selector cycles the three sources in one press", () => {
+    const { screen, sent } = mount();
     screen.paint(
-      conRegistro({
+      withLog({
         sources_available: true,
         source_mode: "both",
         source: "de la ventana y del daemon",
@@ -4796,56 +4807,57 @@ describe("el panel de registro", () => {
     );
     const selector = document.querySelector(".log-source");
     expect(selector).not.toBeNull();
-    // El identificador de WIRE, no la frase traducida: comparar frases ataría
-    // la prueba al idioma.
+    // The WIRE identifier, not the translated phrase: comparing phrases
+    // would tie the test to the language.
     expect((selector as HTMLElement).dataset["source"]).toBe("both");
     (selector as HTMLButtonElement).click();
-    expect(enviadas.at(-1)?.action).toBe("log_cycle_source");
+    expect(sent.at(-1)?.action).toBe("log_cycle_source");
   });
 
-  it("cada línea dice de qué proceso salió", () => {
-    // En una lista mezclada es la mitad de la información: «el provider falló»
-    // y «la ventana no pudo pintarlo» se leen igual sin saber quién lo
-    // escribió, y son dos averías distintas.
-    const { screen } = montar();
-    screen.paint(conRegistro({ sources_available: true, source_mode: "both" }));
-    const filas = [...document.querySelectorAll(".log-line")];
-    expect((filas[0] as HTMLElement).dataset["source"]).toBe("daemon");
-    expect((filas[1] as HTMLElement).dataset["source"]).toBe("window");
+  it("every line says which process it came from", () => {
+    // In a mixed list it's half the information: "the provider failed" and
+    // "the window couldn't paint it" read the same without knowing who wrote
+    // it, and they're two different failures.
+    const { screen } = mount();
+    screen.paint(withLog({ sources_available: true, source_mode: "both" }));
+    const rows = [...document.querySelectorAll(".log-line")];
+    expect((rows[0] as HTMLElement).dataset["source"]).toBe("daemon");
+    expect((rows[1] as HTMLElement).dataset["source"]).toBe("window");
   });
 
-  it("dice cuando el daemon NO sirve su registro", () => {
-    // La mitad de #326 aplicada a la otra orilla: el panel vuelve al anillo
-    // local y lo dice, en vez de quedarse mudo y parecer roto.
-    const { screen } = montar();
-    const nota = catalogoReal()["log-source-unsupported"] ?? "";
-    // La clave TIENE que existir: sin esto, borrarla del catálogo dejaría el
-    // `toContain("")` de abajo pasando siempre y la prueba diría que sí a nada.
-    expect(nota).not.toBe("");
-    screen.paint(conRegistro({ source_note: nota }));
-    const caja = document.querySelector(".log");
-    const cabecera = caja?.parentElement?.querySelector(".slot-title")?.textContent ?? "";
-    expect(cabecera).toContain(nota);
+  it("says when the daemon does NOT serve its log", () => {
+    // Half of #326 applied to the other shore: the panel falls back to the
+    // local ring and says so, instead of staying mute and looking broken.
+    const { screen } = mount();
+    const note = realCatalog()["log-source-unsupported"] ?? "";
+    // The key HAS to exist: without this, deleting it from the catalogue
+    // would leave the `toContain("")` below always passing, and the test
+    // would say yes to nothing.
+    expect(note).not.toBe("");
+    screen.paint(withLog({ source_note: note }));
+    const box = document.querySelector(".log");
+    const header = box?.parentElement?.querySelector(".slot-title")?.textContent ?? "";
+    expect(header).toContain(note);
   });
 
-  it("la rueda desplaza por el HOST, no por el DOM", () => {
-    // La ventana visible la decide el host: dejar que el navegador desplace un
-    // trozo que solo tiene las líneas visibles no llegaría a ninguna parte.
-    const { screen, enviadas } = montar();
-    screen.paint(conRegistro());
-    const caja = document.querySelector(".log") as HTMLElement;
-    caja.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
-    const ultima = enviadas.at(-1);
-    expect(ultima?.action).toBe("log_scroll");
-    if (ultima?.action === "log_scroll") {
-      expect(ultima.delta).toBeGreaterThan(0);
+  it("the wheel scrolls through the HOST, not through the DOM", () => {
+    // The visible window is decided by the host: letting the browser scroll
+    // a chunk that only has the visible lines wouldn't lead anywhere.
+    const { screen, sent } = mount();
+    screen.paint(withLog());
+    const box = document.querySelector(".log") as HTMLElement;
+    box.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+    const last = sent.at(-1);
+    expect(last?.action).toBe("log_scroll");
+    if (last?.action === "log_scroll") {
+      expect(last.delta).toBeGreaterThan(0);
     }
   });
 });
 
-describe("la barra lateral de sitios", () => {
-  function conSitios(cursor: number): ViewSnapshot {
-    const v = vista({});
+describe("the places sidebar", () => {
+  function withPlaces(cursor: number): ViewSnapshot {
+    const v = view({});
     v.slots = [
       ...v.slots,
       {
@@ -4889,54 +4901,53 @@ describe("la barra lateral de sitios", () => {
     return v;
   }
 
-  it("una cabecera dice si está plegada, y un favorito roto dice por qué", () => {
-    const { screen } = montar();
-    screen.paint(conSitios(1));
-    const filas = [...document.querySelectorAll(".places-row")];
-    expect(filas).toHaveLength(5);
-    expect(filas[0]?.getAttribute("aria-expanded")).toBe("true");
-    expect(filas[2]?.getAttribute("aria-expanded")).toBe("false");
-    // El roto se VE, y se ve que está roto.
-    expect(filas[4]?.querySelector(".places-broken")?.textContent).toBe(
-      "la ruta no vale",
-    );
-    expect(filas[3]?.querySelector(".places-broken")).toBeNull();
-    const lista = document.querySelector(".places-rows") as HTMLElement;
-    expect(lista.getAttribute("aria-activedescendant")).toBe("place-row-1");
+  it("a header says whether it's folded, and a broken favorite says why", () => {
+    const { screen } = mount();
+    screen.paint(withPlaces(1));
+    const rows = [...document.querySelectorAll(".places-row")];
+    expect(rows).toHaveLength(5);
+    expect(rows[0]?.getAttribute("aria-expanded")).toBe("true");
+    expect(rows[2]?.getAttribute("aria-expanded")).toBe("false");
+    // The broken one is SEEN, and seen to be broken.
+    expect(rows[4]?.querySelector(".places-broken")?.textContent).toBe("la ruta no vale");
+    expect(rows[3]?.querySelector(".places-broken")).toBeNull();
+    const list = document.querySelector(".places-rows") as HTMLElement;
+    expect(list.getAttribute("aria-activedescendant")).toBe("place-row-1");
   });
 
-  it("una unidad va en UNA línea: icono, nombre corto y libre corto", () => {
-    const { screen } = montar();
-    screen.paint(conSitios(0));
-    const unidad = document.querySelectorAll(".places-row")[1] as HTMLElement;
-    expect(unidad.dataset["line"]).toBe("one");
-    expect(unidad.dataset["kind"]).toBe("network");
-    expect(unidad.querySelector("svg.places-icon")).not.toBeNull();
-    expect(unidad.querySelector(".places-name")?.textContent).toBe("raíz");
-    expect(unidad.querySelector(".places-detail")?.textContent).toBe("12G");
-    // Lo que no cabe en la fila, en su título.
-    expect(unidad.title).toBe("/\n12 GiB libres de 100 GiB");
-    // Un favorito sano, también: el destino al título.
-    const favorito = document.querySelectorAll(".places-row")[3] as HTMLElement;
-    expect(favorito.dataset["line"]).toBe("one");
-    expect(favorito.title).toBe("⟨file⟩/home");
+  it("a drive goes on ONE line: icon, short name and short free space", () => {
+    const { screen } = mount();
+    screen.paint(withPlaces(0));
+    const drive = document.querySelectorAll(".places-row")[1] as HTMLElement;
+    expect(drive.dataset["line"]).toBe("one");
+    expect(drive.dataset["kind"]).toBe("network");
+    expect(drive.querySelector("svg.places-icon")).not.toBeNull();
+    expect(drive.querySelector(".places-name")?.textContent).toBe("raíz");
+    expect(drive.querySelector(".places-detail")?.textContent).toBe("12G");
+    // What doesn't fit in the row, in its title.
+    expect(drive.title).toBe("/\n12 GiB libres de 100 GiB");
+    // A healthy favorite, too: the target in the title.
+    const favorite = document.querySelectorAll(".places-row")[3] as HTMLElement;
+    expect(favorite.dataset["line"]).toBe("one");
+    expect(favorite.title).toBe("⟨file⟩/home");
   });
 
-  it("un click ELIGE y ACTIVA: una barra lateral existe para ir a sitios", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conSitios(0));
-    const filas = [...document.querySelectorAll(".places-row")];
-    (filas[1] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "place_activate_row", row: 1, generation: 3 }]);
-    // También sobre una cabecera: ahí activar es PLEGAR, y lo decide el host.
-    (filas[2] as HTMLElement).click();
-    expect(enviadas).toHaveLength(2);
+  it("a click SELECTS and ACTIVATES: a sidebar exists to go to places", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPlaces(0));
+    const rows = [...document.querySelectorAll(".places-row")];
+    (rows[1] as HTMLElement).click();
+    expect(sent).toEqual([{ action: "place_activate_row", row: 1, generation: 3 }]);
+    // Also on a header: there, activating means FOLDING, and the host
+    // decides.
+    (rows[2] as HTMLElement).click();
+    expect(sent).toHaveLength(2);
   });
 });
 
-describe("el selector de disposiciones", () => {
-  function conDisposiciones(cursor: number, problem = ""): ViewSnapshot {
-    const v = vista({});
+describe("the layouts selector", () => {
+  function withLayouts(cursor: number, problem = ""): ViewSnapshot {
+    const v = view({});
     v.layouts = {
       problem_hostile: false,
       title: "Disposiciones",
@@ -4963,51 +4974,51 @@ describe("el selector de disposiciones", () => {
     return v;
   }
 
-  it("avisa del nombre compartido y marca la que no parsea", () => {
-    const { screen } = montar();
-    screen.paint(conDisposiciones(0));
-    const filas = [...document.querySelectorAll(".layouts-row")];
-    expect(filas).toHaveLength(2);
-    // El aviso no es adorno: elegirla no cambia ninguna tecla.
-    expect(filas[0]?.querySelector(".layouts-warn")).not.toBeNull();
-    expect(filas[0]?.querySelector(".layouts-tag")?.textContent).toBe(
-      catalogoReal()["layout-picker-factory"] ?? "",
+  it("warns about the shared name and marks the one that fails to parse", () => {
+    const { screen } = mount();
+    screen.paint(withLayouts(0));
+    const rows = [...document.querySelectorAll(".layouts-row")];
+    expect(rows).toHaveLength(2);
+    // The warning isn't decoration: selecting it changes no key.
+    expect(rows[0]?.querySelector(".layouts-warn")).not.toBeNull();
+    expect(rows[0]?.querySelector(".layouts-tag")?.textContent).toBe(
+      realCatalog()["layout-picker-factory"] ?? "",
     );
-    expect(filas[1]?.getAttribute("data-broken")).toBe("true");
-    expect(filas[1]?.querySelector(".layouts-tag")).toBeNull();
+    expect(rows[1]?.getAttribute("data-broken")).toBe("true");
+    expect(rows[1]?.querySelector(".layouts-tag")).toBeNull();
   });
 
-  it("la miniatura llega hecha y se pone tal cual", () => {
-    const { screen } = montar();
-    screen.paint(conDisposiciones(0));
-    const vista_previa = document.querySelector(".layouts-preview");
-    expect(vista_previa?.tagName).toBe("PRE");
-    expect(vista_previa?.textContent).toBe("··········\n·bbbbbbbb·");
-    // Es decorativa: lo que dice ya está en el nombre de la fila.
-    expect(vista_previa?.getAttribute("aria-hidden")).toBe("true");
+  it("the thumbnail arrives ready-made and gets set as is", () => {
+    const { screen } = mount();
+    screen.paint(withLayouts(0));
+    const preview = document.querySelector(".layouts-preview");
+    expect(preview?.tagName).toBe("PRE");
+    expect(preview?.textContent).toBe("··········\n·bbbbbbbb·");
+    // It's decorative: what it says is already in the row's name.
+    expect(preview?.getAttribute("aria-hidden")).toBe("true");
   });
 
-  it("una que no parsea enseña su motivo en vez de una miniatura", () => {
-    const { screen } = montar();
-    screen.paint(conDisposiciones(1, "no parsea: falta `kind`"));
+  it("one that fails to parse shows its reason instead of a thumbnail", () => {
+    const { screen } = mount();
+    screen.paint(withLayouts(1, "no parsea: falta `kind`"));
     expect(document.querySelector(".layouts-preview")).toBeNull();
     expect(document.querySelector(".layouts-problem")?.textContent).toBe(
       "no parsea: falta `kind`",
     );
   });
 
-  it("un click elige ESA disposición", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conDisposiciones(0));
-    const filas = [...document.querySelectorAll(".layouts-row")];
-    (filas[1] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "layout_activate_row", row: 1 }]);
+  it("a click selects THAT layout", () => {
+    const { screen, sent } = mount();
+    screen.paint(withLayouts(0));
+    const rows = [...document.querySelectorAll(".layouts-row")];
+    (rows[1] as HTMLElement).click();
+    expect(sent).toEqual([{ action: "layout_activate_row", row: 1 }]);
   });
 });
 
-describe("la búsqueda", () => {
-  function conBusqueda(running: boolean): ViewSnapshot {
-    const v = vista({});
+describe("search", () => {
+  function withSearch(running: boolean): ViewSnapshot {
+    const v = view({});
     v.search = {
       semantic: false,
       query: "*.rs",
@@ -5038,52 +5049,52 @@ describe("la búsqueda", () => {
     return v;
   }
 
-  it("dice en qué estado está, y lo anuncia sin robar el foco", () => {
-    const { screen } = montar();
-    screen.paint(conBusqueda(true));
-    const estado = document.querySelector(".search-status") as HTMLElement;
-    expect(estado.getAttribute("role")).toBe("status");
-    expect(estado.getAttribute("aria-live")).toBe("polite");
-    expect(estado.getAttribute("data-running")).toBe("true");
-    expect(estado.textContent).toContain("buscando");
+  it("says what state it's in, and announces it without stealing focus", () => {
+    const { screen } = mount();
+    screen.paint(withSearch(true));
+    const status = document.querySelector(".search-status") as HTMLElement;
+    expect(status.getAttribute("role")).toBe("status");
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status.getAttribute("data-running")).toBe("true");
+    expect(status.textContent).toContain("buscando");
 
-    screen.paint(conBusqueda(false));
+    screen.paint(withSearch(false));
     expect(document.querySelector(".search-status")?.getAttribute("data-running")).toBe(
       "false",
     );
   });
 
-  it("cada fila dice el nombre y DÓNDE está, y marca lo hostil", () => {
-    const { screen } = montar();
-    screen.paint(conBusqueda(true));
-    const filas = [...document.querySelectorAll(".search-row")];
-    expect(filas).toHaveLength(2);
-    expect(filas[0]?.querySelector(".search-name")?.textContent).toBe("main.rs");
-    expect(filas[0]?.querySelector(".search-parent")?.textContent).toContain("src");
-    expect(filas[1]?.querySelector(".search-name")?.getAttribute("data-hostile")).toBe(
+  it("every row says the name and WHERE it is, and marks the hostile one", () => {
+    const { screen } = mount();
+    screen.paint(withSearch(true));
+    const rows = [...document.querySelectorAll(".search-row")];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.querySelector(".search-name")?.textContent).toBe("main.rs");
+    expect(rows[0]?.querySelector(".search-parent")?.textContent).toContain("src");
+    expect(rows[1]?.querySelector(".search-name")?.getAttribute("data-hostile")).toBe(
       "true",
     );
   });
 
-  it("un click va a ESE resultado, mandando un índice y no una ruta", () => {
-    const { screen, enviadas } = montar();
-    screen.paint(conBusqueda(false));
-    const filas = [...document.querySelectorAll(".search-row")];
-    (filas[1] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "search_activate_row", row: 1 }]);
+  it("a click goes to THAT result, sending an index and not a path", () => {
+    const { screen, sent } = mount();
+    screen.paint(withSearch(false));
+    const rows = [...document.querySelectorAll(".search-row")];
+    (rows[1] as HTMLElement).click();
+    expect(sent).toEqual([{ action: "search_activate_row", row: 1 }]);
   });
 
-  it("cerrada, no tapa nada", () => {
-    const { screen } = montar();
-    screen.paint(vista({}));
+  it("closed, it covers nothing", () => {
+    const { screen } = mount();
+    screen.paint(view({}));
     expect(document.querySelector(".search")).toBeNull();
   });
 });
 
-describe("un diálogo que pregunta por una operación", () => {
-  it("pinta el destino FUERA del cuerpo, marca lo alterado y dice si recorta", () => {
-    const { screen } = montar();
-    const v = vista({});
+describe("a dialog that asks about an operation", () => {
+  it("paints the destination OUTSIDE the body, marks what's altered, and says if it truncates", () => {
+    const { screen } = mount();
+    const v = view({});
     v.dialogs = [
       {
         id: 4,
@@ -5091,9 +5102,9 @@ describe("un diálogo que pregunta por una operación", () => {
         subject: null,
         asker: null,
         deadline: null,
-        // Un directorio que se llama `a → mem_b.txt`: la flecha es legítima,
-        // no se enmascara y no se marca. Con el destino como primera línea
-        // del cuerpo, la línea se leería como dos rutas.
+        // A directory called `a → mem_b.txt`: the arrow is legitimate, not
+        // masked and not flagged. With the destination as the body's first
+        // line, the line would read as two paths.
         destination: { text: "⟨mem⟩/casa/a → mem_b.txt", hostile: false },
         body: [
           { text: "⟨mem⟩/casa/notas.txt", hostile: false },
@@ -5115,29 +5126,29 @@ describe("un diálogo que pregunta por una operación", () => {
     const dest = dialog.querySelector(".dialog-destination") as HTMLElement;
     expect(dest).not.toBeNull();
     expect(dest.textContent).toContain("a → mem_b.txt");
-    // Y no es una línea del cuerpo: el cuerpo es una lista NUMERADA aparte,
-    // y el destino no está en ella.
-    const cuerpo = [...dialog.querySelectorAll("ol.dialog-body li")];
-    expect(cuerpo).toHaveLength(2);
-    expect(cuerpo.map((p) => p.textContent ?? "").join(" ")).not.toContain("→");
+    // And it isn't a body line: the body is a separate NUMBERED list, and
+    // the destination isn't in it.
+    const body = [...dialog.querySelectorAll("ol.dialog-body li")];
+    expect(body).toHaveLength(2);
+    expect(body.map((p) => p.textContent ?? "").join(" ")).not.toContain("→");
 
-    // La línea alterada lo dice, y la fiel no.
-    expect((cuerpo[0] as HTMLElement | undefined)?.dataset["hostile"]).toBe("false");
-    expect((cuerpo[1] as HTMLElement | undefined)?.dataset["hostile"]).toBe("true");
-    expect(cuerpo[1]?.textContent ?? "").toContain("nombre alterado");
+    // The altered line says so, and the faithful one doesn't.
+    expect((body[0] as HTMLElement | undefined)?.dataset["hostile"]).toBe("false");
+    expect((body[1] as HTMLElement | undefined)?.dataset["hostile"]).toBe("true");
+    expect(body[1]?.textContent ?? "").toContain("nombre alterado");
 
-    // Y el recorte se pinta como aviso.
-    const nota = dialog.querySelector(".dialog-overflow") as HTMLElement;
-    expect(nota).not.toBeNull();
-    expect(nota.getAttribute("role")).toBe("alert");
-    expect(nota.textContent).toContain("240");
+    // And the truncation paints as a notice.
+    const note = dialog.querySelector(".dialog-overflow") as HTMLElement;
+    expect(note).not.toBeNull();
+    expect(note.getAttribute("role")).toBe("alert");
+    expect(note.textContent).toContain("240");
   });
 });
 
-describe("el tablero de tareas", () => {
-  it("dice cuándo el fichero en curso se pinta distinto de lo que es", () => {
-    const { screen, root } = montar();
-    const v = vista({});
+describe("the task board", () => {
+  it("says when the file in progress paints differently from what it is", () => {
+    const { screen, root } = mount();
+    const v = view({});
     v.layout.placements.push({
       slot_id: 9,
       x: 0,
@@ -5168,15 +5179,15 @@ describe("el tablero de tareas", () => {
   });
 });
 
-describe("la revisión de un plan de renombrado", () => {
-  it("separa los dos nombres de una pareja SIN un glifo que un nombre pueda tener", () => {
-    const { screen } = montar();
-    const v = vista({});
+describe("reviewing a rename plan", () => {
+  it("separates a pair's two names WITHOUT a glyph a name could contain", () => {
+    const { screen } = mount();
+    const v = view({});
     v.ai_rename = {
       dir: { text: "⟨mem⟩/casa/series", hostile: false },
       pairs: [
-        // Un nombre de ORIGEN con una flecha dentro: en una sola línea
-        // separada por `→`, la fila se leería como otra pareja.
+        // A SOURCE name with an arrow inside: on a single line separated by
+        // `→`, the row would read as another pair.
         {
           from: { text: "cap 2 → final.mkv", hostile: false },
           to: { text: "ep0�2.mkv", hostile: true },
@@ -5193,16 +5204,16 @@ describe("la revisión de un plan de renombrado", () => {
       seen_all: true,
     };
     screen.paint(v);
-    const caja = document.querySelector(".ai-rename") as HTMLElement;
-    expect(caja).not.toBeNull();
-    expect(caja.getAttribute("aria-modal")).toBe("true");
+    const box = document.querySelector(".ai-rename") as HTMLElement;
+    expect(box).not.toBeNull();
+    expect(box.getAttribute("aria-modal")).toBe("true");
 
-    const from = caja.querySelector(".ai-rename-from") as HTMLElement;
-    const to = caja.querySelector(".ai-rename-to") as HTMLElement;
+    const from = box.querySelector(".ai-rename-from") as HTMLElement;
+    const to = box.querySelector(".ai-rename-to") as HTMLElement;
     expect(from.textContent).toBe("cap 2 → final.mkv");
     expect(to.textContent).toContain("ep0�2.mkv");
-    // El separador NO está en el texto: lo pinta el CSS, que un nombre no
-    // puede escribir.
+    // The separator is NOT in the text: it's painted by CSS, which a name
+    // can't write.
     expect(to.textContent?.startsWith("→")).toBe(false);
     expect(from.contains(to)).toBe(false);
 
@@ -5210,14 +5221,14 @@ describe("la revisión de un plan de renombrado", () => {
     expect(to.textContent).toContain("nombre alterado");
     expect(from.dataset["hostile"]).toBe("false");
 
-    const estado = caja.querySelector(".ai-rename-status") as HTMLElement;
-    expect(estado.dataset["confirmable"]).toBe("true");
-    expect(caja.querySelector(".ai-rename-more")?.textContent).toContain("7");
+    const status = box.querySelector(".ai-rename-status") as HTMLElement;
+    expect(status.dataset["confirmable"]).toBe("true");
+    expect(box.querySelector(".ai-rename-more")?.textContent).toContain("7");
   });
 
-  it("un plan que el core no acepta lo dice en su estado", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("a plan the core doesn't accept says so in its status", () => {
+    const { screen } = mount();
+    const v = view({});
     v.ai_rename = {
       dir: { text: "⟨mem⟩/casa", hostile: false },
       pairs: [],
@@ -5232,13 +5243,13 @@ describe("la revisión de un plan de renombrado", () => {
       seen_all: true,
     };
     screen.paint(v);
-    const estado = document.querySelector(".ai-rename-status") as HTMLElement;
-    expect(estado.dataset["confirmable"]).toBe("false");
+    const status = document.querySelector(".ai-rename-status") as HTMLElement;
+    expect(status.dataset["confirmable"]).toBe("false");
   });
 
-  it("sin plan no queda nada pintado", () => {
-    const { screen } = montar();
-    const v = vista({});
+  it("with no plan, nothing is left painted", () => {
+    const { screen } = mount();
+    const v = view({});
     v.ai_rename = {
       dir: { text: "⟨mem⟩/casa", hostile: false },
       pairs: [],
@@ -5260,9 +5271,9 @@ describe("la revisión de un plan de renombrado", () => {
   });
 });
 
-describe("la revisión de un plan de organizar", () => {
-  /** Un árbol con las tres clases de línea y un nombre alterado. */
-  function arbol(): NonNullable<ViewSnapshot["organize"]> {
+describe("reviewing an organize plan", () => {
+  /** A tree with the three line kinds and one altered name. */
+  function tree(): NonNullable<ViewSnapshot["organize"]> {
     return {
       dir: { text: "⟨mem⟩/casa/descargas", hostile: false },
       lines: [
@@ -5287,63 +5298,61 @@ describe("la revisión de un plan de organizar", () => {
     };
   }
 
-  it("marca cada clase de línea de dos formas y sangra con un dato, no con texto", () => {
-    const { screen } = montar();
-    const v = vista({});
-    v.organize = arbol();
+  it("marks each line kind two ways and indents with data, not text", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.organize = tree();
     screen.paint(v);
-    const caja = document.querySelector(".organize") as HTMLElement;
-    expect(caja).not.toBeNull();
-    expect(caja.getAttribute("aria-modal")).toBe("true");
-    // El recuento va ANTES del árbol: es lo que se lee para decidir.
-    const cuerpo = Array.from(caja.children).map((e) => e.className);
-    expect(cuerpo.indexOf("organize-summary")).toBeLessThan(
-      cuerpo.indexOf("organize-tree"),
-    );
+    const box = document.querySelector(".organize") as HTMLElement;
+    expect(box).not.toBeNull();
+    expect(box.getAttribute("aria-modal")).toBe("true");
+    // The tally goes BEFORE the tree: it's what gets read to decide.
+    const body = Array.from(box.children).map((e) => e.className);
+    expect(body.indexOf("organize-summary")).toBeLessThan(body.indexOf("organize-tree"));
 
-    const filas = Array.from(caja.querySelectorAll<HTMLElement>(".organize-line"));
-    expect(filas).toHaveLength(3);
-    // La clase dice qué es, Y el marcador lo dice otra vez: el color no
-    // sobrevive a un tema monocromo.
-    expect(filas[0]?.classList.contains("organize-existing-dir")).toBe(true);
-    expect(filas[1]?.classList.contains("organize-new-dir")).toBe(true);
-    expect(filas[0]?.querySelector(".organize-mark")?.textContent).toBe("·");
-    expect(filas[1]?.querySelector(".organize-mark")?.textContent).toBe("+");
-    expect(filas[2]?.querySelector(".organize-mark")?.textContent).toBe("→");
-    // El sangrado es una variable del estilo, no espacios en el nombre: un
-    // nombre que empiece por espacios no puede fingir estar más adentro.
-    expect(filas[2]?.style.getPropertyValue("--depth")).toBe("2");
-    const nombre = filas[2]?.querySelector(".organize-name") as HTMLElement;
-    expect(nombre.textContent?.startsWith(" ")).toBe(false);
-    expect(nombre.dataset["hostile"]).toBe("true");
-    expect(nombre.textContent).toContain("nombre alterado");
+    const rows = Array.from(box.querySelectorAll<HTMLElement>(".organize-line"));
+    expect(rows).toHaveLength(3);
+    // The class says what it is, AND the marker says it again: color doesn't
+    // survive a monochrome theme.
+    expect(rows[0]?.classList.contains("organize-existing-dir")).toBe(true);
+    expect(rows[1]?.classList.contains("organize-new-dir")).toBe(true);
+    expect(rows[0]?.querySelector(".organize-mark")?.textContent).toBe("·");
+    expect(rows[1]?.querySelector(".organize-mark")?.textContent).toBe("+");
+    expect(rows[2]?.querySelector(".organize-mark")?.textContent).toBe("→");
+    // Indentation is a style variable, not spaces in the name: a name that
+    // starts with spaces can't pretend to be nested deeper.
+    expect(rows[2]?.style.getPropertyValue("--depth")).toBe("2");
+    const name = rows[2]?.querySelector(".organize-name") as HTMLElement;
+    expect(name.textContent?.startsWith(" ")).toBe(false);
+    expect(name.dataset["hostile"]).toBe("true");
+    expect(name.textContent).toContain("nombre alterado");
   });
 
-  it("no deja aprobar hasta haberlo leído entero", () => {
-    const { screen } = montar();
-    const v = vista({});
-    v.organize = arbol();
+  it("doesn't allow approval until it's been read in full", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.organize = tree();
     screen.paint(v);
-    const botones = Array.from(
+    const buttons = Array.from(
       document.querySelectorAll<HTMLButtonElement>(".organize .choices button"),
     );
-    expect(botones[0]?.disabled).toBe(true);
-    // Descartar SIEMPRE se puede: quien no quiere esto tiene que poder
-    // quitárselo de encima.
-    expect(botones[1]?.disabled).toBe(false);
+    expect(buttons[0]?.disabled).toBe(true);
+    // Discarding is ALWAYS possible: whoever doesn't want this has to be
+    // able to get rid of it.
+    expect(buttons[1]?.disabled).toBe(false);
 
-    v.organize = { ...arbol(), seen_all: true };
+    v.organize = { ...tree(), seen_all: true };
     screen.paint(v);
-    const despues = document.querySelector(
+    const after = document.querySelector(
       ".organize .choices button",
     ) as HTMLButtonElement;
-    expect(despues.disabled).toBe(false);
+    expect(after.disabled).toBe(false);
   });
 
-  it("sin plan no queda nada pintado", () => {
-    const { screen } = montar();
-    const v = vista({});
-    v.organize = arbol();
+  it("with no plan, nothing is left painted", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.organize = tree();
     screen.paint(v);
     expect(document.querySelector(".organize")).not.toBeNull();
     v.organize = null;
@@ -5352,10 +5361,10 @@ describe("la revisión de un plan de organizar", () => {
   });
 });
 
-describe("la búsqueda por significado", () => {
-  it("se titula distinto, dice su alcance y pinta el parecido", () => {
-    const { screen } = montar();
-    const v = vista({});
+describe("search by meaning", () => {
+  it("titles itself differently, states its scope, and paints the similarity", () => {
+    const { screen } = mount();
+    const v = view({});
     v.search = {
       semantic: true,
       query: "facturas del año pasado",
@@ -5377,12 +5386,12 @@ describe("la búsqueda por significado", () => {
     };
     screen.paint(v);
 
-    const caja = document.querySelector(".search") as HTMLElement;
-    expect(caja.querySelector("h1")?.textContent ?? "").toContain(
+    const box = document.querySelector(".search") as HTMLElement;
+    expect(box.querySelector("h1")?.textContent ?? "").toContain(
       "facturas del año pasado",
     );
-    // El parecido se ve, con dos decimales: sin él, el orden parece
-    // arbitrario.
-    expect(caja.querySelector(".search-score")?.textContent).toBe("0.91");
+    // The similarity is visible, with two decimals: without it, the order
+    // looks arbitrary.
+    expect(box.querySelector(".search-score")?.textContent).toBe("0.91");
   });
 });

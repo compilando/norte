@@ -403,14 +403,14 @@ pub fn forms(v: &StripView, lang: Lang) -> Vec<Form> {
             out
         }
         StripPhase::Done => {
-            let long = match &v.name {
+            let full = match &v.name {
                 Some(n) => format!("✓ {} {n}", t_in(lang, &format!("strip-done-{class}"))),
                 None => format!(
                     "✓ {}",
                     ta_in(lang, "strip-done-many", &[("n", &v.count.to_string())])
                 ),
             };
-            vec![f(long, false), f("✓".to_owned(), false)]
+            vec![f(full, false), f("✓".to_owned(), false)]
         }
         StripPhase::Failed => vec![
             f(
