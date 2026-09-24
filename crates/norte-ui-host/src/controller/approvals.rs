@@ -287,7 +287,10 @@ impl State {
         let change = ViewChange::Dialogs {
             dialogs: self.dialog_views(),
         };
-        let mut outgoing = vec![self.parche(vec![change])];
+        // The panel's repaint goes FIRST, in the order the patches were
+        // built: it used to be built above and then dropped here.
+        let mut outgoing = agents_notice;
+        outgoing.push(self.parche(vec![change]));
         outgoing.extend(dropped);
         outgoing
     }
